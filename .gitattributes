@@ -1,0 +1,15 @@
+# Check out LF everywhere. Without this, a Windows runner with core.autocrlf
+# rewrites every source file to CRLF and `cargo fmt --check` fails on newline
+# style before it ever looks at the code.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF, because their interpreters care.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets must never be touched.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

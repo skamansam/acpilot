@@ -10,8 +10,11 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # internal
-acpilot-proto = { path = "crates/acpilot-proto" }
-acpilot-core = { path = "crates/acpilot-core" }
+# A version is required alongside the path: without it, tooling that reads
+# workspace dependencies (cargo-deny, publishing) cannot resolve the requirement
+# and reports it as a wildcard.
+acpilot-proto = { version = "0.1.0", path = "crates/acpilot-proto" }
+acpilot-core = { version = "0.1.0", path = "crates/acpilot-core" }
 
 # protocol
 agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }

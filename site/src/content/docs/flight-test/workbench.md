@@ -10,23 +10,24 @@ of the daemon API — the same recipes, the same runs, the same transcript as th
 CLI and the browser. Close it mid-run and the run keeps going, because the
 daemon is doing the work and the pane was only ever a window.
 
-```text
-┌ recipe ────────────────────────┬ corpus ────────────────────────┐
-│ system prompt   ⌨              │ docs/**/*.md        41 files  │
-│                                │ src/**.rs            8 files  │
-│ temperature   0.20 ────────●   │ ───────────────────────────   │
-│ top_p         0.95 ──────●     │ budget 6,120 / 32,768 tokens  │
-│ max_tokens    (server)         │ window   server (32,768)      │
-│ seed          42               │ strategy truncate oldest      │
-│                                │                               │
-│ tools  ☑ read  ☐ write         │                               │
-│        ☐ run   ☑ search        │                               │
-└────────────────────────────────┴───────────────────────────────┘
-┌ output ──────────────────────────────────────────────────────────┐
-│ ▍ first token 118 ms   ·   41.2 tok/s   ·   stop: eosFound       │
-│                                                                  │
-│   The parser rejects `--strict` on this branch because …         │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph recipe["Recipe pane"]
+        prompt["master prompt"]
+        knobs["sampling + budget"]
+        tools["tool ceiling"]
+    end
+    subgraph corpus["Corpus pane"]
+        globs["globs → resolved files"]
+        meter["budget meter"]
+    end
+    assemble["run:<br/>context assembled"]
+    output["Output pane<br/>stream + instruments"]
+    inspector["Effective request<br/>the exact JSON sent"]
+    recipe --> assemble
+    corpus --> assemble
+    assemble --> output
+    assemble --> inspector
 ```
 
 ## The recipe pane

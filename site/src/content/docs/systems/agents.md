@@ -12,15 +12,20 @@ same one Zed uses — so an agent written for ACP works here without an adapter.
 
 ## What the daemon does with an agent
 
-```text
-acpilotd ── stdio JSON-RPC ──► agent process
-   │                              │
-   ├─ initialize ◄─────────────────┤  capabilities, protocol version
-   ├─ session/new ◄────────────────┤  session id
-   ├─ session/prompt ──────────────►│  a turn
-   │◄──────── session/update  …  …  │  chunks, tool calls, plans
-   │◄──────── session/request_permission
-   └─ session/cancel ─────────────►│
+```mermaid
+sequenceDiagram
+    participant D as acpilotd
+    participant A as agent process
+    D->>A: initialize
+    A-->>D: capabilities, protocol version
+    D->>A: session/new
+    A-->>D: session id
+    D->>A: session/prompt
+    A-->>D: session/update — chunks, tool calls, plans
+    A->>D: session/request_permission
+    D-->>A: allow, ask a human, or deny
+    A-->>D: stopReason
+    D->>A: session/cancel
 ```
 
 Three things make this more than a pipe:

@@ -15,11 +15,14 @@ parsers will need adjusting.
 
 ## How it works
 
-```text
-prompt ──► portable-pty ──► program (TUI or CLI)
-                 │
-                 ├─ vt100 screen model  ──► screen text
-                 └─ sentinel detection  ──► "turn finished"
+```mermaid
+flowchart LR
+    prompt["prompt"] --> pty["portable-pty"]
+    pty --> program["program<br/>TUI or CLI"]
+    pty --> screen["vt100 screen model"]
+    screen --> text["screen text"]
+    pty --> sentinel["sentinel detection"]
+    sentinel --> turn["turn finished"]
 ```
 
 1. Spawn the program in a PTY, sized to a known grid.

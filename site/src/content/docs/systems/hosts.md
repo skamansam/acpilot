@@ -30,8 +30,13 @@ For SSH and WSL, the daemon uploads a small static binary (`acpilotd-helper`) an
 talks JSON-RPC to it over stdio. Filesystem calls, PTYs, and spawns happen on the
 far side of the connection, where the latency is zero instead of per-syscall.
 
-```text
-acpilotd ── ssh exec ──► acpilotd-helper (on the host) ──► fs / pty / spawn / lsp
+```mermaid
+flowchart LR
+    daemon["acpilotd<br/>your machine"] -->|ssh exec| helper["acpilotd-helper<br/>on the host"]
+    helper --> fs["fs"]
+    helper --> pty["pty"]
+    helper --> spawn["spawn"]
+    helper --> lsp["lsp"]
 ```
 
 <Aside type="caution" title="The Windows-specific reason">

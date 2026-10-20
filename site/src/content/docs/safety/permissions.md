@@ -10,12 +10,17 @@ broker is the part of Acpilot that makes that sentence survivable.
 
 ## The model
 
-```text
-agent asks ──► broker ──► policy rules ──► allow / ask / deny
-                            │
-                            └─► pending record ──► human answers
-                                        │
-                                        └─► audit line (always)
+```mermaid
+flowchart LR
+    ask["agent asks"] --> broker["broker"]
+    broker --> rules["policy rules"]
+    rules -->|allow| allowed["allowed"]
+    rules -->|ask| pending["pending record"]
+    rules -->|deny| denied["denied"]
+    pending --> human["human answers"]
+    allowed --> audit["audit line<br/>always"]
+    denied --> audit
+    human --> audit
 ```
 
 Every request is classified — file write, file read, terminal, tool call, other —

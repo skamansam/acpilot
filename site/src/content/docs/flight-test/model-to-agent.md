@@ -34,19 +34,13 @@ without a migration.
 `acpilot-agent-lm` is a small ACP **agent** process. It owns the conversation with
 the model, and it owns nothing else:
 
-```text
-              ┌──────────────── acpilotd ────────────────┐
-              │  session · permissions · files · host    │
-              └───────▲──────────────────────┬───────────┘
-        ACP callbacks │                      │ stdio ACP
-                      │                      ▼
-              ┌───────┴──────────────────────────────┐
-              │        acpilot-agent-lm              │
-              │  prompt assembly · tool parse · loop │
-              └───────┬──────────────────────────────┘
-                      │ HTTP (chat completions)
-                      ▼
-              LM Studio on 127.0.0.1:1234
+```mermaid
+flowchart TD
+    daemon["acpilotd<br/>sessions · permissions · files · hosts"]
+    shim["acpilot-agent-lm<br/>prompt assembly · tool parsing · loop"]
+    model["LM Studio<br/>127.0.0.1:1234"]
+    daemon <-->|"ACP over stdio"| shim
+    shim <-->|"HTTP chat completions"| model
 ```
 
 The model never gets a file descriptor. It gets a tool *schema*, and the shim

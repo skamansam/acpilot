@@ -233,6 +233,33 @@ pre {
   border: 1px solid var(--sl-color-hairline);
 }
 
+/* --- Diagrams: instrument faces --------------------------------------- */
+
+/* Mermaid renders client-side, so the container is styled rather than the SVG's
+ * internals: a placard background and a hairline make the diagram read as part of
+ * the panel instead of a pasted screenshot. */
+.mermaid {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sl-color-accent) 3%, var(--sl-color-bg-nav));
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Mermaid writes inline labels with its own font stack; keep the site's. */
+.mermaid text,
+.mermaid .label,
+.mermaid foreignObject div {
+  font-family: var(--sl-font) !important;
+}
+
 /* --- Tables: checklists ----------------------------------------------- */
 
 .sl-markdown-content table {

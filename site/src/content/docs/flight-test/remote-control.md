@@ -10,12 +10,14 @@ callbacks. The bridge flips one seat. A remote driver connects to `acpilotd`,
 opens a session on your machine, and prompts the agents that live here — while
 the files, the terminals, and the permission broker stay exactly where they are.
 
-```text
-Devin ── ACP over HTTPS ──► tunnel ──► acpilotd ── ACP ──► corpus-scraper
-                                         │
-                                         ├── reads files here
-                                         ├── asks *you* before writing
-                                         └── records who asked (driver id + audit)
+```mermaid
+flowchart LR
+    driver["Devin"] -->|"ACP over HTTPS"| tunnel["tunnel"]
+    tunnel --> daemon["acpilotd<br/>your machine"]
+    daemon --> agent["corpus-scraper<br/>ACP agent"]
+    daemon --> reads["reads files here"]
+    daemon --> asks["asks you before writing"]
+    daemon --> audit["records the driver id"]
 ```
 
 Why bother: a cloud agent is good at planning and bad at having your repository.
@@ -60,13 +62,11 @@ acpilot acp token rotate        # writes a new 0600 file, argon2-hashed on disk
 acpilot acp pair                # one-time code, 2 minutes, shown in the cockpit
 ```
 
-```text
-╭─ remote control ──────────────────────────────╮
-│ bridge   on   127.0.0.1:7788                  │
-│ pairing  ALFA-NINER    expires in 1:42         │
-│ drivers  0 connected, 1 known                 │
-╰───────────────────────────────────────────────╯
-```
+| Readout | Value |
+| --- | --- |
+| bridge | `on` at `127.0.0.1:7788` |
+| pairing | `ALFA-NINER`, expires in 1:42 |
+| drivers | 0 connected, 1 known |
 
 The token proves the endpoint is yours. The pairing code proves the driver is the
 one you just walked through setup, not one that found the port.

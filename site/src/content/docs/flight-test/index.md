@@ -11,9 +11,13 @@ to delete one.
 
 The model lab is where you fix that. It is a workbench, not a chat window:
 
-```text
-provider ──► model ──► recipe ──► run ──► recipe, tuned ──► agent
- (a URL)     (an id)   (a file)   (a record)                (a manifest line)
+```mermaid
+flowchart LR
+    provider["Provider<br/>a URL"] --> model["Model<br/>an id"]
+    model --> recipe["Recipe<br/>a file"]
+    recipe --> run["Run<br/>a record"]
+    run -->|tune| recipe
+    run --> agent["Agent<br/>a manifest line"]
 ```
 
 Each step is a thing you can look at, diff, and throw away:

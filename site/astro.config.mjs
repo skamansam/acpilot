@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import mermaid from 'astro-mermaid';
 
 // Project page on GitHub Pages, served under the account's custom domain:
 // https://rudeboy.dev/acpilot/ (skamansam.github.io redirects there).
@@ -7,6 +8,17 @@ export default defineConfig({
   site: 'https://rudeboy.dev',
   base: '/acpilot',
   integrations: [
+    // Must be registered before Starlight: the integration installs the markdown
+    // transform that turns ```mermaid fences into diagram containers.
+    mermaid({
+      autoTheme: true, // follows Starlight's data-theme toggle, no extra plumbing
+      enableLog: false,
+      mermaidConfig: {
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+        flowchart: { curve: 'basis', padding: 12, nodeSpacing: 40, rankSpacing: 48 },
+        sequence: { actorMargin: 44, messageMargin: 34, useMaxWidth: true },
+      },
+    }),
     starlight({
       title: 'Acpilot',
       description:

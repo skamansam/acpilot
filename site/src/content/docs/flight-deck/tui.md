@@ -11,15 +11,11 @@ daemon exists: close the laptop, reconnect, and the turn is still running.
 
 ## Layout
 
-```text
-┌─ files ────────┬─ editor ────────────────────────────┬─ agents ──────────┐
-│ src/           │  fn main() {                        │ ● claude-code      │
-│   main.rs      │      let x = 1;                     │   thinking…        │
-│   lib.rs       │  }                                  │   12 files read    │
-│ Cargo.toml     │                                     │   waiting on you   │
-├────────────────┴─────────────────────────────────────┴───────────────────┤
-│ NORMAL  main.rs  Ln 12, Col 3  utf-8  work  LSP rust-analyzer: ready      │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    files["files<br/>tree + git state"] -->|open| editor["editor<br/>rope + tree-sitter"]
+    agents["agents<br/>sessions · transcript · composer"] -->|proposed diffs| editor
+    editor --> status["status line<br/>mode · position · profile · LSP"]
 ```
 
 Panels are the same three in every UI — files, text, agents — because the mental

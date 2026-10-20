@@ -34,19 +34,9 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
 
-      # `npm ci` refuses this lock, and the lock is not the problem: npm's validator
-      # demands the transitive deps of platform-gated optional packages (the
-      # wasm32-wasi bindings of @astrojs/compiler and satteri) that are never
-      # installed on linux-x64, so it reports them "missing" on every run. Install
-      # from the lock, then fail if npm had to rewrite it — the drift check `npm ci`
-      # was there for, without the false positive.
       - name: Install
         working-directory: site
-        run: npm install --no-audit --no-fund
-
-      - name: Lock file is in sync
-        working-directory: site
-        run: git diff --exit-code -- package-lock.json
+        run: npm ci
 
       - name: Build
         working-directory: site

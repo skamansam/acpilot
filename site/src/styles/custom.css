@@ -106,11 +106,27 @@ header.header {
   border-inline-end: 1px solid var(--sl-color-hairline);
 }
 
-.sidebar-content a[aria-current='page'] {
+/* Starlight marks the current page with `color: var(--sl-color-text-invert)` —
+ * near-black — on a solid accent background. This rule replaces that background
+ * with a 14% tint, so the inherited near-black text landed on a dark panel and the
+ * selected item became unreadable at night. Gold matches the left border and
+ * clears WCAG AA in both themes: 8.6:1 on the night panel, 6.2:1 on the day one. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
   background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
   border-inline-start: 2px solid var(--sl-color-accent);
   border-radius: 0 4px 4px 0;
+  color: var(--acp-amber);
   font-weight: 600;
+}
+
+/* Warm paper needs a deeper gold to stay legible: the amber above would reach
+ * only 3.4:1 on cream. */
+:root[data-theme='light'] .sidebar-content a[aria-current='page'],
+:root[data-theme='light'] .sidebar-content a[aria-current='page']:hover,
+:root[data-theme='light'] .sidebar-content a[aria-current='page']:focus {
+  color: #6b4408;
 }
 
 .sidebar-content .group-label > span {

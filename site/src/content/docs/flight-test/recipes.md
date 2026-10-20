@@ -62,7 +62,7 @@ notes = "Good at extraction, bad at arithmetic. Do not promote without a probe."
 | `sampling.temperature` | float | `0.0`–`2.0` |
 | `sampling.top_p` | float | `0.0`–`1.0` |
 | `sampling.max_tokens` | integer? | Absent means the server's default |
-| `sampling.top_k` | integer? | Sent where supported; ignored parameters are reported |
+| `sampling.top_k` | integer? | Sent when set; a server that refuses it triggers one retry without it, reported on the run |
 | `sampling.repeat_penalty` | float? | As above |
 | `sampling.seed` | integer? | Makes a run reproducible *on the same server and model* |
 | `sampling.stop` | string[] | Sequences that end generation |

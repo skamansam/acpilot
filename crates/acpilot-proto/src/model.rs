@@ -163,8 +163,10 @@ pub struct DiscoveredModel {
     /// Quantization as reported, for example `Q4_K_M`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantization: Option<String>,
-    /// Whether the server currently holds it in memory.
-    pub loaded: bool,
+    /// Whether the server currently holds it in memory. Absent when the dialect
+    /// does not report load state, which is most of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<bool>,
     /// Context window in tokens, when the server says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
@@ -176,9 +178,10 @@ pub struct DiscoveredModel {
 
 /// Sampling knobs, as the lab presents them.
 ///
-/// The set is deliberately small and server-agnostic. Fields a server does not
-/// honour are reported in `RunSummary::warnings` instead of being dropped
-/// quietly: a knob that does nothing is worse than no knob.
+/// The set is deliberately small and server-agnostic. An optional parameter the
+/// server *rejects* is retried without and named in `RunSummary::warnings`: a knob
+/// that silently does nothing is worse than no knob. Silent disregard cannot be
+/// observed from outside a sampler, so it is not claimed either.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SamplingParams {
     /// Randomness. Agent work wants this low; drafting wants it higher.

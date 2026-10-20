@@ -42,10 +42,11 @@ field is empty and says **unknown**, and the recipe must supply a value before a
 run is accepted.
 
 <Aside type="note" title="A knob that does nothing is worse than no knob">
-Some servers accept `top_k` and ignore it, some reject it, some honour it only on
-certain models. After every run the lab lists **parameters the server appeared to
-ignore**, next to the run that proves it. That list is more useful than another
-slider.
+Some servers accept `top_k` and ignore it, some reject it outright, some honour it
+only on certain models. Acpilot cannot see inside the sampler, so it does not
+pretend to: when a server rejects an optional parameter, the request is retried
+without it and the run record names it under **refused parameters**. That list is
+more useful than another slider, and it is honest about what it can know.
 </Aside>
 
 ## The corpus pane
@@ -78,7 +79,7 @@ Streaming text, and a strip of instruments that only shows measured values:
 | Tokens / second | The provider reports it | LM Studio's `stats`; absent on plain OpenAI-shaped servers |
 | Tokens used | Always | Marked **estimated** until the server's `usage` arrives |
 | Stop reason | Always | `eosFound`, `maxPredictedTokensReached`, or our own step cap |
-| Warnings | When non-empty | Ignored parameters, truncated corpus, repaired tool call |
+| Warnings | When non-empty | Refused parameters, truncated corpus, repaired tool call |
 
 <Aside type="caution" title="Estimated is a different colour on purpose">
 Pre-flight counts are a bytes/4 heuristic with a documented error band. When the

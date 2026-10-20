@@ -41,8 +41,8 @@ yesterday?":
 
 - **The exact request.** System prompt hash, sampling values, resolved corpus
   files, budget split. Replay re-sends it unchanged.
-- **The exact answer.** Token usage, time to first token, stop reason, and the
-  parameters the server quietly ignored.
+- **The exact answer.** Token usage, time to first token, stop reason, and any
+  parameter the server refused, with the retry that omitted it.
 - **The comparison.** Two runs side by side, with a delta in tokens and latency.
 - **The verdict.** A promotion step that refuses to be quiet about weak
   tool-calling, and a manifest entry you can delete in one command.

@@ -257,7 +257,8 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
-- [ ] **P4.5-1 · `acpilot-model` crate** (2d)
+- [ ] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
+  landed with 17 tests in this crate; provider registration and the daemon route are still open.
   - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
     cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
     beyond the HTTP client's idle read timeout).
@@ -269,7 +270,9 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     token is `403 permission_denied`; no retries on a 4xx. The variant is added in this phase
     (it is the one failure the P1 enum could not describe without lying).
 
-- [ ] **P4.5-2 · Discovery and capability probing** (1.5d)
+- [ ] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping and
+  `Backend::probe` landed (`crates/acpilot-model/src/lib.rs`); the CLI verb and the probe cache
+  are still open.
   - Map `/api/v0/models` fields into `DiscoveredModel` (`llm`→`chat`, `vlm`→`vision`,
     `embeddings`→`embedding`, `state`→`loaded`, `max_context_length`→`context_window` with
     `context_source = server`). Where a server says nothing, `context_source = unknown` and the
@@ -330,8 +333,9 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     (globs, resolved file list with sizes, budget meter), output (streaming text, run history).
   - Gauges show only what the provider reported: first token, tok/s, stop reason, usage. Estimated
     tokens are drawn differently from reported ones, and the difference is stated in words.
-  - "Effective request" inspector: the exact JSON that was sent, with ignored parameters listed
-    beside it. Debugging a local model is mostly finding out which knob the server dropped.
+  - "Effective request" inspector: the exact JSON that was sent, with any parameter the server
+    refused listed beside it. Debugging a local model is mostly finding out which knob the
+    server dropped — and Acpilot can only report refusals, not silent disregard, so it says so.
   - Compare mode: two runs side by side with a token and latency delta; promote is one keystroke
     from here, and it warns first.
 

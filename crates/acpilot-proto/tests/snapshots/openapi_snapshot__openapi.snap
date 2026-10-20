@@ -364,8 +364,11 @@ expression: document
             "type": "string"
           },
           "loaded": {
-            "description": "Whether the server currently holds it in memory.",
-            "type": "boolean"
+            "description": "Whether the server currently holds it in memory. Absent when the dialect\ndoes not report load state, which is most of them.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "model_type": {
             "$ref": "#/components/schemas/ModelType",
@@ -387,7 +390,6 @@ expression: document
           "id",
           "provider_id",
           "model_type",
-          "loaded",
           "context_source",
           "capabilities"
         ],
@@ -1323,7 +1325,7 @@ expression: document
         "type": "object"
       },
       "SamplingParams": {
-        "description": "Sampling knobs, as the lab presents them.\n\nThe set is deliberately small and server-agnostic. Fields a server does not\nhonour are reported in `RunSummary::warnings` instead of being dropped\nquietly: a knob that does nothing is worse than no knob.",
+        "description": "Sampling knobs, as the lab presents them.\n\nThe set is deliberately small and server-agnostic. An optional parameter the\nserver *rejects* is retried without and named in `RunSummary::warnings`: a knob\nthat silently does nothing is worse than no knob. Silent disregard cannot be\nobserved from outside a sampler, so it is not claimed either.",
         "properties": {
           "max_tokens": {
             "description": "Output cap; `null` means the server's own default.",

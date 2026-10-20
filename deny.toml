@@ -21,6 +21,11 @@ allow = [
   "CC0-1.0",
   "MPL-2.0",
   "BSL-1.0",
+  # `webpki-root-certs` ships Mozilla's root bundle as data, not code, via
+  # rustls-platform-verifier (reqwest → TLS). It is permissive and it is the
+  # alternative to trusting an unverified store; denying it would mean shipping
+  # with no working HTTPS roots.
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 # The allow-list is intentionally broader than today's graph: adding a dependency

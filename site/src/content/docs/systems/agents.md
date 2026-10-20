@@ -47,6 +47,17 @@ not adopted: an editor that chases a draft protocol twice a year is a science
 project, not a tool.
 </Aside>
 
+## Model-backed agents
+
+A local model is not an agent, but it can become one: a recipe tuned in the
+[model lab](../../flight-test/) is promoted into an `acp-stdio` entry that runs
+`acpilot-agent-lm`. The shim owns the conversation loop and reaches files,
+terminals, and permissions only through the ACP callbacks above.
+
+Which means the diagram on this page does not change. A model-backed agent is an
+ordinary agent with an unusual prompt — same supervisor, same broker, same
+transcript, same audit. That was the entire reason to build it that way.
+
 ## Trust
 
 An agent is an arbitrary program with your repository and your network. The first
@@ -58,4 +69,6 @@ same reason your shell asks before running a downloaded script.
 
 Nothing in this page runs yet. P2 builds the registry, supervisor, and session
 layer headless, tested against a mock agent, so the daemon is trustworthy before
-a UI is built on top of it.
+a UI is built on top of it. Model-backed agents arrive in P4.5, on top of that
+same layer, and they inherit whatever P2 gets right — or wrong — without a
+second implementation to blame.

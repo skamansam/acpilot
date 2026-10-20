@@ -52,6 +52,17 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Flight test',
+          items: [
+            { label: 'The model lab', link: '/flight-test/' },
+            { label: 'Providers', link: '/flight-test/providers/' },
+            { label: 'The workbench', link: '/flight-test/workbench/' },
+            { label: 'Recipes', link: '/flight-test/recipes/' },
+            { label: 'From model to agent', link: '/flight-test/model-to-agent/' },
+            { label: 'Remote control', link: '/flight-test/remote-control/' },
+          ],
+        },
+        {
           label: 'Safety systems',
           items: [
             { label: 'Permissions', link: '/safety/permissions/' },

@@ -53,6 +53,17 @@ pub enum AcpilotError {
         host: String,
     },
 
+    /// A model provider could not be reached, refused the request, or answered
+    /// with something that is not a completion. The daemon is fine; the
+    /// inference server behind it is not.
+    #[error("model unavailable ({provider}): {message}")]
+    ModelUnavailable {
+        /// Provider identifier, as configured by the user.
+        provider: String,
+        /// What went wrong, in a sentence a human can act on.
+        message: String,
+    },
+
     /// An agent process failed: it crashed, timed out, or refused the protocol.
     #[error("agent failed: {message}")]
     AgentFailed {
@@ -96,6 +107,7 @@ impl AcpilotError {
             Self::Conflict { .. } => "conflict",
             Self::PermissionDenied { .. } => "permission_denied",
             Self::HostUnavailable { .. } => "host_unavailable",
+            Self::ModelUnavailable { .. } => "model_unavailable",
             Self::AgentFailed { .. } => "agent_failed",
             Self::Protocol { .. } => "protocol",
             Self::Io(_) => "io",
@@ -113,6 +125,7 @@ impl AcpilotError {
             Self::Conflict { .. } => exit::CONFLICT,
             Self::PermissionDenied { .. } => exit::PERMISSION_DENIED,
             Self::HostUnavailable { .. }
+            | Self::ModelUnavailable { .. }
             | Self::AgentFailed { .. }
             | Self::Protocol { .. }
             | Self::Io(_) => exit::FAILURE,
@@ -135,6 +148,14 @@ mod tests {
         assert_eq!(
             AcpilotError::HostUnavailable { host: "dev".into() }.code(),
             "host_unavailable"
+        );
+        assert_eq!(
+            AcpilotError::ModelUnavailable {
+                provider: "lmstudio".into(),
+                message: "connection refused".into(),
+            }
+            .code(),
+            "model_unavailable"
         );
         assert_eq!(
             AcpilotError::AgentFailed {
@@ -160,6 +181,10 @@ mod tests {
         assert_eq!(AcpilotError::denied("x").exit_code(), 5);
         for generic in [
             AcpilotError::HostUnavailable { host: "h".into() },
+            AcpilotError::ModelUnavailable {
+                provider: "lmstudio".into(),
+                message: "no server".into(),
+            },
             AcpilotError::AgentFailed {
                 message: "m".into(),
             },

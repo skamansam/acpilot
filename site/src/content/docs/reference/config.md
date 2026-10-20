@@ -63,6 +63,57 @@ command = "rust-analyzer"
 args = []
 ```
 
+## Providers and recipes
+
+A model server is declared per profile, next to the agents that may use it. It is
+inert until `enabled = true` *and* something asks it a question — there is no
+startup scan.
+
+```toml
+# ~/.config/acpilot/profiles/work/providers.toml
+schema_version = 1
+
+[[providers]]
+id = "lmstudio"
+kind = "lm_studio"                 # or "open_ai_compatible"
+label = "LM Studio (this machine)"
+base_url = "http://127.0.0.1:1234"
+enabled = true
+# credential_ref = "keyring:lmstudio/work"
+```
+
+Recipes live one directory over, one file per model-plus-prompt:
+
+```text
+profiles/work/
+  config.toml
+  providers.toml
+  agents.toml
+  recipes/corpus-scraper.toml      # see Flight test → Recipes
+```
+
+## The ACP bridge
+
+Global, because it is a listener rather than an identity. Off unless enabled, and
+`profiles` is the fence around what a paired remote driver can reach.
+
+```toml
+# ~/.config/acpilot/config.toml
+[acp.bridge]
+enabled = false                    # the default, and the recommendation
+bind = "127.0.0.1:7788"
+require_token = true
+profiles = ["work"]
+rate_limit_per_minute = 120
+```
+
+<Aside type="note" title="One socket, one identity list">
+Binding a second port per profile would be the obvious alternative and the wrong
+one: it multiplies listeners, certificates, and firewall rules. One endpoint,
+an explicit profile allowlist, and a `404` for anything outside it — the same
+answer a local client gets.
+</Aside>
+
 <Aside type="note" title="Unknown keys are an error, not a shrug">
 A typo in a config file should be loud. `acpilot doctor` lists every unknown key
 with the file and line that produced it, and the daemon refuses to start with a
@@ -88,6 +139,7 @@ command that ends the argument.
 | `ACPILOT_ADDR` | Daemon bind address (used by `acpilotd` today) |
 | `ACPILOT_LOG` | `tracing` filter override |
 | `RUST_LOG` | Fallback for `ACPILOT_LOG` |
+| `ACPILOT_BRIDGE_TOKEN` | Read once at startup for the ACP bridge when `require_token` is set and the keyring is unavailable (containers). Never echoed by `doctor`. |
 
 Secrets are never read from the environment for a profile — see
 [Secrets](../../safety/secrets/).

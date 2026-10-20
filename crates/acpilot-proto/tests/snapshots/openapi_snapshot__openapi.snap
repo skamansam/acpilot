@@ -5,6 +5,171 @@ expression: document
 {
   "components": {
     "schemas": {
+      "AcpBridgeSummary": {
+        "description": "The bridge as returned by `GET /v1/acp/bridge`.",
+        "properties": {
+          "bind": {
+            "description": "Address the HTTP transport listens on, when it is enabled.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connected": {
+            "description": "Connected drivers.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "Whether the endpoint is listening at all. Off unless configured.",
+            "type": "boolean"
+          },
+          "known_drivers": {
+            "description": "Drivers on record, including revoked ones.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "public_url": {
+            "description": "Externally reachable URL, for the driver's configuration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "require_token": {
+            "description": "Whether a bearer token is required. Loopback-only endpoints may disable\nit; anything else may not.",
+            "type": "boolean"
+          },
+          "transports": {
+            "description": "Transports currently served.",
+            "items": {
+              "$ref": "#/components/schemas/BridgeTransport"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "transports",
+          "require_token",
+          "connected",
+          "known_drivers"
+        ],
+        "type": "object"
+      },
+      "AcpDriverSummary": {
+        "description": "A driver as returned by `GET /v1/acp/drivers`.",
+        "properties": {
+          "client": {
+            "description": "Client name and version reported by `initialize`, for example\n`devin 2.1`. Recorded, not trusted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connected_at": {
+            "description": "RFC 3339 timestamp of the current connection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Driver identifier, stable across reconnects."
+          },
+          "last_seen_at": {
+            "description": "RFC 3339 timestamp of the last request.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Name the driver gave during the handshake.",
+            "type": "string"
+          },
+          "peer": {
+            "description": "Peer address, or `stdio` for a local process.",
+            "type": "string"
+          },
+          "prompt_turns": {
+            "description": "Turns this driver has prompted; the audit trail at a glance.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "description": "Scopes actually granted, which may be fewer than requested.",
+            "items": {
+              "$ref": "#/components/schemas/DriverScope"
+            },
+            "type": "array"
+          },
+          "sessions": {
+            "description": "Sessions this driver has open.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DriverStatus",
+            "description": "Current state."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "peer",
+          "status",
+          "scopes",
+          "sessions",
+          "prompt_turns"
+        ],
+        "type": "object"
+      },
+      "AddProviderRequest": {
+        "description": "Request body for `POST /v1/providers`.\n\nA provider is inert until it is declared here *and* enabled. There is no\nscanning for servers on the loopback interface: a network call is something\nthe user asked for, not something that happens during startup.",
+        "properties": {
+          "base_url": {
+            "description": "Base URL, for example `http://127.0.0.1:1234`.",
+            "type": "string"
+          },
+          "credential_ref": {
+            "description": "Keyring entry to read a bearer token from, for servers that require one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether the provider may be contacted after it is added.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier to store it under."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind",
+            "description": "Wire dialect."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "base_url",
+          "enabled"
+        ],
+        "type": "object"
+      },
       "AgentStatus": {
         "description": "Whether an agent can be used right now.",
         "enum": [
@@ -64,6 +229,84 @@ expression: document
         ],
         "type": "string"
       },
+      "BridgeTransport": {
+        "description": "Transport a driver is attached over.",
+        "enum": [
+          "stdio",
+          "http_json_rpc"
+        ],
+        "type": "string"
+      },
+      "ContextBudget": {
+        "description": "The budget for one run, in tokens except where stated.",
+        "properties": {
+          "max_corpus_bytes": {
+            "description": "Ceiling on corpus text, in bytes, before tokenisation.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reserve_output": {
+            "description": "Tokens held back for the answer.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/ContextStrategy",
+            "description": "What to do on overflow."
+          },
+          "window": {
+            "description": "Total window to plan against. Defaults to the model's reported value.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "reserve_output",
+          "strategy",
+          "max_corpus_bytes"
+        ],
+        "type": "object"
+      },
+      "ContextStrategy": {
+        "description": "What to do when the assembled prompt would exceed the window.",
+        "enum": [
+          "truncate_oldest",
+          "summarize",
+          "refuse"
+        ],
+        "type": "string"
+      },
+      "CorpusSelector": {
+        "description": "One way to pull text out of the workspace into the prompt.",
+        "properties": {
+          "glob": {
+            "description": "Glob relative to the workspace root, for example `docs/**/*.md`.",
+            "type": "string"
+          },
+          "max_bytes": {
+            "description": "Maximum bytes per file, so one generated lockfile cannot eat the budget.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_files": {
+            "description": "Maximum number of files to include.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "glob",
+          "max_files",
+          "max_bytes"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "description": "Request body for `POST /v1/sessions`.",
         "properties": {
@@ -88,6 +331,87 @@ expression: document
           "agent_id"
         ],
         "type": "object"
+      },
+      "DiscoveredModel": {
+        "description": "A model the provider reported, as returned by `GET /v1/models`.",
+        "properties": {
+          "architecture": {
+            "description": "Architecture as reported, for example `llama` or `qwen2_vl`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilities",
+            "description": "What the model appears able to do."
+          },
+          "context_source": {
+            "$ref": "#/components/schemas/MetadataSource",
+            "description": "Where `context_window` came from."
+          },
+          "context_window": {
+            "description": "Context window in tokens, when the server says.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Model identifier to send in a request.",
+            "type": "string"
+          },
+          "loaded": {
+            "description": "Whether the server currently holds it in memory.",
+            "type": "boolean"
+          },
+          "model_type": {
+            "$ref": "#/components/schemas/ModelType",
+            "description": "Broad class, from the server's typing."
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider that reported it."
+          },
+          "quantization": {
+            "description": "Quantization as reported, for example `Q4_K_M`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider_id",
+          "model_type",
+          "loaded",
+          "context_source",
+          "capabilities"
+        ],
+        "type": "object"
+      },
+      "DriverScope": {
+        "description": "What a driver is allowed to do.",
+        "enum": [
+          "observe",
+          "prompt",
+          "cancel",
+          "answer_permissions"
+        ],
+        "type": "string"
+      },
+      "DriverStatus": {
+        "description": "State of a driver connection.",
+        "enum": [
+          "pending_pairing",
+          "connected",
+          "disconnected",
+          "revoked"
+        ],
+        "type": "string"
       },
       "ErrorBody": {
         "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`not_found`, `conflict`,\n`permission_denied`, `host_unavailable`, `agent_failed`, `protocol`, `io`).\nClients switch on `code`; `message` is for humans and may be reworded.",
@@ -341,6 +665,176 @@ expression: document
         ],
         "type": "object"
       },
+      "MetadataSource": {
+        "description": "Where a fact about a model came from.\n\nThe lab is explicit about this because the alternative — a plausible default\ncontext window — silently truncates prompts.",
+        "enum": [
+          "server",
+          "recipe",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "ModelCapabilities": {
+        "description": "What a model appears able to do, as far as the server admits.",
+        "properties": {
+          "chat": {
+            "description": "Accepts chat messages.",
+            "type": "boolean"
+          },
+          "streaming": {
+            "description": "Streams tokens rather than returning one blob.",
+            "type": "boolean"
+          },
+          "structured_output": {
+            "description": "Honours a JSON schema for output.",
+            "type": "boolean"
+          },
+          "tools": {
+            "description": "Accepts tool definitions and returns tool calls.",
+            "type": "boolean"
+          },
+          "vision": {
+            "description": "Accepts images alongside text.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chat",
+          "streaming",
+          "tools",
+          "structured_output",
+          "vision"
+        ],
+        "type": "object"
+      },
+      "ModelRecipe": {
+        "description": "A tuned configuration for one model, as returned by `GET /v1/recipes`.",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "Context plan."
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier, also the file name under `recipes/`."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "model_id": {
+            "description": "Model identifier to send.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Free-text note: what this recipe is for, and what it is bad at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider to call."
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/SamplingParams",
+            "description": "Sampling knobs."
+          },
+          "schema_version": {
+            "description": "Schema version, so migrations are explicit.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "system_prompt": {
+            "description": "The master prompt. The whole point of the lab is editing this and seeing\nwhat changes.",
+            "type": "string"
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolExposure",
+            "description": "Tool ceiling for the promoted agent."
+          },
+          "updated_at": {
+            "description": "RFC 3339 timestamp of the last edit.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "label",
+          "provider_id",
+          "model_id",
+          "system_prompt",
+          "sampling",
+          "context",
+          "tools",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ModelType": {
+        "description": "Broad class of a discovered model, from the server's own typing.",
+        "enum": [
+          "chat",
+          "vision",
+          "embedding",
+          "other"
+        ],
+        "type": "string"
+      },
+      "PairDriverRequest": {
+        "description": "Request the driver sends over the bridge to claim a pair.\n\nScopes are a request, not a grant: the daemon intersects them with what the\nuser allowed when the code was issued.",
+        "properties": {
+          "code": {
+            "description": "The code from the cockpit.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name to record for this driver.",
+            "type": "string"
+          },
+          "requested_scopes": {
+            "description": "Scopes it would like. `answer_permissions` requires an explicit grant.",
+            "items": {
+              "$ref": "#/components/schemas/DriverScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "requested_scopes"
+        ],
+        "type": "object"
+      },
+      "PairingCode": {
+        "description": "A one-time pairing code, from `POST /v1/acp/pairings`.\n\nThe code is shown in the cockpit and typed into the driver. It is short-lived,\nsingle-use, and useless without the endpoint's token.",
+        "properties": {
+          "code": {
+            "description": "The code to hand to the driver, for example `ALFA-NINER`.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "RFC 3339 expiry. Two minutes by default.",
+            "type": "string"
+          },
+          "handshake_url": {
+            "description": "Where the driver should connect, when the bridge is exposed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "PermissionDecision": {
         "description": "The decision the broker applied, with its provenance.",
         "properties": {
@@ -527,6 +1021,52 @@ expression: document
         ],
         "type": "object"
       },
+      "PromoteRecipeRequest": {
+        "description": "Request body for `POST /v1/recipes/{id}/promote`.",
+        "properties": {
+          "agent_id": {
+            "description": "Agent identifier to write into `agents.toml`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name; the recipe label is used when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "type": "object"
+      },
+      "PromotedAgent": {
+        "description": "Result of promoting a recipe: an ordinary agent, plus the caveats.",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentSummary",
+            "description": "The agent as it will now appear in `GET /v1/agents`."
+          },
+          "manifest_path": {
+            "description": "Manifest the entry was written to, so it can be reviewed or reverted.",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "Reasons to reconsider: a low tool-call validity rate, a model that the\nserver has never loaded, a window larger than the host's memory.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "manifest_path",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "PromptAccepted": {
         "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE; this only acknowledges that it started.",
         "properties": {
@@ -569,6 +1109,279 @@ expression: document
         },
         "required": [
           "text"
+        ],
+        "type": "object"
+      },
+      "ProviderKind": {
+        "description": "Which wire dialect a provider speaks.\n\n`LmStudio` reads LM Studio's native `/api/v0` surface, which reports model\nmetadata (architecture, quantization, `max_context_length`) and per-request\nstats such as time to first token. `OpenAiCompatible` is the plain\n`/v1/chat/completions` shape shared by Ollama, llama.cpp, vLLM, OpenRouter and\nhosted endpoints — fewer facts, so the UI shows fewer gauges rather than\ninventing them.\n\nAnthropic and Gemini are not OpenAI-shaped. They are added as new variants\ntogether with their adapter, never as a guess.",
+        "enum": [
+          "lm_studio",
+          "open_ai_compatible"
+        ],
+        "type": "string"
+      },
+      "ProviderStatus": {
+        "description": "Reachability of a declared provider.",
+        "enum": [
+          "disabled",
+          "reachable",
+          "unreachable",
+          "unauthorized"
+        ],
+        "type": "string"
+      },
+      "ProviderSummary": {
+        "description": "A provider as returned by `GET /v1/providers`.",
+        "properties": {
+          "base_url": {
+            "description": "Base URL, for example `http://127.0.0.1:1234`.",
+            "type": "string"
+          },
+          "credential_ref": {
+            "description": "Keyring entry holding the bearer token, when the server wants one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "description": "One line of human-readable detail: why it is unreachable, which runtime\nanswered, and so on. Never a token.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier used in recipes."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind",
+            "description": "Wire dialect."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "last_probed_at": {
+            "description": "RFC 3339 timestamp of the last probe.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_count": {
+            "description": "How many models the last probe saw.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProviderStatus",
+            "description": "Current reachability."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "base_url",
+          "status",
+          "model_count"
+        ],
+        "type": "object"
+      },
+      "RunRequest": {
+        "description": "Request body for `POST /v1/recipes/{id}/runs`.",
+        "properties": {
+          "corpus": {
+            "description": "Corpus pulled from the current workspace, in order.",
+            "items": {
+              "$ref": "#/components/schemas/CorpusSelector"
+            },
+            "type": "array"
+          },
+          "idempotency_key": {
+            "description": "Client-generated key that makes retries safe.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "description": "The user message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "corpus"
+        ],
+        "type": "object"
+      },
+      "RunStatus": {
+        "description": "Lifecycle of a recorded run.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "type": "string"
+      },
+      "RunSummary": {
+        "description": "A run as returned by `GET /v1/recipes/{id}/runs`.",
+        "properties": {
+          "corpus_files": {
+            "description": "How many workspace files went into the prompt.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_token_ms": {
+            "description": "Time to first token, when the transport reports it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Run identifier."
+          },
+          "message": {
+            "description": "Error text when the run failed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "params": {
+            "$ref": "#/components/schemas/SamplingParams",
+            "description": "The parameters actually sent, so a run can be reproduced."
+          },
+          "recipe_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Recipe this run used."
+          },
+          "started_at": {
+            "description": "RFC 3339 timestamp of the start.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "Lifecycle state."
+          },
+          "stop_reason": {
+            "description": "Why the server stopped: `stop`, `length`, or the server's own reason.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenUsage",
+            "description": "Token accounting, with its provenance."
+          },
+          "tokens_per_second": {
+            "description": "Throughput, when the server reports it.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "total_ms": {
+            "description": "Wall-clock duration.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "warnings": {
+            "description": "Things that went differently from the recipe: an ignored parameter, a\ntruncated corpus, a tool call that had to be repaired.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "recipe_id",
+          "status",
+          "started_at",
+          "tokens",
+          "warnings",
+          "params",
+          "corpus_files"
+        ],
+        "type": "object"
+      },
+      "SamplingParams": {
+        "description": "Sampling knobs, as the lab presents them.\n\nThe set is deliberately small and server-agnostic. Fields a server does not\nhonour are reported in `RunSummary::warnings` instead of being dropped\nquietly: a knob that does nothing is worse than no knob.",
+        "properties": {
+          "max_tokens": {
+            "description": "Output cap; `null` means the server's own default.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "repeat_penalty": {
+            "description": "Penalty for repeating tokens, where the server supports it.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "seed": {
+            "description": "Fixed seed, so a run can be reproduced on the same server and model.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stop": {
+            "description": "Sequences that end generation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "temperature": {
+            "description": "Randomness. Agent work wants this low; drafting wants it higher.",
+            "format": "float",
+            "type": "number"
+          },
+          "top_k": {
+            "description": "Top-k cutoff, where the server supports it.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "top_p": {
+            "description": "Nucleus sampling cutoff.",
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature",
+          "top_p",
+          "stop"
         ],
         "type": "object"
       },
@@ -728,6 +1541,68 @@ expression: document
           "size",
           "alive",
           "command"
+        ],
+        "type": "object"
+      },
+      "TokenUsage": {
+        "description": "Token counts for a run, and whether they are trustworthy.",
+        "properties": {
+          "completion": {
+            "description": "Completion tokens.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "estimated": {
+            "description": "`true` when these are the lab's estimate rather than the server's\nreported `usage`. The UI must not style them the same way.",
+            "type": "boolean"
+          },
+          "prompt": {
+            "description": "Prompt tokens.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt",
+          "completion",
+          "estimated"
+        ],
+        "type": "object"
+      },
+      "ToolExposure": {
+        "description": "Which tools a model-backed agent may *ask* for.\n\nThis is a ceiling, not a grant. Every call still goes through the permission\nbroker; a tool left out here does not exist as far as the model is concerned,\nwhich is a much better place to enforce a boundary than a prompt.",
+        "properties": {
+          "max_steps": {
+            "description": "Hard cap on model→tool→model steps per turn.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "read_files": {
+            "description": "Offer file reads.",
+            "type": "boolean"
+          },
+          "run_commands": {
+            "description": "Offer command execution.",
+            "type": "boolean"
+          },
+          "search": {
+            "description": "Offer workspace search.",
+            "type": "boolean"
+          },
+          "write_files": {
+            "description": "Offer file writes.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_files",
+          "write_files",
+          "run_commands",
+          "search",
+          "max_steps"
         ],
         "type": "object"
       },

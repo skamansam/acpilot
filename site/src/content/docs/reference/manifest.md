@@ -37,6 +37,17 @@ id = "local-gemini"
 transport = "acp-stdio"
 command = "gemini"
 args = ["--experimental-acp"]
+
+# Written by `acpilot recipes promote`. A model-backed agent is an ordinary
+# ACP agent; the recipe is its configuration, not a second transport.
+[[agents]]
+id = "corpus-scraper"
+name = "Corpus scraper (Qwen 7B)"
+transport = "acp-stdio"
+command = "acpilot-agent-lm"
+args = ["--recipe", "corpus-scraper"]
+restart = "on-crash"
+# recipe: profiles/work/recipes/corpus-scraper.toml (mtime 2026-10-20T14:02:11Z)
 ```
 
 ## Transports
@@ -46,6 +57,11 @@ args = ["--experimental-acp"]
 | `acp-stdio` | Native ACP over stdio | `command`; agent implements ACP |
 | `pty` | Program driven through a PTY | `command`, `parser`, and a sentinel or idle timeout |
 | `http-jsonrpc` | ACP over HTTP | `url`; used for remote agents |
+
+The bridge in [remote control](../../flight-test/remote-control/) is the mirror
+image: there the daemon is the ACP **server**, and a remote driver is the client.
+It is configured in `config.toml` rather than in this file, because it is a
+property of the daemon, not of an agent.
 
 ## Fields
 

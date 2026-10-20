@@ -31,6 +31,9 @@ GET /docs               # Swagger UI, only with --features docs
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/decide` |
 | Profiles | `GET/POST /v1/profiles`, `PATCH /v1/profiles/{id}/preferences` |
 | LSP | `GET /v1/lsp`, `WS /v1/lsp/{id}/attach` |
+| Models | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
+| Recipes | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
+| Remote drivers | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`; ACP itself at `/acp` |
 
 ## The error envelope
 
@@ -51,6 +54,7 @@ host that stopped answering:
 | `conflict` | 409 | Stale ETag, duplicate turn, closed session |
 | `permission_denied` | 403 | Policy or a human said no |
 | `host_unavailable` | 502 | SSH/WSL host did not answer |
+| `model_unavailable` | 502 | The inference server is down, refused, or answered nonsense |
 | `agent_failed` | 502 | The agent process died or broke protocol |
 | `protocol` | 500 | Malformed frame, bad version |
 | `io` | 500 | Filesystem or process I/O |
@@ -69,7 +73,8 @@ keypress and a character appearing.
 how code gets sent with the wrong key.
 
 <Aside type="note" title="Why SSE and not WebSockets everywhere">
-Agent output is a stream of events with sequence numbers. SSE gives replay via
+Agent output is a stream of events with sequence numbers — `session.*`, `permission.*`,
+`lsp.*`, `model.run.*` — and the same replay guarantee applies to all of them. SSE gives replay via
 `Last-Event-ID`, survives proxies, and reconnects for free. WebSockets are used
 where they earn it — terminal attach, LSP bridge — not as a default.
 </Aside>

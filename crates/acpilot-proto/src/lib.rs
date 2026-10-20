@@ -11,11 +11,13 @@
 //! the same reason — the wire format should not track a library choice.
 
 pub mod agent;
+pub mod bridge;
 pub mod error;
 pub mod event;
 pub mod file;
 pub mod host;
 pub mod lsp;
+pub mod model;
 pub mod permission;
 pub mod profile;
 pub mod session;
@@ -75,7 +77,34 @@ pub const API_PREFIX: &str = "/v1";
         profile::Preferences,
         lsp::LspServerSummary,
         lsp::LspServerStatus,
-        lsp::PositionEncoding
+        lsp::PositionEncoding,
+        model::ProviderKind,
+        model::ProviderStatus,
+        model::MetadataSource,
+        model::ModelCapabilities,
+        model::ModelType,
+        model::ProviderSummary,
+        model::AddProviderRequest,
+        model::DiscoveredModel,
+        model::SamplingParams,
+        model::ContextStrategy,
+        model::ContextBudget,
+        model::ToolExposure,
+        model::ModelRecipe,
+        model::CorpusSelector,
+        model::RunRequest,
+        model::RunStatus,
+        model::TokenUsage,
+        model::RunSummary,
+        model::PromoteRecipeRequest,
+        model::PromotedAgent,
+        bridge::DriverScope,
+        bridge::BridgeTransport,
+        bridge::DriverStatus,
+        bridge::AcpBridgeSummary,
+        bridge::AcpDriverSummary,
+        bridge::PairingCode,
+        bridge::PairDriverRequest
     ))
 )]
 pub struct ApiDoc;
@@ -113,6 +142,10 @@ mod tests {
             "SessionEvent",
             "PermissionRequest",
             "Preferences",
+            "ModelRecipe",
+            "RunSummary",
+            "AcpBridgeSummary",
+            "AcpDriverSummary",
         ] {
             assert!(schemas.contains_key(name), "{name} missing from components");
         }

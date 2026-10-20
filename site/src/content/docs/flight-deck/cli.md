@@ -46,6 +46,10 @@ acpilot permissions ls|allow|deny|pending
 acpilot files ls|cat|write
 acpilot term attach
 acpilot profile new|ls|show|use|rm|export|import|diff
+acpilot models probe <provider> | ls
+acpilot recipes ls|show|new|run|rm|promote
+acpilot runs ls|show|replay|compare
+acpilot acp pair|token show|token rotate|drivers|revoke
 acpilot serve [--http]
 acpilot doctor
 acpilot setup
@@ -58,6 +62,14 @@ when something is wrong, and the first command worth building well.
 </Aside>
 
 ## What it looks like today
+
+Scripting the lab is a first-class case, not a workaround: a corpus experiment
+that cannot be run in CI is a corpus experiment nobody repeats.
+
+```bash
+acpilot recipes run corpus-scraper "list the undocumented flags" --json \
+  | jq '{stop: .stop_reason, ttft: .first_token_ms, warnings}'
+```
 
 ```bash
 $ acpilot version

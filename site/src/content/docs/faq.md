@@ -45,12 +45,40 @@ takes all day.
 Because the key you use for a client is not the key you use on a weekend. Mixed
 credentials are the one failure this product cannot apologise its way out of.
 
+### Can the model lab run with no internet at all?
+
+Yes. A local model on `127.0.0.1`, a corpus read from disk, a recipe in the
+profile — nothing leaves the machine, and the daemon makes no calls you did not
+ask for. Declare a provider, probe it, and the rest is a socket to your own GPU.
+
+Looks like I picked the wrong week to stop checking egress logs. Fortunately
+this one is short enough to read standing up.
+
+### Do I need a GPU the size of a wardrobe?
+
+No. You need a model small enough for the memory you have, and the lab is honest
+about which one that is: the gauges show the reported context window, the
+quantization, and whether the server has actually loaded the thing. A 70B model
+meeting 8 GB of unified memory says "the plane! the plane!" and then exits.
+
+Start small, measure tool-call validity, and promote only what parses.
+
+### Can something else drive my agent remotely?
+
+Yes — a remote driver connects over ACP, with a token and a pairing code. It can
+open a session and prompt; it cannot approve its own writes unless you grant it
+that scope, per driver, on purpose. See
+[remote control](../flight-test/remote-control/).
+
+We have clearance, Clarence. The tower clears. The passenger does not.
+
 ### Why does the documentation sound like this?
 
 Because documentation that reads like a terms-of-service update gets skimmed, and
 skimming is how people miss the part about permissions. Aviation runs on
 checklists and deadpan humour for the same reason: both keep you calm while the
-gauges tell you something is wrong.
+gauges tell you something is wrong. Every so often it also sounds like a 1980 film
+about an airplane, because the alternative is sounding like a release note.
 
 ### When can I use it?
 
@@ -78,6 +106,11 @@ a working agent loop instead of a joke about one.
 | **Mayday** | `Ctrl-C`. Cancels the turn, not the session. |
 | **Runway** | The workspace root. Nothing takes off from outside it. |
 | **Flight plan** | The diff you approved before the agent started. |
+| **Model lab** | The workbench: a provider, a prompt, a budget, and the record of what happened. |
+| **Recipe** | One model plus one prompt plus one budget, as a file. Not an agent until promoted. |
+| **Autopilot (local)** | A model you already run. Very confident. Reads nothing it is not handed. |
+| **Tower** | A remote driver over the ACP bridge. Clears, routes, does not sign. |
+| **Vector, Victor** | The routing question: which provider, which model, which corpus. |
 
 <Aside type="note" title="The brace position">
 If something goes wrong: `acpilot session cancel`, then read the audit log. If

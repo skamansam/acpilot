@@ -54,18 +54,18 @@ impl From<AcpilotError> for ApiError {
 impl ApiError {
     /// HTTP status for this failure class.
     ///
-    /// `HostUnavailable` and `AgentFailed` are `502`: the daemon is fine, the
-    /// thing behind it is not. That distinction is what lets a client offer
-    /// "retry" instead of "give up".
+    /// `HostUnavailable`, `ModelUnavailable` and `AgentFailed` are `502`: the
+    /// daemon is fine, the thing behind it is not. That distinction is what lets
+    /// a client offer "retry" instead of "give up".
     #[must_use]
     pub fn status(&self) -> StatusCode {
         match self.0 {
             AcpilotError::NotFound { .. } => StatusCode::NOT_FOUND,
             AcpilotError::Conflict { .. } => StatusCode::CONFLICT,
             AcpilotError::PermissionDenied { .. } => StatusCode::FORBIDDEN,
-            AcpilotError::HostUnavailable { .. } | AcpilotError::AgentFailed { .. } => {
-                StatusCode::BAD_GATEWAY
-            }
+            AcpilotError::HostUnavailable { .. }
+            | AcpilotError::ModelUnavailable { .. }
+            | AcpilotError::AgentFailed { .. } => StatusCode::BAD_GATEWAY,
             AcpilotError::Protocol { .. } | AcpilotError::Io(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -145,6 +145,13 @@ mod tests {
             (AcpilotError::denied("x"), StatusCode::FORBIDDEN),
             (
                 AcpilotError::HostUnavailable { host: "h".into() },
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                AcpilotError::ModelUnavailable {
+                    provider: "lmstudio".into(),
+                    message: "connection refused".into(),
+                },
                 StatusCode::BAD_GATEWAY,
             ),
             (

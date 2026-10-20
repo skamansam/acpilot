@@ -514,6 +514,7 @@ acpilot/
 | P2 | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
 | P3 | `acpilotd` HTTP/SSE API + SQLite history |
 | P4 | Profiles: config cascade, per-profile secrets, state, and preferences |
+| P4.5 | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
 | P5 | CLI (complete API coverage, `--profile` everywhere) |
 | P6 | TUI editor (usable daily driver for editing + one agent) |
 | P7 | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
@@ -533,8 +534,9 @@ so they are additive, not rewrites.
 - Being a language server, or shipping and auto-installing other people's servers. We
   configure the ones you already have; v0.1 downloads nothing (D12).
 - Synced or hosted profiles. A profile is a local identity, not an account.
-- Being an agent itself. Acpilot has no model, no prompts, no opinions about which agent
-  is best. It is the cockpit, not the pilot.
+- Being an agent itself. Acpilot ships no hosted model, no default personality, and no
+  opinion about which agent is best. The model lab (P4.5) turns a model *you* already run
+  into an ordinary agent manifest — the cockpit still belongs to the pilot.
 - Replacing the user's shell, git client, or package manager.
 - Hosted/cloud service. The daemon binds localhost by default; remote exposure is
   explicitly opt-in with a token.

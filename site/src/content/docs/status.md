@@ -23,6 +23,9 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Agents, sessions, permissions | <span class="pill pill--hangar">hangar</span> | P2 — the next phase |
 | Language servers | <span class="pill pill--hangar">hangar</span> | P7 |
 | Profiles | <span class="pill pill--hangar">hangar</span> | P4 |
+| Local models (LM Studio) | <span class="pill pill--hangar">hangar</span> | P4.5 — provider crate and discovery. Contract shipped, no server probed yet |
+| The model lab | <span class="pill pill--hangar">hangar</span> | P4.5 — recipes, runs, workbench |
+| Remote drivers over ACP | <span class="pill pill--hangar">hangar</span> | P4.5-10 — bridge, pairing, scopes. Off by default
 | SSH / WSL hosts | <span class="pill pill--hangar">hangar</span> | P8 / P9 |
 
 ## The flight plan
@@ -34,6 +37,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | P2 | ACP engine, sessions, permission broker (headless, mock agent) | next |
 | P3 | Daemon API: SSE, files, terminals, SQLite | |
 | P4 | Profiles and preferences | |
+| P4.5 | Local models: LM Studio, the model lab, promotion, ACP bridge for remote drivers | contract only |
 | P5 | CLI: full API coverage | |
 | P6 | TUI: an editor you could use daily | |
 | P7 | Language servers | |

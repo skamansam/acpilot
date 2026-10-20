@@ -238,6 +238,140 @@ Three rules:
 
 ---
 
+## P4.5 — Local models and the model lab (≈14 days)
+
+Numbered `P4.5` so every existing task id stays valid: this lands after profiles (recipes
+are per-profile data, and credentials are keyring entries) and before the CLI grows the
+commands that drive it. Decisions and consequences: `docs/adr/0002-local-models-and-the-model-lab.md`.
+
+The shape in one paragraph: a **provider** is an HTTP chat endpoint; a **recipe** is a tuned
+configuration for one model of one provider; the **lab** is a UI over the API that edits
+recipes and records runs; **promotion** writes a recipe into `agents.toml` as an ordinary
+`acp-stdio` agent that runs `acpilot-agent-lm`. The model therefore never touches the disk:
+the shim reaches files, terminals, and permissions through ACP callbacks, exactly like
+`claude-code-acp` does. No new trust boundary, no second permission implementation.
+
+LM Studio is the day-one provider, because it reports what a lab needs: `GET /api/v0/models`
+gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
+`POST /api/v0/chat/completions` returns `stats` (tok/s, time to first token) and `model_info`.
+Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
+and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
+
+- [ ] **P4.5-1 · `acpilot-model` crate** (2d)
+  - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
+    cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
+    beyond the HTTP client's idle read timeout).
+  - `LmStudioBackend` on the native `/api/v0` surface; `OpenAiCompatibleBackend` on `/v1`.
+    The difference is deliberate: fewer facts means fewer gauges, not invented ones.
+  - Errors map to `AcpilotError::ModelUnavailable` (`502 model_unavailable`, exit `1`): the
+    daemon is fine, the inference server behind it is not, which is what lets a UI offer "retry"
+    instead of "give up". A model id the server does not have is `404 not_found`; a rejected
+    token is `403 permission_denied`; no retries on a 4xx. The variant is added in this phase
+    (it is the one failure the P1 enum could not describe without lying).
+
+- [ ] **P4.5-2 · Discovery and capability probing** (1.5d)
+  - Map `/api/v0/models` fields into `DiscoveredModel` (`llm`→`chat`, `vlm`→`vision`,
+    `embeddings`→`embedding`, `state`→`loaded`, `max_context_length`→`context_window` with
+    `context_source = server`). Where a server says nothing, `context_source = unknown` and the
+    field stays null — the daemon never assumes 4096 or 8192.
+  - Probe on explicit action only (`acpilot models probe`, a button in the lab); no polling, no
+    startup scan, and an unreachable provider is reported, not retried in the background.
+  - Capability probe sends one tool-shaped request and one JSON-schema request against the
+    loaded model and records what came back in `ModelCapabilities`. A model that claims tools
+    and then emits prose gets `tools: false` with the evidence in `detail`.
+
+- [ ] **P4.5-3 · Recipes** (1d)
+  - `profiles/<name>/recipes/<id>.toml`, `schema_version = 1`, unknown keys are errors (same
+    rule as config and manifests). Hot-reload on change, 200 ms debounce, last-good kept on a
+    parse failure with a notice.
+  - Validation at load, not at run: `window` must not exceed the model's reported window; a tool
+    the model cannot call is refused with an explanation rather than silently omitted;
+    `max_steps` in `1..=50`; `reserve_output + max_corpus_bytes_estimate` must fit.
+
+- [ ] **P4.5-4 · Context assembly** (2d)
+  - Budget split — system prompt, corpus, history, tool schemas, reserved output — with a
+    per-section estimate; corpus from `CorpusSelector` globs honouring `max_files`/`max_bytes`,
+    `ignore` rules, and a stable order so a run is reproducible.
+  - `ContextStrategy::{TruncateOldest, Summarize, Refuse}`; overflow is an event with the numbers
+    attached, never a silent trim. Summarisation uses the same model and is labelled as such in
+    the prompt, because a summarised history is a different history.
+  - Token counting is an estimate until the server answers: pre-flight uses a bytes/4 heuristic
+    with a documented error band, and every `RunSummary` reconciles against `usage` and sets
+    `TokenUsage.estimated = false` only then.
+
+- [ ] **P4.5-5 · `acpilot-agent-lm`** (3d)
+  - A small ACP agent binary: reads a recipe, runs the model loop, and reaches the world only
+    through ACP client callbacks (`fs/read_text_file`, `fs/write_text_file`, `terminal/*`,
+    `session/request_permission`). It holds no filesystem handle of its own.
+  - Tool schema generated from `ToolExposure`; strict parsing of tool calls with one repair
+    attempt, then a `Notice` event; `max_steps` enforced with a clear stop reason; `session/cancel`
+    aborts the HTTP stream immediately rather than after the next chunk.
+  - Streams `SessionEvent`-shaped updates so the transcript, the TUI, and the web UI need no
+    model-specific code. Usage and stop reason are reported on the final update.
+
+- [ ] **P4.5-6 · Run records** (1d)
+  - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
+    sampling, corpus selectors and resolved file list, budget), then the result (latency, first
+    token, usage, stop reason, warnings).
+  - `GET /v1/recipes/{id}/runs` paginates; `POST /v1/recipes/{id}/runs/{run}/replay` re-sends the
+    stored request unchanged. Compare is a diff of two records, so "it was better an hour ago"
+    has an answer.
+
+- [ ] **P4.5-7 · API** (1.5d)
+  - `GET/POST /v1/providers`, `PATCH/DELETE /v1/providers/{id}`, `POST /v1/providers/{id}/probe`,
+    `GET /v1/models`, `GET/POST /v1/recipes`, `GET/PATCH/DELETE /v1/recipes/{id}`,
+    `POST /v1/recipes/{id}/runs` (202 + SSE stream), `GET /v1/recipes/{id}/runs`,
+    `POST /v1/recipes/{id}/promote`.
+  - SSE gains `model.run.started`, `model.run.delta`, `model.run.finished`, `model.provider.status`.
+    OpenAPI snapshot updated in the same PR.
+
+- [ ] **P4.5-8 · The lab UI** (2.5d, TUI first; web and desktop reuse the API)
+  - Three panes: recipe (master prompt, sampling sliders, context budget, tool ceiling), corpus
+    (globs, resolved file list with sizes, budget meter), output (streaming text, run history).
+  - Gauges show only what the provider reported: first token, tok/s, stop reason, usage. Estimated
+    tokens are drawn differently from reported ones, and the difference is stated in words.
+  - "Effective request" inspector: the exact JSON that was sent, with ignored parameters listed
+    beside it. Debugging a local model is mostly finding out which knob the server dropped.
+  - Compare mode: two runs side by side with a token and latency delta; promote is one keystroke
+    from here, and it warns first.
+
+- [ ] **P4.5-9 · Promotion** (1d)
+  - Write the `agents.toml` entry (`transport = "acp-stdio"`, `command = "acpilot-agent-lm"`,
+    `args = ["--recipe", "<id>"]`, `env = { ACPILOT_RECIPE_PROFILE = "work" }`), with a comment
+    naming the recipe file and its mtime, and refuse to overwrite a hand-written entry.
+  - Warn — not block — when the recipe's model never passed the tools probe, when tool-call
+    validity is below 90% across its last ten runs, or when the window exceeds host memory.
+  - `acpilot agents rm <id>` reverses it exactly; a promoted agent is a manifest line, not a
+    migration.
+
+- [ ] **P4.5-10 · ACP bridge for remote drivers** (2d)
+  - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
+    `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
+    Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip
+    the token, anything else may not.
+  - `initialize` returns our capabilities and records the client name/version. Sessions opened
+    by a driver record the driver id, so a transcript can answer "who asked for this?".
+  - Scopes are intersected with the grant: `observe`, `prompt`, `cancel` by default;
+    `answer_permissions` requires an explicit per-driver grant. Without it, a permission request
+    from a driver-started turn is routed to the human's attached clients and the driver's call
+    blocks — with a `Notice` explaining why, so it is never a mysterious hang.
+  - Rate limits per driver, 0600 token file, TLS assumed to be terminated by a tunnel or reverse
+    proxy in v0.1 (documented, not hand-waved), and `GET /v1/acp/{bridge,drivers}` for the
+    cockpit's connection panel.
+
+- [ ] **P4.5-11 · Tests** (1.5d)
+  - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
+    `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
+    request bodies so a param regression is a diff.
+  - Bridge tests: expired code, wrong token, scope escalation refused, driver cannot answer a
+    permission without the grant, revoked driver's next call fails with `401`.
+  - **DoD:** `acpilot recipes run <id> "…"` streams from a real LM Studio on port 1234, the run
+    record reproduces byte-identically on replay, `promote` produces an agent that passes the P2
+    session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while
+    the permission prompt appears in the TUI and not in the script.
+
+---
+
 ## P5 — CLI (≈6 days)
 
 - [ ] **P5-1** `acpilot-cli` skeleton: `clap` derive, global `--json`, `--api-url`, `--token`, `--config`, `--profile`; client discovery of a running daemon (socket then TCP), auto-spawn daemon (`--no-spawn` to disable) with a 2 s readiness wait.
@@ -513,6 +647,9 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 | LSP completion round-trip | ≤ 300 ms p95 |
 | LSP hover | ≤ 200 ms p95 |
 | Profile switch on a warm daemon | ≤ 100 ms |
+| Lab overhead per run, excluding model time | ≤ 25 ms p95 |
+| Recipe edit → next run accepted (window open) | ≤ 50 ms |
+| Context assembly, 50 files / 2 MB corpus | ≤ 120 ms |
 
 ### Security
 
@@ -643,6 +780,11 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 | Scope creep across four UIs | Never ships | API-first rule; v0.1 is CLI+TUI only; GUI/web gated on daemon stability |
 | LSP servers hang, crash, or index forever | Editor feels broken; RAM spikes | Timeouts + `$/cancelRequest` everywhere, per-server stderr ring, idle shutdown, crash-loop cap, nothing on the keystroke path |
 | Profile mix-up sends code to the wrong account | Broken trust, possibly a client confidentiality incident | Keyring namespacing, hard error on unresolved profile, no fallback, cross-profile refs opt-in + audited, `profile diff` in support docs |
+| Local models are bad at tool calls | A promoted agent loops, or calls nothing and explains why | Capability probe (P4.5-2), validity metric across runs, promotion warns below 90%, `max_steps` cap, repair-once parsing with an honest notice |
+| A server lies about its context window | Silent truncation, or a 400 mid-run | `MetadataSource` on every window, recipe validation against the reported value, overflow is an event with numbers, `estimated` flag on pre-flight token counts |
+| The model lab becomes a second product | Four UIs, one lab, endless drift | The lab is an API client like everything else (`POST /v1/recipes/{id}/runs` + SSE); the recipe is a file; the agent is a manifest line |
+| A remote driver approves its own writes | The one promise the product makes, broken by a cloud agent | `answer_permissions` off by default and granted per driver; unanswered requests route to human clients; every driver action audited with its identity |
+| Bridge exposure on a LAN | Remote code execution with a nice UI | Off unless configured, bearer token + hashed storage, single-use pairing code with a 2-minute expiry, scopes intersected, TLS documented as the operator's tunnel in v0.1 |
 
 ## Open decisions ([decide])
 
@@ -659,6 +801,9 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D11 · Profile storage: database per profile (recommended) vs single database with a `profile` column.
 - [ ] D12 · Language-server installation: detect-only in v0.1 (recommended) vs managed downloads with checksums.
 - [ ] D13 · Profile inheritance: `extends` merge vs copy-on-create only.
+- [x] D14 · Model adapter seam: **one `ChatBackend` trait, `LmStudio` native plus `OpenAiCompatible`, new variants only with their adapter** (decided 2026-10-20, ADR 0002). Anthropic/Gemini are not OpenAI-shaped and are explicitly out of v0.1.
+- [x] D15 · Remote driver trust: **ACP bridge with scopes, `answer_permissions` off by default, permission prompts route to a human** (decided 2026-10-20, ADR 0002). TLS termination is the operator's tunnel in v0.1.
+- [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
 
 ## Definition of done for v0.1.0
 
@@ -671,4 +816,6 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] Language servers attach to a workspace: diagnostics, completion, hover, rename, format-on-save; a code action that edits a file is previewed and permissioned.
 - [ ] Two profiles (`work`, `personal`) run agents side by side with different agents, keys, and policies; neither sees the other's sessions or history.
 - [ ] All performance budgets met in CI; `acpilot doctor` clean on all three OSes.
-- [ ] Docs cover install, agents, profiles, hosts, policy, LSP, API; OpenAPI published.
+- [ ] One local model runs a full turn through a promoted recipe on LM Studio: window, tools, and permissions all visible in the lab.
+- [ ] A remote driver pairs over the ACP bridge, prompts that agent, and **cannot** answer the permission prompt it raises — the human does.
+- [ ] Docs cover install, agents, profiles, hosts, policy, LSP, local models, remote drivers, API; OpenAPI published.

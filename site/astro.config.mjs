@@ -1,9 +1,10 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// Project page on GitHub Pages: https://skamansam.github.io/acpilot
+// Project page on GitHub Pages, served under the account's custom domain:
+// https://rudeboy.dev/acpilot/ (skamansam.github.io redirects there).
 export default defineConfig({
-  site: 'https://skamansam.github.io',
+  site: 'https://rudeboy.dev',
   base: '/acpilot',
   integrations: [
     starlight({

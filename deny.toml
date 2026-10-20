@@ -1,0 +1,45 @@
+# cargo-deny configuration.
+#
+# The rule this encodes: a surprise transitive licence is a build failure, not a
+# discovery during a release. Additions to the allow-list are a PR with a reason.
+
+[advisories]
+yanked = "warn"
+ignore = []
+
+[licenses]
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  "BSL-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Copying a dependency into the tree is how a fork becomes permanent; if you need
+# this, say why in the PR.
+deny = [
+  { crate = "openssl-sys", use-instead = "rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev" # a branch-tracking dependency is not a pinned dependency
+
+# gpui pulls font-kit from a rev-pinned Zed fork (README §5.4). Allowing the org
+# rather than one URL is what cargo-deny supports here; combined with
+# required-git-spec = "rev" it still cannot mean "track main".
+[sources.allow-org]
+github = ["zed-industries"]

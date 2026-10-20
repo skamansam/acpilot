@@ -1,0 +1,37 @@
+[package]
+name = "acpilotd"
+description = "The Acpilot daemon: owns sessions, agents, permissions and terminals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acpilotd"
+path = "src/main.rs"
+
+[features]
+default = []
+# Serves a Swagger UI page at /docs. Off by default: the page loads its assets
+# from a CDN, which is fine for development and wrong to assume in production.
+docs = []
+
+[dependencies]
+acpilot-core = { workspace = true }
+acpilot-proto = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+utoipa = { workspace = true }
+
+[dev-dependencies]
+http-body-util = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

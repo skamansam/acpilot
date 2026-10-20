@@ -1,0 +1,12 @@
+[package]
+name = "acpilot-agent"
+description = "ACP client engine, agent supervision, PTY transcript adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

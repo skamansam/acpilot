@@ -1,0 +1,116 @@
+[workspace]
+members = ["crates/*", "xtask"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95" # floor set by rusqlite_migration 2.6; see README §5.9
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# internal
+acpilot-proto = { path = "crates/acpilot-proto" }
+acpilot-core = { path = "crates/acpilot-core" }
+
+# protocol
+agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }
+agent-client-protocol-schema = "1.12" # versioned separately from the 3.x runtime
+
+# runtime
+tokio = { version = "1.54", features = ["full"] }
+futures = "0.3"
+
+# api
+axum = "0.8"
+axum-extra = "0.12"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "compression-full", "cors"] }
+utoipa = { version = "6", features = ["axum_extras"] }
+
+# cli
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.6"
+clap_mangen = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "stream"] }
+eventsource-stream = "0.2"
+
+# tui
+ratatui = "0.30"
+crossterm = "0.29"
+tui-term = "0.3"
+vt100 = "0.18"
+
+# gui
+# gpui is declared here so there is one place to bump it (XT-1), but it is not a
+# dependency of acpilot-gui yet: P10 adds it. Keeping it undeclared as a compile
+# input keeps `cargo test` fast until the GUI phase starts.
+gpui = "0.2.2"
+# gui fallback (P0-3 veto): iced = "0.14"
+
+# editor
+ropey = "1.6"
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+imara-diff = "0.2"
+similar = "3"
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+lsp-types = "0.97" # fallback only; see D8
+gen-lsp-types = { version = "0.11", features = ["url"] }
+async-lsp = "0.2" # spike candidate only; see P7-2
+url = "2"
+
+# hosts
+russh = "0.64"
+russh-sftp = "3"
+ssh2-config = "0.9"
+openssh = "0.11" # optional fallback
+portable-pty = "0.9"
+
+# storage & config
+rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite_migration = "2"
+figment = "0.10"
+keyring = "4.2"
+directories = "6"
+
+# misc
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+toml = "1.1"
+uuid = { version = "1", features = ["v7", "serde"] }
+jiff = "0.2"
+notify = "8"
+arboard = "3.7"
+pulldown-cmark = "0.13"
+nucleo = "0.5"
+thiserror = "2"
+anyhow = "1"
+miette = "7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
+argon2 = "0.6"
+
+# dev
+insta = { version = "1", features = ["json"] }
+http-body-util = "0.1"
+
+[workspace.dependencies.windows]
+version = "0.62"
+features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

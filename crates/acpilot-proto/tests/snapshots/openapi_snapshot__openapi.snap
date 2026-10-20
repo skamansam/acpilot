@@ -1,0 +1,811 @@
+---
+source: crates/acpilot-proto/tests/openapi_snapshot.rs
+expression: document
+---
+{
+  "components": {
+    "schemas": {
+      "AgentStatus": {
+        "description": "Whether an agent can be used right now.",
+        "enum": [
+          "available",
+          "missing",
+          "unhealthy",
+          "untrusted"
+        ],
+        "type": "string"
+      },
+      "AgentSummary": {
+        "description": "An agent as returned by `GET /v1/agents`.",
+        "properties": {
+          "command": {
+            "description": "Command that will be spawned, for display and debugging.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Agent identifier."
+          },
+          "name": {
+            "description": "Human-readable name.",
+            "type": "string"
+          },
+          "protocol_version": {
+            "description": "Protocol version reported by the last handshake, when there was one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentStatus",
+            "description": "Current availability."
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AgentTransport",
+            "description": "How the agent is driven."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "status",
+          "command"
+        ],
+        "type": "object"
+      },
+      "AgentTransport": {
+        "description": "Transport used to drive an agent.\n\n`AcpStdio` is the native path. `Pty` is the program-as-agent adapter, which\nlets an ordinary TUI program (freebuff, claude, anything) participate through\na transcript parser. `HttpJsonRpc` is reserved for remote agents.",
+        "enum": [
+          "acp_stdio",
+          "pty",
+          "http_json_rpc"
+        ],
+        "type": "string"
+      },
+      "CreateSessionRequest": {
+        "description": "Request body for `POST /v1/sessions`.",
+        "properties": {
+          "agent_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Agent to run."
+          },
+          "title": {
+            "description": "Optional title; the first prompt supplies one otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Workspace to attach the session to."
+          }
+        },
+        "required": [
+          "workspace_id",
+          "agent_id"
+        ],
+        "type": "object"
+      },
+      "ErrorBody": {
+        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`not_found`, `conflict`,\n`permission_denied`, `host_unavailable`, `agent_failed`, `protocol`, `io`).\nClients switch on `code`; `message` is for humans and may be reworded.",
+        "properties": {
+          "code": {
+            "description": "Stable identifier for the failure class.",
+            "type": "string"
+          },
+          "details": {
+            "description": "Field-level detail, when the failure is attributable to specific inputs.",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "type": "array"
+          },
+          "message": {
+            "description": "Human-readable explanation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "description": "One field-level entry in an [`ErrorBody`].",
+        "properties": {
+          "field": {
+            "description": "Dotted path of the offending field, for example `preferences.wrap`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What is wrong with it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "message"
+        ],
+        "type": "object"
+      },
+      "FileContent": {
+        "description": "File contents plus the token needed to write them back.",
+        "properties": {
+          "etag": {
+            "description": "Opaque validator; send it back as `if_match` to write.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative path.",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 contents. Binary files are refused rather than mangled.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text",
+          "etag"
+        ],
+        "type": "object"
+      },
+      "FileEntry": {
+        "description": "One directory entry.",
+        "properties": {
+          "is_dir": {
+            "description": "Whether this is a directory.",
+            "type": "boolean"
+          },
+          "modified": {
+            "description": "RFC 3339 modification time, when the host reports one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Path relative to the workspace root, using `/` as the separator everywhere.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Size in bytes; zero for directories.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "is_dir",
+          "size"
+        ],
+        "type": "object"
+      },
+      "FileWriteRequest": {
+        "description": "Request body for `PUT /v1/files`.",
+        "properties": {
+          "if_match": {
+            "description": "The `etag` the caller last read, or absent to create a new file.\n\nA mismatch is a `409`, never a silent overwrite.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Workspace-relative path.",
+            "type": "string"
+          },
+          "text": {
+            "description": "New UTF-8 contents.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
+      "HostCapabilities": {
+        "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files, and the UIs need to know that before offering an\nagent.",
+        "properties": {
+          "filesystem": {
+            "description": "Can the daemon read and write files here?",
+            "type": "boolean"
+          },
+          "lsp": {
+            "description": "Can the daemon run language servers here?",
+            "type": "boolean"
+          },
+          "pty": {
+            "description": "Can the daemon allocate a PTY here?",
+            "type": "boolean"
+          },
+          "spawn": {
+            "description": "Can the daemon spawn agent processes here?",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "filesystem",
+          "pty",
+          "spawn",
+          "lsp"
+        ],
+        "type": "object"
+      },
+      "HostKind": {
+        "description": "How the daemon reaches a host.",
+        "enum": [
+          "local",
+          "ssh",
+          "wsl"
+        ],
+        "type": "string"
+      },
+      "HostSummary": {
+        "description": "A host as returned by `GET /v1/hosts`.",
+        "properties": {
+          "capabilities": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HostCapabilities",
+                "description": "Negotiated capabilities, absent until the host has been reached once."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connected": {
+            "description": "Whether the last connection attempt succeeded.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Host identifier."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HostKind",
+            "description": "Transport used to reach the host."
+          },
+          "label": {
+            "description": "Human-readable label.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "connected"
+        ],
+        "type": "object"
+      },
+      "LspServerStatus": {
+        "description": "Lifecycle state of a language server.",
+        "enum": [
+          "starting",
+          "ready",
+          "indexing",
+          "crashed",
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "LspServerSummary": {
+        "description": "A language server as returned by `GET /v1/lsp`.",
+        "properties": {
+          "command": {
+            "description": "Command that was spawned.",
+            "type": "string"
+          },
+          "encoding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PositionEncoding",
+                "description": "Encoding agreed during `initialize`, absent before the handshake."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Server identifier."
+          },
+          "languages": {
+            "description": "Language identifiers this server is attached to.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LspServerStatus",
+            "description": "Current state."
+          }
+        },
+        "required": [
+          "id",
+          "languages",
+          "command",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PermissionDecision": {
+        "description": "The decision the broker applied, with its provenance.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339 timestamp of the decision.",
+            "type": "string"
+          },
+          "decided_by": {
+            "description": "Who or what decided: `user`, `policy:<rule-id>`, or `timeout`.",
+            "type": "string"
+          },
+          "option": {
+            "$ref": "#/components/schemas/PermissionOption",
+            "description": "What was chosen."
+          }
+        },
+        "required": [
+          "option",
+          "decided_by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "PermissionKind": {
+        "description": "What an agent is asking to do.",
+        "enum": [
+          "file_write",
+          "file_read",
+          "terminal",
+          "tool_call",
+          "other"
+        ],
+        "type": "string"
+      },
+      "PermissionOption": {
+        "description": "An answer the caller may give.",
+        "enum": [
+          "allow_once",
+          "allow_always",
+          "deny"
+        ],
+        "type": "string"
+      },
+      "PermissionRequest": {
+        "description": "A pending request as returned by `GET /v1/permissions`.",
+        "properties": {
+          "created_at": {
+            "description": "RFC 3339 timestamp of when the request was raised.",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Full detail: the diff, the command line, the tool payload.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Request identifier, used when answering."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PermissionKind",
+            "description": "Classification of the request."
+          },
+          "options": {
+            "description": "Options the caller may choose from, in display order.",
+            "items": {
+              "$ref": "#/components/schemas/PermissionOption"
+            },
+            "type": "array"
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session that is blocked on this."
+          },
+          "title": {
+            "description": "One-line title, safe to show in a notification.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "kind",
+          "title",
+          "detail",
+          "options",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "PositionEncoding": {
+        "description": "Position encoding negotiated with a server.\n\nLSP defaults to UTF-16, while the editor buffers are UTF-8 bytes; the daemon\nnegotiates explicitly and records what was agreed rather than assuming.",
+        "enum": [
+          "utf8",
+          "utf16"
+        ],
+        "type": "string"
+      },
+      "Preferences": {
+        "description": "Editor and UI preferences, per profile.\n\nDefaults are data (`defaults.toml`), not code: adding a preference should be a\none-line change that every UI picks up, and unknown keys are reported rather\nthan ignored.",
+        "properties": {
+          "diagnostics_min_severity": {
+            "description": "Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.",
+            "type": "string"
+          },
+          "format_on_save": {
+            "description": "Run the formatter on save when one is available.",
+            "type": "boolean"
+          },
+          "insert_spaces": {
+            "description": "Insert spaces instead of tab characters.",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "description": "Schema version of this document, so migrations are explicit.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tab_width": {
+            "description": "Columns per tab stop.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "theme": {
+            "description": "Theme identifier, shared by TUI, GUI and web.",
+            "type": "string"
+          },
+          "trim_trailing_whitespace": {
+            "description": "Strip trailing whitespace on save.",
+            "type": "boolean"
+          },
+          "wrap": {
+            "description": "Soft-wrap long lines.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tab_width",
+          "insert_spaces",
+          "format_on_save",
+          "trim_trailing_whitespace",
+          "wrap",
+          "theme",
+          "diagnostics_min_severity"
+        ],
+        "type": "object"
+      },
+      "ProfileSummary": {
+        "description": "A profile as returned by `GET /v1/profiles`.",
+        "properties": {
+          "active": {
+            "description": "Whether this is the daemon's currently active profile.",
+            "type": "boolean"
+          },
+          "agent_count": {
+            "description": "Number of configured agents.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Profile identifier."
+          },
+          "label": {
+            "description": "Human-readable label.",
+            "type": "string"
+          },
+          "workspace_count": {
+            "description": "Number of workspaces opened under this profile.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "active",
+          "agent_count",
+          "workspace_count"
+        ],
+        "type": "object"
+      },
+      "PromptAccepted": {
+        "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE; this only acknowledges that it started.",
+        "properties": {
+          "first_seq": {
+            "description": "Sequence number the client should use as `Last-Event-ID` when reconnecting.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session the turn belongs to."
+          },
+          "turn_id": {
+            "description": "Identifier for this turn, usable to correlate events and cancels.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "turn_id",
+          "first_seq"
+        ],
+        "type": "object"
+      },
+      "PromptRequest": {
+        "description": "Request body for `POST /v1/sessions/{id}/prompt`.\n\n`idempotency_key` exists so a retried request cannot start a second turn —\na dropped connection must not cost the user an agent run.",
+        "properties": {
+          "idempotency_key": {
+            "description": "Client-generated key that makes retries safe.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The prompt text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "SessionEvent": {
+        "description": "One event on a session's stream.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339 timestamp of when the daemon recorded the event.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SessionEventKind",
+            "description": "What happened."
+          },
+          "payload": {
+            "description": "Kind-specific payload.",
+            "type": "object"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/u64",
+            "description": "Monotonic sequence number within the session."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session this event belongs to."
+          }
+        },
+        "required": [
+          "seq",
+          "session_id",
+          "kind",
+          "at",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "SessionEventKind": {
+        "description": "The kind of a session event.\n\nThis enum is deliberately closed: UIs switch on it exhaustively, and adding a\nvariant is a wire change that shows up in the OpenAPI snapshot. Adapter-\nspecific detail belongs in the payload, not in new kinds.",
+        "enum": [
+          "message_chunk",
+          "thought",
+          "tool_call",
+          "plan",
+          "mode_changed",
+          "notice",
+          "compaction",
+          "commands_changed"
+        ],
+        "type": "string"
+      },
+      "SessionStatus": {
+        "description": "Where a session is in its lifecycle.",
+        "enum": [
+          "idle",
+          "busy",
+          "awaiting_permission",
+          "closed",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "SessionSummary": {
+        "description": "A session as returned by `GET /v1/sessions`.",
+        "properties": {
+          "agent_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Agent driving the session."
+          },
+          "created_at": {
+            "description": "RFC 3339 timestamp of creation.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session identifier."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus",
+            "description": "Lifecycle state."
+          },
+          "title": {
+            "description": "Display title, derived from the first prompt when not set.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "RFC 3339 timestamp of the last event.",
+            "type": "string"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Workspace the session edits."
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "agent_id",
+          "title",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "String": {
+        "type": "string"
+      },
+      "TerminalSize": {
+        "description": "Terminal dimensions in character cells.",
+        "properties": {
+          "cols": {
+            "description": "Columns.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Rows.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "TerminalSummary": {
+        "description": "A terminal as returned by `GET /v1/sessions/{id}/terminals`.",
+        "properties": {
+          "alive": {
+            "description": "Whether the child process is still running.",
+            "type": "boolean"
+          },
+          "command": {
+            "description": "Command that was started, for display.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Terminal identifier."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session that owns it."
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize",
+            "description": "Current dimensions."
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "size",
+          "alive",
+          "command"
+        ],
+        "type": "object"
+      },
+      "WorkspaceOpenRequest": {
+        "description": "Request body for `POST /v1/workspaces`.\n\nOpening is idempotent: the same `host_id` + `root` pair resolves to the same\nworkspace, so a client can call this on every launch.",
+        "properties": {
+          "host_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Host to open the workspace on."
+          },
+          "name": {
+            "description": "Optional display name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "description": "Absolute path on that host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "root"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSummary": {
+        "description": "A workspace as returned by `GET /v1/workspaces`.",
+        "properties": {
+          "host_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Host the root lives on."
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Workspace identifier."
+          },
+          "name": {
+            "description": "Display name, defaulting to the directory's basename.",
+            "type": "string"
+          },
+          "root": {
+            "description": "Root path, as the host spells it (not translated to the client's platform).",
+            "type": "string"
+          },
+          "session_count": {
+            "description": "Number of sessions recorded against this workspace.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "host_id",
+          "root",
+          "session_count"
+        ],
+        "type": "object"
+      },
+      "u64": {
+        "format": "int64",
+        "minimum": 0,
+        "type": "integer"
+      }
+    }
+  },
+  "info": {
+    "description": "Control plane for editing and ACP agents. Clients observe state and submit intent; file contents never round-trip through this API on the keystroke path.",
+    "license": {
+      "name": "MIT OR Apache-2.0"
+    },
+    "title": "Acpilot API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}

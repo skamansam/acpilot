@@ -1,0 +1,23 @@
+/target
+**/*.rs.bk
+
+# snapshot/patch review leftovers
+*.snap.new
+*.rej
+*.orig
+
+# web (P11)
+web/node_modules
+web/dist
+
+# session history captured for resuming work locally; not part of the product
+.history/
+HISTORY.md
+
+# local runtime state
+.acpilot/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+.DS_Store

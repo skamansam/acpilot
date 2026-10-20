@@ -1,0 +1,16 @@
+[package]
+name = "acpilotd-helper"
+description = "Tiny stdio JSON-RPC shim dropped into SSH and WSL hosts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acpilotd-helper"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

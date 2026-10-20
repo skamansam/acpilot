@@ -1,0 +1,36 @@
+name: Release
+
+# Stub, deliberately: P12 replaces this with cargo-dist driven packaging
+# (tarballs, Homebrew, PowerShell installer, MSI). Until then it only proves that
+# the workspace builds in release mode on every supported platform, so a broken
+# release build is caught on a tag rather than at the end of a phase.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }} -p acpilotd -p acpilot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acpilot-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/acpilot*
+          if-no-files-found: error

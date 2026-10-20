@@ -1,0 +1,19 @@
+[package]
+name = "acpilot-cli"
+description = "The acpilot command line: a typed client for the daemon API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acpilot"
+path = "src/main.rs"
+
+[dependencies]
+acpilot-core = { workspace = true }
+acpilot-proto = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

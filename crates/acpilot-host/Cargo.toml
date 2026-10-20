@@ -1,0 +1,12 @@
+[package]
+name = "acpilot-host"
+description = "The host abstraction: local, SSH, and WSL behind one trait"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

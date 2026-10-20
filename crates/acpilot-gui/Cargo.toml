@@ -1,0 +1,16 @@
+[package]
+name = "acpilot-gui"
+description = "The native desktop app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# gpui is declared in [workspace.dependencies] (one place to bump it, XT-1) but is
+# not wired in yet: P10 adds it, after P0-3 clears the text-performance benchmark.
+# Keeping it out until then keeps `cargo test` from compiling a graphics stack.
+
+[dependencies]
+
+[lints]
+workspace = true

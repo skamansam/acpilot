@@ -1,0 +1,13 @@
+[package]
+name = "acpilot-core"
+description = "Domain model and error type for Acpilot: no I/O, no protocol, no UI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

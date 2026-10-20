@@ -1,0 +1,10 @@
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+
+# Deliberately absent: `group_imports` and `imports_granularity`. Both are
+# nightly-only rustfmt options; setting them on a stable toolchain makes every
+# `cargo fmt` print a warning while silently doing nothing. Import grouping is
+# a review convention here instead (std, then external, then crate) — see
+# CONTRIBUTING.md. Revisit if rustfmt stabilises them.

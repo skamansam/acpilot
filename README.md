@@ -515,6 +515,7 @@ acpilot/
 | P3 | `acpilotd` HTTP/SSE API + SQLite history |
 | P4 | Profiles: config cascade, per-profile secrets, state, and preferences |
 | P4.5 | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
+| P4.6 | Extensions: declarative packs for themes, language-server and agent presets, grammars, snippets; signed index; per-profile activation |
 | P5 | CLI (complete API coverage, `--profile` everywhere) |
 | P6 | TUI editor (usable daily driver for editing + one agent) |
 | P7 | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
@@ -532,7 +533,8 @@ so they are additive, not rewrites.
 
 - Collaborative multi-user editing (design for it; do not ship CRDT in v0.1).
 - Being a language server, or shipping and auto-installing other people's servers. We
-  configure the ones you already have; v0.1 downloads nothing (D12).
+  configure the ones you already have; v0.1 downloads no servers (D12). Extensions can
+  carry a preset for a server you installed yourself, never the binary.
 - Synced or hosted profiles. A profile is a local identity, not an account.
 - Being an agent itself. Acpilot ships no hosted model, no default personality, and no
   opinion about which agent is best. The model lab (P4.5) turns a model *you* already run

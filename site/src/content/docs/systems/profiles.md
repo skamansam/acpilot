@@ -28,9 +28,12 @@ leave a stack trace.
 
 The active profile is resolved in this order:
 
-```text
---profile <name>   →   ACPILOT_PROFILE   →   .acpilot/profile marker
-                   →   active_profile in config.toml   →   "default"
+```mermaid
+flowchart LR
+    flag["--profile name"] --> env["ACPILOT_PROFILE"]
+    env --> marker[".acpilot/profile marker"]
+    marker --> active["active_profile<br/>in config.toml"]
+    active --> fallback["default"]
 ```
 
 A name that does not resolve is an **error**, never a fallback. Falling back to
@@ -58,9 +61,10 @@ surprise.
 
 ## Configuration cascade
 
-```text
-defaults.toml  <  config.toml  <  profiles/<name>/config.toml  <  workspace .acpilot/config.toml  <  env  <  flags
-```
+The cascade is the same one described in [configuration](../../reference/config/):
+built-ins, then the global file, then the profile, then the workspace, then the
+environment, then flags — merged per key, with the winning file recorded so
+`profile diff` can name it.
 
 Merged per key, not per file. `acpilot profile diff work personal` prints the
 effective configuration with the winning file for every key, which is the only

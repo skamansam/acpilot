@@ -376,6 +376,90 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
 
 ---
 
+## P4.6 — Extensions: the mod shop (≈11 days)
+
+Numbered after the model lab for the same reason: no existing task id moves. Decisions and the
+argument against WASM-everything: `docs/adr/0003-extensions-are-data-first.md`.
+
+The shape: a **declarative** extension is a directory with `extension.toml` and assets — a theme,
+language-server presets, agent presets, grammars, snippets, a keymap layer. It is installed once
+into a content-addressed store and **activated per profile**; activation never rewrites your
+config, it changes what the loader sees, so `profile diff` can still explain every value. The
+registry is a signed static index reviewed by a human, with mandatory checksums and no
+auto-update. Code extensions (transcript parsers, tokenizers) are Tier 2 and deliberately not in
+v0.1 (D18).
+
+- [ ] **P4.6-1 · Manifest and loader** (1.5d)
+  - `extension.toml`: `schema_version`, `id` (`publisher.id`), `name`, `version`, `description`,
+    `publisher`, `homepage`, `min_acpilot`, and `[[contributes]]` entries with `kind` + path.
+  - Unknown keys are errors; ids are namespaced so an extension cannot shadow a built-in; a
+    contribution whose path escapes the extension directory is rejected before anything is read.
+  - Loading is a pure function of the directory: no install-time script, no network.
+
+- [ ] **P4.6-2 · The built-ins become extensions** (2d)
+  - Extract the two themes (`night-flight`, `paper`), the ten LSP presets, and the four agent
+    presets out of Rust and into `extensions/` shipped with the binary, loaded through the same
+    loader as anything installed. If the schema is wrong, the first build says so.
+  - Built-ins are marked `built_in` and cannot be uninstalled, only shadowed by id namespacing.
+
+- [ ] **P4.6-3 · Store and verification** (1.5d)
+  - `~/.local/share/acpilot/extensions/<id>/<version>/` extracted atomically to a temp path,
+    hashed (SHA-256 over a sorted file list), then renamed. A mismatch is `Blocked`, never a
+    warning, and a blocked extension is invisible to every loader.
+  - `acpilot ext verify --all` rehashes the store; `acpilot ext prune` removes versions no profile
+    activates.
+
+- [ ] **P4.6-4 · Registry: signed static index** (1.5d)
+  - `index.json` (`{id, version, kind, checksum, size, publisher, min_acpilot, download}`) plus a
+    detached signature. The maintainer key ships in the binary; `registry.trusted_keys` adds a
+    private one. Signature failure is a hard error with the key id named.
+  - `acpilot ext search|add|update|remove|list|show`; `--from <dir>` installs a path link for
+    development; `--index <url>` for a private registry. No fetch on startup, ever.
+
+- [ ] **P4.6-5 · Activation and precedence** (1d)
+  - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <
+    profile's own config. `acpilot ext why rust-analyzer` prints the chain that produced the
+    effective preset, reusing the `profile diff` origin machinery.
+  - Deactivating restores the previous answer without a restart; the daemon emits
+    `extension.changed` and every attached UI re-reads the registries.
+
+- [ ] **P4.6-6 · Themes as data** (1.5d)
+  - Token schema (`bg`, `bg_panel`, `text`, `text_muted`, `accent`, `accent_high`, `border`,
+    `success`, `warning`, `danger`, plus syntax classes), shared by TUI, GUI, and web; hot switch
+    via `prefs.changed`.
+  - CI runs a contrast check over every theme token pair and fails below AA, because "it looked
+    fine on my monitor" is how a theme ships unreadable.
+
+- [ ] **P4.6-7 · Presets that point at programs** (1d)
+  - A `language_servers` or `agents` contribution merges into the typed registries; a command it
+    introduces is trust-pinned on first run (P7-12) exactly like a hand-written one, and the pin
+    UI names the extension so the question is "trust rust-analyzer from acpilot.rust-pack?" rather
+    than a bare binary path.
+
+- [ ] **P4.6-8 · Grammars** (2d)
+  - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of
+    that language, with a parse-time budget and a visible "grammar missing" fallback rather than
+    plain text and no explanation.
+
+- [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
+  - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
+    and below the user's own `keymap.toml`, with conflicts reported by `acpilot keys check`.
+
+- [ ] **P4.6-10 · API and CLI** (1d)
+  - `GET /v1/extensions`, `GET /v1/extensions/{id}`, `POST /v1/extensions`,
+    `POST /v1/extensions/{id}/activate|deactivate|verify`, `DELETE /v1/extensions/{id}`,
+    `GET /v1/themes`; SSE `extension.*`. CLI mirrors it, `--json` everywhere.
+
+- [ ] **P4.6-11 · Tests** (1d)
+  - Manifest matrix (missing fields, unknown keys, path traversal, id collision); checksum mismatch
+    → `Blocked` and invisible; signature failure; install→activate→use→deactivate→use cycle;
+    precedence snapshots; theme contrast; a grammar that fails to parse degrades visibly.
+  - **DoD:** `acpilot ext add acpilot.night-flight-pack`, activate it in `work`, and both themes
+    plus the Rust preset appear in the TUI with no config edit; `acpilot ext why rust-analyzer`
+    names the extension and the manifest version; a tampered extension is refused by name.
+
+---
+
 ## P5 — CLI (≈6 days)
 
 - [ ] **P5-1** `acpilot-cli` skeleton: `clap` derive, global `--json`, `--api-url`, `--token`, `--config`, `--profile`; client discovery of a running daemon (socket then TCP), auto-spawn daemon (`--no-spawn` to disable) with a 2 s readiness wait.
@@ -789,6 +873,10 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 | The model lab becomes a second product | Four UIs, one lab, endless drift | The lab is an API client like everything else (`POST /v1/recipes/{id}/runs` + SSE); the recipe is a file; the agent is a manifest line |
 | A remote driver approves its own writes | The one promise the product makes, broken by a cloud agent | `answer_permissions` off by default and granted per driver; unanswered requests route to human clients; every driver action audited with its identity |
 | Bridge exposure on a LAN | Remote code execution with a nice UI | Off unless configured, bearer token + hashed storage, single-use pairing code with a 2-minute expiry, scopes intersected, TLS documented as the operator's tunnel in v0.1 |
+| A grammar in an extension is still executable wasm | Code execution inside the editor's parser runtime | Reviewed index, pinned checksum, lazy load, parse budget; the docs say "declarative" is narrower, not inert |
+| The extension index becomes a bottleneck | Good extensions wait on a maintainer | Small, reviewable submissions; private registry supported via `--index` + trusted key; the schema is public so packs can be self-hosted |
+| Themes drift across four UIs | An extension that looks wrong in one cockpit | One token schema, hot-switched through `prefs.changed`, contrast checked in CI |
+| Extension id collision shadows a built-in | Silently different behaviour than the docs describe | Namespaced ids (`publisher.id`), collisions are errors, built-ins cannot be overridden by name |
 
 ## Open decisions ([decide])
 
@@ -808,6 +896,8 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [x] D14 · Model adapter seam: **one `ChatBackend` trait, `LmStudio` native plus `OpenAiCompatible`, new variants only with their adapter** (decided 2026-10-20, ADR 0002). Anthropic/Gemini are not OpenAI-shaped and are explicitly out of v0.1.
 - [x] D15 · Remote driver trust: **ACP bridge with scopes, `answer_permissions` off by default, permission prompts route to a human** (decided 2026-10-20, ADR 0002). TLS termination is the operator's tunnel in v0.1.
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
+- [x] D17 · Extension registry trust: **signed static index, mandatory SHA-256, reviewed pull requests, no auto-update** (decided 2026-10-20, ADR 0003). A private registry is `--index` plus a trusted key.
+- [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one.
 
 ## Definition of done for v0.1.0
 
@@ -821,5 +911,6 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] Two profiles (`work`, `personal`) run agents side by side with different agents, keys, and policies; neither sees the other's sessions or history.
 - [ ] All performance budgets met in CI; `acpilot doctor` clean on all three OSes.
 - [ ] One local model runs a full turn through a promoted recipe on LM Studio: window, tools, and permissions all visible in the lab.
+- [ ] A theme and a language-server preset arrive through an extension, activated per profile, with the built-ins themselves shipped as extensions.
 - [ ] A remote driver pairs over the ACP bridge, prompts that agent, and **cannot** answer the permission prompt it raises — the human does.
 - [ ] Docs cover install, agents, profiles, hosts, policy, LSP, local models, remote drivers, API; OpenAPI published.

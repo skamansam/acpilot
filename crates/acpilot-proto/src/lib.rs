@@ -14,6 +14,7 @@ pub mod agent;
 pub mod bridge;
 pub mod error;
 pub mod event;
+pub mod extension;
 pub mod file;
 pub mod host;
 pub mod lsp;
@@ -104,7 +105,16 @@ pub const API_PREFIX: &str = "/v1";
         bridge::AcpBridgeSummary,
         bridge::AcpDriverSummary,
         bridge::PairingCode,
-        bridge::PairDriverRequest
+        bridge::PairDriverRequest,
+        extension::ExtensionKind,
+        extension::ExtensionSource,
+        extension::ExtensionStatus,
+        extension::ExtensionSummary,
+        extension::ExtensionContribution,
+        extension::ExtensionDetail,
+        extension::InstallExtensionRequest,
+        extension::ThemeAppearance,
+        extension::ThemeSummary
     ))
 )]
 pub struct ApiDoc;
@@ -146,6 +156,8 @@ mod tests {
             "RunSummary",
             "AcpBridgeSummary",
             "AcpDriverSummary",
+            "ExtensionSummary",
+            "ThemeSummary",
         ] {
             assert!(schemas.contains_key(name), "{name} missing from components");
         }

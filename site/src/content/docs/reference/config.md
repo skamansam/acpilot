@@ -8,13 +8,13 @@ description: One cascade, per-key merging, and a command that tells you which fi
 Configuration is layered, and every layer can override a single key rather than a
 whole file. The last word wins:
 
-```text
-defaults.toml
-  <  config.toml                       (global)
-  <  profiles/<name>/config.toml       (per profile)
-  <  <workspace>/.acpilot/config.toml  (per workspace)
-  <  ACPILOT_* environment variables
-  <  command-line flags
+```mermaid
+flowchart TD
+    defaults["defaults.toml<br/>shipped with the binary"] --> global["config.toml<br/>global"]
+    global --> profile["profiles/name/config.toml<br/>per profile"]
+    profile --> workspace["workspace/.acpilot/config.toml"]
+    workspace --> env["ACPILOT_* environment"]
+    env --> flags["command-line flags<br/>highest precedence"]
 ```
 
 ## Where things live
@@ -89,6 +89,7 @@ profiles/work/
   config.toml
   providers.toml
   agents.toml
+  extensions.toml                  # activated extensions (install is global)
   recipes/corpus-scraper.toml      # see Flight test → Recipes
 ```
 

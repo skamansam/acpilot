@@ -458,6 +458,166 @@ expression: document
         ],
         "type": "object"
       },
+      "ExtensionContribution": {
+        "description": "One thing an extension provides, named as the profile will see it.",
+        "properties": {
+          "id": {
+            "description": "Identifier inside that registry, for example `rust-analyzer` or\n`night-flight`.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExtensionKind",
+            "description": "Which registry the id lands in."
+          },
+          "summary": {
+            "description": "One line of description, so `ext list` is readable without the manifest.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "ExtensionDetail": {
+        "description": "One extension, in full, as returned by `GET /v1/extensions/{id}`.",
+        "properties": {
+          "active_profiles": {
+            "description": "Profiles that have it activated.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "contributions": {
+            "description": "Everything it contributes, flattened.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionContribution"
+            },
+            "type": "array"
+          },
+          "manifest": {
+            "description": "The manifest as written, for reviewing before enabling.",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ExtensionSummary",
+            "description": "The same summary the list endpoint returns."
+          }
+        },
+        "required": [
+          "summary",
+          "contributions",
+          "manifest",
+          "active_profiles"
+        ],
+        "type": "object"
+      },
+      "ExtensionKind": {
+        "description": "What an extension contributes.\n\nOne extension may contribute several kinds; a \"Rust pack\" is a bundle rather\nthan a category, which is why this is a list on the summary and a single value\non each contribution.",
+        "enum": [
+          "theme",
+          "language_servers",
+          "agents",
+          "grammars",
+          "snippets",
+          "keymap",
+          "transcript_parser"
+        ],
+        "type": "string"
+      },
+      "ExtensionSource": {
+        "description": "How the extension got here.",
+        "enum": [
+          "registry",
+          "path"
+        ],
+        "type": "string"
+      },
+      "ExtensionStatus": {
+        "description": "Verification and activation state.",
+        "enum": [
+          "installed",
+          "active",
+          "disabled",
+          "blocked"
+        ],
+        "type": "string"
+      },
+      "ExtensionSummary": {
+        "description": "An extension as returned by `GET /v1/extensions`.",
+        "properties": {
+          "checksum": {
+            "description": "SHA-256 of the installed directory, verified against the index.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "description": "One sentence, shown in the list.",
+            "type": "string"
+          },
+          "homepage": {
+            "description": "Project page or repository, for a reader deciding whether to trust it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier, `publisher.id`."
+          },
+          "installed_at": {
+            "description": "RFC 3339 timestamp of installation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "description": "Everything it contributes.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionKind"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "Display name.",
+            "type": "string"
+          },
+          "publisher": {
+            "description": "Who published it, as the index records them.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExtensionSource",
+            "description": "Where it came from."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExtensionStatus",
+            "description": "Verification and activation state."
+          },
+          "version": {
+            "description": "Semantic version from the manifest.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "publisher",
+          "description",
+          "kinds",
+          "status",
+          "source"
+        ],
+        "type": "object"
+      },
       "FileContent": {
         "description": "File contents plus the token needed to write them back.",
         "properties": {
@@ -611,6 +771,38 @@ expression: document
           "label",
           "kind",
           "connected"
+        ],
+        "type": "object"
+      },
+      "InstallExtensionRequest": {
+        "description": "Request body for `POST /v1/extensions`.\n\nExactly one of `version` (registry) or `path` (local directory) is used;\n`path` wins when both are present, because a developer typing a path means it.",
+        "properties": {
+          "activate": {
+            "description": "Activate it in the profile named by `X-Acpilot-Profile` after verifying.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier from the index, or the manifest's id for a path install."
+          },
+          "path": {
+            "description": "Directory to link instead of downloading.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Version to install. The index's latest when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "activate"
         ],
         "type": "object"
       },
@@ -1543,6 +1735,53 @@ expression: document
           "size",
           "alive",
           "command"
+        ],
+        "type": "object"
+      },
+      "ThemeAppearance": {
+        "description": "Light or dark, so a UI can pick the right half of a theme pair.",
+        "enum": [
+          "dark",
+          "light"
+        ],
+        "type": "string"
+      },
+      "ThemeSummary": {
+        "description": "A theme as returned by `GET /v1/themes`.\n\nThemes are the one extension kind every surface consumes, so they get a\nfirst-class route rather than being reachable only through the extension list.",
+        "properties": {
+          "appearance": {
+            "$ref": "#/components/schemas/ThemeAppearance",
+            "description": "Which half of the day it is for."
+          },
+          "built_in": {
+            "description": "`true` for the themes compiled into the binary.",
+            "type": "boolean"
+          },
+          "extension_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Extension that provided it, when it did not come from the binary."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "Identifier, for example `acpilot.night-flight`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "appearance",
+          "built_in"
         ],
         "type": "object"
       },

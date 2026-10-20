@@ -75,6 +75,15 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Mod shop',
+          items: [
+            { label: 'The mod shop', link: '/mod-shop/' },
+            { label: 'The manifest', link: '/mod-shop/manifest/' },
+            { label: 'Installing and approving', link: '/mod-shop/registry/' },
+            { label: 'Themes', link: '/mod-shop/themes/' },
+          ],
+        },
+        {
           label: 'Safety systems',
           items: [
             { label: 'Permissions', link: '/safety/permissions/' },

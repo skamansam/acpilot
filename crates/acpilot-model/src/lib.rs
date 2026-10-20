@@ -231,12 +231,31 @@ pub struct ChatResponse {
 }
 
 /// Result of a capability probe, with the evidence that produced it.
+///
+/// Only the dimensions that were actually tested appear here. Vision and
+/// streaming are not probed, so they are absent rather than `false`: a `false`
+/// that means "not tested" is the same lie as a context window that means "we
+/// could not find one". Fold the verdict in with [`Probe::apply_to`], which
+/// leaves everything discovery established untouched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
-    /// What the model demonstrated.
-    pub capabilities: ModelCapabilities,
+    /// The model emitted a tool call when offered a trivial tool.
+    pub tools: bool,
+    /// The model produced a JSON object when constrained to a schema.
+    pub structured_output: bool,
     /// One line per test: what was asked, what came back.
     pub evidence: String,
+}
+
+impl Probe {
+    /// Apply the probed dimensions to a model's capabilities.
+    ///
+    /// Only these two fields move. A `vision: true` from the model list survives a
+    /// probe that never looked at an image.
+    pub fn apply_to(&self, capabilities: &mut ModelCapabilities) {
+        capabilities.tools = self.tools;
+        capabilities.structured_output = self.structured_output;
+    }
 }
 
 /// A provider's wire dialect, dispatched without `dyn`.
@@ -344,13 +363,8 @@ impl Backend {
         ));
 
         Ok(Probe {
-            capabilities: ModelCapabilities {
-                chat: true,
-                streaming: false,
-                tools,
-                structured_output,
-                vision: false,
-            },
+            tools,
+            structured_output,
             evidence: evidence.join("; "),
         })
     }

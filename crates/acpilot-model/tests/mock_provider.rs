@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use acpilot_core::AcpilotError;
 use acpilot_model::{Backend, ChatRequest, Provider};
-use acpilot_proto::model::{MetadataSource, ModelType, ProviderKind, SamplingParams};
+use acpilot_proto::model::{
+    DiscoveredModel, MetadataSource, ModelCapabilities, ModelType, ProviderKind, SamplingParams,
+};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -349,11 +351,37 @@ async fn probe_demonstrates_tools_and_structured_output() {
         .await
         .expect("the probe runs");
 
-    assert!(probe.capabilities.tools, "evidence: {}", probe.evidence);
-    assert!(probe.capabilities.structured_output);
-    assert!(probe.capabilities.chat);
+    assert!(probe.tools, "evidence: {}", probe.evidence);
+    assert!(probe.structured_output);
     assert!(probe.evidence.contains("tools: called `ping`"));
     assert!(probe.evidence.contains("valid JSON object"));
+
+    // Folding the verdict in must not touch what the server reported.
+    let mut capabilities = DiscoveredModel {
+        id: "qwen2-vl".to_owned(),
+        provider_id: "test-provider".to_owned(),
+        model_type: ModelType::Vision,
+        architecture: None,
+        quantization: None,
+        loaded: Some(true),
+        context_window: Some(32_768),
+        context_source: MetadataSource::Server,
+        capabilities: ModelCapabilities {
+            chat: true,
+            vision: true,
+            streaming: false,
+            tools: false,
+            structured_output: false,
+        },
+    }
+    .capabilities;
+    probe.apply_to(&mut capabilities);
+    assert!(capabilities.tools, "the probe's verdict applies");
+    assert!(
+        capabilities.vision,
+        "a probe that never saw an image cannot unset vision"
+    );
+    assert!(capabilities.chat);
 }
 
 #[tokio::test]
@@ -379,8 +407,8 @@ async fn a_model_that_cannot_call_tools_is_reported_honestly() {
         .await
         .expect("the probe runs");
 
-    assert!(!probe.capabilities.tools);
-    assert!(!probe.capabilities.structured_output);
+    assert!(!probe.tools);
+    assert!(!probe.structured_output);
     assert!(probe.evidence.contains("no tool call"));
     assert!(probe.evidence.contains("not a JSON object"));
 }

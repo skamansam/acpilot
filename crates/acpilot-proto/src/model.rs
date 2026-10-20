@@ -368,8 +368,8 @@ pub struct RunSummary {
     /// Why the server stopped: `stop`, `length`, or the server's own reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
-    /// Things that went differently from the recipe: an ignored parameter, a
-    /// truncated corpus, a tool call that had to be repaired.
+    /// Things that went differently from the recipe: a parameter the server
+    /// refused, a truncated corpus, a tool call that had to be repaired.
     pub warnings: Vec<String>,
     /// The parameters actually sent, so a run can be reproduced.
     pub params: SamplingParams,

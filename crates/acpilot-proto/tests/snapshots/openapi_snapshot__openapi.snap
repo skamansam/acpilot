@@ -1305,7 +1305,7 @@ expression: document
             ]
           },
           "warnings": {
-            "description": "Things that went differently from the recipe: an ignored parameter, a\ntruncated corpus, a tool call that had to be repaired.",
+            "description": "Things that went differently from the recipe: a parameter the server\nrefused, a truncated corpus, a tool call that had to be repaired.",
             "items": {
               "type": "string"
             },

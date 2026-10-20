@@ -1,7 +1,8 @@
 # Acpilot
 
-**[Read the field manual](https://skamansam.github.io/acpilot/)** — the docs site, in the tone of a
-flight crew that has seen too much. The honest status page lives there too.
+**The field manual** is the docs site under [`site/`](site/) — written in the tone of a flight crew
+that has seen too much, and honest about which phase each page belongs to. Preview it with
+`cd site && npm run dev`. It deploys to GitHub Pages once the repository is public (`DOCS_DEPLOY=true`).
 
 **One editor. Every agent. You fly.**
 
@@ -493,7 +494,8 @@ acpilot/
 │   ├── acpilot-tui/           # ratatui UI
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
-├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js
+├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js (P11)
+├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one
 ├── spikes/                    # throwaway P0 experiments (deleted before v0.1)
 ├── migrations/                # sqlite migrations

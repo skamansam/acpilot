@@ -532,6 +532,7 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ### Documentation
 
+- [x] Docs site (`site/`): Astro + Starlight, custom theme, status pills per page, link checker in the Docs workflow. Deploy is gated on `DOCS_DEPLOY` until the repository is public (Pages is not available for private repos on this plan).
 - [ ] ADRs: protocol v1-only vs v2 draft, GUI framework, CRDT vs LWW, wasm vs TS web, daemon auth model, LSP wire types + position encoding (D8/D9), profile isolation model (D10).
 - [ ] `docs/api.md` kept in sync with `utoipa` output (CI diff).
 

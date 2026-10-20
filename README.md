@@ -1,5 +1,8 @@
 # Acpilot
 
+**[Read the field manual](https://skamansam.github.io/acpilot/)** — the docs site, in the tone of a
+flight crew that has seen too much. The honest status page lives there too.
+
 **One editor. Every agent. You fly.**
 
 Acpilot is a code editor for the agent era. It is a Rust-native editor whose first-class

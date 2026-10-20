@@ -1,0 +1,294 @@
+/* Acpilot field manual: instrument panel by day, night flight by default.
+ *
+ * Two rules keep this from becoming a novelty theme:
+ *   1. Contrast is load-bearing. Amber on navy, ink on cream, nothing in between.
+ *   2. The jokes live in the copy. The layout stays quiet so long pages read well.
+ */
+
+:root {
+  --sl-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --sl-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+
+  --acp-navy-900: #070d18;
+  --acp-navy-800: #0c1424;
+  --acp-navy-700: #131f33;
+  --acp-navy-600: #1b2b45;
+  --acp-amber: #f7c65c;
+  --acp-amber-dim: #c9963a;
+  --acp-ink: #1a2333;
+  --acp-cream: #fbf7ef;
+}
+
+/* Dark (default): night flight. */
+:root[data-theme='dark'] {
+  --sl-color-bg: var(--acp-navy-900);
+  --sl-color-bg-nav: var(--acp-navy-800);
+  --sl-color-bg-sidebar: var(--acp-navy-800);
+  --sl-color-bg-inline-code: var(--acp-navy-700);
+  --sl-color-text: #e8edf6;
+  --sl-color-text-accent: var(--acp-amber);
+  --sl-color-accent: var(--acp-amber);
+  --sl-color-accent-low: #2a2415;
+  --sl-color-accent-high: #ffe3a8;
+  --sl-color-white: #f4f7fc;
+  --sl-color-gray-1: #dde4ef;
+  --sl-color-gray-2: #b9c4d4;
+  --sl-color-gray-3: #8b99ad;
+  --sl-color-gray-4: #5a6879;
+  --sl-color-gray-5: #2c3a4f;
+  --sl-color-gray-6: var(--acp-navy-700);
+  --sl-color-gray-7: var(--acp-navy-800);
+  --sl-color-black: var(--acp-navy-900);
+  --sl-color-hairline: #24334a;
+  --sl-color-hairline-light: #2c3a4f;
+}
+
+/* Light: day VFR. Warm paper, ink, and the same amber used sparingly. */
+:root[data-theme='light'] {
+  --sl-color-bg: var(--acp-cream);
+  --sl-color-bg-nav: #f4eee1;
+  --sl-color-bg-sidebar: #f4eee1;
+  --sl-color-text: var(--acp-ink);
+  --sl-color-text-accent: #8a5a10;
+  --sl-color-accent: #9a6413;
+  --sl-color-accent-low: #f6e3b8;
+  --sl-color-accent-high: #6b4408;
+  --sl-color-hairline: #ddd2bb;
+  --sl-color-hairline-light: #e7ddc9;
+}
+
+/* --- Typography ------------------------------------------------------- */
+
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.011em;
+}
+
+.sl-markdown-content h2 {
+  padding-block-start: 1.35em;
+  border-block-start: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content > h2:first-of-type {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+
+/* Section labels read like panel placards: small, spaced, upper-case. */
+.sl-markdown-content h3 {
+  font-size: var(--sl-text-h5);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sl-color-text-accent);
+}
+
+/* --- Header ----------------------------------------------------------- */
+
+.site-title {
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: var(--sl-text-sm);
+}
+
+header.header {
+  border-block-end: 1px solid var(--sl-color-hairline);
+  backdrop-filter: blur(6px);
+}
+
+/* --- Sidebar: instrument stack ---------------------------------------- */
+
+.sidebar-pane {
+  border-inline-end: 1px solid var(--sl-color-hairline);
+}
+
+.sidebar-content a[aria-current='page'] {
+  background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
+  border-inline-start: 2px solid var(--sl-color-accent);
+  border-radius: 0 4px 4px 0;
+  font-weight: 600;
+}
+
+.sidebar-content .group-label > span {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}
+
+/* --- Hero: a runway seen from above ----------------------------------- */
+
+.hero {
+  position: relative;
+  padding-block: clamp(2.5rem, 6vw, 5rem);
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 18% 22%, color-mix(in srgb, var(--sl-color-accent) 16%, transparent), transparent 42%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 78px,
+      color-mix(in srgb, var(--sl-color-accent) 9%, transparent) 78px 79px
+    );
+  mask-image: linear-gradient(to bottom, #000 0%, transparent 82%);
+  opacity: 0.55;
+  z-index: -1;
+}
+
+.hero h1 {
+  font-size: clamp(2.35rem, 5.5vw, 3.5rem);
+  line-height: 1.03;
+  letter-spacing: -0.03em;
+}
+
+/* One deliberate step per level. Docs read better when the jump from h2 to h3
+ * is visible without a ruler. */
+.sl-markdown-content h2 {
+  font-size: var(--sl-text-h2);
+  letter-spacing: -0.015em;
+}
+
+.sl-markdown-content h3 {
+  font-size: 1.02rem;
+}
+
+.hero .copy {
+  max-width: 46ch;
+}
+
+.hero img {
+  filter: drop-shadow(0 10px 30px color-mix(in srgb, var(--sl-color-accent) 22%, transparent));
+}
+
+/* --- Cards: boarding passes ------------------------------------------- */
+
+.card-grid {
+  gap: 1rem;
+}
+
+.card {
+  position: relative;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--sl-color-accent) 4%, transparent), transparent 55%),
+    var(--sl-color-bg-nav);
+  padding: 1.15rem 1.25rem 1.15rem 1.25rem;
+  overflow: hidden;
+}
+
+/* The perforation. A dashed stub edge, like a ticket you keep. */
+.card::after {
+  content: '';
+  position: absolute;
+  inset-block: 0.6rem;
+  inset-inline-end: 0.55rem;
+  border-inline-end: 1px dashed color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+}
+
+.card .title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  letter-spacing: 0.01em;
+}
+
+.card .icon {
+  color: var(--sl-color-accent);
+}
+
+/* --- Asides: cockpit placards ----------------------------------------- */
+
+/* Placards, not warning tape: a tinted panel with a hairline, no thick edge. */
+.starlight-aside {
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 28%, var(--sl-color-hairline));
+  background: color-mix(in srgb, var(--sl-color-accent) 6%, var(--sl-color-bg-nav));
+  padding-inline: 1rem;
+  padding-block: 0.85rem;
+}
+
+.starlight-aside .starlight-aside__title {
+  color: var(--sl-color-text-accent);
+  letter-spacing: 0.02em;
+}
+
+/* --- Code: instrument readouts ---------------------------------------- */
+
+.expressive-code,
+pre {
+  border-radius: 8px;
+}
+
+:root[data-theme='dark'] .expressive-code .frame pre {
+  border: 1px solid var(--sl-color-hairline);
+}
+
+/* --- Tables: checklists ----------------------------------------------- */
+
+.sl-markdown-content table {
+  font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content th {
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}
+
+/* --- Status pills used in content ------------------------------------- */
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: var(--sl-text-xs);
+  font-family: var(--sl-font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid currentColor;
+  vertical-align: 0.08em;
+}
+
+.pill--flying {
+  color: #59c98b;
+}
+
+.pill--boarding {
+  color: var(--sl-color-accent);
+}
+
+.pill--hangar {
+  color: var(--sl-color-gray-3);
+}
+
+/* --- Footer ----------------------------------------------------------- */
+
+.meta {
+  border-block-start: 1px solid var(--sl-color-hairline);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero::before {
+    animation: taxi 24s linear infinite;
+  }
+
+  @keyframes taxi {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 0 0, 79px 0;
+    }
+  }
+}

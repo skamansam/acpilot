@@ -1,0 +1,94 @@
+---
+title: Acpilot
+description: A code editor that flies your agents. You keep the controls.
+template: splash
+hero:
+  tagline: |
+    A code editor that flies your agents. You keep the controls — which is why the permission prompts exist.
+  image:
+    file: ../../assets/logo.svg
+    alt: An aircraft inside an instrument gauge
+  actions:
+    - text: Start ground school
+      link: ./ground-school/installation/
+      icon: right-arrow
+    - text: Check flight status
+      link: ./status/
+      variant: minimal
+---
+
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Now boarding">
+**The autopilot is very good. That is exactly the problem.** Acpilot is a code
+editor built around one opinion: an agent may fly, but a human signs the flight
+plan. Everything else — ACP, terminals, remote hosts, profiles — exists to make
+that opinion practical.
+</Aside>
+
+## What this is
+
+Acpilot is a code editor and an agent cockpit in one program. It speaks the
+**Agent Client Protocol** to agents that support it, and it can also fly
+programs that have never heard of ACP — a terminal agent, a CLI, anything that
+prints a transcript.
+
+One daemon owns the sessions, the agents, the permissions, and the terminals.
+The CLI, the terminal UI, the desktop app, and the browser are all clients of
+that daemon, which is why they never disagree about what happened.
+
+<CardGrid>
+  <Card title="ACP, plus a tow hook" icon="rocket">
+    Native ACP agents are the easy case. For everything else there is a PTY
+    adapter: an ordinary program can be flown as an agent without knowing it is
+    being flown.
+  </Card>
+  <Card title="One daemon, four cockpits" icon="laptop">
+    TUI, desktop, browser, CLI. Same session, same permissions, same transcript.
+    Close the laptop and the turn keeps running.
+  </Card>
+  <Card title="Remote without the ritual" icon="puzzle">
+    SSH and WSL are hosts, not special cases. Files, terminals, agents, and
+    language servers all run where the code actually lives.
+  </Card>
+  <Card title="Nothing writes without a signature" icon="approve-check">
+    A write leaves the flight deck only after a human — or a rule you wrote —
+    clears it. Every clearance is logged.
+  </Card>
+  <Card title="Profiles, because keys are not moods" icon="setting">
+    Work, personal, client-acme. Separate agents, separate credentials, separate
+    history. The client's code never flies on your weekend key.
+  </Card>
+  <Card title="Your files stay yours" icon="open-book">
+    Edits are local. The API is a control plane, not a keystroke pipe, so typing
+    never waits on a socket.
+  </Card>
+</CardGrid>
+
+## The shape of a flight
+
+```bash
+acpilot tui                      # open the cockpit on this machine
+acpilot watch build             # follow a session from another terminal
+acpilot --profile work agents ls  # who is available under work credentials?
+```
+
+Those three lines are the destination, not the current position. The
+[flight status](status/) page says exactly how much of this exists today,
+because a manual that lies about the aircraft is worse than no manual.
+
+## What it is not
+
+- **Not a chat window with a file tree.** The editor is the product; the agent is
+  a crew member, not the pilot.
+- **Not a cloud service.** Your machine, your daemon, your keys.
+- **Not a promise that the agent is right.** It is a promise that you will see
+  what it did before it counts.
+
+<Aside type="caution" title="Reality check">
+This site describes a product under construction. Pages carry a status pill:
+<span class="pill pill--flying">flying</span> means it works today,
+<span class="pill pill--boarding">boarding</span> means it is being built now,
+<span class="pill pill--hangar">hangar</span> means it is designed but not
+started. See [flight status](status/).
+</Aside>

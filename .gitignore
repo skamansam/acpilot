@@ -10,6 +10,11 @@
 web/node_modules
 web/dist
 
+# docs site
+site/node_modules
+site/dist
+site/.astro
+
 # session history captured for resuming work locally; not part of the product
 .history/
 HISTORY.md

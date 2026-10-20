@@ -1,0 +1,56 @@
+---
+title: Flight status
+description: What actually works today, and what is still in the hangar.
+---
+
+<span class="pill pill--boarding">boarding</span>
+
+**Current altitude: 3,000 ft and climbing.** The workspace exists, the contract
+tests pass, and nothing has flown a real agent yet. This page is the honest
+instrument panel; if it says a thing works, it works in the repository today.
+
+## What works right now
+
+| Capability | State | Notes |
+| --- | --- | --- |
+| Workspace builds | <span class="pill pill--flying">flying</span> | `cargo xtask check` — fmt, clippy, tests, on Linux/macOS/Windows |
+| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/openapi.json` |
+| API document | <span class="pill pill--flying">flying</span> | Snapshot-tested, so a wire change is a reviewable diff |
+| Error contract | <span class="pill pill--flying">flying</span> | One error type → fixed HTTP statuses and exit codes |
+| Swagger UI | <span class="pill pill--flying">flying</span> | `--features docs`, at `/docs` |
+| CLI | <span class="pill pill--boarding">boarding</span> | `acpilot version` only; the rest is P5 |
+| TUI, desktop, web | <span class="pill pill--hangar">hangar</span> | Crates exist so the layout is real; the UIs are P6/P10/P11 |
+| Agents, sessions, permissions | <span class="pill pill--hangar">hangar</span> | P2 — the next phase |
+| Language servers | <span class="pill pill--hangar">hangar</span> | P7 |
+| Profiles | <span class="pill pill--hangar">hangar</span> | P4 |
+| SSH / WSL hosts | <span class="pill pill--hangar">hangar</span> | P8 / P9 |
+
+## The flight plan
+
+| Phase | What lands | State |
+| --- | --- | --- |
+| P0 | Spikes: ACP handshake, PTY agent, gpui text benchmark, SSH, WSL, LSP | planned |
+| P1 | Workspace skeleton, error model, CI, OpenAPI snapshot | **done** |
+| P2 | ACP engine, sessions, permission broker (headless, mock agent) | next |
+| P3 | Daemon API: SSE, files, terminals, SQLite | |
+| P4 | Profiles and preferences | |
+| P5 | CLI: full API coverage | |
+| P6 | TUI: an editor you could use daily | |
+| P7 | Language servers | |
+| P8 | SSH hosts | |
+| P9 | Windows + WSL | |
+| P10 | Desktop app (gpui) | |
+| P11 | Web UI + `acpilot serve` | |
+| P12 | Packaging, docs, v0.1 | |
+
+## How this page stays honest
+
+The phases come from `TODO.md` in the repository, which is the source of truth.
+When a phase lands, its row here changes in the same pull request — a status page
+that drifts is just a rumour with better typography.
+
+<Aside type="tip" title="Why publish this at all">
+Because "coming soon" is what people write when they mean "not started". A
+numbered phase with a visible state is the same information without the
+marketing.
+</Aside>

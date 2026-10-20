@@ -1,5 +1,14 @@
 name: Docs
 
+# The site is always built and link-checked. Deployment to GitHub Pages is gated
+# on the repository variable DOCS_DEPLOY=true, because Pages is not available for
+# private repositories on every plan — and a workflow that fails on every push for
+# an account setting is a workflow people learn to ignore.
+#
+# To publish: make the repository public (or use a plan with Pages), then
+#   gh variable set DOCS_DEPLOY --body true
+# Until then, `cd site && npm run dev` is the preview.
+
 on:
   push:
     branches: [main]
@@ -8,11 +17,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: docs
   cancel-in-progress: false
 
 jobs:
@@ -41,17 +48,22 @@ jobs:
         working-directory: site
         run: node scripts/check-links.mjs
 
-      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
+        if: vars.DOCS_DEPLOY == 'true'
         with:
           path: site/dist
 
   deploy:
     needs: build
+    if: vars.DOCS_DEPLOY == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/configure-pages@v5
       - id: deployment
         uses: actions/deploy-pages@v4

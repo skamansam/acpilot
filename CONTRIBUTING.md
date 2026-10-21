@@ -7,10 +7,16 @@ to make it unmaintainable is to let one of them grow its own copy of the logic.
 ## Before you start
 
 ```bash
-cargo xtask check        # fmt + clippy -D warnings + tests: what CI runs
-cargo test --workspace
+cargo install cargo-nextest --locked   # once; CI installs the same tool
+cargo xtask check        # fmt + clippy -D warnings + nextest: what CI runs
 curl -s localhost:7777/v1/health   # after `cargo run -p acpilotd`
 ```
+
+`cargo xtask check` runs `cargo nextest run --workspace --no-fail-fast`, the
+same command as CI. `cargo test --workspace` still works for a single crate or a
+`--test` filter, but it is not the gate: nextest isolates tests in separate
+processes and skips doctests, and the local check should fail for the same
+reasons CI does.
 
 The toolchain is pinned in `rust-toolchain.toml`; the MSRV floor is 1.95 and is
 chosen by our dependencies, not by taste. If an upgrade raises it, that is a
@@ -35,8 +41,8 @@ to either.
 
 Unit tests sit in `#[cfg(test)]` modules next to the code; anything that crosses a
 process, a file, or a wire boundary gets an integration suite in
-`crates/<crate>/tests/`. `cargo test --workspace` runs both, and CI runs the same
-set through `cargo nextest`.
+`crates/<crate>/tests/`. `cargo nextest run --workspace` runs both, locally and in
+CI; `cargo xtask check` invokes exactly that command.
 
 Two suites are contracts rather than coverage, and should not be weakened:
 

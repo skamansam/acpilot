@@ -55,7 +55,14 @@ fn run_check() -> ExitCode {
                 "warnings",
             ],
         ),
-        ("test", vec!["test", "--workspace"]),
+        // Same command as `.github/workflows/ci.yml`, not `cargo test`: a local
+        // run that differs from CI is a place for "works for me" to hide.
+        // nextest runs each test in its own process and does not run doctests,
+        // which is also what CI does today.
+        (
+            "test",
+            vec!["nextest", "run", "--workspace", "--no-fail-fast"],
+        ),
     ];
 
     for (name, args) in steps {

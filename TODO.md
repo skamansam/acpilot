@@ -402,7 +402,7 @@ v0.1 (D18).
     loader as anything installed. If the schema is wrong, the first build says so.
   - Built-ins are marked `built_in` and cannot be uninstalled, only shadowed by id namespacing.
 
-- [ ] **P4.6-3 · Store and verification** (1.5d)
+- [x] **P4.6-3 · Store and verification** (1.5d) — done: `store.rs`, `ext add|verify|prune`
   - `~/.local/share/acpilot/extensions/<id>/<version>/` extracted atomically to a temp path,
     hashed (SHA-256 over a sorted file list), then renamed. A mismatch is `Blocked`, never a
     warning, and a blocked extension is invisible to every loader.
@@ -410,13 +410,15 @@ v0.1 (D18).
     activates.
 
 - [ ] **P4.6-4 · Registry: signed static index** (1.5d)
+  - The curated list itself exists: `marketplace/index.toml`, reviewed by pull request; `acpilot ext add --from`
+    installs. Downloading from a listing, checksums from the index, and the signature remain.
   - `index.json` (`{id, version, kind, checksum, size, publisher, min_acpilot, download}`) plus a
     detached signature. The maintainer key ships in the binary; `registry.trusted_keys` adds a
     private one. Signature failure is a hard error with the key id named.
   - `acpilot ext search|add|update|remove|list|show`; `--from <dir>` installs a path link for
     development; `--index <url>` for a private registry. No fetch on startup, ever.
 
-- [ ] **P4.6-5 · Activation and precedence** (1d)
+- [x] **P4.6-5 · Activation and precedence** (1d) — done: `activation.rs`, `effective.rs`, `ext why`; the daemon's `extension.changed` event waits for P4.6-10
   - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <
     profile's own config. `acpilot ext why rust-analyzer` prints the chain that produced the
     effective preset, reusing the `profile diff` origin machinery.
@@ -459,6 +461,15 @@ v0.1 (D18).
   - **DoD:** `acpilot ext add acpilot.night-flight-pack`, activate it in `work`, and both themes
     plus the Rust preset appear in the TUI with no config edit; `acpilot ext why rust-analyzer`
     names the extension and the manifest version; a tampered extension is refused by name.
+  - Status: manifest matrix, checksum/store, activation cycle, precedence, contrast, and the CLI
+    verbs are covered; signature failure arrives with P4.6-4, grammar degradation with P4.6-8.
+
+- [ ] **P4.6-12 · Import from other editors** (future, not v0.1)
+  - TextMate `.tmTheme` is done (`acpilot ext import-theme`). VS Code (JSON themes, node
+    extensions) and Zed's marketplace (server + WASM code extensions) are deliberately future
+    work: importing a code-bearing extension means either translating its declarative parts or
+    growing a runtime, which is the decision in ADR 0003. Start with VS Code themes, which are
+    data, and keep the curated list reviewed by pull request.
 
 ---
 

@@ -8,6 +8,9 @@
 //! `include_str!` also means a manifest that points at a missing asset is a build
 //! error, not a runtime one.
 
+use crate::error::ExtensionError;
+use crate::loader::{LoadedExtension, load_embedded};
+
 /// `night-flight`: the default dark theme.
 pub const NIGHT_FLIGHT: &[(&str, &str)] = &[
     (
@@ -58,3 +61,23 @@ pub const AGENTS: &[(&str, &str)] = &[
 
 /// Every built-in, in load order.
 pub const ALL: [&[(&str, &str)]; 4] = [NIGHT_FLIGHT, PAPER, LANGUAGE_SERVERS, AGENTS];
+
+/// Load every built-in through the public loader.
+///
+/// Errors are collected so a schema mistake in one built-in names all of them
+/// rather than only the first.
+pub fn load_all() -> Result<Vec<LoadedExtension>, Vec<ExtensionError>> {
+    let mut loaded = Vec::with_capacity(ALL.len());
+    let mut errors = Vec::new();
+    for files in ALL {
+        match load_embedded(files) {
+            Ok(extension) => loaded.push(extension),
+            Err(error) => errors.push(error),
+        }
+    }
+    if errors.is_empty() {
+        Ok(loaded)
+    } else {
+        Err(errors)
+    }
+}

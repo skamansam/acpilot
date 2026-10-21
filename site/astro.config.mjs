@@ -80,6 +80,7 @@ export default defineConfig({
             { label: 'The mod shop', link: '/mod-shop/' },
             { label: 'The manifest', link: '/mod-shop/manifest/' },
             { label: 'Installing and approving', link: '/mod-shop/registry/' },
+            { label: 'The marketplace', link: '/mod-shop/marketplace/' },
             { label: 'Themes', link: '/mod-shop/themes/' },
           ],
         },

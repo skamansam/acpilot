@@ -11,7 +11,7 @@ use acpilot_proto::extension::ThemeAppearance;
 
 use crate::builtin;
 use crate::error::ExtensionError;
-use crate::loader::{Contribution, LoadedExtension, load_embedded};
+use crate::loader::{Contribution, LoadedExtension};
 use crate::preset::{AgentPreset, LanguageServerPreset};
 use crate::theme::{Palette, ResolvedTheme, Theme};
 
@@ -110,18 +110,7 @@ impl Registry {
 
     /// The extensions compiled into this binary, loaded the long way round.
     pub fn built_in() -> Result<Self, Vec<ExtensionError>> {
-        let mut loaded = Vec::new();
-        let mut errors = Vec::new();
-        for files in builtin::ALL {
-            match load_embedded(files) {
-                Ok(extension) => loaded.push(extension),
-                Err(error) => errors.push(error),
-            }
-        }
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-        Self::new(loaded)
+        Self::new(builtin::load_all()?)
     }
 
     /// Every loaded extension, sorted by id.
@@ -172,7 +161,7 @@ impl Registry {
 }
 
 /// Resolve every theme's `extends` chain, collecting collisions and cycles.
-fn resolve_themes(
+pub(crate) fn resolve_themes(
     extensions: &[LoadedExtension],
     errors: &mut Vec<ExtensionError>,
 ) -> Vec<ResolvedTheme> {

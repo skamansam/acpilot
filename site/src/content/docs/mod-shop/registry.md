@@ -1,78 +1,81 @@
 ---
 title: Installing and approving
-description: A signed index, a checksum that must match, and an approval that belongs to a profile.
+description: A checksummed store, a curated list, and an approval that belongs to a profile.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.6-3, P4.6-4, P4.6-5
+<span class="pill pill--boarding">boarding</span> &nbsp; P4.6-3 and P4.6-5 landed; the signed index is P4.6-4
 
 Two verbs, deliberately separate:
 
 ```bash
-acpilot ext add acpilot.rust-pack        # install: download, verify, unpack
-acpilot ext activate acpilot.rust-pack   # approve: this profile may use it
+acpilot ext add --from ~/src/acpilot-pack   # install: copy, verify, record
+acpilot ext activate acpilot.rust-pack      # approve: this profile may use it
 ```
 
 Installing changes the disk. Activating changes what one profile's loaders see.
 Neither touches your `config.toml`, `agents.toml`, or `lsp.toml` — which is why
 `acpilot profile diff work personal` can still explain every value afterwards.
 
-## The index
+## The store
 
-The registry is a static document, not a service:
-
-```json
-{
-  "schema_version": 1,
-  "generated_at": "2026-10-20T14:02:11Z",
-  "extensions": [
-    {
-      "id": "acpilot.rust-pack",
-      "version": "1.2.0",
-      "kinds": ["language_servers", "theme", "snippets"],
-      "publisher": "acpilot",
-      "checksum": "sha256:9f2c…",
-      "size": 184320,
-      "min_acpilot": "0.1.0",
-      "download": "https://…/rust-pack-1.2.0.tar.gz"
-    }
-  ]
-}
+```text
+~/.local/share/acpilot/extensions/
+  acpilot.paper/
+    1.0.0/                 # the extension, exactly as installed
+    1.0.0.sha256           # sha256:<64 hex characters>
 ```
 
-plus a detached signature over the canonical JSON. The maintainer's public key
-ships in the binary; `registry.trusted_keys` adds a key for a private index, and a
-signature that does not verify is a hard failure with the key id in the message.
-
-<Aside type="note" title="Reviewed, not crawled">
-Publishing means a pull request against the index repository: a human reads the
-manifest, the diff of the assets, and the checksum. Slow, and the only
-supply-chain defence that has ever worked at this scale. A private registry only
-needs `acpilot ext add --index https://…/index.json`.
-</Aside>
-
-## What happens on install
+Install is atomic and ordered so that nothing unverified is ever visible:
 
 ```mermaid
 flowchart TD
-    fetch["fetch archive<br/>and index entry"] --> sig{"index signature<br/>valid?"}
-    sig -->|no| stop["refuse: key id named"]
-    sig -->|yes| hash{"SHA-256 of the<br/>unpacked tree matches?"}
-    hash -->|no| blocked["Blocked<br/>invisible to every loader"]
-    hash -->|yes| manifest{"manifest valid?<br/>schema, ids, paths"}
-    manifest -->|no| blocked
-    manifest -->|yes| store["rename into place<br/>extensions/publisher.id/version/"]
-    store --> ready["Installed<br/>activating is a separate step"]
+    copy["copy into .staging/"] --> load["load the copy<br/>manifest, paths, assets"]
+    load -->|invalid| discard["discard staging<br/>nothing installed"]
+    load -->|ok| hash["SHA-256 over the sorted tree"]
+    hash --> rename["rename into <id>/<version>/"]
+    rename --> record["write <version>.sha256"]
+    record --> ready["Ready"]
 ```
 
-Extraction goes to a temporary directory first: a half-written extension is never
-visible, and an interrupted download leaves nothing to clean up but the temp path.
+The hash covers a canonical stream: a format tag, then every file sorted by path,
+each as a length-prefixed path followed by length-prefixed contents. It does not
+depend on directory order, and a file whose contents look like a path cannot be
+confused with a path. Symlinks and non-UTF-8 names are refused rather than hashed
+differently on different hosts.
+
+## Blocked means invisible
+
+A version whose bytes do not match its record is `Blocked`. Not warned about,
+not loaded with a caveat: every loader — `ext why`, the registries, the daemon's
+future routes — treats it as if it were not installed, and `acpilot ext verify
+--all` names it and prints both checksums.
+
+```bash
+$ acpilot ext verify --all
+ok      acpilot.paper@1.0.0
+blocked acpilot.pack@1.0.0: checksum mismatch: recorded sha256:9f2c…, computed sha256:41aa…
+1 of 2 versions blocked
+$ echo $?
+1
+```
+
+| Situation | Result |
+| --- | --- |
+| Bytes changed | `Blocked`, mismatch printed |
+| Record missing | `Blocked`, "not installed by the store" |
+| Record malformed | `Blocked`, the format is named |
+| Hash matches but manifest is broken | `Blocked`, the parse error is named |
+| Directory named like a version but isn't | `Blocked`, the path is named |
+
+Activating a blocked extension is refused as well. Approval is a statement about
+known bytes, and there are no known bytes to approve.
 
 ## Approval is per profile
 
 ```toml
 # ~/.config/acpilot/profiles/work/extensions.toml
 schema_version = 1
-active = ["acpilot.rust-pack", "acpilot.night-flight-syntax"]
+active = ["acpilot.rust-pack", "you.hangar"]
 ```
 
 Precedence, lowest to highest:
@@ -80,48 +83,50 @@ Precedence, lowest to highest:
 ```mermaid
 flowchart LR
     builtin["built-in themes<br/>and presets"] --> ext["activated<br/>extensions"]
-    ext --> own["profile's own<br/>config / agents / lsp"]
+    ext --> own["profile's own<br/>lsp.toml / agents.toml"]
     own --> effective["effective value<br/>for this profile"]
 ```
 
-`acpilot ext why rust-analyzer` prints that chain for one preset, reusing the same
-origin machinery as `profile diff`:
-
-```text
-rust-analyzer
-  command      rust-analyzer
-  args         ["--log-file", "/tmp/ra.log"]
-  from         acpilot.rust-pack 1.2.0  (extensions.toml, work profile)
-  overridden   built-in preset, 2024 edition defaults
-```
-
-## Failure modes, and what they look like
-
-| Situation | What happens |
-| --- | --- |
-| Index signature invalid | Install refused, key id named, nothing written |
-| Checksum mismatch | Extension marked `Blocked`, never activated, `ext verify --all` reports it by name |
-| Manifest invalid | Same, with the parse error and the field |
-| `min_acpilot` too new | Refused, both versions shown |
-| Active but missing | Profile stays usable; every UI shows a missing-extension notice naming it |
-| Deactivated mid-session | Loaders re-read, `extension.changed` fires, no restart |
-
-<Aside type="caution" title="A grammar is compiled code">
-A `.wasm` tree-sitter grammar executes inside the parser runtime. It is a much
-smaller surface than a plugin API — it cannot open files, spawn processes, or
-speak to the network through the host — but it is not inert, and this page will
-never claim otherwise. The review and the pinned checksum are the defence.
-</Aside>
-
-## Updates are a decision, not a schedule
-
-There is no auto-update and no fetch on startup. `acpilot ext update` lists what
-changed, and a version only arrives when a person types the command:
+Within one layer, two things claiming the same id is an error — two activated
+packs that both ship `rust-analyzer` is a bug in one of them. Across layers the
+higher layer wins, and the chain is recorded:
 
 ```bash
-acpilot ext update --check
-acpilot ext update acpilot.rust-pack     # new checksum, new review, your call
+$ acpilot ext why rust-analyzer --profile work
+language server rust-analyzer
+  command     profile-analyzer
+  args        ["--log-file", "/tmp/ra.log"]
+  languages   rust
+  from        profile lsp.toml   (wins)
+  overridden  extension acpilot.rust-pack 1.2.0
+  overridden  built-in acpilot.language-servers 1.0.0
 ```
 
-An editor that quietly changes your theme because a publisher pushed 1.2.1 at
-midnight is an editor you cannot reproduce a bug in.
+Themes are not presets: an id is an identity, so no layer can replace
+`acpilot.night-flight` and make every screenshot in this manual a lie. An
+activated theme may `extends` a built-in and inherit its unset tokens.
+
+Deactivating is a file edit, and every resolution re-reads the file: there is no
+cached registry to invalidate, so the next answer is the correct one. The daemon
+event that tells attached UIs to re-read (`extension.changed`) is P4.6-10.
+
+## Pruning
+
+`acpilot ext prune` removes versions no profile activates — with a floor: it never
+removes the newest version of an id, because a store where nothing has been
+activated yet should not lose a fresh install.
+
+```bash
+$ acpilot ext prune --dry-run
+would remove acpilot.rust-pack@1.1.0
+$ acpilot ext prune
+removed acpilot.rust-pack@1.1.0
+```
+
+## What is still missing
+
+The signed static index (P4.6-4) with per-version download URLs and a signature
+over the list. Until then the marketplace is the
+[curated list](../marketplace/) in this repository, and installing means checking
+a repository out and pointing `ext add --from` at it — same verification, one
+manual step.

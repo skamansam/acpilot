@@ -497,6 +497,7 @@ acpilot/
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
 ├── extensions/                # built-in extensions (themes, presets), embedded in the binary
+├── marketplace/               # curated list of extension repositories, reviewed by PR
 ├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js (P11)
 ├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one

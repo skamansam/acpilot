@@ -75,5 +75,9 @@ presets, four agent presets — are embedded in the binary and load through that
 same code, so the schema is tested by the things we already ship before anyone
 else's file is trusted.
 
-Installing from a registry, checksum verification, and per-profile activation are
-P4.6-3 to P4.6-5; the `acpilot ext` verbs are documented but not implemented yet.
+Installing is a checksummed, atomic store; a version whose bytes change is
+`Blocked` and invisible to every loader. Activation is a per-profile list with
+three layers of precedence and `acpilot ext why` naming the winner and everything
+it overrode. The [marketplace](marketplace/) is a curated list of repositories
+in this repository, changed by pull request. The signed index and download URLs
+are P4.6-4.

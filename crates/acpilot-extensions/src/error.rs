@@ -120,4 +120,57 @@ pub enum ExtensionError {
         /// What is wrong, with the missing token or the cycle named.
         message: String,
     },
+
+    /// A store path or record was asked for and is not there.
+    #[error("not found: {what}")]
+    NotFound {
+        /// What was being looked for, phrased for a human.
+        what: String,
+    },
+
+    /// That version is already in the store. Replacing it would change bytes
+    /// under a checksum somebody already approved, so it is refused.
+    #[error("{id}@{version} is already installed; remove it first or install a different version")]
+    AlreadyInstalled {
+        /// Extension id.
+        id: String,
+        /// Version already present.
+        version: String,
+    },
+
+    /// A checksum record is not in the one format the store writes.
+    #[error("{path}: {message}")]
+    Record {
+        /// Path to the record file.
+        path: String,
+        /// Why it is not usable.
+        message: String,
+    },
+
+    /// A tree contains something a content-addressed store cannot represent.
+    #[error("{path}: {why}")]
+    UnsupportedEntry {
+        /// The offending entry.
+        path: String,
+        /// Why it is refused.
+        why: &'static str,
+    },
+
+    /// A file from another editor could not be understood.
+    #[error("{path}: {message}")]
+    Import {
+        /// The file being imported.
+        path: String,
+        /// What is wrong with it.
+        message: String,
+    },
+
+    /// Activation was requested for something that is present but blocked.
+    #[error("cannot activate {id}: {blocked}")]
+    BlockedActivation {
+        /// Extension id.
+        id: String,
+        /// The blocked versions, by name, so the next command is obvious.
+        blocked: String,
+    },
 }

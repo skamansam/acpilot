@@ -1,0 +1,299 @@
+//! The argument surface, kept out of `main` so it can be tested.
+//!
+//! Every command here is either a filesystem operation or (later) a call into
+//! `acpilot-proto`; none of them reimplements daemon policy.
+
+use std::path::PathBuf;
+
+use acpilot_core::error::exit;
+use acpilot_extensions::ExtensionError;
+use acpilot_proto::API_PREFIX;
+use clap::{Args, Parser, Subcommand};
+
+use crate::ext::{self, Paths};
+
+/// `acpilot` command line.
+#[derive(Debug, Parser)]
+#[command(
+    name = "acpilot",
+    version,
+    about = "Edit and run ACP agents over one daemon"
+)]
+pub struct Cli {
+    /// Command to run.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Top-level commands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Print version and protocol information.
+    Version,
+    /// Install, verify, and approve extensions.
+    Ext {
+        /// Which ext verb.
+        #[command(subcommand)]
+        command: ExtCommand,
+    },
+}
+
+/// Everything under `acpilot ext`.
+#[derive(Debug, Subcommand)]
+pub enum ExtCommand {
+    /// Install an extension from a local directory.
+    Add {
+        /// Extension directory containing `extension.toml`.
+        #[arg(long, value_name = "DIR")]
+        from: PathBuf,
+        #[command(flatten)]
+        store: StoreArgs,
+    },
+    /// Import a TextMate `.tmTheme` as a theme extension and install it.
+    ImportTheme {
+        /// Path to a `.tmTheme` file.
+        #[arg(long, value_name = "FILE")]
+        from: PathBuf,
+        /// Namespaced theme id to import it as, for example `acpilot.hangar`.
+        #[arg(long)]
+        id: String,
+        /// Version to install it under.
+        #[arg(long, default_value = "1.0.0")]
+        version: String,
+        /// Activate it in this profile after installing.
+        #[arg(long, value_name = "PROFILE")]
+        activate: Option<String>,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Rehash every installed version and report any that are blocked.
+    Verify {
+        /// Verify everything. Required: a partial verify is not a safety check.
+        #[arg(long)]
+        all: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+    },
+    /// Remove versions no profile activates.
+    Prune {
+        /// Report what would be removed without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Approve an installed extension for one profile.
+    Activate {
+        /// Extension id, `publisher.name`.
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[command(flatten)]
+        store: StoreArgs,
+    },
+    /// Withdraw approval from one profile.
+    Deactivate {
+        /// Extension id, `publisher.name`.
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[command(flatten)]
+        store: StoreArgs,
+    },
+    /// Explain how a preset or agent resolves for one profile.
+    Why {
+        /// Preset or agent id, for example `rust-analyzer`.
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[command(flatten)]
+        store: StoreArgs,
+    },
+}
+
+/// Where the store lives.
+#[derive(Debug, Args)]
+pub struct StoreArgs {
+    /// Extension store root. Defaults to the platform data directory.
+    #[arg(long, value_name = "PATH")]
+    pub store: Option<PathBuf>,
+}
+
+/// Where the config (and therefore profiles) live.
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    /// Acpilot config root; profiles live under `<config>/profiles`.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+}
+
+/// Which profile to act on.
+#[derive(Debug, Args)]
+pub struct ProfileArgs {
+    /// Profile to act on.
+    #[arg(long, env = "ACPILOT_PROFILE", default_value = "default")]
+    pub profile: String,
+    #[command(flatten)]
+    pub config: ConfigArgs,
+}
+
+/// Run a parsed command and return the process exit code.
+pub fn run(cli: Cli) -> u8 {
+    match cli.command {
+        Some(Command::Version) => {
+            println!("acpilot {}", env!("CARGO_PKG_VERSION"));
+            println!("api      {API_PREFIX}");
+            exit::SUCCESS
+        }
+        Some(Command::Ext { command }) => run_ext(command),
+        None => {
+            // `clap` prints usage on --help; with no subcommand, do the same
+            // rather than pretending to do work.
+            use clap::CommandFactory;
+            let mut command = Cli::command();
+            let _ = command.print_help();
+            println!();
+            exit::USAGE
+        }
+    }
+}
+
+fn run_ext(command: ExtCommand) -> u8 {
+    match command {
+        ExtCommand::Add { from, store } => {
+            let paths = match Paths::resolve(store.store, None) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::add(&paths, &from) {
+                Ok(line) => {
+                    println!("{line}");
+                    println!("approve it for a profile with `acpilot ext activate <id>`");
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::ImportTheme {
+            from,
+            id,
+            version,
+            activate,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::import_theme(&paths, &from, &id, &version, activate.as_deref()) {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::Verify { all, store } => {
+            if !all {
+                eprintln!(
+                    "acpilot ext verify: pass --all; verifying a subset is not a safety check"
+                );
+                return exit::USAGE;
+            }
+            let paths = match Paths::resolve(store.store, None) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::verify_all(&paths) {
+                Ok((all_ready, lines)) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    if all_ready {
+                        exit::SUCCESS
+                    } else {
+                        exit::FAILURE
+                    }
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::Prune {
+            dry_run,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::prune(&paths, dry_run) {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::Activate { id, profile, store } => {
+            let paths = match Paths::resolve(store.store, profile.config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::activate(&paths, &profile.profile, &id) {
+                Ok(line) => {
+                    println!("{line}");
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::Deactivate { id, profile, store } => {
+            let paths = match Paths::resolve(store.store, profile.config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::deactivate(&paths, &profile.profile, &id) {
+                Ok(line) => {
+                    println!("{line}");
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+        ExtCommand::Why { id, profile, store } => {
+            let paths = match Paths::resolve(store.store, profile.config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            match ext::why(&paths, &profile.profile, &id) {
+                Ok(text) => {
+                    print!("{text}");
+                    exit::SUCCESS
+                }
+                Err(error) => fail(&error),
+            }
+        }
+    }
+}
+
+/// Print an extension failure with the exit code scripts depend on.
+fn fail(error: &ExtensionError) -> u8 {
+    eprintln!("error: {error}");
+    match error {
+        ExtensionError::NotFound { .. } => exit::NOT_FOUND,
+        ExtensionError::AlreadyInstalled { .. } | ExtensionError::Duplicate { .. } => {
+            exit::CONFLICT
+        }
+        _ => exit::FAILURE,
+    }
+}

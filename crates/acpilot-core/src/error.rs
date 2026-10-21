@@ -8,6 +8,8 @@ use std::io;
 /// Exit codes are a public interface: scripts depend on them, so they are fixed
 /// here rather than derived from whatever a layer happens to return.
 pub mod exit {
+    /// It worked.
+    pub const SUCCESS: u8 = 0;
     /// Failure that has no more specific class.
     pub const FAILURE: u8 = 1;
     /// Bad invocation: unknown flag, malformed argument. Owned by the CLI parser.

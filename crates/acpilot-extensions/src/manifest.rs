@@ -309,7 +309,13 @@ pub fn version_tuple(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-fn is_version(version: &str) -> bool {
+/// Whether a string is a version this store will accept as a directory name.
+///
+/// Three numeric parts and an optional `-pre` / `+build` suffix: anything else
+/// sorts unpredictably, and a store that cannot order versions cannot say which
+/// one an activation refers to.
+#[must_use]
+pub fn is_version(version: &str) -> bool {
     // `1.0.0` is a version; `1.0` is not, because the store sorts on three
     // parts and a missing patch would sort as zero while looking absent.
     let core = version.split(['-', '+']).next().unwrap_or(version);

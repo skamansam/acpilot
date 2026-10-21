@@ -3,7 +3,7 @@ title: CLI
 description: A typed client for the daemon, designed so scripts can fly too.
 ---
 
-<span class="pill pill--boarding">boarding</span> &nbsp; only `acpilot version` exists today
+<span class="pill pill--boarding">boarding</span> &nbsp; `acpilot version` and the filesystem `ext` verbs exist today
 
 The CLI is not a second implementation of the product. It is a client of the
 daemon API with a nicer surface, which means anything the TUI can do, a script
@@ -50,6 +50,10 @@ acpilot models probe <provider> | ls
 acpilot recipes ls|show|new|run|rm|promote
 acpilot runs ls|show|replay|compare
 acpilot acp pair|token show|token rotate|drivers|revoke
+acpilot ext add --from <dir> | import-theme --from <file> --id <publisher.name>
+acpilot ext verify --all | prune [--dry-run]
+acpilot ext activate|deactivate <id> --profile <name>
+acpilot ext why <preset> --profile <name>
 acpilot serve [--http]
 acpilot doctor
 acpilot setup
@@ -72,6 +76,16 @@ acpilot recipes run corpus-scraper "list the undocumented flags" --json \
 ```
 
 ```bash
+$ acpilot ext verify --all
+ok      acpilot.paper@1.0.0
+
+$ acpilot ext why rust-analyzer --profile work
+language server rust-analyzer
+  command     rust-analyzer
+  args        []
+  languages   rust
+  from        built-in acpilot.language-servers 1.0.0   (wins)
+
 $ acpilot version
 acpilot 0.1.0
 api      /v1

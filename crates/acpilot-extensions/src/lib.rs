@@ -16,22 +16,29 @@
 //! first test of the schema, and they fail at build time rather than in a user's
 //! terminal.
 
+pub mod activation;
 pub mod builtin;
 pub mod contrast;
 pub mod docs;
+pub mod effective;
 pub mod error;
 pub mod loader;
 pub mod manifest;
 pub mod preset;
 pub mod registry;
 pub mod source;
+pub mod store;
 pub mod theme;
+pub mod theme_import;
 
 pub use acpilot_proto::extension::{ExtensionKind, ThemeAppearance};
+pub use activation::{Activation, ProfileExtensions, Resolution};
+pub use effective::{EffectiveRegistry, Layer, ProfileLayer, Trace};
 pub use error::ExtensionError;
 pub use loader::{Contribution, LoadedExtension, load, load_dir, load_embedded};
 pub use manifest::{MANIFEST_FILE, Manifest, SCHEMA_VERSION};
 pub use preset::{AgentPreset, LanguageServerPreset};
 pub use registry::Registry;
 pub use source::{AssetSource, DirSource, EmbeddedSource};
+pub use store::{ActiveSet, BlockReason, Store, StoreStatus, StoredExtension};
 pub use theme::{Color, Palette, ResolvedTheme, SyntaxToken, Theme, UiToken};

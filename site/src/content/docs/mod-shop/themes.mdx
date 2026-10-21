@@ -80,6 +80,25 @@ The gallery is generated, not drawn by hand: `cargo xtask docs-data` writes
 fails if the committed file drifts. The ratios shown are the ones the gate
 enforces, which is the only way a preview can be trusted to describe the product.
 
+## Importing a TextMate theme
+
+```bash
+acpilot ext import-theme --from ~/Downloads/Dracula.tmTheme --id you.dracula \
+  --activate work
+```
+
+The importer reads the plist (dict, array, string, number, no external
+entities), maps the global background, foreground, caret, gutter and line
+highlight onto the interface tokens, and maps scope rules onto the syntax tokens.
+Everything the file does not define is inherited from the built-in with the same
+appearance, so a minimal theme still works.
+
+It is honest about the edges: eight-digit colours lose their alpha (and say so),
+unknown scopes are ignored, and any pair below WCAG AA is printed as a warning
+with both tokens and the ratio. The result is an ordinary extension — stored,
+checksummed, and blockable like any other — which is why the id must be
+namespaced and why `acpilot.night-flight` itself cannot be replaced.
+
 ## Switching, without a restart
 
 The theme is a preference, so changing it emits `prefs.changed` and every attached

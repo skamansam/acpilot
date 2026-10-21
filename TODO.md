@@ -769,6 +769,9 @@ serialiser.
   exit codes `0/1/2/3/4/5`, stderr for usage errors, `ACPILOT_PROFILE`, help snapshots.
 - [x] API: route tests through the router (`tower::ServiceExt::oneshot`) plus a live-socket
   test that binds an ephemeral port and uses a real HTTP client (`acpilotd/tests/http.rs`).
+- [x] Commit-time hooks: `.pre-commit-config.yaml` for prek runs fmt, clippy `-D warnings`,
+  the nextest workspace, the `docs`-feature test, and `cargo deny` — the CI commands, plus the
+  jobs `xtask check` does not cover yet. Install with `prek install`.
 - [ ] Web: Playwright in **P11**, against `acpilot serve` with a temp profile — no mocked routes.
 - [ ] TUI: headless snapshots via `ratatui`'s `TestBackend` in **P6**, including the stats bar
   at known dimensions and a 200×60 frame budget.

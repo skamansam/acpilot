@@ -7,7 +7,8 @@ to make it unmaintainable is to let one of them grow its own copy of the logic.
 ## Before you start
 
 ```bash
-cargo install cargo-nextest --locked   # once; CI installs the same tool
+cargo install --locked cargo-nextest prek   # once; CI installs nextest
+prek install                                # writes .git/hooks/pre-commit
 cargo xtask check        # fmt + clippy -D warnings + nextest: what CI runs
 curl -s localhost:7777/v1/health   # after `cargo run -p acpilotd`
 ```
@@ -17,6 +18,17 @@ same command as CI. `cargo test --workspace` still works for a single crate or a
 `--test` filter, but it is not the gate: nextest isolates tests in separate
 processes and skips doctests, and the local check should fail for the same
 reasons CI does.
+
+`.pre-commit-config.yaml` is the commit-time version of that gate, run by
+[prek](https://prek.j178.dev). It runs `cargo fmt`, clippy with `-D warnings`,
+the nextest workspace, the `docs`-feature test, and `cargo deny`. The OpenAPI
+snapshot and WCAG contrast checks are inside the nextest run, so they are not
+duplicated as separate hooks.
+
+`prek run --all-files` runs the same hooks without committing. The hooks are a
+convenience, not an authority: CI is what protects `main`, so if a hook ever
+disagrees with CI, fix the hook. Do not use `git commit --no-verify` to get past
+a failure — the same command will fail in CI, and later.
 
 The toolchain is pinned in `rust-toolchain.toml`; the MSRV floor is 1.95 and is
 chosen by our dependencies, not by taste. If an upgrade raises it, that is a

@@ -22,13 +22,24 @@ becoming four products.
 Throwaway code in `spikes/`, no workspace integration, no polish. Each spike answers one
 question that would be expensive to get wrong.
 
-- [ ] **P0-1 · ACP handshake against a real agent** (2d)
+- [x] **P0-1 · ACP handshake against a real agent** (2d) — **done 2026-10-21**
   - `cargo new spikes/acp-handshake`; deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
   - Implement the `Client` trait: `initialize` (protocol v1) → `session/new` → `session/prompt` "list the files here" → print every `session/update`.
   - Handle `session/request_permission` with an auto-deny and log the payload.
   - Run against `npx -y @zed-industries/claude-code-acp` and `gemini --experimental-acp`.
   - **Answer:** exact capabilities advertised by each agent; which `session/update` kinds arrive; what `stopReason` values appear; does `session/load` work.
   - **Exit criteria:** transcript of two different agents driving the same 40 lines of client code, checked into `docs/notes/acp-transcripts.md`.
+  - **Result:** the client is `spikes/acp-handshake` (613 lines, standalone crate, SDK 3.4.0) and
+    the transcript is `docs/notes/acp-transcripts.md`. It ran Claude Agent 0.94.0 and OpenCode
+    1.19.3 through one code path: both advertise `loadSession`, and both replay a **condensed**
+    history (5 and 7 updates for turns that streamed 29 and 16), so `session/load` cannot replace
+    our own transcript. Seven update kinds appeared, none of them `plan` or `thought`. A denied
+    write is a `failed` tool call with `end_turn`, not a protocol error. OpenCode 1.15.13 answered
+    `end_turn` with zero tokens and no text and no error — agent versions must be recorded. Usage
+    on `PromptResponse` is behind `unstable_end_turn_token_usage` and was dropped by the typed view.
+    Two plan details changed in the doing: the Claude package is now
+    `@agentclientprotocol/claude-agent-acp` (the old name is deprecated), and Gemini CLI was not
+    installed or signed in on this machine, so OpenCode 1.19.3 was the second agent.
 
 - [ ] **P0-2 · Program-as-agent over a PTY** (2d)
   - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, render its screen with `vt100`, detect "turn complete" from a sentinel (prompt string reappearing / idle timeout).

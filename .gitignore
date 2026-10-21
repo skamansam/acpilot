@@ -1,6 +1,9 @@
 /target
 **/*.rs.bk
 
+# P0 spikes are standalone crates with their own target directories
+/spikes/*/target
+
 # snapshot/patch review leftovers
 *.snap.new
 *.rej

@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "acp-handshake"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately standalone: P0 spikes are not workspace members, so their
+# dependencies cannot leak into the product. The lockfile is committed with the
+# spike because the point is to measure *these* versions.
+[dependencies]
+agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

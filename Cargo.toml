@@ -85,6 +85,9 @@ directories = "6"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# YAML frontmatter for SKILL.md. serde-saphyr is the maintained, panic-free
+# successor to serde_yaml; only the deserializer is linked.
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
 schemars = "1"
 toml = "1.1"
 uuid = { version = "1", features = ["v7", "serde"] }

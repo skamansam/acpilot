@@ -1,0 +1,13 @@
+[package]
+name = "acpilot-git"
+description = "Git status, diffs, tree and history over the system git CLI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

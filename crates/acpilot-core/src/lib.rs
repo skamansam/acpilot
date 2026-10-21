@@ -9,6 +9,7 @@
 //! shares, because exit codes and HTTP statuses are a promise to users and
 //! scripts, not an implementation detail.
 
+pub mod commit;
 pub mod error;
 pub mod stats;
 

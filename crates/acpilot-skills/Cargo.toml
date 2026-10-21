@@ -1,0 +1,15 @@
+[package]
+name = "acpilot-skills"
+description = "Agent Skills discovery: workspace and extension-provided SKILL.md folders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde-saphyr = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

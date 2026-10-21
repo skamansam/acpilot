@@ -26,6 +26,9 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Local models (LM Studio) | <span class="pill pill--boarding">boarding</span> | P4.5 — `acpilot-model` discovers models and probes capabilities against a mock server; no daemon route or CLI verb yet, so you cannot reach it from the app |
 | The model lab | <span class="pill pill--hangar">hangar</span> | P4.5 — recipes, runs, workbench |
 | Integration stats | <span class="pill pill--hangar">hangar</span> | Contract only: `IntegrationStats` and the fill math are tested; no `/v1/stats` route and no UI yet |
+| Git diff and tree | <span class="pill pill--hangar">hangar</span> | `acpilot-git` reads status, diffs, tree and log from the system `git`; no route or pane yet |
+| Commit messages | <span class="pill pill--hangar">hangar</span> | Prompt and validator landed in `acpilot-core`; no generator route and no editor |
+| Skills | <span class="pill pill--hangar">hangar</span> | `acpilot-skills` discovers `SKILL.md` from the workspace and extensions; no creator/editor yet |
 | Remote drivers over ACP | <span class="pill pill--hangar">hangar</span> | P4.5-10 — bridge, pairing, scopes. Off by default |
 | Extensions (themes, presets, grammars) | <span class="pill pill--boarding">boarding</span> | P4.6 — loader, checksummed store, per-profile activation with precedence, TextMate theme import, and a curated marketplace list. Signed index and grammar loading remain |
 | SSH / WSL hosts | <span class="pill pill--hangar">hangar</span> | P8 / P9 |

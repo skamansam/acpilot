@@ -397,6 +397,18 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - One row per integration, including quiet ones, so the bar does not reflow when a provider
     stops answering; `updated_at` makes a stale reading visible.
 
+- [ ] **P4.5-13 · Skills** (2d) — `acpilot-skills` parses Agent Skills (`SKILL.md`: YAML
+  frontmatter plus instructions) and resolves workspace `.acpilot/skills/<name>/` over an
+  extension's `skills/<name>/`, with the name/directory/description limits enforced and 12
+  tests over temporary trees. Still open:
+  - a `skills` contribution kind in extension manifests and activation, so a pack can ship them
+    and a profile decides whether they exist;
+  - the creator/editor in the model lab: write `SKILL.md`, validate before saving, preview the
+    instructions, and choose workspace or profile as the destination;
+  - selection in a recipe/session, and how the instructions reach the agent — system prompt for
+    model-backed agents, an ACP attachment for external ones — without pretending every agent
+    has a native skill mechanism.
+
 ---
 
 ## P4.6 — Extensions: the mod shop (≈11 days)
@@ -537,6 +549,40 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   indeterminate track, never full or empty; estimated figures are styled differently and the
   source is one keystroke away. TUI snapshots via `ratatui::TestBackend`, GUI in P10, web in P11.
   - **DoD:** open a 100k-line file, edit with undo, open a session with Claude, stream a turn, answer a permission, accept a hunk, run `cargo test` in the terminal pane — all without leaving the TUI.
+
+---
+
+## P6.5 — Git and the commit writer (≈6 days)
+
+Numbered after P6 so no existing task id moves. The backend and the prompt logic land first;
+what needs an editor shell waits for the editor shell.
+
+- [x] **P6.5-1 · `acpilot-git`** — `status` over `--porcelain=v2 -z` (branch, upstream,
+  ahead/behind, both sides of each change, renames), scoped diffs with a patch and a file list,
+  a working-tree listing, and `log` with parents for a graph. It shells out to the user's `git`,
+  so config, filters, worktrees, submodules and signing stay consistent with the command line.
+  Nine tests run against real temporary repositories, including a staged rename, an unborn
+  repository, and a subdirectory discovery.
+- [ ] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
+  proto types mirroring `acpilot-git`; `404 not_found` for "not a repository" and a clear
+  `host_unavailable` when `git` is missing on the host.
+- [ ] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
+  prompt (Conventional Commits with the gitmoji inside the description), the gitmoji table, and
+  strict validation of the model's answer. Still open: per-profile prompt storage, a route that
+  runs either a model-lab recipe or an active agent session, and a draft the editor can change
+  before committing.
+  - The generator is selectable per request; the staged diff is what it sees, and nothing is
+    committed until the user confirms.
+  - Reject rather than repair: an unknown type, a missing description, a subject over 72
+    characters, or a body without a blank line is a validation error, not something the daemon
+    silently rewrites.
+- [ ] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
+  composer whose message can be generated then edited. `git` writes stay a separate, confirmed
+  action; the pane never stages or commits on its own.
+- [ ] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
+  no second diff implementation.
+- [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
+  generation exercised without a network call.
 
 ---
 
@@ -772,6 +818,11 @@ serialiser.
 - [x] Commit-time hooks: `.pre-commit-config.yaml` for prek runs fmt, clippy `-D warnings`,
   the nextest workspace, the `docs`-feature test, and `cargo deny` — the CI commands, plus the
   jobs `xtask check` does not cover yet. Install with `prek install`.
+- [x] Git: `acpilot-git` is tested against real temporary repositories (status, scoped diffs,
+  renames, tree, log, unborn HEAD, discovery), and the commit prompt/validation in
+  `acpilot-core` has unit tests, including fences and every rejection path.
+- [x] Skills: `acpilot-skills` is tested over temporary workspace/extension trees: parsing,
+  instructions, name/directory agreement, limits, duplicate handling, and workspace precedence.
 - [ ] Web: Playwright in **P11**, against `acpilot serve` with a temp profile — no mocked routes.
 - [ ] TUI: headless snapshots via `ratatui`'s `TestBackend` in **P6**, including the stats bar
   at known dimensions and a 200×60 frame budget.

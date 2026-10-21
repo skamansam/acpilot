@@ -47,6 +47,13 @@ jobs:
       - name: Test (docs feature)
         run: cargo test -p acpilotd --features docs
 
+      # The themes page promises this gate, so it gets a named step: a red build
+      # says which check failed without opening the log. Every foreground token
+      # is measured against both surfaces in every built-in theme; a pair below
+      # WCAG AA fails with the token names and both ratios.
+      - name: Theme contrast (WCAG AA)
+        run: cargo test -p acpilot-extensions --test themes built_in_themes_meet_wcag_aa
+
   deny:
     name: licences and advisories
     runs-on: ubuntu-latest

@@ -1,0 +1,17 @@
+[package]
+name = "acpilot-extensions"
+description = "Extension manifests, theme tokens, presets, and the loader that reads them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acpilot-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

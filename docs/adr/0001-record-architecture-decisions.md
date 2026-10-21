@@ -53,11 +53,13 @@ These are tracked as `D1`–`D13` in `TODO.md`; each gets an ADR when it is sett
 
 | ADR | Decision |
 | --- | --- |
-| 0002 | Daemon-centric process model: one daemon, thin clients (D4, D7) |
-| 0003 | The API is a control plane, not a keystroke pipe (D2) |
-| 0004 | `Host` trait for local/SSH/WSL, with an uploaded helper (P8, P9) |
-| 0005 | Profiles: isolation model and storage layout (D10, D11, D13) |
-| 0006 | LSP in the daemon, negotiated position encodings (D8, D9, D12) |
-| 0007 | GUI framework: gpui, pinned, with an iced fallback (D1) |
-| 0008 | Daemon auth for non-loopback exposure (D5) |
-| 0009 | Agent manifest licensing so other editors can adopt it (D6) |
+| 0002 | Local models and the model lab (P4.5) — **recorded** |
+| 0003 | Extensions are data-first (D18) — **recorded** |
+| 0004 | Daemon-centric process model: one daemon, thin clients (D4, D7) |
+| 0005 | The API is a control plane, not a keystroke pipe (D2) |
+| 0006 | `Host` trait for local/SSH/WSL, with an uploaded helper (P8, P9) |
+| 0007 | Profiles: isolation model and storage layout (D10, D11, D13) |
+| 0008 | LSP in the daemon, negotiated position encodings (D8, D9, D12) |
+| 0009 | GUI framework: gpui, pinned, with an iced fallback (D1) |
+| 0010 | Daemon auth for non-loopback exposure (D5) |
+| 0011 | Agent manifest licensing so other editors can adopt it (D6) |

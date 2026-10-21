@@ -67,7 +67,13 @@ type; the extension format does not grow an API.
 
 ## What is built today
 
-The contract (this page and its neighbours), the OpenAPI types, and the ADR that
-argues the split. No manifest has been loaded yet. P4.6 starts by moving the
-built-in themes and presets into the extension format, so the schema is tested by
-the things we already ship before anyone else's file is trusted.
+The contract (this page and its neighbours), the OpenAPI types, the ADR, and the
+loader. `crates/acpilot-extensions` parses and validates manifests, refuses paths
+that leave the extension directory, and resolves theme inheritance and
+collisions. The four built-ins in `extensions/` — two themes, ten language-server
+presets, four agent presets — are embedded in the binary and load through that
+same code, so the schema is tested by the things we already ship before anyone
+else's file is trusted.
+
+Installing from a registry, checksum verification, and per-profile activation are
+P4.6-3 to P4.6-5; the `acpilot ext` verbs are documented but not implemented yet.

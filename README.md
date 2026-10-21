@@ -485,15 +485,18 @@ acpilot/
 │   ├── acpilot-core/          # domain: workspaces, sessions, agents, permissions
 │   ├── acpilot-text/          # rope, selection, edits, tree-sitter, diff — UI-agnostic
 │   ├── acpilot-agent/         # ACP client engine, supervision, transcript adapters
+│   ├── acpilot-model/         # local model backends, capability probes, recipes
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
 │   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
+│   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
 │   ├── acpilotd/              # daemon: axum API, sqlite, event bus
 │   ├── acpilotd-helper/       # tiny in-host shim for SSH/WSL (stdio JSON-RPC)
 │   ├── acpilot-cli/           # `acpilot` binary: CLI + subcommand dispatch
 │   ├── acpilot-tui/           # ratatui UI
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
+├── extensions/                # built-in extensions (themes, presets), embedded in the binary
 ├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js (P11)
 ├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one

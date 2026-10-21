@@ -1,0 +1,12 @@
+schema_version = 1
+id = "acpilot.language-servers"
+name = "Language servers"
+version = "1.0.0"
+publisher = "acpilot"
+description = "The ten language-server presets Acpilot ships: command, arguments, languages, root markers."
+homepage = "https://rudeboy.dev/acpilot/systems/language-servers/"
+min_acpilot = "0.1.0"
+
+[[contributes]]
+kind = "language_servers"
+path = "lsp.toml"

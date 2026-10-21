@@ -1,0 +1,415 @@
+{
+  "aa_threshold": 4.5,
+  "generated_by": "cargo xtask docs-data",
+  "schema_version": 1,
+  "themes": [
+    {
+      "appearance": "dark",
+      "built_in": true,
+      "extension_id": "acpilot.night-flight",
+      "id": "acpilot.night-flight",
+      "minimum": 5.39,
+      "name": "Night flight",
+      "pairs": [
+        {
+          "foreground": "text",
+          "ratio": 16.55,
+          "surface": "bg"
+        },
+        {
+          "foreground": "text_muted",
+          "ratio": 7.77,
+          "surface": "bg"
+        },
+        {
+          "foreground": "accent",
+          "ratio": 12.21,
+          "surface": "bg"
+        },
+        {
+          "foreground": "accent_high",
+          "ratio": 15.56,
+          "surface": "bg"
+        },
+        {
+          "foreground": "success",
+          "ratio": 9.4,
+          "surface": "bg"
+        },
+        {
+          "foreground": "warning",
+          "ratio": 12.21,
+          "surface": "bg"
+        },
+        {
+          "foreground": "danger",
+          "ratio": 7.7,
+          "surface": "bg"
+        },
+        {
+          "foreground": "comment",
+          "ratio": 5.7,
+          "surface": "bg"
+        },
+        {
+          "foreground": "keyword",
+          "ratio": 12.21,
+          "surface": "bg"
+        },
+        {
+          "foreground": "string",
+          "ratio": 11.3,
+          "surface": "bg"
+        },
+        {
+          "foreground": "number",
+          "ratio": 10.05,
+          "surface": "bg"
+        },
+        {
+          "foreground": "type",
+          "ratio": 10.91,
+          "surface": "bg"
+        },
+        {
+          "foreground": "function",
+          "ratio": 14.53,
+          "surface": "bg"
+        },
+        {
+          "foreground": "variable",
+          "ratio": 16.55,
+          "surface": "bg"
+        },
+        {
+          "foreground": "constant",
+          "ratio": 11.55,
+          "surface": "bg"
+        },
+        {
+          "foreground": "operator",
+          "ratio": 11.03,
+          "surface": "bg"
+        },
+        {
+          "foreground": "punctuation",
+          "ratio": 7.77,
+          "surface": "bg"
+        },
+        {
+          "foreground": "text",
+          "ratio": 15.66,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "text_muted",
+          "ratio": 7.35,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "accent",
+          "ratio": 11.56,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "accent_high",
+          "ratio": 14.73,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "success",
+          "ratio": 8.9,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "warning",
+          "ratio": 11.56,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "danger",
+          "ratio": 7.29,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "comment",
+          "ratio": 5.39,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "keyword",
+          "ratio": 11.56,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "string",
+          "ratio": 10.7,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "number",
+          "ratio": 9.51,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "type",
+          "ratio": 10.32,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "function",
+          "ratio": 13.74,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "variable",
+          "ratio": 15.66,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "constant",
+          "ratio": 10.93,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "operator",
+          "ratio": 10.44,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "punctuation",
+          "ratio": 7.35,
+          "surface": "bg_panel"
+        }
+      ],
+      "syntax": {
+        "comment": "#7d8ca3",
+        "constant": "#ffb3c1",
+        "function": "#ffd9a0",
+        "keyword": "#f7c65c",
+        "number": "#e0a3ff",
+        "operator": "#b9c4d4",
+        "punctuation": "#97a5b8",
+        "string": "#8ad6a0",
+        "type": "#8fc7ff",
+        "variable": "#e8edf6"
+      },
+      "ui": {
+        "accent": "#f7c65c",
+        "accent_high": "#ffe3a8",
+        "bg": "#070d18",
+        "bg_panel": "#0c1424",
+        "border": "#24334a",
+        "danger": "#ff7a7a",
+        "success": "#59c98b",
+        "text": "#e8edf6",
+        "text_muted": "#97a5b8",
+        "warning": "#f7c65c"
+      }
+    },
+    {
+      "appearance": "light",
+      "built_in": true,
+      "extension_id": "acpilot.paper",
+      "id": "acpilot.paper",
+      "minimum": 5.12,
+      "name": "Paper",
+      "pairs": [
+        {
+          "foreground": "text",
+          "ratio": 14.75,
+          "surface": "bg"
+        },
+        {
+          "foreground": "text_muted",
+          "ratio": 6.52,
+          "surface": "bg"
+        },
+        {
+          "foreground": "accent",
+          "ratio": 5.53,
+          "surface": "bg"
+        },
+        {
+          "foreground": "accent_high",
+          "ratio": 8.0,
+          "surface": "bg"
+        },
+        {
+          "foreground": "success",
+          "ratio": 6.08,
+          "surface": "bg"
+        },
+        {
+          "foreground": "warning",
+          "ratio": 7.0,
+          "surface": "bg"
+        },
+        {
+          "foreground": "danger",
+          "ratio": 7.25,
+          "surface": "bg"
+        },
+        {
+          "foreground": "comment",
+          "ratio": 5.56,
+          "surface": "bg"
+        },
+        {
+          "foreground": "keyword",
+          "ratio": 5.53,
+          "surface": "bg"
+        },
+        {
+          "foreground": "string",
+          "ratio": 6.08,
+          "surface": "bg"
+        },
+        {
+          "foreground": "number",
+          "ratio": 8.13,
+          "surface": "bg"
+        },
+        {
+          "foreground": "type",
+          "ratio": 7.77,
+          "surface": "bg"
+        },
+        {
+          "foreground": "function",
+          "ratio": 8.08,
+          "surface": "bg"
+        },
+        {
+          "foreground": "variable",
+          "ratio": 14.75,
+          "surface": "bg"
+        },
+        {
+          "foreground": "constant",
+          "ratio": 8.37,
+          "surface": "bg"
+        },
+        {
+          "foreground": "operator",
+          "ratio": 10.71,
+          "surface": "bg"
+        },
+        {
+          "foreground": "punctuation",
+          "ratio": 6.52,
+          "surface": "bg"
+        },
+        {
+          "foreground": "text",
+          "ratio": 13.63,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "text_muted",
+          "ratio": 6.03,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "accent",
+          "ratio": 5.12,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "accent_high",
+          "ratio": 7.4,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "success",
+          "ratio": 5.62,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "warning",
+          "ratio": 6.47,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "danger",
+          "ratio": 6.7,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "comment",
+          "ratio": 5.14,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "keyword",
+          "ratio": 5.12,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "string",
+          "ratio": 5.62,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "number",
+          "ratio": 7.52,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "type",
+          "ratio": 7.18,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "function",
+          "ratio": 7.47,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "variable",
+          "ratio": 13.63,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "constant",
+          "ratio": 7.73,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "operator",
+          "ratio": 9.9,
+          "surface": "bg_panel"
+        },
+        {
+          "foreground": "punctuation",
+          "ratio": 6.03,
+          "surface": "bg_panel"
+        }
+      ],
+      "syntax": {
+        "comment": "#6b6353",
+        "constant": "#8a1f3f",
+        "function": "#7a3a00",
+        "keyword": "#8a5a10",
+        "number": "#6a2f8f",
+        "operator": "#3a3a34",
+        "punctuation": "#5f594a",
+        "string": "#1f6b3f",
+        "type": "#1a4f8a",
+        "variable": "#1a2333"
+      },
+      "ui": {
+        "accent": "#8a5a10",
+        "accent_high": "#6b4408",
+        "bg": "#fbf7ef",
+        "bg_panel": "#f4eee1",
+        "border": "#ddd2bb",
+        "danger": "#a01f1f",
+        "success": "#1f6b3f",
+        "text": "#1a2333",
+        "text_muted": "#5f594a",
+        "warning": "#7a4a00"
+      }
+    }
+  ]
+}

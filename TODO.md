@@ -389,14 +389,14 @@ registry is a signed static index reviewed by a human, with mandatory checksums 
 auto-update. Code extensions (transcript parsers, tokenizers) are Tier 2 and deliberately not in
 v0.1 (D18).
 
-- [ ] **P4.6-1 · Manifest and loader** (1.5d)
+- [x] **P4.6-1 · Manifest and loader** (1.5d) — done: `crates/acpilot-extensions`, 24 tests
   - `extension.toml`: `schema_version`, `id` (`publisher.id`), `name`, `version`, `description`,
     `publisher`, `homepage`, `min_acpilot`, and `[[contributes]]` entries with `kind` + path.
   - Unknown keys are errors; ids are namespaced so an extension cannot shadow a built-in; a
     contribution whose path escapes the extension directory is rejected before anything is read.
   - Loading is a pure function of the directory: no install-time script, no network.
 
-- [ ] **P4.6-2 · The built-ins become extensions** (2d)
+- [x] **P4.6-2 · The built-ins become extensions** (2d) — done: `extensions/`, embedded with `include_str!`
   - Extract the two themes (`night-flight`, `paper`), the ten LSP presets, and the four agent
     presets out of Rust and into `extensions/` shipped with the binary, loaded through the same
     loader as anything installed. If the schema is wrong, the first build says so.
@@ -428,7 +428,9 @@ v0.1 (D18).
     `success`, `warning`, `danger`, plus syntax classes), shared by TUI, GUI, and web; hot switch
     via `prefs.changed`.
   - CI runs a contrast check over every theme token pair and fails below AA, because "it looked
-    fine on my monitor" is how a theme ships unreadable.
+    fine on my monitor" is how a theme ships unreadable. **Done with P4.6-1**: 34 pairs per
+    theme (17 foreground tokens x 2 surfaces), `built_in_themes_meet_wcag_aa`. Hot switch and the
+    TUI/GUI/web consumers remain.
 
 - [ ] **P4.6-7 · Presets that point at programs** (1d)
   - A `language_servers` or `agents` contribution merges into the typed registries; a command it

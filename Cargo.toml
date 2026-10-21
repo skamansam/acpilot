@@ -16,6 +16,7 @@ license = "MIT OR Apache-2.0"
 acpilot-proto = { version = "0.1.0", path = "crates/acpilot-proto" }
 acpilot-core = { version = "0.1.0", path = "crates/acpilot-core" }
 acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
+acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 
 # protocol
 agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }

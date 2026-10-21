@@ -8,6 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+acpilot-extensions = { workspace = true }
 clap = { workspace = true }
 
 [lints]

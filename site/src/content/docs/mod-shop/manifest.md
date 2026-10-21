@@ -75,10 +75,11 @@ fragment is validated by the code that already validates your own files.
 - **Unknown keys are errors.** Same rule as configuration, manifests, and recipes.
   An extension that spills a typo should fail loudly on the developer's machine,
   not quietly on a user's.
-- **Ids are namespaced and collision-free.** `theme` ids share a namespace with
-  the built-ins; `night-flight` already exists, so an extension ships
-  `acpilot.night-flight-syntax` instead. A collision is an error, never an
-  override.
+- **Ids are namespaced and collision-free.** An id is `publisher.name`, and a
+  theme's id must sit under its extension's publisher. `acpilot.night-flight`
+  already exists, so a variant ships `acpilot.night-flight-syntax` — a free name
+  because ids collide only when they are literally equal. A collision is an
+  error, never an override.
 - **Paths may not escape the extension directory.** `../` in a contribution path
   is rejected before the file is opened, and symlinks are resolved and checked the
   same way. This is the one check that must not have a "probably fine" branch.
@@ -94,3 +95,12 @@ command for a language server or an agent — and that command is trust-pinned o
 first use, with the extension's name in the prompt, so the question is "trust
 rust-analyzer from acpilot.rust-pack?" rather than a bare path in a dialog.
 </Aside>
+
+## What is implemented
+
+`crates/acpilot-extensions` parses and validates this schema, and the four
+built-in extensions under `extensions/` are its first users. The checks above are
+tests, not intentions: `crates/acpilot-extensions/tests/loader.rs` covers unknown
+keys, schema versions, publisher mismatches, path traversal, symlink escapes, and
+the collision and `extends` cycles. Installing from a registry and activating in
+a profile are P4.6-3 to P4.6-5.

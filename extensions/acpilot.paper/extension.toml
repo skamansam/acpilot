@@ -1,0 +1,12 @@
+schema_version = 1
+id = "acpilot.paper"
+name = "Paper"
+version = "1.0.0"
+publisher = "acpilot"
+description = "Day VFR: warm paper, ink, and the same amber used sparingly."
+homepage = "https://rudeboy.dev/acpilot/mod-shop/themes/"
+min_acpilot = "0.1.0"
+
+[[contributes]]
+kind = "theme"
+path = "paper.toml"

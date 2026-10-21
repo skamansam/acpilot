@@ -45,7 +45,7 @@ tab_width = 2
 insert_spaces = true
 format_on_save = true
 wrap = false
-theme = "night-flight"
+theme = "acpilot.night-flight"
 ```
 
 ## Profile config

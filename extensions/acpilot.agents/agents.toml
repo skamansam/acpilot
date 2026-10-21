@@ -1,0 +1,38 @@
+# The built-in agent presets.
+#
+# A preset is a command, not a grant: the daemon hashes the binary on first run
+# and asks before it is trusted, and an agent still meets the permission broker
+# for every write, terminal, or tool call.
+schema_version = 1
+
+[[agents]]
+id = "claude-code"
+name = "Claude Code"
+transport = "acp_stdio"
+command = "npx"
+args = ["-y", "@zed-industries/claude-code-acp"]
+description = "Anthropic's agent, spoken to over ACP by the Zed adapter."
+
+[[agents]]
+id = "gemini-cli"
+name = "Gemini CLI"
+transport = "acp_stdio"
+command = "npx"
+args = ["-y", "@google/gemini-cli", "--experimental-acp"]
+description = "Google's terminal agent, in its experimental ACP mode."
+
+[[agents]]
+id = "codex"
+name = "Codex"
+transport = "acp_stdio"
+command = "npx"
+args = ["-y", "@zed-industries/codex-acp"]
+description = "OpenAI's Codex CLI through the ACP adapter."
+
+[[agents]]
+id = "local-model"
+name = "Local model (acpilot-agent-lm)"
+transport = "acp_stdio"
+command = "acpilot-agent-lm"
+args = []
+description = "A recipe from the model lab promoted to an agent; reaches files only over ACP."

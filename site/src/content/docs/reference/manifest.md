@@ -29,8 +29,10 @@ name = "Freebuff"
 transport = "pty"
 command = "freebuff"
 parser = "ansi-transcript"
-sentinel = "> "
-idle_timeout_ms = 600000
+prompt_row = "▍Enter a coding task"
+sentinel = "▍Enter a coding task"
+exit_command = "/exit"
+idle_timeout_ms = 5000
 
 [[agents]]
 id = "local-gemini"
@@ -55,7 +57,7 @@ restart = "on-crash"
 | Transport | What it means | Requirements |
 | --- | --- | --- |
 | `acp-stdio` | Native ACP over stdio | `command`; agent implements ACP |
-| `pty` | Program driven through a PTY | `command`, `parser`, and a sentinel or idle timeout |
+| `pty` | Program driven through a PTY | `command`, `parser`, and a `sentinel`; `idle_timeout_ms` is the backstop |
 | `http-jsonrpc` | ACP over HTTP | `url`; used for remote agents |
 
 The bridge in [remote control](../../flight-test/remote-control/) is the mirror
@@ -75,8 +77,11 @@ property of the daemon, not of an agent.
 | `env` | table | Values may be `keyring:<agent>/<profile>` references |
 | `restart` | enum | `never` or `on-crash` (max 3 attempts) |
 | `parser` | string | PTY only: `plain-transcript`, `ansi-transcript`, or `script:<path>` |
-| `sentinel` | string | PTY only: prompt string that marks a finished turn |
-| `idle_timeout_ms` | integer | PTY only: fallback turn-complete detection |
+| `prompt_row` | string | PTY only: text that identifies the input row, so chrome can be cut away |
+| `sentinel` | string | PTY only: the input row back at rest — the primary turn-complete signal |
+| `exit_command` | string | PTY only: what to type to leave cleanly (e.g. `/exit`); `Ctrl-D` is not universal |
+| `submit_delay_ms` | integer | PTY only: gap between the text and the Enter key; one write of `text\r` is a paste, not a submit, in at least one TUI |
+| `idle_timeout_ms` | integer | PTY only: backstop when the sentinel does not fire. 5,000 avoided every truncated turn measured; smaller values did not |
 
 ## Validation
 

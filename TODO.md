@@ -41,10 +41,22 @@ question that would be expensive to get wrong.
     `@agentclientprotocol/claude-agent-acp` (the old name is deprecated), and Gemini CLI was not
     installed or signed in on this machine, so OpenCode 1.19.3 was the second agent.
 
-- [ ] **P0-2 · Program-as-agent over a PTY** (2d)
+- [x] **P0-2 · Program-as-agent over a PTY** (2d) — **done 2026-10-21**
   - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, render its screen with `vt100`, detect "turn complete" from a sentinel (prompt string reappearing / idle timeout).
   - **Answer:** is a transcript adapter viable, or do we need per-program adapter profiles? What breaks with alternate-screen TUIs, colours, and bracketed paste?
   - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns the final screen text + exit state for two programs.
+  - **Result:** `spikes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query answers,
+    submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude Code 2.1.306 through a
+    real turn each, plus a deterministic `fake-tui.sh` double. The transport is generic; the
+    **semantics are per-program** — submit key, answer region, completion sentinel, and startup
+    dialogs all differ, so `transport = "pty"` must carry a profile rather than a parser guess.
+    An idle timeout below 5 s truncated the answer in 4 of 5 real turns (largest mid-turn gap
+    3.4 s, from the model thinking); 5 s never lied and added 5 s of latency, versus ~200 ms for a
+    per-program sentinel. Both programs run on the alternate screen, so the screen must be captured
+    before exit — after `quit` it is empty. Sending `text` and Enter in one write silently fails to
+    submit in Freebuff and looks exactly like a completed turn. Both probe the terminal (`CSI ? u`,
+    `CSI > 0 q`, plus `6 n`/`c`) and both gate the first prompt behind a dialog. Numbers, screens and
+    commands: `docs/notes/pty-agents.md`.
 
 - [ ] **P0-3 · gpui text benchmark** (2d)
   - Render a 100k-line Rust file in gpui, scroll, select, type, undo; build the screen against the `text_system` shaped-line API and a `uniform_list` row window rather than one giant element.

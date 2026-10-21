@@ -1,6 +1,9 @@
 # P0-2 — a program as an agent: three TUIs under one PTY driver
 
-Measured 2026-10-21 on Linux (x86_64), Rust 1.97.0.
+Measured 2026-10-21 on Linux under WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2,
+x86_64), Rust 1.97.0. WSL2 runs a real kernel and hands out a real Linux PTY, so
+these are Linux PTY numbers — not Windows ConPTY ones, which no run here
+exercised.
 
 | program | version | invocation |
 | --- | --- | --- |
@@ -203,8 +206,10 @@ status bar, and the thought. That is a profile, not a heuristic.
 
 ## Limitations
 
-- Two programs, one platform, one turn each. Windows and WSL are P0-5; no resize,
-  cancellation, tool-permission prompt, or multi-turn context was exercised.
+- Two programs, one turn each, all on WSL2's Linux PTY. The Windows side —
+  ConPTY, and `wsl.exe` starting a distro from Windows — is untouched; P0-5 owns
+  that, and it is not the same terminal. No resize, cancellation,
+  tool-permission prompt, or multi-turn context was exercised.
 - The spike returns screen text; it does **not** extract messages. That is P2-7's
   job, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so

@@ -56,7 +56,9 @@ question that would be expensive to get wrong.
     before exit — after `quit` it is empty. Sending `text` and Enter in one write silently fails to
     submit in Freebuff and looks exactly like a completed turn. Both probe the terminal (`CSI ? u`,
     `CSI > 0 q`, plus `6 n`/`c`) and both gate the first prompt behind a dialog. Numbers, screens and
-    commands: `docs/notes/pty-agents.md`.
+    commands: `docs/notes/pty-agents.md`. All runs were on WSL2 (kernel
+    6.18.33.2-microsoft-standard-WSL2): a real Linux PTY, so these numbers say nothing about Windows
+    ConPTY, which P0-5 owns.
 
 - [ ] **P0-3 · gpui text benchmark** (2d)
   - Render a 100k-line Rust file in gpui, scroll, select, type, undo; build the screen against the `text_system` shaped-line API and a `uniform_list` row window rather than one giant element.
@@ -73,6 +75,14 @@ question that would be expensive to get wrong.
 
 - [ ] **P0-5 · WSL helper round-trip** (1d)
   - On a Windows box (CI runner or VM): enumerate distros, `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON line, get one back.
+  - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box: `wsl.exe -l -q` works
+    through interop (135 ms) but prints **UTF-16LE** — NUL-interleaved output that a naive line reader
+    turns into garbage; the box has `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things,
+    not one prefix: `/home/sam` → `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
+    `C:\Users\SamTyler` → `/mnt/c/Users/SamTyler`. So the translation function is a pair of mappings
+    (drives ↔ `/mnt/<letter>`, and the distro root ↔ its UNC path), and the harness must decode UTF-16.
+    The interop path does not cover ConPTY or `wsl.exe` invoked from Windows, which is what the helper
+    actually ships against — that half still needs a Windows runner.
   - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), interop quirks.
   - **Exit criteria:** latency table + a path-translation function with unit tests that we can lift into `acpilot-host`.
 

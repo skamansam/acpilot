@@ -31,6 +31,20 @@ Two things that do not belong anywhere: domain logic in a UI crate, and UI
 concerns in the daemon. If the TUI cannot do something, the GUI should not be able
 to either.
 
+## Tests
+
+Unit tests sit in `#[cfg(test)]` modules next to the code; anything that crosses a
+process, a file, or a wire boundary gets an integration suite in
+`crates/<crate>/tests/`. `cargo test --workspace` runs both, and CI runs the same
+set through `cargo nextest`.
+
+Two suites are contracts rather than coverage, and should not be weakened:
+
+- `acpilot-proto/tests/openapi_snapshot.rs` — regenerate deliberately with
+  `INSTA_UPDATE=always cargo test -p acpilot-proto` and review the diff.
+- `acpilot-proto/tests/wire_contract.rs` — every schema, parsed and re-serialised.
+  A failure here means the wire moved, not that the test is stale.
+
 ## Commits
 
 One idea per commit, imperative subject, scoped by area:

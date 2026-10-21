@@ -383,6 +383,20 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while
     the permission prompt appears in the TUI and not in the script.
 
+- [ ] **P4.5-12 · Integration stats** (1d) — the shared contract landed:
+  `acpilot_proto::stats::IntegrationStats` covers providers and agents, every figure carries
+  `StatSource` (`server`, `configured`, `estimated`, `unknown`), and
+  `acpilot_core::stats::{context_fill, credit_fill}` is the tested fill math both UIs use.
+  Still open: `GET /v1/stats`, the collector that fills it, and provider balance reads.
+  - Context: the window and usage come from the provider when it reports them (LM Studio
+    `max_context_length`, `usage`) and from the session transcript (marked `estimated`)
+    otherwise; no default window is ever substituted.
+  - Credits: read from a provider that exposes a balance endpoint (for example OpenRouter's
+    `/api/v1/credits`) or from a configured plan; a provider with no such endpoint shows no
+    credits rather than zero. Local servers show a context bar and no credit bar.
+  - One row per integration, including quiet ones, so the bar does not reflow when a provider
+    stops answering; `updated_at` makes a stale reading visible.
+
 ---
 
 ## P4.6 — Extensions: the mod shop (≈11 days)
@@ -517,6 +531,11 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
 - [ ] **P6-10** Terminal pane: `tui-term` attachment to session PTYs; `Ctrl-T` to open; scrollback; copy mode with OSC 52 clipboard fallback for SSH.
 - [ ] **P6-11** Embedded mode: `acpilot tui` works with **no daemon** (in-process core) and attaches to a daemon when one exists — same code path, different `Host`/client impl. Guard with a trait so behaviour cannot fork.
 - [ ] **P6-12** Mouse support (optional), focus cycling, resize handling, `--no-mouse`, and a 60 fps budget on a 200×60 terminal.
+- [ ] **P6-13** Integration stats bar, shared by TUI, GUI and web: one row per provider and agent,
+  a context bar (`used/window`) and a credit bar (`used/limit`, or `remaining`), drawn from
+  `IntegrationStats` with `acpilot_core::stats` for the fill. Unknown denominators render as an
+  indeterminate track, never full or empty; estimated figures are styled differently and the
+  source is one keystroke away. TUI snapshots via `ratatui::TestBackend`, GUI in P10, web in P11.
   - **DoD:** open a 100k-line file, edit with undo, open a session with Claude, stream a turn, answer a permission, accept a hunk, run `cargo test` in the terminal pane — all without leaving the TUI.
 
 ---
@@ -728,13 +747,34 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ### Testing
 
-- [ ] Unit tests per crate; `insta` snapshots for API JSON, transcripts, and CLI help.
+- [x] Wire contract: `crates/acpilot-proto/tests/wire_contract.rs` parses and re-serialises
+every schema and enum spelling in the crate, so a renamed field or a changed enum value
+fails with the type's name. The OpenAPI snapshot covers the document; this covers the
+serialiser.
+- [ ] Unit tests per crate. Every crate with behaviour has them: `acpilot-core` (error
+  contract, stats math), `acpilot-cli` (unit plus two process-level suites),
+  `acpilot-extensions` (unit plus five integration suites), `acpilot-lsp` (position, framing,
+  client, probe), `acpilot-model` (unit plus a mock provider), `acpilot-proto` (wire
+  contract plus OpenAPI snapshot) and `acpilotd` (unit plus HTTP). `acpilot-agent`,
+  `acpilot-gui`, `acpilot-host`, `acpilot-profile`, `acpilot-text`, `acpilot-tui`,
+  `acpilot-web` and `acpilotd-helper` are empty stubs by design; their tests land with the
+  phase that gives them code.
+- [ ] `insta` snapshots for transcripts and CLI help.
 - [ ] Mock ACP agent (P2-9) is the default fixture; one nightly job against real agents (network, secrets-gated).
 - [ ] Mock LSP server (P7-15) as the default fixture; rust-analyzer + typescript-language-server nightly; position-encoding proptests on every CI run.
 - [ ] Profile precedence matrix and keyring isolation run on all three OSes (P4-10).
 - [ ] Official ACP **test compatibility kit** in CI once published as a binary; assert we pass as a client.
 - [ ] `proptest` for buffer invariants and path translation (WSL/SSH).
-- [ ] Playwright for web, `assert_cmd` for CLI, headless TUI tests via `ratatui`'s `TestBackend`.
+- [x] CLI: process-level scripting tests in `crates/acpilot-cli/tests/` (`ext.rs`, `cli.rs`):
+  exit codes `0/1/2/3/4/5`, stderr for usage errors, `ACPILOT_PROFILE`, help snapshots.
+- [x] API: route tests through the router (`tower::ServiceExt::oneshot`) plus a live-socket
+  test that binds an ephemeral port and uses a real HTTP client (`acpilotd/tests/http.rs`).
+- [ ] Web: Playwright in **P11**, against `acpilot serve` with a temp profile — no mocked routes.
+- [ ] TUI: headless snapshots via `ratatui`'s `TestBackend` in **P6**, including the stats bar
+  at known dimensions and a 200×60 frame budget.
+- [ ] GUI: a gpui test harness in **P10** (frame + text layout assertions), added with the crate.
+- [ ] SSE: a live-server suite that opens the stream, drops it, reconnects with `Last-Event-ID`,
+  and asserts ordered replay with no gaps (**P3**).
 
 ### Dependencies & upgrades
 

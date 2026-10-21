@@ -271,6 +271,35 @@ expression: document
         ],
         "type": "object"
       },
+      "ContextStats": {
+        "description": "Context-window usage for one integration.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/StatSource",
+            "description": "Where `used_tokens` and `window_tokens` came from."
+          },
+          "used_tokens": {
+            "description": "Tokens currently in the conversation, including the system prompt and\nany corpus that was assembled for the next turn.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_tokens": {
+            "description": "The window to measure against. Absent when neither the server nor the\nrecipe states one; a client must not substitute a default.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "used_tokens",
+          "source"
+        ],
+        "type": "object"
+      },
       "ContextStrategy": {
         "description": "What to do when the assembled prompt would exceed the window.",
         "enum": [
@@ -329,6 +358,48 @@ expression: document
         "required": [
           "workspace_id",
           "agent_id"
+        ],
+        "type": "object"
+      },
+      "CreditStats": {
+        "description": "Credit balance for one integration.\n\nAmounts are in the provider's own unit — credits, not necessarily currency —\nand `currency` carries the label to show. Any field may be absent: some\nproviders report only a balance, some only usage, and local servers report\nneither. [`limit`](Self::limit) is separate because a remaining balance is not\nthe same as a plan ceiling.",
+        "properties": {
+          "currency": {
+            "description": "What the amounts are counted in, for example `credits` or `USD`.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Plan ceiling for the period, when reported. With `used` this makes the\nbar's denominator; without it the bar is indeterminate.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "remaining": {
+            "description": "Credits left, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/StatSource",
+            "description": "Where the figures came from."
+          },
+          "used": {
+            "description": "Credits spent in the current billing period, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "currency",
+          "source"
         ],
         "type": "object"
       },
@@ -803,6 +874,64 @@ expression: document
         "required": [
           "id",
           "activate"
+        ],
+        "type": "object"
+      },
+      "IntegrationKind": {
+        "description": "What the stats describe.\n\nProviders and agents share the bar because they share the questions, not\nbecause they share a lifecycle: a provider can serve several agents, and an\nagent can outlive the provider that answered its last turn.",
+        "enum": [
+          "provider",
+          "agent"
+        ],
+        "type": "string"
+      },
+      "IntegrationStats": {
+        "description": "One integration's stats, as returned by `GET /v1/stats`.\n\nA list of these is what the stats bar renders. Integrations with nothing\nreported still appear, with `source: unknown`, so the bar has a stable row\ninstead of disappearing when a provider is quiet.",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextStats",
+                "description": "Context usage, absent when the integration has no conversation attached\n(a provider that has not served a turn, for example)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credits": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CreditStats",
+                "description": "Credit balance, absent for local servers and for plans that do not\nexpose one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "Provider or agent identifier.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/IntegrationKind",
+            "description": "Which kind of integration this is."
+          },
+          "label": {
+            "description": "Display label, so a bar can be drawn without a second lookup.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "RFC 3339 timestamp of the last observation. A stale bar is better than a\nsilently frozen one, so the age is on the wire.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -1679,6 +1808,16 @@ expression: document
           "updated_at"
         ],
         "type": "object"
+      },
+      "StatSource": {
+        "description": "Where one figure came from.\n\nThis is recorded per figure rather than per integration: a server may report a\ncontext window but no balance, and a configured plan may name a credit ceiling\nthe server never mentions.",
+        "enum": [
+          "server",
+          "configured",
+          "estimated",
+          "unknown"
+        ],
+        "type": "string"
       },
       "String": {
         "type": "string"

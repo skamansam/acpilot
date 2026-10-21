@@ -22,6 +22,7 @@ pub mod model;
 pub mod permission;
 pub mod profile;
 pub mod session;
+pub mod stats;
 pub mod terminal;
 pub mod workspace;
 
@@ -99,6 +100,11 @@ pub const API_PREFIX: &str = "/v1";
         model::RunSummary,
         model::PromoteRecipeRequest,
         model::PromotedAgent,
+        stats::IntegrationKind,
+        stats::StatSource,
+        stats::ContextStats,
+        stats::CreditStats,
+        stats::IntegrationStats,
         bridge::DriverScope,
         bridge::BridgeTransport,
         bridge::DriverStatus,
@@ -154,6 +160,7 @@ mod tests {
             "Preferences",
             "ModelRecipe",
             "RunSummary",
+            "IntegrationStats",
             "AcpBridgeSummary",
             "AcpDriverSummary",
             "ExtensionSummary",

@@ -1,0 +1,20 @@
+---
+source: crates/acpilot-cli/tests/cli.rs
+expression: stdout(&ext)
+---
+Install, verify, and approve extensions
+
+Usage: acpilot ext <COMMAND>
+
+Commands:
+  add           Install an extension from a local directory
+  import-theme  Import a TextMate `.tmTheme` as a theme extension and install it
+  verify        Rehash every installed version and report any that are blocked
+  prune         Remove versions no profile activates
+  activate      Approve an installed extension for one profile
+  deactivate    Withdraw approval from one profile
+  why           Explain how a preset or agent resolves for one profile
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

@@ -10,5 +10,6 @@
 //! scripts, not an implementation detail.
 
 pub mod error;
+pub mod stats;
 
 pub use error::AcpilotError;

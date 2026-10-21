@@ -35,8 +35,10 @@ the probe exits non-zero. Fixtures are in `spikes/fixtures/lsp/{rust,typescript,
    publish path regardless, and a pull path that retries cancellation.
 4. **`$/progress` is not optional UX.** During the first index,
    `rust-analyzer` sent 133 `$/progress` notifications (14 begin, 105 report, 14
-   end); two begin without a matching end were still open when the probe stopped.
-   A UI that ignores these shows a spinner with no reason.
+   end). At the moment the first diagnostics arrived it had begun 14 and ended
+   12, so an unmatched begin is normal while work is still running; after a
+   500 ms drain the counts balanced. A UI that ignores these shows a spinner
+   with no reason.
 5. **URIs were well formed.** All returned `file://` URIs parsed, had no host, and
    preserved percent-encoding for a directory containing a space and `ü`
    (`file:///tmp/lsp-spike%20%C3%BCn%C3%AFcode/index.ts`). Windows drive letters
@@ -103,7 +105,7 @@ only that code.
 
 | server | total | begin | report | end | first progress after `didOpen` |
 | --- | --- | --- | --- | --- | --- |
-| rust-analyzer | 133 | 14 | 105 | 14 | 3 ms |
+| rust-analyzer | 133 | 14 | 105 | 14 | 3 ms (12 ends at first publish) |
 | typescript-language-server | 2 | 1 | 0 | 1 | 121 ms |
 | pyright-langserver | 0 | — | — | — | — |
 
@@ -141,10 +143,11 @@ Checked against 0.2.4 from crates.io, in a scratch crate outside this repository
 - It brings typed request/notification methods for the whole LSP surface
   (`lsp-types` 0.97), plus lifecycle, concurrency, panic, and tracing layers. That
   is real value: our probe client is ~400 lines and implements four methods.
-- Cost measured: 97 packages in the closure versus 92 for our current
-  `acpilot-lsp` (which includes proptest and `url`), and 9.1 s for a cold debug
-  build of an otherwise empty binary. Dependency count is a wash; build time is
-  not free but is not disqualifying.
+- Cost measured: 97 packages in its normal closure versus 66 for
+  `acpilot-lsp` (both with tokio's `full` feature), so about 25 extra crates,
+  and 9.1 s for a cold debug build of an otherwise empty binary. That is real
+  weight for a client that currently needs five requests, but it is not
+  disqualifying once P7 needs the whole surface.
 - The trade-off is ownership: `MainLoop` owns the read loop. Raw notifications —
   exactly what the probe needed to count — are only visible by implementing
   `LanguageClient` callbacks, and a request that needs to race a notification

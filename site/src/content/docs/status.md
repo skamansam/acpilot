@@ -33,7 +33,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 
 | Phase | What lands | State |
 | --- | --- | --- |
-| P0 | Spikes: ACP handshake, PTY agent, gpui text benchmark, SSH, WSL, LSP | planned |
+| P0 | Spikes: ACP handshake, PTY agent, gpui text benchmark, SSH, WSL, LSP | in progress — LSP round-trip done |
 | P1 | Workspace skeleton, error model, CI, OpenAPI snapshot | **done** |
 | P2 | ACP engine, sessions, permission broker (headless, mock agent) | next |
 | P3 | Daemon API: SSE, files, terminals, SQLite | |

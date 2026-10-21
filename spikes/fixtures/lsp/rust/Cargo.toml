@@ -1,0 +1,9 @@
+[package]
+name = "lsp-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately outside the workspace: rust-analyzer should index exactly this
+# crate, not the repository it happens to live in.
+[workspace]

@@ -57,7 +57,7 @@ question that would be expensive to get wrong.
   - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event taxonomy, and the error envelope. Review it against: CLI needs, TUI needs, permission answering from a script, web reconnect.
   - **Exit criteria:** endpoint list frozen for P3; anything missing from the README added there.
 
-- [ ] **P0-7 · LSP client round-trip + position encodings** (1d)
+- [x] **P0-7 · LSP client round-trip + position encodings** (1d) — **done 2026-10-21**
   - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), `initialize` advertising
     `general.positionEncodings = ["utf-8", "utf-16"]`, then `didOpen` a file containing emoji,
     CJK, and combining marks; assert a `definition`/`diagnostics` range lands on the right column.
@@ -70,6 +70,15 @@ question that would be expensive to get wrong.
     URIs (Windows drive letters, percent-encoding, `file://` with a host)?
   - **Exit criteria:** `docs/notes/lsp-servers.md` capability table + a position-conversion
     function with proptests, liftable into `acpilot-lsp`.
+  - **Result:** the conversion lives in `acpilot-lsp::position` (proptested over emoji, CJK,
+    combining marks, CRLF) and says **negotiate both, honour the server, default to UTF-16**.
+    rust-analyzer chose `utf-8`; `typescript-language-server` and `pyright` sent no
+    `positionEncoding` and used UTF-16. Definitions landed on the expected byte in all three,
+    including a path with a space and `ü`. Conversion is 18–28 ns; the whole-file index build
+    (2.26 ms per 100k lines) is what must become incremental in P7. `rust-analyzer` answers
+    pull diagnostics only after one `-32802` cancellation, and is the only server that sends
+    substantial `$/progress` traffic (133 notifications for a one-file index). Measurements,
+    commands and the `async-lsp` 0.2 assessment: `docs/notes/lsp-servers.md`.
 
 ---
 
@@ -901,7 +910,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D6 · Licensing of agent manifest schema: Apache-2.0 so other editors can adopt it.
 - [ ] D7 · Whether `acpilot` ships as one binary with subcommands (recommended) or separate `acpilot`/`acpilotd` binaries everywhere.
 - [ ] D8 · LSP wire types: `gen-lsp-types` 0.11 with the `url` feature (recommended) vs `ls-types` 0.0.6 (3.18 proposals) vs `lsp-types` 0.97 (unmaintained, `fluent-uri`). Isolated behind `acpilot-lsp::wire` either way.
-- [ ] D9 · Position encoding: negotiate `utf-8` (recommended) vs always `utf-16`. P0-7 measures the conversion cost before P7-5 commits.
+- [x] D9 · Position encoding: **advertise `utf-8` + `utf-16`, use the server's answer, default to UTF-16 when it says nothing** (decided 2026-10-21 on P0-7's numbers). UTF-8 saves 10 ns per conversion and is what rust-analyzer picks; always-UTF-16 would be wrong for it, and assuming UTF-8 breaks the two servers that advertise nothing. Index rebuild, not conversion, is the cost that matters. See `docs/notes/lsp-servers.md`.
 - [ ] D10 · Profile isolation: one daemon with N stores (recommended — profiles must run concurrently) vs one daemon per profile (stronger blast-radius, worse UX).
 - [ ] D11 · Profile storage: database per profile (recommended) vs single database with a `profile` column.
 - [ ] D12 · Language-server installation: detect-only in v0.1 (recommended) vs managed downloads with checksums.

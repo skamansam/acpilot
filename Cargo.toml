@@ -104,6 +104,7 @@ argon2 = "0.6"
 # dev
 insta = { version = "1", features = ["json"] }
 http-body-util = "0.1"
+proptest = "1"
 
 [workspace.dependencies.windows]
 version = "0.62"

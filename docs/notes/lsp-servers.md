@@ -1,6 +1,9 @@
 # P0-7 — language servers: what three real servers do
 
-Measured 2026-10-21 on Linux (x86_64), Rust 1.97.0. Servers:
+Measured 2026-10-21 on Linux under WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2,
+x86_64), Rust 1.97.0. Fixtures were opened from the distro's own filesystem
+(`/home`), not from `/mnt/c`, so the index timings are not Windows-drive timings.
+Servers:
 
 | server | version | invocation |
 | --- | --- | --- |

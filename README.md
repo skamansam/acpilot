@@ -243,28 +243,52 @@ auth, optional TLS termination, no cloud dependency.
 ### API — HTTP + SSE + WS
 
 ```
-GET    /v1/health
+GET    /v1/health                         GET  /v1/openapi.json
 GET    /v1/hosts                          POST /v1/hosts
+                                          POST /v1/hosts/{id}/test
 GET    /v1/workspaces                     POST /v1/workspaces
 GET    /v1/agents                         POST /v1/agents/{id}/refresh
+                                          POST /v1/agents/{id}/trust
 GET    /v1/sessions                       POST /v1/sessions
 GET    /v1/sessions/{id}                  DELETE /v1/sessions/{id}
 POST   /v1/sessions/{id}/prompt           POST /v1/sessions/{id}/cancel
 POST   /v1/sessions/{id}/mode             GET  /v1/sessions/{id}/events   (SSE)
+WS     /v1/sessions/{id}/stream           GET  /v1/events                 (SSE)
 GET    /v1/permissions?status=pending     POST /v1/permissions/{id}/resolve
 GET    /v1/files?workspace=&path=         PUT  /v1/files
-GET    /v1/terminals                      POST /v1/terminals
-WS     /v1/terminals/{id}/attach          WS   /v1/sessions/{id}/stream
-GET    /v1/profiles                        POST /v1/profiles
-GET    /v1/profiles/{id}                   PATCH/DELETE /v1/profiles/{id}
-GET    /v1/profiles/{id}/preferences       PATCH .../preferences
-GET    /v1/lsp/servers                     POST /v1/lsp/servers/{id}/restart
-GET    /v1/lsp/servers/{id}/logs           GET  /v1/lsp/diagnostics
+GET    /v1/files/list
+GET    /v1/terminals?session=             POST /v1/terminals
+WS     /v1/terminals/{id}/attach
+GET    /v1/profiles                       POST /v1/profiles
+GET    /v1/profiles/{id}                  PATCH/DELETE /v1/profiles/{id}
+POST   /v1/profiles/{id}/activate         POST /v1/profiles/{id}/export
+GET    /v1/profiles/{id}/preferences      PATCH .../preferences
+GET    /v1/lsp/servers                    POST /v1/lsp/servers/{id}/restart
+GET    /v1/lsp/servers/{id}/logs          GET  /v1/lsp/diagnostics
 POST   /v1/lsp/request
 ```
 
-Every route except `/v1/events` takes `X-Acpilot-Profile`, and on a mutating request the
-header is *required* — a client cannot silently act as the wrong identity.
+The list is **frozen** for v1, with the reasoning and the rejected alternatives in
+[`docs/api.md`](docs/api.md). Providers, models, recipes and the ACP bridge are deliberately
+later; none of them changes a route above.
+
+Every route takes `X-Acpilot-Profile`; on a mutating request the header is *required* — a
+client cannot silently act as the wrong identity. On a read or a stream, omitting it means
+the active profile, and a stream binds whichever profile it was opened with.
+
+Agent output streams over SSE with a per-session monotonic sequence number: `Last-Event-ID`
+replays from the transcript, a heartbeat every 15 s proves the stream is alive, and an id
+the daemon cannot replay is answered with `resync` rather than silence. A prompt returns
+`202` with a `turn_id` instead of waiting for the agent, and an `idempotency_key` makes a
+retried prompt the same turn. Pending permissions are *state*
+(`GET /v1/permissions?status=pending`), while resolving one is idempotent for a repeated
+answer and `409` for a different one — which is what makes a script able to answer a prompt.
+
+Every failure is the same envelope, `{code, message, details?}`, and `code` is stable
+enough to switch on: `invalid_request` (400), `permission_denied` (403), `not_found`
+(404), `conflict` (409), `timeout` (504), `host_unavailable`, `model_unavailable` and
+`agent_failed` (502), `protocol` and `io` (500). The 502/500 split is the "retry" versus
+"file a bug" signal.
 
 OpenAPI 3.1 is generated from the Rust types (`utoipa`); TS and Rust clients are
 generated from it so a third-party UI is a weekend project, not a fork.
@@ -398,7 +422,14 @@ than to reimplement it.
 path — 9P is slow and silently changes case/permission semantics. Run the daemon helper
 *inside* the distro instead (`wsl.exe -d Ubuntu -- acpilotd-helper --stdio`), so file and
 agent operations are in-distro and only the control plane crosses the boundary. UNC is the
-fallback for read-only browsing.
+fallback for read-only browsing. Measured on the dev box, same file and same cache: 13.0 ms
+per 37 KB read over UNC against 0.096 ms in-distro, 136× — `docs/notes/wsl-helper.md`.
+
+The path a user opens is only a door. A folder that arrives as
+`\\wsl.localhost\Ubuntu-24.04\home\sam\proj` becomes the host `wsl://Ubuntu-24.04`
+plus the Linux cwd `/home/sam/proj`; the Windows path never becomes the identity of the
+workspace. On a machine without WSL there is no `wsl://` host at all — detection is one
+`wsl.exe -l -q`, and absent, failing, or empty is not an error and never a prompt.
 
 ### 5.7 Language servers (LSP)
 

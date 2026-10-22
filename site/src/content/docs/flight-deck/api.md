@@ -7,7 +7,9 @@ description: One control plane for every client, with an error envelope you can 
 
 Every client — CLI, TUI, desktop, browser — uses this API. There is no privileged
 back channel, which is why the API is designed before the UIs rather than
-extracted from them afterwards.
+extracted from them afterwards. `docs/api.md` in the repository is the frozen v1
+contract, including the event taxonomy and the reconnect rules; this page is the
+short version.
 
 ## Today
 
@@ -26,14 +28,14 @@ GET /docs               # Swagger UI, only with --features docs
 | Agents | `GET /v1/agents`, `POST /v1/agents/{id}/trust` |
 | Sessions | `POST /v1/sessions`, `POST /v1/sessions/{id}/prompt`, `POST /v1/sessions/{id}/cancel` |
 | Events | `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` replay) |
-| Files | `GET/PUT /v1/files` with ETag and `If-Match` |
+| Files | `GET/PUT /v1/files` with ETag and `If-Match`, `GET /v1/files/list` for directories |
 | Terminals | `WS /v1/terminals/{id}/attach`, resize, replay-on-attach |
-| Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/decide` |
+| Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
 | Profiles | `GET/POST /v1/profiles`, `PATCH /v1/profiles/{id}/preferences` |
-| LSP | `GET /v1/lsp`, `WS /v1/lsp/{id}/attach` |
-| Models | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
-| Recipes | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
-| Remote drivers | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`; ACP itself at `/acp` |
+| LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
+| Models (post-v1) | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
+| Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
+| Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`; ACP itself at `/acp` |
 
 ## The error envelope
 
@@ -50,9 +52,11 @@ host that stopped answering:
 
 | `code` | HTTP | Meaning |
 | --- | --- | --- |
+| `invalid_request` | 400 | Malformed body, bad enum, missing profile header |
 | `not_found` | 404 | The thing is not there |
-| `conflict` | 409 | Stale ETag, duplicate turn, closed session |
+| `conflict` | 409 | Stale ETag, duplicate turn, closed session, already answered |
 | `permission_denied` | 403 | Policy or a human said no |
+| `timeout` | 504 | An agent, LSP server or host did not answer in time |
 | `host_unavailable` | 502 | SSH/WSL host did not answer |
 | `model_unavailable` | 502 | The inference server is down, refused, or answered nonsense |
 | `agent_failed` | 502 | The agent process died or broke protocol |

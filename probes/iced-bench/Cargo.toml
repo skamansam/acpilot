@@ -1,0 +1,20 @@
+[workspace]
+
+[package]
+name = "iced-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# P0-3's remaining half: the same screen, measured again, so the first-paint
+# number has something to be compared against instead of being a verdict.
+# Default features on purpose — this is the configuration iced would ship in,
+# exactly as `probes/gpui-bench` uses gpui's defaults.
+[dependencies]
+# `advanced` exposes the text primitives the shaping probe measures; it does
+# not change the renderer, and the frame and first-paint numbers are from the
+# same default feature set as `probes/gpui-bench`.
+iced = { version = "0.14", features = ["advanced"] }
+
+[profile.release]
+debug = 1

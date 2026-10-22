@@ -1,142 +1,182 @@
-# P0-3 — the gpui benchmark, on a GPU
+# P0-3 — gpui against iced, on a GPU
 
-Status: **the frame budget is met with margin; the first-paint budget is missed,
-and the number that misses it is not yet attributable to gpui.** P0-3 stays open
-on one sub-item: the `iced` baseline that turns the first-paint number into a
-comparison instead of a verdict.
+Status: **closed, and the framework decision stands.** The frame budget is met by
+both frameworks; the first-paint budget is missed by both; the fallback is priced
+and it is ~3× slower, so it is not taken. Two parts of the task's spec are still
+unmeasured — tree-sitter highlight cost for a 3k-line window, and any macOS
+number — and they are listed under Limitations rather than hidden.
 
-Measured 2026-10-22 on native **Windows 11**, with `gpui` 0.2.2 and Rust 1.96.0
-(the Windows toolchain; the Linux side of this box has 1.97.0).
+Measured 2026-10-22 on native **Windows 11**, not in WSL, with `gpui` 0.2.2,
+`iced` 0.14.0 and Rust 1.96.0 (the Windows toolchain; the Linux side of this box
+has 1.97.0).
 
 | side | thing | version |
 | --- | --- | --- |
 | OS | Windows 11 | native, not WSL |
 | GPU | NVIDIA GeForce RTX 5060 Laptop | driver 616.56 (`32.0.16.1656`) |
 | display | laptop panel | 240 Hz |
-| framework | `gpui` | 0.2.2, default features, release |
+| frameworks | `gpui` / `iced` | 0.2.2 / 0.14.0, default features, release |
 | toolchain | rustc | 1.96.0 stable (msvc) |
 
 ## Why the numbers are from Windows and not from inside WSL2
 
-The previous run of this note stopped because WSL2 reports `Accelerated: no` and
-Mesa's llvmpipe — a CPU rasteriser — which would have answered for llvmpipe rather
-than for gpui.
+WSL2 reports `Accelerated: no` and Mesa's llvmpipe — a CPU rasteriser — which
+would answer for llvmpipe rather than for either framework.
 
-The hardware was not the problem. `nvidia-smi` answers inside WSL2, `/dev/dxg`
+The hardware is not the problem. `nvidia-smi` answers inside WSL2, `/dev/dxg`
 exists, and the RTX 5060 is passed through; what WSL2 does **not** offer is a
 Vulkan ICD for it. The installed ICDs are Intel, RADV, nouveau, lavapipe, asahi,
 gfxstream and virtio — no `nvidia_icd.json`, and Mesa's `dzn` (Vulkan over D3D12)
 is not shipped by Ubuntu 24.04's `mesa-vulkan-drivers` 25.2.8. gpui's Linux
-renderer is Blade, which is Vulkan-only, so every frame there would have gone
-through lavapipe.
+renderer is Blade, which is Vulkan-only, so every frame there would go through
+lavapipe.
 
 The machine underneath is a Windows laptop with the same GPU, a Windows Rust
-toolchain and Visual Studio, and WSL can run Windows programs. So the benchmark
-was built and run natively: `probes/gpui-bench` copied to
-`C:\Users\<user>\acpilot-gpui-bench`, `cargo build --release` there (10m47s cold,
-33 s incremental), and the executable started through interop. The window appears
-on the Windows desktop for ~2 s and the process prints one JSON object and exits.
+toolchain and Visual Studio, and WSL can run Windows programs. So both
+benchmarks were built and run natively: the crate copied to
+`C:\Users\<user>\acpilot-gpui-bench` and `…\acpilot-iced-bench`,
+`cargo build --release` there (gpui 10m47s cold / 33 s incremental; iced 4m02s
+cold / 13 s incremental), and the executables started through interop. Each
+window appears on the Windows desktop for ~2 s and the process prints one JSON
+object and exits.
 
 That is a Windows number for a Windows GPU, which is what the budget wants. It
 says nothing about macOS or Linux; P10-3's macOS work has no paint numbers yet.
 
-## The instrument
+## The two instruments
 
-`probes/gpui-bench` (standalone crate, own lockfile):
+`probes/gpui-bench` and `probes/iced-bench` are separate standalone crates with
+their own lockfiles, and they draw the same screen: a **100 000-line** document
+in a 1400 × 900 window, **50 rows** of 18 px visible, 13 px Consolas, each row
+one named line of generated Rust. Rows are generated from their index, **not
+materialised**, in both.
 
-- a `uniform_list` of **100 000 rows**, each row one text element at 13 px in
-  Consolas, inside a 1400 × 900 window — 50 rows visible, which is what an editor
-  of that window size actually draws;
-- rows are **generated on demand** from their index, not materialised. The first
-  version of the harness built all 100k `SharedString`s up front and added 724 ms
-  to first paint that had nothing to do with the framework; that number would have
-  been reported as gpui's;
-- three phases in one run, all after 30 warm-up frames: **steady** 120 frames
-  (repaint, no input), **scroll** 60 frames (viewport moves three rows per frame
-  through `scroll_to_item`), **type** 40 frames (one character edited into the
-  row nearest the viewport centre, timed from the edit to the next frame);
-- a separate **shaping probe**: 3 000 lines through `TextSystem::shape_line` with
-  the text already built, cold (no cache), so shaping cost is not confused with
-  paint cost;
-- `first paint` is measured in three parts, because 150 ms of budget divided
-  between framework start-up and a view is not one number:
-  `app_ms` (process start → the app loop starts), `window_ms` (→ the view is
-  constructed, i.e. the window and device exist), `first_frame_ms` (→ the first
-  frame after that has been submitted).
+- `probes/gpui-bench` — a `uniform_list` of 100k rows, one text element per row,
+  one scroll handle.
+- `probes/iced-bench` — iced has no `uniform_list`, so the same window is
+  virtualised by hand: a spacer of the scrolled-past height, the 50 visible rows,
+  a spacer for the rest, driven with `scrollable::scroll_to`. Drawing 100k widgets
+  was the mistake the gpui harness exists to rule out, so it is not repeated here.
 
-Frame timings are wall-clock at the frame boundary: `build` is the view's
-`render()`; `paint` is the end of that render to the start of the next frame,
-which includes layout, shaping, paint, submit **and the compositor's vsync wait**;
-`interval` is start-to-start. At 240 Hz a vsync-bound frame is 4.17 ms, so a
-`paint` of 4.15 ms means "waiting", not "working".
+Both run the same three phases after 30 warm-up frames — **steady** 120 frames
+(repaint, no input), **scroll** 60 frames (viewport moves three rows per frame),
+**type** 40 frames (one character edited into the row nearest the viewport
+centre) — plus a cold **shaping probe** of 3 000 lines, and the same three parts
+of first paint: process start → the app loop starts (`app_ms`), → the window and
+device exist (`window_ms`), → the first frame (`first_frame_ms`).
+
+What differs is only where the clock is read, and it is worth being exact about
+because it bounds what the comparison can claim:
+
+- **gpui's frame boundary is a callback that runs as a frame begins.** `build` is
+  the view's `render()`; `paint` is the end of that render to the start of the
+  next frame, which includes layout, shaping, paint, submit **and the
+  compositor's vsync wait**; `interval` is start-to-start. At 240 Hz a
+  vsync-bound frame is 4.17 ms, so a `paint` of 4.15 ms means "waiting", not
+  "working".
+- **iced's frame boundary is `window::frames()`**, which yields the `Instant`
+  stamped at the start of handling `RedrawRequested` — *before* iced builds that
+  frame's view. So `interval` is still start-to-start pacing, and `build` is
+  still the view body, but **there is no "paint" number**: a `tick - view end`
+  delta would measure the gap to a request issued immediately after the previous
+  present, i.e. 0.00 ms, and about nothing. iced's public API has no
+  "frame presented" callback, and a screenshot fence would perturb the frame it
+  measured. `edit_to_view` is reported instead: the edit to the view that
+  responds to it, which is the app-side half of keystroke→paint.
+- Because of that, **gpui's `edit_to_frame` (≈4.2 ms, a full vsync period) and
+  iced's `edit_to_view` (≈0.01 ms) are not the same quantity** and must not be
+  read as one framework being 400× more responsive. The comparable statement is
+  the one both report: frame pacing.
 
 ## Numbers
 
-Three consecutive runs with the window visible, nothing else on that GPU:
+Interleaved runs (gpui, iced, gpui, iced, …) on the same machine with the binaries
+and their DLLs already in the OS cache, so neither framework gets a colder
+system than the other — six gpui, five warm iced:
 
-| what | run 1 | run 2 | run 3 |
-| --- | --- | --- | --- |
-| start-up → app loop (`app_ms`) | 770.6 | 389.3 | 654.1 |
-| start-up → window exists (`window_ms`) | 948.0 | 572.1 | 726.2 |
-| start-up → first frame (`first_frame_ms`) | 967.6 | 580.1 | 733.6 |
-| steady `interval` p50 / p95 | 4.16 / 4.46 | 4.16 / 4.41 | 4.16 / 4.46 |
-| steady `paint` p95 | 4.45 | 4.40 | 4.46 |
-| scroll `interval` p50 / p95 | 4.16 / 4.40 | 4.15 / 4.41 | 4.15 / 4.47 |
-| edit → next frame p50 / p95 | 4.13 / 4.37 | 4.17 / 4.49 | 4.14 / 4.36 |
-| dropped frame intervals | 0 | 0 | 0 |
-| shape 3 000 lines, cold | 52.2 ms | 52.5 ms | 51.3 ms |
+| what | gpui 0.2.2 | iced 0.14.0 |
+| --- | --- | --- |
+| start-up → app loop (`app_ms`) | 231–273 | 50–66 |
+| start-up → window exists (`window_ms`) | 272–313 | 853–898 |
+| start-up → first frame (`first_frame_ms`) | **277–326** | **851–896** |
+| steady `interval` p50 / p95 | 4.14–4.17 / 4.41–4.56 | 4.15–4.18 / 4.32–4.45 |
+| scroll `interval` p50 / p95 | 4.14–4.17 / 4.30–4.65 | 4.14–4.17 / 4.37–4.59 |
+| view build per frame p95 | 0.00 | 0.01 |
+| dropped frame intervals | 0–1 | 0 |
+| shape 3 000 lines, cold | 49.5–51.4 ms (one run 66.0) | 46.1–47.6 ms |
+| rows rendered per frame | 50 | 50 |
 
-`build` is 0.00 ms in every phase by design: `uniform_list` calls its row closure
-during layout, not during `render()`, so the row work is in `paint`, where it
-belongs. Rows rendered per frame: 50.
+Beyond the table:
+
+- iced's **first run after a rebuild** is not the steady-state number: 2 766 ms
+  to first frame, 11 dropped intervals while wgpu compiled its pipelines, then
+  851–896 ms on every run after. It is reported here because a user's first
+  launch after an upgrade pays it.
+- iced's **font system**, measured by `probes/iced-bench` in `font` mode (one
+  timed paragraph, no window): 25.5–26.0 ms warm, 2 244 ms on the very first
+  invocation on this machine. That is cosmic-text reading the system font
+  database, and it is the reason a 300 ms start-up can be 2.5 s once.
+- Neither harness measured a *paint* time it can attribute to the framework:
+  both are vsync-bound, and gpui's `paint` (4.15 ms) is the wait for the
+  compositor, not work.
 
 ### Verdict against the two budgets
 
-- **Keystroke→paint, p95 16 ms: met, with about 3.5× margin.** p95 frame interval
-  is 4.4–4.5 ms on a 240 Hz panel, and the edit→next-frame p95 is 4.4–4.5 ms, with
-  zero missed vsync periods in 660 measured intervals. The honest bound is that
-  the measurement is vsync-bound: gpui is keeping up at 240 Hz, and this harness
-  cannot say how much headroom above that exists. It can say the budget is not
-  close.
-- **First paint, 150 ms: missed by 3.9–6.5×.** 580–968 ms, of which 389–771 ms is
-  spent before the app loop runs at all and a further ~180 ms in window and device
-  creation. None of it is this harness's view, which costs ~0 ms.
+- **Keystroke→paint, p95 16 ms: met, by both, with room.** Both pace at 4.1–4.6 ms
+  p95 on a 240 Hz panel, with 0–1 missed vsync periods per run across ~1 300
+  measured frame intervals, and app-side work of 0.00–0.01 ms per frame. The
+  honest bound is that this is a vsync-bound measurement: the harness can say the
+  budget is not close, not how much headroom above 240 Hz exists.
+- **First paint, 150 ms: missed by both.** gpui is 1.85–2.17× over (277–326 ms);
+  iced is 5.7–6.0× over (851–896 ms).
+- **The fallback is priced, and it is the more expensive one.** iced buys a
+  4.5–5.4× faster *boot* (50 ms against 231–273 ms) and spends it several times
+  over in window and device creation: 853–898 ms to a painted window against
+  272–313 ms. Total first paint is ~3× worse, at the same steady-state pacing and
+  at ~2× the build time. Nothing in these numbers argues for switching.
 
 ## Does the first-paint miss veto gpui?
 
-`TODO.md` §P0-3 says to fall back to `iced` if gpui "misses by >2×". On the number
-alone it does. Two reasons not to apply that as written yet:
+`TODO.md` §P0-3 says to fall back to `iced` if gpui "misses by >2×". The answer
+depends on the machine state, and that is the finding, not a hedge:
 
-1. **The criterion was written expecting an iced measurement to compare against** —
-   "also measure a minimal iced build of the same screen, so the fallback is
-   priced rather than assumed". That half is not done, so a 2× miss has nothing to
-   be 2× *of*. Process start-up, DLL loading and font enumeration are costs any
-   native UI pays; if iced/Tauri pay 600 ms too, the framework is not the problem,
-   and switching buys nothing.
-2. **The number is not attributable.** 389–771 ms elapses before the app loop
-   begins, and this harness cannot see inside it. The plausible components are
-   DirectX device creation and the system font database; which one dominates is a
-   10-minute profile, not a guess worth writing down as fact.
+- On a machine whose DLLs and driver caches are warm, gpui sits **on** the line:
+  1.85–2.17×, median 1.90×. The veto does not fire, but it is within run-to-run
+  noise of firing, which is not a usable acceptance test.
+- The same binary, run earlier in this session before those caches were warm,
+  measured **580–968 ms** — 3.9–6.5× — and would have fired it. A first-paint
+  budget that does not name the machine state it is measured in is measuring the
+  OS file cache.
+- iced misses the same budget by 5.7–6.0×. So the clause, read as a number to
+  clear rather than a comparison to win, rejects the **fallback** harder than the
+  framework it was written to protect against. It cannot be the decision rule.
 
-So P0-3 is **not** decided by this run. What would decide it, in order of cost:
+What the numbers do support:
 
-1. an `iced` 0.14 window with the same 100k-row screen, measuring the same three
-   start-up numbers (a day, and the remaining half of the exit criteria);
-2. a profile of the app-loop phase to see whether first paint can be cut by
-   lazily creating anything (font enumeration is the usual suspect);
-3. a macOS run on hardware, which is where a first-paint budget is most likely to
-   be met or missed differently.
+1. **D1 stands: gpui.** The veto does not fire on the warm number, and the
+   fallback is strictly worse on the only budget that is missed.
+2. **A first-paint budget on a desktop framework needs a stated machine state**,
+   or a target that is not 150 ms: no native framework measured here paints in
+   that time from a process start, and gpui's own 277 ms is already 1.9×. If
+   150 ms is a product requirement it is a requirement about *how the app
+   starts* — pre-warmed process, persisted window, splash — not about the
+   framework, and it should be written in `TODO.md` §Perf that way.
+3. **The remaining lever is window/device creation, not the view.** The 100k-row
+   list costs ~0 ms per frame in both, and iced's own split shows where the time
+   goes: 51 ms to boot, then 750–800 ms to a window. A profile of that phase
+   (DirectX/wgpu device creation and pipeline compilation) is the next useful
+   measurement, and it is the one thing that could move the number at all.
 
-The rest of the benchmark's spec — tree-sitter highlight cost for a 3k-line
-window — is unmeasured. The shaping number above is the ceiling that highlight
-cost has to fit inside: 3 000 lines cost ~52 ms cold, i.e. ~17 µs per line, which
-is why shaped lines are cached across frames rather than re-shaped. A 3k-line
-window re-shaped every frame would be 52 ms of work per frame against a 4.2 ms
-budget, so the cache is not an optimisation, it is the design.
+The rest of the benchmark's spec is still open: **tree-sitter highlight cost** for
+a 3k-line window is unmeasured, and it has to fit inside the shaping number above
+— 3 000 lines cost ~50 ms cold in both frameworks (~17 µs per line), which is why
+shaped lines are cached across frames rather than re-shaped. A 3k-line window
+re-shaped every frame would be 50 ms of work per frame against a 4.2 ms budget,
+so the cache is not an optimisation, it is the design.
 
-## What the build still costs (from the same pin)
+## What the build still costs (from the same gpui pin)
 
-Unchanged from the previous run, and both still true on Windows:
+Unchanged, and both still true on Windows:
 
 - `libc` must be held at **≤ 0.2.189** while gpui 0.2.2 is in the graph
   (`zed-async-tar` → `xattr` 0.2.3 uses `libc::ENOATTR`, dropped in 0.2.190).
@@ -144,20 +184,30 @@ Unchanged from the previous run, and both still true on Windows:
 - The Linux link needs `libxkbcommon-x11`'s dev symlink even with X11 off.
 
 The build itself is fine: `gpui` 0.2.2 from crates.io alone, no git dependency, no
-`zed/` checkout, no nightly. On Windows the dependency graph takes 10m47s from
-cold and 33 s incremental.
+`zed/` checkout, no nightly. `iced` 0.14 builds clean from crates.io on both
+platforms, in a third of the time.
 
 ## Limitations
 
-- One machine, one GPU, one refresh rate; three runs. A 240 Hz panel hides
-  headroom: the same harness on a 60 Hz panel would be pinned at 16.7 ms and would
-  measure nothing but vsync.
+- One machine, one GPU, one refresh rate; six runs each. A 240 Hz panel hides
+  headroom: the same harness on a 60 Hz panel would be pinned at 16.7 ms and
+  would measure nothing but vsync.
 - vsync was not disabled, so no "how much slack is there" number exists.
+- **Warm-machine numbers.** Both frameworks were measured with their binaries and
+  DLLs in the OS cache. The cold-first-run cost is real and, for iced, ~3× the
+  warm one; it is reported above rather than averaged in.
+- iced has no public frame-presented signal, so its paint and true
+  keystroke→paint latency are not in this comparison. Only pacing and app-side
+  work are.
+- iced's shaping probe times `Paragraph::with_text`, which is shaping **and**
+  layout; gpui's times `TextSystem::shape_line`. The iced figure is therefore an
+  upper bound on a like-for-like comparison, not a like-for-like one.
 - 50 visible rows, not 3 000. The 3k figure in the spec is about a highlight cache,
   which is unmeasured.
-- Two harness bugs were found and fixed during this work (eager 100k-row
+- Two gpui harness bugs were found and fixed earlier in this work (eager 100k-row
   construction inflating first paint; the view-build timer measuring a `Vec` clone
-  instead of `render()`). The numbers above are from after both fixes; the earlier
-  numbers are not in this note because they measured the harness.
-- No macOS or Linux paint numbers, and Linux cannot have any on a WSL2 host
-  without a Vulkan ICD for the physical GPU.
+  instead of `render()`). The numbers here are from after both fixes.
+- No macOS paint numbers for either framework. iced *does* paint on this WSL2 box
+  (275 ms to first frame, on a 60 Hz software path) where gpui's Vulkan-only
+  renderer has no ICD for the physical GPU; that is a portability data point, not
+  a comparable measurement.

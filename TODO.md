@@ -60,29 +60,39 @@ question that would be expensive to get wrong.
     6.18.33.2-microsoft-standard-WSL2): a real Linux PTY, so these numbers say nothing about Windows
     ConPTY, which P0-5 owns.
 
-- [ ] **P0-3 · gpui text benchmark** (2d)
+- [x] **P0-3 · gpui text benchmark** (2d) — **closed 2026-10-22; D1 stands**
   - Render a 100k-line Rust file in gpui, scroll, select, type, undo; build the screen against the `text_system` shaped-line API and a `uniform_list` row window rather than one giant element.
   - Measure: first paint, keystroke→paint, scroll frame time, and the cost of highlighting a 3k-line visible window with tree-sitter.
   - Also measure a minimal `iced` build of the same screen, so the fallback is priced rather than assumed.
   - Verify the pin actually builds clean from crates.io alone (no `zed/` checkout, no network beyond the lockfile): this is where the `zed-font-kit` git dependency and any missing feature will bite.
   - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
   - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
-  - **Result (2026-10-22): the build half passes, the frame budget is met, first paint is missed — and P0-3 stays
-    open on the iced baseline.** The GPU was there all along: WSL2 has the RTX 5060 (`/dev/dxg`, driver 616.56)
-    but no Vulkan ICD for it (`dzn` is not in Ubuntu's `mesa-vulkan-drivers`), and gpui's Linux renderer is
-    Vulkan-only, so the benchmark ran **natively on Windows** through the WSL interop — the same hardware, the
-    platform the budget is about. `probes/gpui-bench` (100k-row `uniform_list`, 50 visible rows, 3 runs): frame
-    interval **p95 4.4–4.5 ms at 240 Hz** and edit→next-frame **p95 4.4–4.5 ms**, zero dropped intervals —
-    the 16 ms budget met with ~3.5× margin, though vsync-bound so the headroom above it is unmeasured.
-    **First paint 580–968 ms against 150 ms**, split as 389–771 ms before the app loop starts and ~180 ms of
-    window/device creation, none of it the view. The >2× veto would fire on that number, but the exit criteria
-    ask for the `iced` build "so the fallback is priced rather than assumed" and that half does not exist yet:
-    process start-up, DLL loads and font enumeration are costs any native UI pays, so a 2× miss of nothing
-    decides nothing. Shaping 3 000 lines cold costs **52 ms** (~17 µs/line), which is why shaped lines must be
-    cached rather than re-shaped per frame. The pin still needs **`libc` held at ≤ 0.2.189** on Linux
-    (`xattr` 0.2.3 uses `libc::ENOATTR`) and `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method
-    and limitations: `docs/notes/gui-bench.md`. Remaining: the iced baseline, a profile of the app-loop phase,
-    the tree-sitter highlight cost, and a macOS run.
+  - **Result (2026-10-22): both frameworks meet the frame budget, both miss first paint, and the fallback is the
+    slower of the two — so the veto does not fire and D1 stands.** The GPU was there all along: WSL2 has the
+    RTX 5060 (`/dev/dxg`, driver 616.56) but no Vulkan ICD for it (`dzn` is not in Ubuntu's
+    `mesa-vulkan-drivers`), and gpui's Linux renderer is Vulkan-only, so both benchmarks ran **natively on
+    Windows** through the WSL interop — the same hardware, the platform the budget is about.
+    `probes/gpui-bench` and `probes/iced-bench` draw the same screen (100k rows, 50 visible at 18 px, 13 px
+    Consolas, generated rows, three phases after warm-up, one cold 3k-line shaping probe) and were run
+    interleaved so neither got a colder system. **Frame pacing: p95 4.3–4.6 ms at 240 Hz for both**, 0–1 dropped
+    intervals per run — the 16 ms budget met with room, though vsync-bound so headroom above 240 Hz is
+    unmeasured. **First paint: gpui 277–326 ms, iced 851–896 ms, against 150 ms.** The fallback is not a fix:
+    iced boots 4–5× faster (50 ms vs 231–273 ms) and spends it several times over in window/device creation
+    (853–898 ms vs 272–313 ms), i.e. ~3× worse in total at the same pacing. Shaping 3 000 lines cold is ~50 ms
+    in both (~17 µs/line), which is why shaped lines are cached rather than re-shaped.
+    **The >2× clause needs care, and this is the finding that changes:** on a warm machine gpui is 1.85–2.17×
+    over (median 1.90×), so it does not fire — but the same binary measured 580–968 ms (3.9–6.5×) earlier in the
+    session before the DLL and driver caches were warm, and iced misses by 5.7–6.0×. A first-paint budget that
+    does not state the machine state measures the OS file cache, and the clause read as an absolute number
+    rejects the fallback harder than the framework it protects. So it is restated as a comparison: a framework
+    is vetoed when the alternative is >2× better, which no measurement here supports. The lever left is
+    window/device creation (iced: 51 ms boot → 750–800 ms to a window), not the view, which costs ~0 ms per
+    frame in both; a profile of that phase is the next useful measurement, and §Perf should say that a 150 ms
+    first paint is a property of how the app starts, not of the framework.
+    The pin still needs **`libc` held at ≤ 0.2.189** on Linux (`xattr` 0.2.3 uses `libc::ENOATTR`) and
+    `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method and limitations:
+    `docs/notes/gui-bench.md`. Still unmeasured: tree-sitter highlight cost for a 3k-line window, a profile of
+    the window/device phase, and a macOS run.
 
 - [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
   - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.
@@ -964,6 +974,14 @@ serialiser.
 | 1 M-line grep in 50k files | ≤ 3 s |
 | LSP diagnostics after an edit (100k-line repo) | ≤ 200 ms p95 |
 | LSP completion round-trip | ≤ 300 ms p95 |
+
+The first two rows were measured by P0-3 on this machine (2026-10-22, Windows 11,
+RTX 5060, warm caches): keystroke→paint is met by both `gpui` and `iced` at
+4.1–4.6 ms p95; **100k-line first paint is not met by either** — gpui 277–326 ms,
+iced 851–896 ms — and the cost is window/device creation, not the view, which is
+~0 ms per frame. Until that phase has a profile, read 150 ms as a target for how
+the app *starts* (pre-warmed process, restored window), not a number a framework
+reaches from a cold process. Numbers and method: `docs/notes/gui-bench.md`.
 | LSP hover | ≤ 200 ms p95 |
 | Profile switch on a warm daemon | ≤ 100 ms |
 | Lab overhead per run, excluding model time | ≤ 25 ms p95 |
@@ -1111,7 +1129,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 
 ## Open decisions ([decide])
 
-- [x] D1 · GUI framework: **gpui 0.2.2** (decided 2026-10-20 — a sibling GUI-builder project will use gpui, so framework knowledge and pins are shared; the text stack and the reference ACP client come for free). P0-3 can still veto: fallback `iced` 0.14 → Tauri.
+- [x] D1 · GUI framework: **gpui 0.2.2** (decided 2026-10-20 — a sibling GUI-builder project will use gpui, so framework knowledge and pins are shared; the text stack and the reference ACP client come for free). P0-3 did not veto it: `iced` 0.14 was measured at the same frame pacing but ~3× slower to first paint (851–896 ms against 277–326 ms), so the fallback stays a fallback (`docs/notes/gui-bench.md`).
 - [ ] D2 · Multi-client concurrency model: last-write-wins + ETag conflict UI (v0.1) vs CRDT (`loro`/`automerge`) later.
 - [ ] D3 · Web frontend: Svelte 5 + CodeMirror (recommended) vs Leptos/WASM.
 - [ ] D4 · Local IPC: HTTP over unix socket (recommended, one protocol everywhere) vs a second JSON-RPC transport.

@@ -1096,6 +1096,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
 - [x] D17 · Extension registry trust: **signed static index, mandatory SHA-256, reviewed pull requests, no auto-update** (decided 2026-10-20, ADR 0003). A private registry is `--index` plus a trusted key.
 - [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one.
+- [x] D19 · Platform order: **unix and macOS first, Windows last, and every OS branch under `src/platform/`** (decided 2026-10-21). The Windows half is the one that cannot be developed on the machines the project is written on, so writing it first means writing it blind. `acpilot-host` now has the seam: `Host::spawn` is portable (`std::process`) with one implementation, `spawn_pty` branches once into `platform/unix.rs` (forkpty via `portable-pty`) and `platform/windows.rs` (a typed refusal naming P2-5 until ConPTY lands). The rule is enforced, not remembered: a boundary test fails if `cfg(windows)`/`cfg(unix)`/`cfg(target_os…)` appears outside `src/platform/` in any crate, and `cargo xtask check` type-checks the crate for the windows-msvc and both apple targets from any host.
 
 ## Definition of done for v0.1.0
 

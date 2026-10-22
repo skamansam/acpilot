@@ -96,12 +96,80 @@ fn run_check() -> ExitCode {
     // The workspace is not the whole gate: the P0-5 spike is deliberately not a
     // member, so `--workspace` never reaches it. Checking it here keeps one
     // command for "everything CI enforces".
+    if !check_platforms() {
+        return ExitCode::FAILURE;
+    }
+
     if !check_spike() {
         return ExitCode::FAILURE;
     }
 
     println!("==> all checks passed");
     ExitCode::SUCCESS
+}
+
+/// The other half of each platform pair, type-checked from here.
+///
+/// Unix and macOS are built first and Windows last, which otherwise means a
+/// Windows-only module can stop compiling without anyone finding out until a CI
+/// runner says so. `cargo check` type-checks `cfg`'d code for another target
+/// without linking, so the unix machine everyone is sitting at can catch it.
+///
+/// This is a convenience, not the authority: CI's matrix builds every platform
+/// natively (`cargo clippy --all-targets` on windows-latest and macos-latest), and
+/// that is what actually protects `main`. A target whose std is not installed is
+/// skipped with a printed note — a developer is not expected to carry all three.
+fn check_platforms() -> bool {
+    const TARGETS: [&str; 3] = [
+        "x86_64-pc-windows-msvc",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ];
+
+    let installed = installed_targets();
+    let mut ok = true;
+    for target in TARGETS {
+        if !installed.iter().any(|installed| installed == target) {
+            println!("==> check (platform, {target}): skipped, target not installed");
+            continue;
+        }
+        let mut command = Command::new(env!("CARGO"));
+        command.args([
+            "check",
+            // The platform crate holds the only `cfg` branches, so it is the one
+            // that has to compile everywhere. `--all-targets` includes the
+            // Windows-only test module, which a plain check would skip.
+            "-p",
+            "acpilot-host",
+            "--all-targets",
+            "--target",
+            target,
+        ]);
+        ok &= run_step(&format!("check (platform, {target})"), command);
+    }
+
+    if installed.is_empty() {
+        println!("==> check (platform): skipped, rustup did not list any targets");
+    }
+    ok
+}
+
+fn installed_targets() -> Vec<String> {
+    let Ok(output) = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The P0-5 spike: a standalone crate plus a helper that cargo never compiles.
@@ -124,24 +192,24 @@ fn check_spike() -> bool {
     fmt.args(["fmt", "--manifest-path"])
         .arg(&manifest)
         .args(["--", "--check"]);
-    ok &= run_spike("fmt (spike)", fmt);
+    ok &= run_step("fmt (spike)", fmt);
 
     // Cargo never sees the helper: on the Linux side it is deliberately not a
     // cargo project, so rustfmt is invoked directly, as CI does.
     let mut rustfmt = spike_command("rustfmt", None);
     rustfmt.args(["--check", "helper/acpilotd-helper.rs"]);
-    ok &= run_spike("rustfmt (helper)", rustfmt);
+    ok &= run_step("rustfmt (helper)", rustfmt);
 
     let mut clippy = spike_command(cargo, target.as_deref());
     clippy
         .args(["clippy", "--manifest-path"])
         .arg(&manifest)
         .args(["--all-targets", "--", "-D", "warnings"]);
-    ok &= run_spike("clippy (spike)", clippy);
+    ok &= run_step("clippy (spike)", clippy);
 
     let mut test = spike_command(cargo, target.as_deref());
     test.args(["test", "--manifest-path"]).arg(&manifest);
-    ok &= run_spike("test (spike)", test);
+    ok &= run_step("test (spike)", test);
 
     let exe = if cfg!(windows) { ".exe" } else { "" };
     let helper_test = std::env::temp_dir().join(format!("acpilot-helper-test{exe}"));
@@ -149,8 +217,8 @@ fn check_spike() -> bool {
     build_test
         .args(["helper/acpilotd-helper.rs", "--test", "-o"])
         .arg(&helper_test);
-    if run_spike("test (helper, build)", build_test) {
-        ok &= run_spike("test (helper, run)", Command::new(&helper_test));
+    if run_step("test (helper, build)", build_test) {
+        ok &= run_step("test (helper, run)", Command::new(&helper_test));
     } else {
         ok = false;
     }
@@ -163,10 +231,10 @@ fn check_spike() -> bool {
             build
                 .args(["-O", "helper/acpilotd-helper.rs", "-o"])
                 .arg(&helper);
-            if run_spike("build helper", build) {
+            if run_step("build helper", build) {
                 let mut protocol = spike_command(python, None);
                 protocol.arg("helper/check_protocol.py").arg(&helper);
-                ok &= run_spike("helper protocol", protocol);
+                ok &= run_step("helper protocol", protocol);
             } else {
                 ok = false;
             }
@@ -201,7 +269,7 @@ fn spike_target_dir(dir: &Path) -> Option<PathBuf> {
         .then(|| std::env::temp_dir().join("acpilot-wsl-helper-target"))
 }
 
-fn run_spike(name: &str, mut command: Command) -> bool {
+fn run_step(name: &str, mut command: Command) -> bool {
     println!("==> {name}");
     match command.status() {
         Ok(status) if status.success() => true,

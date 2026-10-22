@@ -76,6 +76,23 @@ Two things that do not belong anywhere: domain logic in a UI crate, and UI
 concerns in the daemon. If the TUI cannot do something, the GUI should not be able
 to either.
 
+## Platforms
+
+Unix and macOS are built first; the Windows implementation is written last,
+because it is the half that cannot be developed or tested on the machines the
+project is written on. The rule that keeps that order from rotting is structural:
+**a `cfg` naming an operating system may appear only under a crate's
+`src/platform/`**, one file per platform, same signature. `acpilot-host` has the
+first one; `crates/acpilot-host/tests/platform_boundary.rs` fails the build if a
+branch appears anywhere else in any crate, and fails if a platform file goes
+missing. Do not add `cfg(windows)` to a shared module — add the platform file.
+
+`cargo xtask check` also type-checks `acpilot-host` for `x86_64-pc-windows-msvc`,
+`x86_64-apple-darwin` and `aarch64-apple-darwin` from whatever machine you are on
+(`cargo check` needs no linker), skipping targets you have not installed. That
+catches a broken Windows module before a CI runner does; CI's matrix still builds
+each platform natively, which is the authority.
+
 ## Tests
 
 Unit tests sit in `#[cfg(test)]` modules next to the code; anything that crosses a

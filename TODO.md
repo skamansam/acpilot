@@ -73,22 +73,70 @@ question that would be expensive to get wrong.
   - **Answer:** does ACP over an SSH `exec` channel behave (line buffering, stderr, exit codes, resize)?
   - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-spike` prints a real ACP session from inside the container.
 
-- [ ] **P0-5 · WSL helper round-trip** (1d)
+- [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
   - On a Windows box (CI runner or VM): enumerate distros, `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON line, get one back.
   - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box: `wsl.exe -l -q` works
     through interop (135 ms) but prints **UTF-16LE** — NUL-interleaved output that a naive line reader
     turns into garbage; the box has `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things,
     not one prefix: `/home/sam` → `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
     `C:\Users\SamTyler` → `/mnt/c/Users/SamTyler`. So the translation function is a pair of mappings
-    (drives ↔ `/mnt/<letter>`, and the distro root ↔ its UNC path), and the harness must decode UTF-16.
+    (mounted drives ↔ `/mnt/<letter>`, and the distro root ↔ its UNC path), and the harness must decode UTF-16.
     The interop path does not cover ConPTY or `wsl.exe` invoked from Windows, which is what the helper
     actually ships against — that half still needs a Windows runner.
   - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), interop quirks.
   - **Exit criteria:** latency table + a path-translation function with unit tests that we can lift into `acpilot-host`.
+  - **Result:** `spikes/wsl-helper` (Windows driver, `wsl.exe` 2.7.10.0) plus
+    `helper/acpilotd-helper.rs` (dependency-free Linux end, installed with `rustc -O` through stdin).
+    Measured on Windows 11 26300 / Ubuntu-24.04: one helper **spawn costs ~140 ms** to the first
+    response and ~197 ms through exit, while a message on the warm session costs **0.1 ms** (p50, 30
+    samples); a 1 MiB request line arrived intact in 1.3 ms. So the helper is a session, not a call:
+    P2-2/P3-1 must spawn it once per host and multiplex ids. `wsl.exe -- <cmd>` goes through the user's
+    shell and eats backslashes (missing binary → 127); `-e` execs directly and keeps them (missing
+    binary → relay error, exit 1). `-e` does **not** expand `~` in the program path, so the helper path
+    is resolved from `$HOME` and `--cd ~` is passed explicitly. `-l -q` is UTF-16LE+CRLF (as the
+    starting points said); enumeration also returns `docker-desktop`, which is not a usable distro.
+    Translation is two rules and only one is unconditional: `C:\x` ↔ `/mnt/c/x` for **mounted** drives
+    only (`ls /mnt` gave `c` and `e` here; `D:` has no Linux path and `wslpath` refuses it too), and
+    `/home/sam` ↔ `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
+    `spikes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from `ls /mnt`, with an
+    unmounted drive or a foreign distro as a typed refusal; `..` is left to the policy layer. Under
+    ConPTY `wsl.exe` sends `CSI 6 n` and waits, so the helper never starts until DSR is answered — with
+    an answer it works, echoing the request and ending lines with CRLF. Pipes are the transport for the
+    JSON channel; ConPTY stays for terminals, where a query responder is mandatory anyway. Numbers,
+    the `wslpath` oracle table and every quirk: `docs/notes/wsl-helper.md`. The suite runs on both
+    sides: fmt/clippy/`cargo test` (23) under Windows and inside the distro, the helper's 4 unit tests
+    with `rustc --test` on either OS, and `helper/check_protocol.py` against a native helper build in
+    both. CI (`.github/workflows/ci.yml`, job `p0-5 spike`) runs that suite on both OSes on every push.
+    The round trip is a second, opt-in job (`wsl-bench`) because WSL2 needs nested virtualisation, which
+    standard hosted Windows runners do not have (they can offer WSL1 only); the bench reads the
+    `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and `--require-wsl2` makes a
+    WSL1 distro a hard failure instead of a quietly different table. Enable it with `WSL_BENCH=true`
+    and `WSL_RUNNER` pointing at a self-hosted Windows runner with the `wsl2` label; it uploads
+    `wsl-helper-bench` for the note's tables. The user story is measured end to end too
+    (`wsl-helper workspace`): a folder opened as `\\wsl.localhost\Ubuntu-24.04\...` becomes
+    `wsl://Ubuntu-24.04` + `/home/sam/workspace-other/acpilot`, the helper starts in that
+    directory (cwd asserted) at ~124 ms with 0.1 ms per message, and the same 37 KB file
+    costs **13.0 ms/read over UNC vs 0.096 ms in-distro (136×)** — so the daemon reads files
+    in-distro and UNC stays a read-only fallback, as README §5.6 claims. Cold start after a
+    reboot is **not** measured: terminating the distro would kill this checkout's own processes.
 
-- [ ] **P0-6 · API shape review (paper)** (0.5d)
+- [x] **P0-6 · API shape review (paper)** (0.5d) — **done 2026-10-21**
   - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event taxonomy, and the error envelope. Review it against: CLI needs, TUI needs, permission answering from a script, web reconnect.
   - **Exit criteria:** endpoint list frozen for P3; anything missing from the README added there.
+  - **Result:** `docs/api.md` freezes the v1 route list, the SSE taxonomy (`session`, `permission`,
+    `heartbeat` and `resync` frames; `Last-Event-ID` replay from the transcript; a 15 s heartbeat;
+    `resync` instead of silence when an id cannot be replayed), the prompt contract (`202` with
+    `turn_id`, `idempotency_key`, `409` for a turn already in flight), the permission rules
+    (idempotent for the same answer, `409` for a different one, no timeout in v1) and the error
+    envelope with its HTTP mapping. The review found six gaps and fixed each rather than noting it:
+    no way out of `AgentStatus::untrusted` (`POST /v1/agents/{id}/trust`), no host connection test,
+    no profile activate/export, no directory listing (`GET /v1/files/list`), no profile-wide
+    `GET /v1/events`, and no error envelope in the README at all. It also settled three names where
+    two documents disagreed: `permissions/{id}/resolve` (not `/decide`), `/v1/lsp/servers`
+    (not `/v1/lsp`), and the flat `/v1/terminals?session=` (not nested). Providers, models, recipes
+    and the ACP bridge stay explicitly post-v1. The proto doc comments and the committed OpenAPI
+    snapshot were corrected to the frozen names; those snapshot edits are description-only, so no
+    wire type moved.
 
 - [x] **P0-7 · LSP client round-trip + position encodings** (1d) — **done 2026-10-21**
   - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), `initialize` advertising
@@ -121,7 +169,7 @@ question that would be expensive to get wrong.
 - [x] **P1-2** `rust-toolchain.toml` pinning **1.97.0**; `rustfmt.toml` with stable-only options (`edition`, `max_width`); `clippy.toml` with `msrv = "1.95"`. `group_imports = "StdExternalCrate"` was dropped: it is nightly-only, so on a stable toolchain it prints a warning and does nothing. Import grouping is a review convention (`CONTRIBUTING.md`) until rustfmt stabilises it.
 - [x] **P1-3** `crates/acpilot-proto`: typed modules `host`, `workspace`, `agent`, `session`, `event`, `permission`, `file`, `terminal`, `profile`, `lsp`, `error`; every type `serde` + `utoipa::ToSchema`; `ErrorBody { code, message, details }`; `ApiDoc` registers them all.
 - [x] **P1-4** `AcpilotError` in `acpilot-core::error` with the seven variants; `ApiError` newtype in `acpilotd` maps to `404/409/403/502/502/500/500`; `exit_code()` maps to `3/4/5/1`, with `USAGE = 2` owned by the parser. Both mappings are unit-tested.
-- [x] **P1-5** `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, nextest, docs-feature tests, `cargo-deny`, and an OpenAPI-snapshot freshness job, on linux+macos+windows. `.github/workflows/release.yml` is the stub until P12 wires `cargo-dist`.
+- [x] **P1-5** `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, nextest, docs-feature tests, `cargo-deny`, and an OpenAPI-snapshot freshness job, on linux+macos+windows. `.github/workflows/release.yml` is the stub until P12 wires `cargo-dist`. A separate `p0-5 spike` job checks `spikes/wsl-helper` on ubuntu+windows: it is deliberately not a workspace member, so the workspace commands cannot reach it.
 - [x] **P1-6** `xtask`: `cargo xtask check` runs what CI runs; `dev`, `web-build` and `dist` exit 2 with the phase that owns them rather than pretending to work.
 - [x] **P1-7** `.gitignore`, `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md`, `docs/adr/0001-record-architecture-decisions.md` (with the index of ADRs 0002–0009 to come).
 - [x] **P1-8** `crates/acpilot-proto/tests/openapi_snapshot.rs` with `insta`; the 811-line snapshot is committed and CI fails if regenerating changes it.
@@ -152,13 +200,14 @@ and deterministic.
 
 - [ ] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
 - [ ] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
-- [ ] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s.
+- [ ] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s, and answer an un-replayable id with `event: resync` carrying the latest seq instead of pretending to catch up (`docs/api.md`). Pending permissions are state, not history: the client fetches `GET /v1/permissions?status=pending` on connect and the stream only announces new requests.
 - [ ] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
 - [ ] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
 - [ ] **P3-6** Terminals API: create/attach (`WS /v1/terminals/{id}/attach`), resize (cols/rows), detach-without-kill, replay last screen on attach (from `vt100` state).
 - [ ] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
   per profile (P4-4), so migrations run once per open profile — keep them idempotent.
 - [ ] **P3-8** Hosts API: `POST /v1/hosts` (`local|ssh|wsl`), connection test endpoint, capability report (can spawn? can read fs? latency).
+  - WSL specifics, from P0-5's `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the spike (`spikes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
 - [ ] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
 - [ ] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
   - **DoD:** `acpilotd` runs headless, a scripted `curl` session (create → prompt → stream → permission → resolve) works, and SSE replay after disconnect loses no events.

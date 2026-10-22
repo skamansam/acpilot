@@ -207,9 +207,11 @@ status bar, and the thought. That is a profile, not a heuristic.
 ## Limitations
 
 - Two programs, one turn each, all on WSL2's Linux PTY. The Windows side —
-  ConPTY, and `wsl.exe` starting a distro from Windows — is untouched; P0-5 owns
-  that, and it is not the same terminal. No resize, cancellation,
-  tool-permission prompt, or multi-turn context was exercised.
+  ConPTY, and `wsl.exe` starting a distro from Windows — was untouched here.
+  P0-5 covered it separately (`docs/notes/wsl-helper.md`): under ConPTY,
+  `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same query
+  problem this note found in the TUIs. It is not the same terminal. No resize,
+  cancellation, tool-permission prompt, or multi-turn context was exercised.
 - The spike returns screen text; it does **not** extract messages. That is P2-7's
   job, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so

@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "pty-agent"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately standalone, like `probes/acp-handshake`: P0 probes are not
+# workspace members, so a probe dependency can never leak into the product.
+# The lockfile is committed because the point is to measure *these* versions.
+[dependencies]
+anyhow = "1"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vt100 = "0.18"

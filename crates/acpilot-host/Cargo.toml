@@ -6,9 +6,28 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["ssh"]
+# The SSH transport, off for a daemon that only ever talks to this machine or to
+# WSL. It is a feature for two reasons: a local-only build should not link a TLS
+# and crypto stack, and `russh`'s crypto backend compiles C for the target, so an
+# unconditional dependency would make the cross-target platform check (which
+# type-checks the Windows module from here) impossible without a Windows
+# toolchain. SSH has no platform branch, so nothing platform-specific is lost by
+# checking it natively in CI only.
+ssh = ["dep:russh", "dep:tokio"]
+
 [dependencies]
 portable-pty = { workspace = true }
 thiserror = { workspace = true }
+# P0-4 (docs/notes/ssh-agent.md) measured this version: the exec channel is a
+# byte stream, stderr arrives as EXTENDED_DATA ext=1, resize is a window_change.
+# Features are fixed at the workspace dependency (no `rsa`: RUSTSEC-2023-0071 has
+# no fix, so RSA keys are refused rather than the advisory suppressed).
+russh = { workspace = true, optional = true }
+# `rt` for the one session thread each host owns, `sync` for the channel between
+# sync callers and that thread, `net` for russh's sockets.
+tokio = { workspace = true, optional = true }
 
 [lints]
 workspace = true

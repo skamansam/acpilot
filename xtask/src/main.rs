@@ -20,13 +20,13 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Task {
     /// Everything CI enforces that can run locally: formatting, lints, the
-    /// workspace tests, and the P0-5 spike. `wsl-bench` needs a WSL2 runner and
+    /// workspace tests, and the P0-5 probe. `wsl-bench` needs a WSL2 runner and
     /// stays out.
     Check,
-    /// The P0-5 spike's checks alone. CI's `spikes` job runs this, so the six
+    /// The P0-5 probe's checks alone. CI's `probes` job runs this, so the six
     /// steps are written once — here — and cannot drift from what a developer
     /// runs locally.
-    Spike,
+    Probe,
     /// Regenerate the theme data the documentation site renders.
     DocsData,
     /// Run the daemon and the web dev server together (needs a built web UI).
@@ -40,8 +40,8 @@ enum Task {
 fn main() -> ExitCode {
     match Cli::parse().command {
         Task::Check => run_check(),
-        Task::Spike => {
-            if check_spike() {
+        Task::Probe => {
+            if check_probe() {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -93,14 +93,14 @@ fn run_check() -> ExitCode {
         }
     }
 
-    // The workspace is not the whole gate: the P0-5 spike is deliberately not a
+    // The workspace is not the whole gate: the P0-5 probe is deliberately not a
     // member, so `--workspace` never reaches it. Checking it here keeps one
     // command for "everything CI enforces".
     if !check_platforms() {
         return ExitCode::FAILURE;
     }
 
-    if !check_spike() {
+    if !check_probe() {
         return ExitCode::FAILURE;
     }
 
@@ -142,6 +142,11 @@ fn check_platforms() -> bool {
             "-p",
             "acpilot-host",
             "--all-targets",
+            // Optional transports are off: `russh`'s crypto backend compiles C
+            // for the target, which needs that target's toolchain, and the SSH
+            // module has no `cfg` in it — there is nothing platform-specific to
+            // learn by cross-checking it. CI builds it natively on each OS.
+            "--no-default-features",
             "--target",
             target,
         ]);
@@ -172,48 +177,48 @@ fn installed_targets() -> Vec<String> {
         .collect()
 }
 
-/// The P0-5 spike: a standalone crate plus a helper that cargo never compiles.
+/// The P0-5 probe: a standalone crate plus a helper that cargo never compiles.
 ///
-/// Same commands as the `p0-5 spike` job in `.github/workflows/ci.yml`, spawned
+/// Same commands as the `p0-5 probe` job in `.github/workflows/ci.yml`, spawned
 /// directly rather than through a shell — a bash bundled with an editor is not
 /// part of the toolchain, and several agents may run this.
-fn check_spike() -> bool {
-    let dir = spike_dir();
+fn check_probe() -> bool {
+    let dir = probe_dir();
     let manifest = dir.join("Cargo.toml");
-    let target = spike_target_dir(&dir);
+    let target = probe_target_dir(&dir);
     if let Some(target) = &target {
-        println!("==> spike target dir: {}", target.display());
+        println!("==> probe target dir: {}", target.display());
     }
 
     let cargo = env!("CARGO");
     let mut ok = true;
 
-    let mut fmt = spike_command(cargo, target.as_deref());
+    let mut fmt = probe_command(cargo, target.as_deref());
     fmt.args(["fmt", "--manifest-path"])
         .arg(&manifest)
         .args(["--", "--check"]);
-    ok &= run_step("fmt (spike)", fmt);
+    ok &= run_step("fmt (probe)", fmt);
 
     // Cargo never sees the helper: on the Linux side it is deliberately not a
     // cargo project, so rustfmt is invoked directly, as CI does.
-    let mut rustfmt = spike_command("rustfmt", None);
+    let mut rustfmt = probe_command("rustfmt", None);
     rustfmt.args(["--check", "helper/acpilotd-helper.rs"]);
     ok &= run_step("rustfmt (helper)", rustfmt);
 
-    let mut clippy = spike_command(cargo, target.as_deref());
+    let mut clippy = probe_command(cargo, target.as_deref());
     clippy
         .args(["clippy", "--manifest-path"])
         .arg(&manifest)
         .args(["--all-targets", "--", "-D", "warnings"]);
-    ok &= run_step("clippy (spike)", clippy);
+    ok &= run_step("clippy (probe)", clippy);
 
-    let mut test = spike_command(cargo, target.as_deref());
+    let mut test = probe_command(cargo, target.as_deref());
     test.args(["test", "--manifest-path"]).arg(&manifest);
-    ok &= run_step("test (spike)", test);
+    ok &= run_step("test (probe)", test);
 
     let exe = if cfg!(windows) { ".exe" } else { "" };
     let helper_test = std::env::temp_dir().join(format!("acpilot-helper-test{exe}"));
-    let mut build_test = spike_command("rustc", None);
+    let mut build_test = probe_command("rustc", None);
     build_test
         .args(["helper/acpilotd-helper.rs", "--test", "-o"])
         .arg(&helper_test);
@@ -227,12 +232,12 @@ fn check_spike() -> bool {
         None => println!("==> helper protocol: skipped (no python3 or python on PATH)"),
         Some(python) => {
             let helper = std::env::temp_dir().join(format!("acpilotd-helper{exe}"));
-            let mut build = spike_command("rustc", None);
+            let mut build = probe_command("rustc", None);
             build
                 .args(["-O", "helper/acpilotd-helper.rs", "-o"])
                 .arg(&helper);
             if run_step("build helper", build) {
-                let mut protocol = spike_command(python, None);
+                let mut protocol = probe_command(python, None);
                 protocol.arg("helper/check_protocol.py").arg(&helper);
                 ok &= run_step("helper protocol", protocol);
             } else {
@@ -244,23 +249,23 @@ fn check_spike() -> bool {
     ok
 }
 
-fn spike_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../spikes/wsl-helper")
+fn probe_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../probes/wsl-helper")
 }
 
-fn spike_command(program: &str, target: Option<&Path>) -> Command {
+fn probe_command(program: &str, target: Option<&Path>) -> Command {
     let mut command = Command::new(program);
-    command.current_dir(spike_dir());
+    command.current_dir(probe_dir());
     if let Some(target) = target {
         command.env("CARGO_TARGET_DIR", target);
     }
     command
 }
 
-/// A checkout reached over `\\wsl.localhost` would otherwise build the spike
+/// A checkout reached over `\\wsl.localhost` would otherwise build the probe
 /// into the `target/` the Linux toolchain also owns, where the Windows build
 /// fails on files it cannot replace. An explicit `CARGO_TARGET_DIR` wins.
-fn spike_target_dir(dir: &Path) -> Option<PathBuf> {
+fn probe_target_dir(dir: &Path) -> Option<PathBuf> {
     if std::env::var_os("CARGO_TARGET_DIR").is_some() {
         return None;
     }

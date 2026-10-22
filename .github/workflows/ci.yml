@@ -62,10 +62,10 @@ jobs:
   # The WSL round trip itself needs a WSL2 distro, which no hosted runner has;
   # it lives in the opt-in `wsl-bench` job below. The checks here are the
   # deterministic half of that note's "Testing both sides" table, and they are
-  # not written out here: `cargo xtask spike` runs them, so CI and a developer's
+  # not written out here: `cargo xtask probe` runs them, so CI and a developer's
   # shell cannot drift apart.
-  spikes:
-    name: p0-5 spike (${{ matrix.os }})
+  probes:
+    name: p0-5 probe (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -82,25 +82,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # `cargo xtask` is a workspace member, so the workspace target joins the
-          # spike's own (a standalone crate with its own lockfile) in the key.
+          # probe's own (a standalone crate with its own lockfile) in the key.
           workspaces: |
             . -> target
-            spikes/wsl-helper -> target
+            probes/wsl-helper -> target
 
       # The six checks — fmt for the crate and for the helper that cargo never
       # sees, clippy, the 23 tests, the helper's 4, and the process-level
       # protocol checker — live in xtask so that the command here and the one a
       # developer runs are the same command. That also keeps the Windows job off
       # bash: xtask spawns cargo, rustfmt, rustc and python directly.
-      - name: Spike checks
-        run: cargo xtask spike
+      - name: Probe checks
+        run: cargo xtask probe
 
       # The guard stays here rather than in xtask: it asserts the binary's own
       # exit codes (1 and 2), a property of the program rather than of a command
       # line, and it only means anything where wsl.exe is absent.
       - name: Platform guard
         if: runner.os == 'Linux'
-        working-directory: spikes/wsl-helper
+        working-directory: probes/wsl-helper
         run: |
           set +e
           cargo run --quiet -- > /dev/null 2>&1
@@ -141,18 +141,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: spikes/wsl-helper -> target
+          workspaces: probes/wsl-helper -> target
 
       # `install` compiles helper/acpilotd-helper.rs with the distro's own rustc
       # and writes ~/.local/bin/acpilotd-helper — the same path a developer uses,
       # so the prerequisite is a rustc inside the distro.
       - name: Install the helper inside the distro
-        run: cargo run --release --manifest-path spikes/wsl-helper/Cargo.toml -- install
+        run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- install
 
       # No `shell:` override on purpose: the only argument that needs quoting is
       # an expression, so this line is valid under bash and under pwsh.
       - name: Bench
-        run: cargo run --release --manifest-path spikes/wsl-helper/Cargo.toml -- bench --require-wsl2 --oracle --json "${{ runner.temp }}/wsl-helper.json"
+        run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- bench --require-wsl2 --oracle --json "${{ runner.temp }}/wsl-helper.json"
 
       # The JSON is the artifact worth keeping: it is what the note's table is
       # regenerated from, and `wsl_version` in it says which product it measured.

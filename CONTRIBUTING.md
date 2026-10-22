@@ -34,14 +34,14 @@ same command as CI. `cargo test --workspace` still works for a single crate or a
 processes and skips doctests, and the local check should fail for the same
 reasons CI does.
 
-`cargo xtask check` also runs the P0-5 spike, which is not a workspace member and
+`cargo xtask check` also runs the P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
-covers the repository. `cargo xtask spike` is the same steps without the
-workspace half, and it is what CI's `p0-5 spike` job runs. All of it spawns
+covers the repository. `cargo xtask probe` is the same steps without the
+workspace half, and it is what CI's `p0-5 probe` job runs. All of it spawns
 cargo, rustfmt, rustc and python directly instead of going through a shell,
 deliberately: a bash bundled with an editor is not part of the toolchain, Windows
 may flag it as a security risk, and several agents may run the same checks.
-`spikes/wsl-helper/check.ps1`/`check.cmd` are wrappers around that same command
+`probes/wsl-helper/check.ps1`/`check.cmd` are wrappers around that same command
 for PowerShell and cmd.exe callers. Use PowerShell, cmd, or the distro's own
 shell for the distro half — not `bash.exe` out of an application's install
 directory.
@@ -76,6 +76,41 @@ Two things that do not belong anywhere: domain logic in a UI crate, and UI
 concerns in the daemon. If the TUI cannot do something, the GUI should not be able
 to either.
 
+## Probes
+
+A **probe** is a time-boxed measurement that answers one question a decision
+depends on. The question comes first; the code is only the instrument. `P0-4`
+asked "does an SSH exec channel preserve ACP framing?" and `probes/ssh` exists to
+answer it, not to become the SSH client.
+
+The directory was called `spikes/` until 2026-10-22. "Spike" is Extreme
+Programming jargon for the same idea — a spike solution buys knowledge before you
+commit — but the word says nothing about measuring, which is what every one of
+these does, and it suggests throwaway code, which some of them are not. The rule
+below is what the name is meant to carry.
+
+What a probe must be:
+
+- **Standalone.** Its own `[workspace]` and committed lockfile, so nothing in it
+  can leak into a product crate, and the versions measured are the versions
+  recorded. `probes/fixtures/` holds inputs they share.
+- **One question, with numbers.** The result goes in `docs/notes/<topic>.md`:
+  what was measured, on what machine and versions, and what the measurement does
+  *not* say. A probe that reports "it worked" has not answered anything.
+- **Bounded and cited.** The task in `TODO.md` states the question and exit
+  criteria, its result line states the answer, and any decision that followed
+  cites it (an ADR for the ones that bind us).
+- **Deletable.** A probe outlives its question only while something still runs
+  it: `probes/wsl-helper` is a CI fixture and a driver we ship against, and the
+  P0-3 benchmark runs again on every framework upgrade. The rest are deleted once
+  the note is written, because a directory of half-used instruments is worse than
+  the note alone.
+
+If a probe has to run on another operating system, say so in its note and in CI
+rather than claiming the result transfers. P0-5 is the standing example: its
+WSL1-on-a-hosted-runner half is the version that would have been published as
+WSL2's if the note had not insisted otherwise.
+
 ## Platforms
 
 Unix and macOS are built first; the Windows implementation is written last,
@@ -92,6 +127,13 @@ missing. Do not add `cfg(windows)` to a shared module — add the platform file.
 (`cargo check` needs no linker), skipping targets you have not installed. That
 catches a broken Windows module before a CI runner does; CI's matrix still builds
 each platform natively, which is the authority.
+
+The cross-check runs `--no-default-features`, because optional transports are not
+part of it. `russh` (the `ssh` feature) compiles C for its target, which needs
+that target's toolchain, and the SSH module contains no `cfg` — cross-checking it
+would teach nothing that CI's native Windows and macOS builds do not. Keep it that
+way: platform-specific code goes in `src/platform/`, where this check will see it;
+transports stay platform-independent and are checked where they run.
 
 ## Tests
 

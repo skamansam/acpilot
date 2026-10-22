@@ -1,7 +1,7 @@
 # P0-1 — two real agents through one ACP client
 
 Measured 2026-10-21 on Linux (WSL2, x86_64). The instrument is
-[`spikes/acp-handshake`](../../spikes/acp-handshake/src/main.rs) — one client, one
+[`probes/acp-handshake`](../../probes/acp-handshake/src/main.rs) — one client, one
 code path, two agents — built on `agent-client-protocol` 3.4.0. It performs
 `initialize` → `session/new` → `session/prompt`, records every `session/update`,
 answers `session/request_permission` by auto-deny, then calls `session/load` and
@@ -18,7 +18,7 @@ renamed to `@agentclientprotocol/claude-agent-acp` (the old package still works 
 prints a deprecation warning); Gemini CLI was not installed or signed in on this
 machine, so OpenCode was the second agent.
 
-The fixture is [`spikes/fixtures/acp`](../../spikes/fixtures/acp): two files, one
+The fixture is [`probes/fixtures/acp`](../../probes/fixtures/acp): two files, one
 subdirectory, deliberately untracked. The prompt is `list the files here`, which
 forces at least one tool call without asking the model to change anything.
 
@@ -82,8 +82,8 @@ update). Setting a model id copied from 1.15.13's list failed with JSON-RPC
 `-32602 Invalid params: model not found` — the agent advertises a value it then
 refuses, so a refused config write is a recoverable warning, not a fatal error.
 Claude's options (`mode`, `effort`, `fast`, `agent`) were not written by this
-spike, so their accepted value shape remains untested; `mode` also has its own
-`session/set_mode` path, which this spike did not call.
+probe, so their accepted value shape remains untested; `mode` also has its own
+`session/set_mode` path, which this probe did not call.
 
 ## One turn, in events
 
@@ -96,7 +96,7 @@ spike, so their accepted value shape remains untested; `mode` also has its own
 
 Every run ended with `stopReason: "end_turn"`. `cancelled`, `max_tokens`,
 `max_turn_requests` and `refusal` were not observed — they need a cancellation or a
-cap, which this spike does not perform. `usage_update` carries `used`/`size` during
+cap, which this probe does not perform. `usage_update` carries `used`/`size` during
 the turn; OpenCode adds `cost`, Claude adds `_meta["_claude/model"]`. Claude puts
 token counts in the `session/prompt` response `_meta.quota`; OpenCode puts them in
 the response's `usage` (`inputTokens`, `outputTokens`, `totalTokens`,

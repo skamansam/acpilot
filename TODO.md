@@ -17,19 +17,19 @@ becoming four products.
 
 ---
 
-## P0 — De-risking spikes (≈9 days)
+## P0 — De-risking probes (≈9 days)
 
-Throwaway code in `spikes/`, no workspace integration, no polish. Each spike answers one
+Throwaway code in `probes/`, no workspace integration, no polish. Each probe answers one
 question that would be expensive to get wrong.
 
 - [x] **P0-1 · ACP handshake against a real agent** (2d) — **done 2026-10-21**
-  - `cargo new spikes/acp-handshake`; deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
+  - `cargo new probes/acp-handshake`; deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
   - Implement the `Client` trait: `initialize` (protocol v1) → `session/new` → `session/prompt` "list the files here" → print every `session/update`.
   - Handle `session/request_permission` with an auto-deny and log the payload.
   - Run against `npx -y @zed-industries/claude-code-acp` and `gemini --experimental-acp`.
   - **Answer:** exact capabilities advertised by each agent; which `session/update` kinds arrive; what `stopReason` values appear; does `session/load` work.
   - **Exit criteria:** transcript of two different agents driving the same 40 lines of client code, checked into `docs/notes/acp-transcripts.md`.
-  - **Result:** the client is `spikes/acp-handshake` (613 lines, standalone crate, SDK 3.4.0) and
+  - **Result:** the client is `probes/acp-handshake` (613 lines, standalone crate, SDK 3.4.0) and
     the transcript is `docs/notes/acp-transcripts.md`. It ran Claude Agent 0.94.0 and OpenCode
     1.19.3 through one code path: both advertise `loadSession`, and both replay a **condensed**
     history (5 and 7 updates for turns that streamed 29 and 16), so `session/load` cannot replace
@@ -45,7 +45,7 @@ question that would be expensive to get wrong.
   - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, render its screen with `vt100`, detect "turn complete" from a sentinel (prompt string reappearing / idle timeout).
   - **Answer:** is a transcript adapter viable, or do we need per-program adapter profiles? What breaks with alternate-screen TUIs, colours, and bracketed paste?
   - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns the final screen text + exit state for two programs.
-  - **Result:** `spikes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query answers,
+  - **Result:** `probes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query answers,
     submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude Code 2.1.306 through a
     real turn each, plus a deterministic `fake-tui.sh` double. The transport is generic; the
     **semantics are per-program** — submit key, answer region, completion sentinel, and startup
@@ -67,21 +67,28 @@ question that would be expensive to get wrong.
   - Verify the pin actually builds clean from crates.io alone (no `zed/` checkout, no network beyond the lockfile): this is where the `zed-font-kit` git dependency and any missing feature will bite.
   - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
   - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
-  - **Result so far (2026-10-21): the build half passes, the latency half is not measurable here.** `spikes/gpui-pin`
-    links gpui 0.2.2 from crates.io alone — 48.5 s release build, no git dependency, no `zed/` checkout, no
-    nightly — so the "cannot be built from a clean vendored tree" veto does not fire. Two costs came out of it:
-    the graph needs **`libc` held at ≤ 0.2.189** (gpui → `gpui_http_client` → `zed-async-tar` → `xattr` 0.2.3,
-    which uses `libc::ENOATTR`; 0.2.190 dropped it on Linux, bisected), and the Linux link needs
-    `libxkbcommon-x11`'s dev symlink even with the X11 feature off. No paint numbers: this box has no `/dev/dri`
-    and Mesa reports llvmpipe with `Accelerated: no`, so keystroke→paint would measure the CPU rasteriser and
-    veto the framework for a property of the test machine — the WSL1-as-WSL2 mistake again. P0-3 stays open
-    until a GPU machine runs the harness in `docs/notes/gui-bench.md`.
+  - **Result (2026-10-22): the build half passes, the frame budget is met, first paint is missed — and P0-3 stays
+    open on the iced baseline.** The GPU was there all along: WSL2 has the RTX 5060 (`/dev/dxg`, driver 616.56)
+    but no Vulkan ICD for it (`dzn` is not in Ubuntu's `mesa-vulkan-drivers`), and gpui's Linux renderer is
+    Vulkan-only, so the benchmark ran **natively on Windows** through the WSL interop — the same hardware, the
+    platform the budget is about. `probes/gpui-bench` (100k-row `uniform_list`, 50 visible rows, 3 runs): frame
+    interval **p95 4.4–4.5 ms at 240 Hz** and edit→next-frame **p95 4.4–4.5 ms**, zero dropped intervals —
+    the 16 ms budget met with ~3.5× margin, though vsync-bound so the headroom above it is unmeasured.
+    **First paint 580–968 ms against 150 ms**, split as 389–771 ms before the app loop starts and ~180 ms of
+    window/device creation, none of it the view. The >2× veto would fire on that number, but the exit criteria
+    ask for the `iced` build "so the fallback is priced rather than assumed" and that half does not exist yet:
+    process start-up, DLL loads and font enumeration are costs any native UI pays, so a 2× miss of nothing
+    decides nothing. Shaping 3 000 lines cold costs **52 ms** (~17 µs/line), which is why shaped lines must be
+    cached rather than re-shaped per frame. The pin still needs **`libc` held at ≤ 0.2.189** on Linux
+    (`xattr` 0.2.3 uses `libc::ENOATTR`) and `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method
+    and limitations: `docs/notes/gui-bench.md`. Remaining: the iced baseline, a profile of the app-loop phase,
+    the tree-sitter highlight cost, and a macOS run.
 
 - [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
   - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.
   - **Answer:** does ACP over an SSH `exec` channel behave (line buffering, stderr, exit codes, resize)?
-  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-spike` prints a real ACP session from inside the container.
-  - **Result:** `spikes/ssh-spike` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, `russh` 0.64.1.
+  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-probe` prints a real ACP session from inside the container.
+  - **Result:** `probes/ssh` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, `russh` 0.64.1.
     No usable container runtime here (Docker Desktop's WSL integration is off, rootless podman's socket
     refuses), so `sshd.sh` runs the distro's own `sshd` unprivileged on `127.0.0.1:2222` with a throwaway
     host key and key-only auth — same server, same channels, minus the process boundary that P0-4 is not
@@ -89,7 +96,7 @@ question that would be expensive to get wrong.
     time arrived in 20–33 `DATA` events, up to 37 frames in one event (largest 6,007 B), so the client
     must buffer and split on `\n`; zero frames straddled an event on loopback, which is the conservative
     case and not a guarantee. stderr arrives as `EXTENDED_DATA ext=1` and the exit code survives (probe
-    exits 3), so a frame stream is never polluted by an agent's warnings — the spike fails the run if it is.
+    exits 3), so a frame stream is never polluted by an agent's warnings — the probe fails the run if it is.
     A PTY over the hop takes a `window_change` from `40 100` to `50 120` while a program watches, and `tty`
     answers a real `/dev/pts/N`, so resize is a channel message rather than a reconnect. Cost is the
     connection, not the messages: connect+auth 70.7–113.9 ms, then an exec round trip 44.7–49.8 ms and the
@@ -110,7 +117,7 @@ question that would be expensive to get wrong.
     actually ships against — that half still needs a Windows runner.
   - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), interop quirks.
   - **Exit criteria:** latency table + a path-translation function with unit tests that we can lift into `acpilot-host`.
-  - **Result:** `spikes/wsl-helper` (Windows driver, `wsl.exe` 2.7.10.0) plus
+  - **Result:** `probes/wsl-helper` (Windows driver, `wsl.exe` 2.7.10.0) plus
     `helper/acpilotd-helper.rs` (dependency-free Linux end, installed with `rustc -O` through stdin).
     Measured on Windows 11 26300 / Ubuntu-24.04: one helper **spawn costs ~140 ms** to the first
     response and ~197 ms through exit, while a message on the warm session costs **0.1 ms** (p50, 30
@@ -123,7 +130,7 @@ question that would be expensive to get wrong.
     Translation is two rules and only one is unconditional: `C:\x` ↔ `/mnt/c/x` for **mounted** drives
     only (`ls /mnt` gave `c` and `e` here; `D:` has no Linux path and `wslpath` refuses it too), and
     `/home/sam` ↔ `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
-    `spikes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from `ls /mnt`, with an
+    `probes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from `ls /mnt`, with an
     unmounted drive or a foreign distro as a typed refusal; `..` is left to the policy layer. Under
     ConPTY `wsl.exe` sends `CSI 6 n` and waits, so the helper never starts until DSR is answered — with
     an answer it works, echoing the request and ending lines with CRLF. Pipes are the transport for the
@@ -131,7 +138,7 @@ question that would be expensive to get wrong.
     the `wslpath` oracle table and every quirk: `docs/notes/wsl-helper.md`. The suite runs on both
     sides: fmt/clippy/`cargo test` (23) under Windows and inside the distro, the helper's 4 unit tests
     with `rustc --test` on either OS, and `helper/check_protocol.py` against a native helper build in
-    both. CI (`.github/workflows/ci.yml`, job `p0-5 spike`) runs that suite on both OSes on every push.
+    both. CI (`.github/workflows/ci.yml`, job `p0-5 probe`) runs that suite on both OSes on every push.
     The round trip is a second, opt-in job (`wsl-bench`) because WSL2 needs nested virtualisation, which
     standard hosted Windows runners do not have (they can offer WSL1 only); the bench reads the
     `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and `--require-wsl2` makes a
@@ -194,7 +201,7 @@ question that would be expensive to get wrong.
 - [x] **P1-2** `rust-toolchain.toml` pinning **1.97.0**; `rustfmt.toml` with stable-only options (`edition`, `max_width`); `clippy.toml` with `msrv = "1.95"`. `group_imports = "StdExternalCrate"` was dropped: it is nightly-only, so on a stable toolchain it prints a warning and does nothing. Import grouping is a review convention (`CONTRIBUTING.md`) until rustfmt stabilises it.
 - [x] **P1-3** `crates/acpilot-proto`: typed modules `host`, `workspace`, `agent`, `session`, `event`, `permission`, `file`, `terminal`, `profile`, `lsp`, `error`; every type `serde` + `utoipa::ToSchema`; `ErrorBody { code, message, details }`; `ApiDoc` registers them all.
 - [x] **P1-4** `AcpilotError` in `acpilot-core::error` with the seven variants; `ApiError` newtype in `acpilotd` maps to `404/409/403/502/502/500/500`; `exit_code()` maps to `3/4/5/1`, with `USAGE = 2` owned by the parser. Both mappings are unit-tested.
-- [x] **P1-5** `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, nextest, docs-feature tests, `cargo-deny`, and an OpenAPI-snapshot freshness job, on linux+macos+windows. `.github/workflows/release.yml` is the stub until P12 wires `cargo-dist`. A separate `p0-5 spike` job checks `spikes/wsl-helper` on ubuntu+windows: it is deliberately not a workspace member, so the workspace commands cannot reach it.
+- [x] **P1-5** `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, nextest, docs-feature tests, `cargo-deny`, and an OpenAPI-snapshot freshness job, on linux+macos+windows. `.github/workflows/release.yml` is the stub until P12 wires `cargo-dist`. A separate `p0-5 probe` job checks `probes/wsl-helper` on ubuntu+windows: it is deliberately not a workspace member, so the workspace commands cannot reach it.
 - [x] **P1-6** `xtask`: `cargo xtask check` runs what CI runs; `dev`, `web-build` and `dist` exit 2 with the phase that owns them rather than pretending to work.
 - [x] **P1-7** `.gitignore`, `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md`, `docs/adr/0001-record-architecture-decisions.md` (with the index of ADRs 0002–0009 to come).
 - [x] **P1-8** `crates/acpilot-proto/tests/openapi_snapshot.rs` with `insta`; the 811-line snapshot is committed and CI fails if regenerating changes it.
@@ -232,7 +239,7 @@ and deterministic.
 - [ ] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
   per profile (P4-4), so migrations run once per open profile — keep them idempotent.
 - [ ] **P3-8** Hosts API: `POST /v1/hosts` (`local|ssh|wsl`), connection test endpoint, capability report (can spawn? can read fs? latency).
-  - WSL specifics, from P0-5's `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the spike (`spikes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
+  - WSL specifics, from P0-5's `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the probe (`probes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
 - [ ] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
 - [ ] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
   - **DoD:** `acpilotd` runs headless, a scripted `curl` session (create → prompt → stream → permission → resolve) works, and SSE replay after disconnect loses no events.
@@ -834,6 +841,7 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 ## P8 — SSH hosts (≈10 days)
 
 - [ ] **P8-1** `acpilot-host::ssh`: `SshHost` on `russh` — connect (agent auth, key files, password via keyring, `known_hosts` verification with TOFU prompt), keepalive, reconnect with backoff.
+  **Started 2026-10-22:** `acpilot-host::ssh` implements `Host` over one connection — `connect` with a key file and a `known_hosts` policy (strict, TOFU, or explicit accept-any), exec channels that keep stderr out of the frame stream and preserve exit codes, PTY channels with resize, and one session thread multiplexing channels (byte-stream readers on the caller's side, per `docs/notes/ssh-agent.md`). `tests/ssh_host.rs` exercises all of it against P0-4's real `sshd`. Still open here: ssh-agent and password/keyring auth, keepalives, reconnect/backoff, `signal`/kill semantics verified against a server, a connect timeout policy beyond the 30 s dial guard, and RSA keys — disabled because the `rsa` crate carries RUSTSEC-2023-0071 with no fix, so `ssh-rsa`-only servers are refused rather than the advisory suppressed.
 - [ ] **P8-2** `ssh2-config` parsing: `Host`/`HostName`/`User`/`Port`/`IdentityFile`/`ProxyJump`/`Include`/`ForwardAgent`; surface unknown directives as warnings in `acpilot host test`.
 - [ ] **P8-3** Capabilities over SSH: upload `acpilotd-helper` (musl, `scp`-less — write via `exec` + base64 or SFTP), version handshake, then fs/PTY/spawn/LSP through the helper.
 - [ ] **P8-4** Remote workspace: root path on remote, file read/write with ETag, `notify`-equivalent via helper polling interval (500 ms) until inotify-over-SSH exists.
@@ -859,13 +867,13 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## P10 — GUI (≈25 days)
 
-- [ ] **P10-1** Spike outcome review from P0-3; write `docs/adr/0007-gui-framework.md` with the decision, the pinned `gpui` rev/version, the numbers that justify it, and the recorded trigger that would force the iced fallback.
+- [ ] **P10-1** Probe outcome review from P0-3; write `docs/adr/0007-gui-framework.md` with the decision, the pinned `gpui` rev/version, the numbers that justify it, and the recorded trigger that would force the iced fallback.
 - [ ] **P10-2** `acpilot-gui` shell on gpui 0.2.2: `Application` + `Entity`/`View` tree, window and menu bar, theme tokens (shared `theme.toml` with TUI), profile switcher, command palette, panes, and keyboard-first navigation via gpui `KeyBinding` contexts (same keymap data as the TUI, not a second hand-written table).
 - [ ] **P10-3** Text surface on `acpilot-text`: shaped `LineLayout` wrapping, display map for folds, virtualised rows (`uniform_list`), cursor blink, IME, selection, soft-wrap toggle, minimap (optional/later).
 - [ ] **P10-4** Panels: file tree, tabs, editor, agent session list + transcript + composer, permission dialogs, diff review, LSP surfaces (diagnostics, hover, completion, code actions — from the daemon, same as the TUI), terminal (`vt100` grid rendered as a gpui element, reusing the TUI's grid model).
 - [ ] **P10-5** System integration: menu bar, open-with, recent workspaces, drag-and-drop files, notifications on turn completion/needs-input, dock/taskbar badge, single instance + deep links (`acpilot://session/<id>`).
 - [ ] **P10-6** Performance pass against the budgets in §Performance budgets; `tracing` spans + a frame-timing overlay (gpui has no off-the-shelf integration, so measure in-crate and keep the harness alongside the editor).
-- [ ] **P10-7** Accessibility — **not inherited**: gpui 0.2.2 ships no `accesskit` bridge, so this is an implementation task, not an audit. Wire focus order, labels, and role/live-region events for the transcript and permission dialog; 200% scaling; high-contrast theme. Timebox a spike early in P10: if the bridge is not viable by then, ship TUI-parity keyboard paths, document the gap in the release notes, and treat it as a v0.1 limitation rather than silently claiming accessibility.
+- [ ] **P10-7** Accessibility — **not inherited**: gpui 0.2.2 ships no `accesskit` bridge, so this is an implementation task, not an audit. Wire focus order, labels, and role/live-region events for the transcript and permission dialog; 200% scaling; high-contrast theme. Timebox a probe early in P10: if the bridge is not viable by then, ship TUI-parity keyboard paths, document the gap in the release notes, and treat it as a v0.1 limitation rather than silently claiming accessibility.
 - [ ] **P10-8** Packaging: `.app` bundle + notarisation (macOS), MSI/MSIX (Windows), AppImage + `.deb` (Linux) via `cargo-dist` + `cargo-bundle`.
   - **DoD:** a user who never opens a terminal can install Acpilot, open a workspace, run an agent, and approve a write.
 
@@ -970,7 +978,7 @@ serialiser.
 - [ ] Default policy: read anywhere in workspace, ask on write, deny outside workspace, deny network-spawning tools (configurable).
 - [ ] Audit log is append-only and included in `session.jsonl`.
 - [ ] Secrets: keyring only; redact secret-looking strings from logs and transcripts (`sk-`, `ghp_`, bearer tokens).
-- [ ] Sandbox spike (later): `landlock` (Linux), `sandbox-exec` (macOS), AppContainer (Windows) per-session; [decide] whether v0.2.
+- [ ] Sandbox probe (later): `landlock` (Linux), `sandbox-exec` (macOS), AppContainer (Windows) per-session; [decide] whether v0.2.
 
 ### Accessibility & i18n
 
@@ -1027,7 +1035,7 @@ grep-searcher              = "0.1"
 grep-regex                 = "0.1"
 lsp-types                  = "0.97"          # fallback only; see D8
 gen-lsp-types              = { version = "0.11", features = ["url"] }
-async-lsp                  = "0.2"           # spike candidate only; see P7-2
+async-lsp                  = "0.2"           # probe candidate only; see P7-2
 url                        = "2"
 # hosts
 russh                      = "0.64"
@@ -1080,16 +1088,16 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| GUI framework churn (gpui/iced) | Losing months | P0-3 spike with hard numbers, UI-agnostic `acpilot-text`, bounded fallback path |
+| GUI framework churn (gpui/iced) | Losing months | P0-3 probe with hard numbers, UI-agnostic `acpilot-text`, bounded fallback path |
 | gpui has no semver contract | A routine upgrade eats a week; a moved rev breaks the build | Exact pin, vendored builds in CI (XT-2), release-watch automation (XT-1), ADR records pin + escape hatch |
-| gpui ships no accessibility bridge | Screen-reader users locked out; retrofit arrives too late | P10-7 is an implementation task with an early viability spike, keyboard-complete TUI parity, gap documented if unresolved |
+| gpui ships no accessibility bridge | Screen-reader users locked out; retrofit arrives too late | P10-7 is an implementation task with an early viability probe, keyboard-complete TUI parity, gap documented if unresolved |
 | ACP v2 draft lands with breaking changes | Rework in the engine | Isolate all protocol types in `acpilot-agent`; never leak ACP types into `acpilot-proto` |
 | Agents are non-deterministic; tests flake | Slow CI, mistrust | Mock agent for tests, real agents nightly only, transcript snapshots |
 | Remote file watching over SSH is polling | Stale UI, battery drain | 500 ms coalesced poll, ETag revalidation, explicit "remote" indicator, inotify-over-ssh later |
 | Program-as-agent parsers are brittle | "Run anything" promise breaks | Ship 2 generic parsers, make profiles data-driven and user-editable, keep ACP-native path primary |
 | Permission broker bugs = data loss | Trust destroyed | Default-deny writes, shadow-write guard, audit log, property tests for path canonicalisation |
 | Scope creep across four UIs | Never ships | API-first rule; v0.1 is CLI+TUI only; GUI/web gated on daemon stability |
-| LSP servers hang, crash, or index forever | Editor feels broken; RAM spikes | Timeouts + `$/cancelRequest` everywhere, per-server stderr ring, idle shutdown, crash-loop cap, nothing on the keystroke path |
+| LSP servers hang, crash, or index forever | Editor feels broken; RAM probes | Timeouts + `$/cancelRequest` everywhere, per-server stderr ring, idle shutdown, crash-loop cap, nothing on the keystroke path |
 | Profile mix-up sends code to the wrong account | Broken trust, possibly a client confidentiality incident | Keyring namespacing, hard error on unresolved profile, no fallback, cross-profile refs opt-in + audited, `profile diff` in support docs |
 | Local models are bad at tool calls | A promoted agent loops, or calls nothing and explains why | Capability probe (P4.5-2), validity metric across runs, promotion warns below 90%, `max_steps` cap, repair-once parsing with an honest notice |
 | A server lies about its context window | Silent truncation, or a 400 mid-run | `MetadataSource` on every window, recipe validation against the reported value, overflow is an event with numbers, `estimated` flag on pre-flight token counts |
@@ -1121,7 +1129,8 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
 - [x] D17 · Extension registry trust: **signed static index, mandatory SHA-256, reviewed pull requests, no auto-update** (decided 2026-10-20, ADR 0003). A private registry is `--index` plus a trusted key.
 - [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one.
-- [x] D19 · Platform order: **unix and macOS first, Windows last, and every OS branch under `src/platform/`** (decided 2026-10-21). The Windows half is the one that cannot be developed on the machines the project is written on, so writing it first means writing it blind. `acpilot-host` now has the seam: `Host::spawn` is portable (`std::process`) with one implementation, `spawn_pty` branches once into `platform/unix.rs` (forkpty via `portable-pty`) and `platform/windows.rs` (a typed refusal naming P2-5 until ConPTY lands). The rule is enforced, not remembered: a boundary test fails if `cfg(windows)`/`cfg(unix)`/`cfg(target_os…)` appears outside `src/platform/` in any crate, and `cargo xtask check` type-checks the crate for the windows-msvc and both apple targets from any host.
+- [x] D19 · Platform order: **unix and macOS first, Windows last, and every OS branch under `src/platform/`** (decided 2026-10-21, ConPTY landed 2026-10-22). The Windows half is the one that cannot be developed on the machines the project is written on, so writing it first means writing it blind. `acpilot-host` has the seam: `Host::spawn` is portable (`std::process`) with one implementation; the local PTY is one implementation too, because `portable-pty` already branches (`platform/unix.rs` forkpty, `platform/windows.rs` ConPTY) and the platform files hold what differs *above* that — echo, `\r\n`, the terminal queries a ConPTY program blocks on, and the fact that killing a ConPTY child does not hang up its tree. `crates/acpilot-host/tests/local_host_windows.rs` asserts the property that matters (a ConPTY child sees a console where a piped child sees a redirection) and runs on `windows-latest` in CI. The rule is enforced, not remembered: a boundary test fails if `cfg(windows)`/`cfg(unix)`/`cfg(target_os…)` appears outside `src/platform/` in any crate, and `cargo xtask check` type-checks the crate for the windows-msvc and both apple targets from any host.
+- [x] D20 · Naming: **`probes/` and "probe", not `spikes/` and "spike"** (decided 2026-10-22). "Spike" is Extreme Programming jargon for a time-boxed investigation; it says nothing about measuring, which is what every one of these does, and it implies throwaway code, which `probes/wsl-helper` is not. A probe is one question, answered with numbers in `docs/notes/`, in a standalone crate with its own lockfile; it outlives its question only while something still runs it. The rule for what belongs there is in `CONTRIBUTING.md` §Probes.
 
 ## Definition of done for v0.1.0
 

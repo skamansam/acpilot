@@ -21,20 +21,34 @@
 //! case cannot spread through the host layer one `cfg!` at a time.
 //!
 //! Exec does not branch at all: `std::process` is portable, so `Host::spawn` has
-//! exactly one implementation. Only the PTY differs, and on Windows it answers
-//! [`HostError::Unsupported`] naming the phase that owes it — a refusal, not a
-//! silent fallback to pipes.
+//! exactly one implementation. The local PTY is one implementation too, because
+//! `portable-pty` already branches (`forkpty` on unix, ConPTY on Windows); what
+//! the platform files hold is what differs *above* that — ConPTY's echo, its
+//! `\r\n`, and the terminal queries a program will wait on — so it is written
+//! down where a Windows special case would go rather than discovered in a
+//! terminal pane later.
+//!
+//! The other transport is [`ssh`], behind the default `ssh` feature: one
+//! connection per host, one channel per exec or terminal, built on what P0-4
+//! measured rather than on a guess about how SSH frames data. A local-only
+//! build turns the feature off and links no crypto stack; the SSH code has no
+//! platform branch, so `cargo xtask check` type-checks the platform files with
+//! it off and CI builds it natively per OS.
 
 mod platform;
 mod pty;
+#[cfg(feature = "ssh")]
+pub mod ssh;
 
 use std::ffi::OsString;
 use std::fmt;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::{ChildStderr, ChildStdin, ChildStdout, Stdio};
+use std::process::Stdio;
 
 pub use pty::Pty;
+#[cfg(feature = "ssh")]
+pub use ssh::{HostKeyPolicy, SshConfig, SshHost};
 
 /// One command to run on a host, wherever that host is.
 ///
@@ -170,17 +184,76 @@ impl From<std::process::ExitStatus> for Exit {
     }
 }
 
-/// A spawned process with piped stdin, stdout and stderr.
-#[derive(Debug)]
+/// A spawned process with piped stdin, stdout and stderr, wherever it runs.
+///
+/// The pipes are `Box<dyn Write>`/`Box<dyn Read>` rather than `std::process`
+/// handles because a process on the far side of an SSH channel has file
+/// descriptors on this machine only if they are invented; the seam makes the
+/// caller pay the same price either way.
 pub struct Child {
     program: String,
-    inner: std::process::Child,
-    stdin: Option<ChildStdin>,
-    stdout: Option<ChildStdout>,
-    stderr: Option<ChildStderr>,
+    backend: Box<dyn ChildBackend + Send>,
+    stdin: Option<Box<dyn Write + Send>>,
+    stdout: Option<Box<dyn Read + Send>>,
+    stderr: Option<Box<dyn Read + Send>>,
+}
+
+impl fmt::Debug for Child {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Child")
+            .field("program", &self.program)
+            .field("pid", &self.backend.id())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Everything about a child that is not its pipes: identity, ending it, and
+/// waiting for it.
+pub(crate) trait ChildBackend: Send {
+    fn id(&self) -> Option<u32>;
+    fn kill(&mut self) -> io::Result<()>;
+    fn wait(&mut self) -> io::Result<Exit>;
+    fn try_wait(&mut self) -> io::Result<Option<Exit>>;
+}
+
+/// `std::process::Child`, which is what a local exec is.
+struct ProcessChild(std::process::Child);
+
+impl ChildBackend for ProcessChild {
+    fn id(&self) -> Option<u32> {
+        Some(self.0.id())
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        self.0.kill()
+    }
+
+    fn wait(&mut self) -> io::Result<Exit> {
+        self.0.wait().map(Exit::from)
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<Exit>> {
+        self.0.try_wait().map(|status| status.map(Exit::from))
+    }
 }
 
 impl Child {
+    pub(crate) fn new(
+        program: String,
+        backend: Box<dyn ChildBackend + Send>,
+        stdin: Option<Box<dyn Write + Send>>,
+        stdout: Option<Box<dyn Read + Send>>,
+        stderr: Option<Box<dyn Read + Send>>,
+    ) -> Self {
+        Self {
+            program,
+            backend,
+            stdin,
+            stdout,
+            stderr,
+        }
+    }
+
     /// The program as it was asked for, for error messages that name the agent
     /// rather than the daemon.
     #[must_use]
@@ -188,33 +261,35 @@ impl Child {
         &self.program
     }
 
+    /// The process id on the host that runs it. `None` over SSH, where the pid
+    /// would be the remote one and nothing here can use it.
     #[must_use]
-    pub fn id(&self) -> u32 {
-        self.inner.id()
+    pub fn id(&self) -> Option<u32> {
+        self.backend.id()
     }
 
-    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+    pub fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
         self.stdin.take()
     }
 
-    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+    pub fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
         self.stdout.take()
     }
 
-    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+    pub fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
         self.stderr.take()
     }
 
     pub fn kill(&mut self) -> io::Result<()> {
-        self.inner.kill()
+        self.backend.kill()
     }
 
     pub fn wait(&mut self) -> io::Result<Exit> {
-        self.inner.wait().map(Exit::from)
+        self.backend.wait()
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<Exit>> {
-        self.inner.try_wait().map(|status| status.map(Exit::from))
+        self.backend.try_wait()
     }
 }
 
@@ -235,10 +310,11 @@ pub trait Host: fmt::Debug + Send + Sync {
     /// Run a command under a pseudo-terminal of the given size.
     ///
     /// A PTY is not "pipes with a nice name": programs detect it, colour their
-    /// output, and refuse to prompt without it. On a platform that cannot yet
-    /// make one this returns [`HostError::Unsupported`] rather than quietly
-    /// handing back pipes, which is the failure mode that looks like a working
-    /// terminal until someone opens a TUI.
+    /// output, and refuse to prompt without it. A transport that cannot make one
+    /// returns [`HostError::Unsupported`] rather than quietly handing back pipes,
+    /// which is the failure mode that looks like a working terminal until someone
+    /// opens a TUI. Both local platforms can make one: `forkpty` on unix, ConPTY
+    /// on Windows.
     fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError>;
 }
 
@@ -276,13 +352,25 @@ impl Host for LocalHost {
             command: command.command_line(),
             source,
         })?;
-        Ok(Child {
-            program: command.program.to_string_lossy().into_owned(),
-            stdin: child.stdin.take(),
-            stdout: child.stdout.take(),
-            stderr: child.stderr.take(),
-            inner: child,
-        })
+        let stdin = child
+            .stdin
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Write + Send>);
+        let stdout = child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>);
+        let stderr = child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>);
+        Ok(Child::new(
+            command.program.to_string_lossy().into_owned(),
+            Box::new(ProcessChild(child)),
+            stdin,
+            stdout,
+            stderr,
+        ))
     }
 
     fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
@@ -313,6 +401,14 @@ pub enum HostError {
 
     #[error("pty for `{command}`: {message}")]
     Pty { command: String, message: String },
+
+    /// The SSH side of the seam: connecting, authenticating, or opening a
+    /// channel. `operation` is one of "connect", "authenticate", "exec", "pty".
+    #[error("ssh {operation}: {message}")]
+    Ssh {
+        operation: &'static str,
+        message: String,
+    },
 
     #[error("{operation}: {source}")]
     Io {

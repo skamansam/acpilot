@@ -13,10 +13,10 @@ the product ships.
 | Linux | distro | Ubuntu-24.04, kernel 6.18.33.2 |
 | Linux | `acpilotd-helper` | this repository, built with `rustc -O` |
 
-The instrument is `spikes/wsl-helper`: a Windows binary that enumerates distros,
+The instrument is `probes/wsl-helper`: a Windows binary that enumerates distros,
 spawns a helper inside one with `wsl.exe -d <d> --cd ~ -e <helper> --stdio`,
 writes one JSON line, reads one back, and records the timings. The Linux end is
-`spikes/wsl-helper/helper/acpilotd-helper.rs`, a dependency-free 150-line
+`probes/wsl-helper/helper/acpilotd-helper.rs`, a dependency-free 150-line
 program that answers one line per line and exits on EOF.
 
 Both halves are tested on both operating systems ("Testing both sides" below):
@@ -76,7 +76,7 @@ Windows-local target directory; `check.ps1` sets one, and an explicit
    tolerate `\r\n`.
 7. **Pass `--cd` even though `wsl.exe` guesses.** With no `--cd`, the helper
    inherited the host working directory translated into Linux
-   (`/home/sam/workspace-other/acpilot/spikes/wsl-helper` from the UNC cwd,
+   (`/home/sam/workspace-other/acpilot/probes/wsl-helper` from the UNC cwd,
    `/mnt/c/Users/SamTyler` from `C:\Users\SamTyler`). Deterministic startup is
    worth one flag.
 
@@ -148,7 +148,7 @@ So the contract is:
   hosts" — no prompt, no error, exit 0 (`src/discovery.rs`). Five tests on each
   OS drive that through real processes: a binary that does not exist, `exit 3`,
   a command that succeeds silently, and decode-then-filter. `ACPILOT_WSL_EXE`
-  points the spike at any other program, so the absence path can be seen on a
+  points the probe at any other program, so the absence path can be seen on a
   machine that *has* WSL — `ACPILOT_WSL_EXE=C:\Windows\System32\cmd.exe cargo run
   -- distros` prints the silence. `docker-desktop` and `docker-desktop-*` are
   filtered out: a real distro name, never a workspace.
@@ -192,7 +192,7 @@ within ±15% and do not change any ordering or conclusion.
 
 ## Path translation
 
-`spikes/wsl-helper/src/paths.rs` is the liftable artifact: pure functions, 12
+`probes/wsl-helper/src/paths.rs` is the liftable artifact: pure functions, 12
 unit tests, no Windows APIs. `WslPathMap::new(distro, mounted_drives)` then
 `to_linux` / `to_windows`.
 
@@ -258,18 +258,18 @@ by the same OS the daemon will run on.
 
 ```powershell
 # on Windows, from the repo root: every local check, no Unix shell involved
-pwsh -File spikes/wsl-helper/check.ps1
+pwsh -File probes/wsl-helper/check.ps1
 
 # both halves in one run; the distro's own shell runs its three checks
-pwsh -File spikes/wsl-helper/check.ps1 -Wsl -WslDistro Ubuntu-24.04
+pwsh -File probes/wsl-helper/check.ps1 -Wsl -WslDistro Ubuntu-24.04
 
 # from cmd.exe or Explorer instead of PowerShell
-spikes\wsl-helper\check.cmd -Wsl -WslDistro Ubuntu-24.04
+probes\wsl-helper\check.cmd -Wsl -WslDistro Ubuntu-24.04
 ```
 
 ```bash
 # inside the distro, in the distro's shell — not an editor's bundled one
-cd ~/workspace-other/acpilot/spikes/wsl-helper
+cd ~/workspace-other/acpilot/probes/wsl-helper
 cargo test && cargo clippy --all-targets -- -D warnings
 rustc --test helper/acpilotd-helper.rs -o /tmp/helper-test && /tmp/helper-test
 python3 helper/check_protocol.py ~/.local/bin/acpilotd-helper
@@ -279,12 +279,12 @@ The Windows half deliberately does not go through bash. A bash that arrives
 with an editor is not part of the toolchain, Windows may block it as a security
 risk, and a check that only works under one app's shell is not a check — so the
 checks spawn `cargo`, `rustfmt`, `rustc` and `python` directly. They live in
-`cargo xtask spike` and nowhere else: `check.ps1` and `check.cmd` are thin
+`cargo xtask probe` and nowhere else: `check.ps1` and `check.cmd` are thin
 wrappers that call that command (plus, with `-Wsl`, the same command inside the
 distro), and CI calls it too.
 
-CI runs that table on every push in `.github/workflows/ci.yml`, job `p0-5 spike`
-on `ubuntu-latest` + `windows-latest` — by calling `cargo xtask spike`, so the
+CI runs that table on every push in `.github/workflows/ci.yml`, job `p0-5 probe`
+on `ubuntu-latest` + `windows-latest` — by calling `cargo xtask probe`, so the
 steps CI trusts are the ones a developer runs rather than a second transcription
 of them. The Windows job therefore never invokes bash. The Linux-only platform
 guard (the binary's own exit codes 1 and 2) stays a workflow step: it asserts
@@ -297,7 +297,7 @@ not get it ([actions/runner-images#5920](https://github.com/actions/runner-image
 they can only offer WSL1, which `--require-wsl2` refuses rather than presenting
 WSL1 timings as the shipped path. Turn the job on against a Windows machine you
 control, registered as a self-hosted runner with the `wsl2` label and a distro
-that has `rustc` (the job installs the helper with the spike's own `install`):
+that has `rustc` (the job installs the helper with the probe's own `install`):
 
 ```bash
 gh variable set WSL_BENCH  --body true
@@ -312,7 +312,7 @@ against this WSL2 box): exit 0, `wsl_version: 2`, 20 `wslpath` oracle rows.
 Without the variables the job is skipped before a runner is even chosen, so the
 repository does not carry a permanently red check.
 
-The Linux build of `wsl-helper` printing *this spike drives wsl.exe and only runs
+The Linux build of `wsl-helper` printing *this probe drives wsl.exe and only runs
 on Windows* and exiting 1 is the guard working, not a failure; `--help` exits 2.
 The helper's unit tests run on either OS with `rustc --test`, which needs no
 cargo and no harness dependency — the same property that lets the daemon install
@@ -327,7 +327,7 @@ target directory:
 
 ```powershell
 $env:CARGO_TARGET_DIR='C:/Users/SamTyler/AppData/Local/Temp/wsl-helper-target'
-cargo test --manifest-path '\\wsl.localhost\Ubuntu-24.04\home\sam\workspace-other\acpilot\spikes\wsl-helper\Cargo.toml'
+cargo test --manifest-path '\\wsl.localhost\Ubuntu-24.04\home\sam\workspace-other\acpilot\probes\wsl-helper\Cargo.toml'
 ```
 
 That is a property of editing a WSL-hosted checkout from Windows, not of the

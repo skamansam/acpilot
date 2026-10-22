@@ -12,13 +12,13 @@ prediction of a real remote link.
 | client | `russh` | 0.64.1 |
 | transport | loopback TCP | `127.0.0.1:2222` |
 
-The instrument is `spikes/ssh-spike`: `exec` (stdout, stderr, exit code), `pty`
+The instrument is `probes/ssh`: `exec` (stdout, stderr, exit code), `pty`
 (request, run, resize while a program watches), and `acp` (this binary running
 as a mock agent on the far side, answering `initialize`, `session/new` and
 `session/prompt` in real ACP shapes). `bench` runs all three.
 
 ```bash
-cd spikes/ssh-spike
+cd probes/ssh
 ./sshd.sh start                 # unprivileged sshd on 127.0.0.1:2222, key-only
 cargo run --release -- bench
 ./sshd.sh stop
@@ -51,7 +51,7 @@ nothing privileged and no key is committed.
 3. **stderr stays out of the frame channel.** A probe that writes to both and
    exits 3 came back with `stdout "out"`, `stderr "err"`, and exit code **3**
    intact: stderr arrives as `SSH_EXTENDED_DATA` with `ext = 1`, not as stdout
-   noise. The spike fails the run if the agent writes anything on an extended
+   noise. The probe fails the run if the agent writes anything on an extended
    stream, because a frame stream polluted by a warning is the failure mode that
    looks like a protocol bug.
 4. **A PTY survives the hop, resize included.** `request_pty` then `window_change`
@@ -85,15 +85,58 @@ nothing privileged and no key is committed.
   `Lines` transport already does this; the point is that the channel cannot.
 - **Drain stdout and stderr concurrently.** SSH's channel window is consumed by
   both streams; an agent that logs to stderr will block on a full window if the
-  daemon only reads stdout. The spike reads both in one loop, and P2-2's ring
+  daemon only reads stdout. The probe reads both in one loop, and P2-2's ring
   buffer is where stderr belongs.
 - **Connect once per host and multiplex.** ~50 ms per exchange is fine; ~78 ms per
   prompt is not. The same conclusion as P0-5, from a different transport.
 - **Resize is a channel message, not a reconnect** (`window_change`), so the
   terminal API's resize maps straight onto it.
-- **The host key needs a policy.** The spike accepts any key (`Ok(true)`) because
+- **The host key needs a policy.** The probe accepts any key (`Ok(true)`) because
   a TOFU prompt would block a measurement; `known_hosts` verification is P8-1's
   job and is not answered here.
+
+## What landed in `acpilot-host::ssh` (2026-10-22)
+
+Built on the five points above rather than on how SSH is usually described:
+
+- **One connection, kept.** `SshHost::connect` authenticates once on a session
+  thread; every `spawn`/`spawn_pty` opens another channel on that session. The
+  thread owns a current-thread tokio runtime because `russh` is async and `Host`
+  is not; the seam between them is a bounded set of commands and blocking pipes on
+  the caller's side.
+- **Bytes, not messages.** Each channel's `DATA` chunks go straight into a reader;
+  nothing splits or joins lines. The caller frames, exactly as the 103-frame probe
+  showed it must.
+- **stderr stays a separate reader** (`EXTENDED_DATA ext = 1`), and the test fails
+  if a byte crosses over.
+- **Resize is `window_change`** on the live channel — `Pty::resize` maps onto it,
+  and `tests/ssh_host.rs` changes the size under a running `stty size` and asserts
+  the program saw it.
+- **`drop(stdin)` is EOF, not close.** The first version held the channel's write
+  half alive in the child handle, so `cat` never saw EOF and the test hung; the
+  writer now sends an explicit EOF on drop, which is what a sync caller means.
+- **Host keys are checked by default.** `HostKeyPolicy::KnownHosts` compares
+  against `known_hosts` and fails on a mismatch; `trust_on_first_use` appends an
+  unknown key; `AcceptAny` exists for this fixture only. Host *certificates* are
+  refused rather than guessed at.
+- **RSA is off, deliberately.** `russh`'s default graph pulls `rsa` 0.10.0-rc.18,
+  which carries RUSTSEC-2023-0071 (the Marvin timing attack) with no fixed release;
+  `cargo deny` fails the build on it. Rather than add a suppression for a crypto
+  advisory, the `rsa` feature is disabled at the workspace dependency, so a server
+  offering only `ssh-rsa` cannot be reached. ed25519 and ECDSA — what this fixture
+  and this user's keys use — are unaffected. P8-1 re-adds it with a written
+  justification when a host needs it.
+- **`kill` is best effort**: a `signal KILL` request followed by channel close.
+  OpenSSH acts on the signals it supports and P0-4 never measured this, so the
+  note does not claim more.
+- **`cwd` and `env` are shell prefixes** (`cd … && K=V …`), POSIX-quoted. Correct
+  for a unix host, meaningless for a Windows one; the quoting is one tested
+  function, not sprinkled through the module.
+
+`tests/ssh_host.rs` runs against this fixture with `ACPILOT_SSH_TEST=1` and is
+skipped (loudly) elsewhere, because CI has no sshd. It asserts the exec streams and
+console-detection pair, the mid-run resize, a hundred lines surviving the hop as a
+byte stream, and that a strict `known_hosts` policy refuses the unknown host.
 
 ## Limitations
 

@@ -53,7 +53,7 @@ lookup.
 
 ## Status
 
-The engine is P7; the P0-7 spike is done. Framing, negotiation, and the
+The engine is P7; the P0-7 probe is done. Framing, negotiation, and the
 UTF-8/UTF-16 conversion are already in `acpilot-lsp`, tested over emoji, CJK,
 combining marks, and CRLF, and were proven end-to-end against `rust-analyzer`,
 `typescript-language-server`, and `pyright`. The numbers and the capability

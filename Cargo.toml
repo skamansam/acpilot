@@ -64,11 +64,18 @@ grep-searcher = "0.1"
 grep-regex = "0.1"
 lsp-types = "0.97" # fallback only; see D8
 gen-lsp-types = { version = "0.11", features = ["url"] }
-async-lsp = "0.2" # spike candidate only; see P7-2
+async-lsp = "0.2" # probe candidate only; see P7-2
 url = "2"
 
 # hosts
-russh = "0.64"
+# Default features minus `rsa`: russh's default graph pulls `rsa` 0.10.0-rc.18,
+# which carries RUSTSEC-2023-0071 (Marvin timing attack) with no fixed release,
+# and `cargo deny` fails on it. The cost is explicit: RSA host keys and RSA user
+# keys are not accepted yet, so a server offering only `ssh-rsa` is unreachable;
+# ed25519 and ECDSA are unaffected. P8-1 re-adds `rsa` with a written
+# justification when a host needs it. Feature selection lives here because cargo
+# forbids a member overriding `default-features` on an inherited dependency.
+russh = { version = "0.64", default-features = false, features = ["flate2", "aws-lc-rs"] }
 russh-sftp = "3"
 ssh2-config = "0.9"
 openssh = "0.11" # optional fallback

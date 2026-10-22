@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! cargo run -p acpilot-lsp --example lsp_probe -- \
-//!   --server rust-analyzer --root spikes/fixtures/lsp/rust \
+//!   --server rust-analyzer --root probes/fixtures/lsp/rust \
 //!   --file src/lib.rs --needle 'describe("x")' --expect describe \
 //!   -- rust-analyzer
 //! ```

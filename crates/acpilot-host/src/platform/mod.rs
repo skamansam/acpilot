@@ -6,10 +6,12 @@
 //! platform's behaviour can drift without the other side noticing, and the
 //! Windows side is written last, so nothing would notice for a phase.
 //!
-//! Both platforms implement [`spawn_pty`] with the same signature. On Windows it
-//! returns [`Unsupported`](crate::HostError::Unsupported) until P2-5 lands
-//! ConPTY; the fact that the signature exists is what makes that a decision
-//! rather than an omission.
+//! Both platforms implement [`spawn_pty`] with the same signature and share the
+//! construction in `pty.rs`: `portable-pty` already owns the difference
+//! (`forkpty` here, ConPTY there). What each file holds is the difference that
+//! is *not* in the dependency — the echo, line-ending and query-answering
+//! behaviour of a Windows pseudo-console, and the process-group question on
+//! unix — so that when one becomes code there is exactly one place to put it.
 
 #[cfg(unix)]
 mod unix;

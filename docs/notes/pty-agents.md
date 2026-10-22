@@ -9,9 +9,9 @@ exercised.
 | --- | --- | --- |
 | Freebuff | npm wrapper 0.0.106 (the native TUI it downloads prints no version) | `freebuff` |
 | Claude Code | 2.1.306 | `claude` |
-| `fake-tui.sh` | this repository | `bash spikes/fixtures/tui/fake-tui.sh` |
+| `fake-tui.sh` | this repository | `bash probes/fixtures/tui/fake-tui.sh` |
 
-The instrument is `spikes/pty-agent`: a standalone crate that opens a PTY with
+The instrument is `probes/pty-agent`: a standalone crate that opens a PTY with
 `portable-pty` 0.9, feeds every byte into a `vt100` 0.18 screen, sends a prompt,
 and records the screen at every candidate turn boundary. It writes a JSON report
 per run; the reports stay in `/tmp` and only the numbers below are committed.
@@ -29,7 +29,7 @@ cargo run -q -- --cmd claude --cwd ~/workspace-other/acpilot \
   --prompt 'Reply with exactly the word OK and nothing else.' --quit 'text:/exit' \
   --json /tmp/claude.json
 
-bash spikes/fixtures/tui/fake-tui.sh   # the deterministic double
+bash probes/fixtures/tui/fake-tui.sh   # the deterministic double
 ```
 
 ## Verdict
@@ -60,7 +60,7 @@ bash spikes/fixtures/tui/fake-tui.sh   # the deterministic double
 5. **Sending `text` and `\r` in one write does not submit.** Four runs left the
    prompt sitting in the box with no turn started — and the idle detector then
    declared that non-turn complete. Splitting the write (text, ~250 ms, Enter)
-   worked every time. This is the single most expensive line in the spike.
+   worked every time. This is the single most expensive line in the probe.
 6. **The answer is not the screen.** Freebuff renders rotating ads, a spinner,
    and the model's `• Thinking` text in the same region as the answer; Claude
    prefixes the answer with `●` and puts a status bar under it. Screen text is
@@ -212,7 +212,7 @@ status bar, and the thought. That is a profile, not a heuristic.
   `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same query
   problem this note found in the TUIs. It is not the same terminal. No resize,
   cancellation, tool-permission prompt, or multi-turn context was exercised.
-- The spike returns screen text; it does **not** extract messages. That is P2-7's
+- The probe returns screen text; it does **not** extract messages. That is P2-7's
   job, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so
   Freebuff's three `CSI 6 n` probes in one chunk get one answer. Harmless here,

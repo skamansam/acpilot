@@ -347,7 +347,7 @@ reference implementation for editing keymaps.
 
 ### 5.4 GUI
 
-This is the one genuinely contested decision, so it gets a benchmark spike with hard exit
+This is the one genuinely contested decision, so it gets a benchmark probe with hard exit
 criteria (TODO `P0-3`) and a decision ADR (TODO `P10-1`) rather than a fait accompli.
 
 | Candidate | Case for | Case against |
@@ -532,7 +532,7 @@ acpilot/
 ├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js (P11)
 ├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one
-├── spikes/                    # throwaway P0 experiments (deleted before v0.1)
+├── probes/                    # time-boxed P0 measurements, one question each (CONTRIBUTING §Probes)
 ├── migrations/                # sqlite migrations
 ├── docs/                      # ADRs, ACP + LSP notes, protocol map
 ├── xtask/                     # build/dev/packaging tasks
@@ -544,7 +544,7 @@ acpilot/
 
 | Phase | Outcome |
 | --- | --- |
-| P0 | Spikes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
+| P0 | Probes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
 | P1 | Workspace skeleton, CI, `acpilot-proto`, error model |
 | P2 | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
 | P3 | `acpilotd` HTTP/SSE API + SQLite history |

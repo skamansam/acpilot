@@ -16,7 +16,7 @@ The instrument is `crates/acpilot-lsp/examples/lsp_probe.rs`: it frames stdio it
 `general.positionEncodings = ["utf-8", "utf-16"]`, opens one file, waits for
 diagnostics, asks for a definition, and converts every returned range back to a
 byte offset. With `--expect`, the definition must start on that exact substring or
-the probe exits non-zero. Fixtures are in `spikes/fixtures/lsp/{rust,typescript,python}`.
+the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,python}`.
 
 ## Verdict
 
@@ -44,7 +44,7 @@ the probe exits non-zero. Fixtures are in `spikes/fixtures/lsp/{rust,typescript,
    with no reason.
 5. **URIs were well formed.** All returned `file://` URIs parsed, had no host, and
    preserved percent-encoding for a directory containing a space and `ü`
-   (`file:///tmp/lsp-spike%20%C3%BCn%C3%AFcode/index.ts`). Windows drive letters
+   (`file:///tmp/lsp-probe%20%C3%BCn%C3%AFcode/index.ts`). Windows drive letters
    are untested here (P0-5 owns that).
 6. **`async-lsp` 0.2 is transport-agnostic, so non-stdio costs no extra protocol
    work** — its `MainLoop::run` takes any `AsyncBufRead`/`AsyncWrite`. What it
@@ -166,18 +166,18 @@ adopt it *because* of transport: both designs are transport-agnostic.
 ```sh
 cargo install --locked rust-analyzer   # or: rustup component add rust-analyzer
 cargo run -p acpilot-lsp --example lsp_probe -- \
-  --server rust-analyzer --root spikes/fixtures/lsp/rust \
+  --server rust-analyzer --root probes/fixtures/lsp/rust \
   --file src/lib.rs --needle '日本語の関数(41)' --expect '日本語の関数' \
   -- rust-analyzer
 
 cargo run -p acpilot-lsp --example lsp_probe -- \
-  --server typescript-language-server --root spikes/fixtures/lsp/typescript \
+  --server typescript-language-server --root probes/fixtures/lsp/typescript \
   --file index.ts --needle '日本語の関数(41 + banner)' --expect '日本語の関数' \
   --init-options '{"tsserver":{"path":"<prefix>/node_modules/typescript/lib/tsserver.js"}}' \
   -- typescript-language-server --stdio
 
 cargo run -p acpilot-lsp --example lsp_probe -- \
-  --server pyright-langserver --root spikes/fixtures/lsp/python \
+  --server pyright-langserver --root probes/fixtures/lsp/python \
   --file main.py --needle '日本語の関数(41)' --expect '日本語の関数' \
   -- pyright-langserver --stdio
 ```

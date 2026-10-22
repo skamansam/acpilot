@@ -7,17 +7,44 @@ to make it unmaintainable is to let one of them grow its own copy of the logic.
 ## Before you start
 
 ```bash
+# Linux and macOS
 cargo install --locked cargo-nextest prek   # once; CI installs nextest
 prek install                                # writes .git/hooks/pre-commit
-cargo xtask check        # fmt + clippy -D warnings + nextest: what CI runs
-curl -s localhost:7777/v1/health   # after `cargo run -p acpilotd`
+cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
+curl -s localhost:7777/v1/health            # after `cargo run -p acpilotd`
 ```
+
+```powershell
+# Windows, PowerShell 5.1 or 7. Same, except the health check: `curl` there is
+# an alias for Invoke-WebRequest that rejects -s, so name the binary.
+cargo install --locked cargo-nextest prek   # once; CI installs nextest
+prek install                                # writes .git/hooks/pre-commit
+cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
+curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd`
+```
+
+The daemon answers `GET /v1/health` on port 7777 once `cargo run -p acpilotd` is
+up. Every command in both blocks is a program rather than a shell builtin, so
+the only difference between them is the HTTP client's name — nothing here
+depends on the bash an editor ships.
 
 `cargo xtask check` runs `cargo nextest run --workspace --no-fail-fast`, the
 same command as CI. `cargo test --workspace` still works for a single crate or a
 `--test` filter, but it is not the gate: nextest isolates tests in separate
 processes and skips doctests, and the local check should fail for the same
 reasons CI does.
+
+`cargo xtask check` also runs the P0-5 spike, which is not a workspace member and
+so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
+covers the repository. `cargo xtask spike` is the same steps without the
+workspace half, and it is what CI's `p0-5 spike` job runs. All of it spawns
+cargo, rustfmt, rustc and python directly instead of going through a shell,
+deliberately: a bash bundled with an editor is not part of the toolchain, Windows
+may flag it as a security risk, and several agents may run the same checks.
+`spikes/wsl-helper/check.ps1`/`check.cmd` are wrappers around that same command
+for PowerShell and cmd.exe callers. Use PowerShell, cmd, or the distro's own
+shell for the distro half — not `bash.exe` out of an application's install
+directory.
 
 `.pre-commit-config.yaml` is the commit-time version of that gate, run by
 [prek](https://prek.j178.dev). It runs `cargo fmt`, clippy with `-D warnings`,
@@ -58,8 +85,9 @@ CI; `cargo xtask check` invokes exactly that command.
 
 Two suites are contracts rather than coverage, and should not be weakened:
 
-- `acpilot-proto/tests/openapi_snapshot.rs` — regenerate deliberately with
-  `INSTA_UPDATE=always cargo test -p acpilot-proto` and review the diff.
+- `acpilot-proto/tests/openapi_snapshot.rs` — regenerate deliberately and
+  review the diff: `INSTA_UPDATE=always cargo test -p acpilot-proto` in bash or
+  zsh, `$env:INSTA_UPDATE='always'; cargo test -p acpilot-proto` in PowerShell.
 - `acpilot-proto/tests/wire_contract.rs` — every schema, parsed and re-serialised.
   A failure here means the wire moved, not that the test is stale.
 

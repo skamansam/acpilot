@@ -68,10 +68,26 @@ question that would be expensive to get wrong.
   - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
   - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
 
-- [ ] **P0-4 · SSH PTY + agent spawn** (1d)
+- [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
   - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.
   - **Answer:** does ACP over an SSH `exec` channel behave (line buffering, stderr, exit codes, resize)?
   - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-spike` prints a real ACP session from inside the container.
+  - **Result:** `spikes/ssh-spike` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, `russh` 0.64.1.
+    No usable container runtime here (Docker Desktop's WSL integration is off, rootless podman's socket
+    refuses), so `sshd.sh` runs the distro's own `sshd` unprivileged on `127.0.0.1:2222` with a throwaway
+    host key and key-only auth — same server, same channels, minus the process boundary that P0-4 is not
+    about. **The exec channel is a byte stream, not a message channel:** 103 JSON lines written one at a
+    time arrived in 20–33 `DATA` events, up to 37 frames in one event (largest 6,007 B), so the client
+    must buffer and split on `\n`; zero frames straddled an event on loopback, which is the conservative
+    case and not a guarantee. stderr arrives as `EXTENDED_DATA ext=1` and the exit code survives (probe
+    exits 3), so a frame stream is never polluted by an agent's warnings — the spike fails the run if it is.
+    A PTY over the hop takes a `window_change` from `40 100` to `50 120` while a program watches, and `tty`
+    answers a real `/dev/pts/N`, so resize is a channel message rather than a reconnect. Cost is the
+    connection, not the messages: connect+auth 70.7–113.9 ms, then an exec round trip 44.7–49.8 ms and the
+    whole 103-frame ACP exchange 43.1–51.4 ms (5 runs) — connect once per host and multiplex, the same
+    verdict as P0-5 from a different transport. Numbers, the harness and what P8-1 inherits:
+    `docs/notes/ssh-agent.md`. The agent is a mock speaking real ACP methods; P0-1 already ran two real
+    agents over stdio, and the question here was whether SSH preserves their framing.
 
 - [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
   - On a Windows box (CI runner or VM): enumerate distros, `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON line, get one back.

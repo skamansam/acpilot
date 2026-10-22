@@ -67,6 +67,15 @@ question that would be expensive to get wrong.
   - Verify the pin actually builds clean from crates.io alone (no `zed/` checkout, no network beyond the lockfile): this is where the `zed-font-kit` git dependency and any missing feature will bite.
   - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
   - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
+  - **Result so far (2026-10-21): the build half passes, the latency half is not measurable here.** `spikes/gpui-pin`
+    links gpui 0.2.2 from crates.io alone — 48.5 s release build, no git dependency, no `zed/` checkout, no
+    nightly — so the "cannot be built from a clean vendored tree" veto does not fire. Two costs came out of it:
+    the graph needs **`libc` held at ≤ 0.2.189** (gpui → `gpui_http_client` → `zed-async-tar` → `xattr` 0.2.3,
+    which uses `libc::ENOATTR`; 0.2.190 dropped it on Linux, bisected), and the Linux link needs
+    `libxkbcommon-x11`'s dev symlink even with the X11 feature off. No paint numbers: this box has no `/dev/dri`
+    and Mesa reports llvmpipe with `Accelerated: no`, so keystroke→paint would measure the CPU rasteriser and
+    veto the framework for a property of the test machine — the WSL1-as-WSL2 mistake again. P0-3 stays open
+    until a GPU machine runs the harness in `docs/notes/gui-bench.md`.
 
 - [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
   - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.

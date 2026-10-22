@@ -487,7 +487,7 @@ expression: document
         "type": "string"
       },
       "ErrorBody": {
-        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`not_found`, `conflict`,\n`permission_denied`, `host_unavailable`, `agent_failed`, `protocol`, `io`).\nClients switch on `code`; `message` is for humans and may be reworded.",
+        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`; `message` is for humans and may be reworded.",
         "properties": {
           "code": {
             "description": "Stable identifier for the failure class.",
@@ -947,7 +947,7 @@ expression: document
         "type": "string"
       },
       "LspServerSummary": {
-        "description": "A language server as returned by `GET /v1/lsp`.",
+        "description": "A language server as returned by `GET /v1/lsp/servers`.",
         "properties": {
           "command": {
             "description": "Command that was spawned.",
@@ -1845,7 +1845,7 @@ expression: document
         "type": "object"
       },
       "TerminalSummary": {
-        "description": "A terminal as returned by `GET /v1/sessions/{id}/terminals`.",
+        "description": "A terminal as returned by `GET /v1/terminals`.",
         "properties": {
           "alive": {
             "description": "Whether the child process is still running.",

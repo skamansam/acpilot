@@ -17,7 +17,7 @@ pub struct TerminalSize {
     pub rows: u16,
 }
 
-/// A terminal as returned by `GET /v1/sessions/{id}/terminals`.
+/// A terminal as returned by `GET /v1/terminals`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TerminalSummary {
     /// Terminal identifier.

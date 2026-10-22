@@ -79,7 +79,7 @@ kind = "lm_studio"                 # or "open_ai_compatible"
 label = "LM Studio (this machine)"
 base_url = "http://127.0.0.1:1234"
 enabled = true
-# credential_ref = "keyring:lmstudio/work"
+# credential_ref = "keyring:work/lmstudio"
 ```
 
 Recipes live one directory over, one file per model-plus-prompt:

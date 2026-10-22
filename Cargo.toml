@@ -115,6 +115,9 @@ argon2 = "0.6"
 insta = { version = "1", features = ["json"] }
 http-body-util = "0.1"
 proptest = "1"
+# The registry watches a file, so its tests need a real directory to write into
+# and a real rename to replace a file.
+tempfile = "3"
 
 [workspace.dependencies.windows]
 version = "0.62"

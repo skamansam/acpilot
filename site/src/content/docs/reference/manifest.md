@@ -20,7 +20,7 @@ name = "Claude Code"
 transport = "acp-stdio"
 command = "npx"
 args = ["-y", "@zed-industries/claude-code-acp"]
-env = { ANTHROPIC_API_KEY = "keyring:claude-code/work" }
+env = { ANTHROPIC_API_KEY = "keyring:claude-code" }
 restart = "on-crash"
 
 [[agents]]
@@ -60,6 +60,10 @@ restart = "on-crash"
 | `pty` | Program driven through a PTY | `command`, `parser`, and a `sentinel`; `idle_timeout_ms` is the backstop |
 | `http-jsonrpc` | ACP over HTTP | `url`; used for remote agents |
 
+These are the spellings to write. The snake_case form the API returns
+(`acp_stdio`) is accepted too, so a value copied out of `GET /v1/agents` can be
+pasted in unchanged — but a typo is still an error that lists the valid values.
+
 The bridge in [remote control](../../flight-test/remote-control/) is the mirror
 image: there the daemon is the ACP **server**, and a remote driver is the client.
 It is configured in `config.toml` rather than in this file, because it is a
@@ -69,13 +73,17 @@ property of the daemon, not of an agent.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `id` | string | Stable identifier; used by `--agent` and in the API |
-| `name` | string | Display name |
+| `id` | string | Stable identifier; lowercase, used by `--agent` and in the API |
+| `name` | string | Display name; defaults to the id |
+| `description` | string | One sentence on what the agent is for |
 | `transport` | enum | One of the three above |
 | `command` | string | Executable, resolved on the **host** the workspace lives on |
 | `args` | string[] | Passed verbatim |
-| `env` | table | Values may be `keyring:<agent>/<profile>` references |
-| `restart` | enum | `never` or `on-crash` (max 3 attempts) |
+| `env` | table | Literal values (`NO_COLOR = "1"`), or `keyring:<name>` references |
+| `url` | string | `http-jsonrpc` only: where the agent answers (http or https) |
+| `auth` | string | `http-jsonrpc` only: a `keyring:` reference. A plaintext token is refused |
+| `restart` | enum | `never` (the default) or `on-crash` (max 3 attempts) |
+| `allow_cross_profile` | bool | Required before a `keyring:<profile>/<name>` reference is accepted |
 | `parser` | string | PTY only: `plain-transcript`, `ansi-transcript`, or `script:<path>` |
 | `prompt_row` | string | PTY only: text that identifies the input row, so chrome can be cut away |
 | `sentinel` | string | PTY only: the input row back at rest — the primary turn-complete signal |
@@ -89,9 +97,19 @@ A manifest is checked before use, not at spawn time:
 
 - Unknown keys are errors (same rule as configuration).
 - `transport` must be one of the three, and its required fields must be present.
+- A field that belongs to another transport is an error too. `sentinel` on an
+  `acp-stdio` agent is a misunderstanding worth reporting, not a typo worth
+  ignoring — and a key that silently does nothing is how a file stops matching
+  the behaviour somebody believes it has.
 - `id` must be unique within the profile.
 - `keyring:` references are resolved eagerly, so a missing credential is reported
-  when the profile loads rather than mid-turn.
+  when the profile loads rather than mid-turn. `keyring:<name>` means this
+  profile; `keyring:<profile>/<name>` means another one and additionally needs
+  `allow_cross_profile = true`.
+
+A file that fails any check does not load at all, and a profile whose file
+fails to reload keeps the agents it already had: the old snapshot is only
+replaced by a complete, valid file.
 
 <Aside type="note" title="Why a manifest and not a registry service">
 Because the file is reviewable, diffable, and portable. A registry would need

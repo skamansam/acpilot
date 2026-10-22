@@ -27,7 +27,7 @@ label = "LM Studio (this machine)"
 base_url = "http://127.0.0.1:1234"
 enabled = true
 # Only for servers started with a token (lms server start --token):
-# credential_ref = "keyring:lmstudio/work"
+# credential_ref = "keyring:work/lmstudio"
 ```
 
 ```bash
@@ -123,6 +123,6 @@ implying that Acpilot broke.
 <Aside type="tip" title="Credentials are references, not values">
 `credential_ref` names a keyring entry, exactly like a profile secret. The API
 returns the reference; it never returns the token, and `acpilot provider show`
-prints `keyring:lmstudio/work` rather than something you should not paste into an
+prints `keyring:work/lmstudio` rather than something you should not paste into an
 issue.
 </Aside>

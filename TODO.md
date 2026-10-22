@@ -225,7 +225,49 @@ question that would be expensive to get wrong.
 The heart. Headless: no daemon, no UI, tested against a **mock agent** so tests are fast
 and deterministic.
 
-- [ ] **P2-1** `acpilot-agent::registry`: load the active profile's `agents.toml` (P4-2), validate manifests (`transport ∈ {acp-stdio, pty, http-jsonrpc}`, required fields per transport), resolve `keyring:` secrets, expose `AgentSpec`. Hot-reload on file change.
+- [x] **P2-1** `acpilot-agent::registry`: load the active profile's `agents.toml` (P4-2), validate manifests (`transport ∈ {acp-stdio, pty, http-jsonrpc}`, required fields per transport), resolve `keyring:` secrets, expose `AgentSpec`. Hot-reload on file change. — **done 2026-10-22**
+  - **Result:** four modules in `acpilot-agent` — `manifest` (schema → `AgentSpec`), `secret`
+    (references and the resolver seam), `registry` (snapshot + watcher), `error` — with 38 tests.
+    The shape of each transport is in the type: `Transport::AcpStdio { command }`,
+    `Pty { command, profile }`, `HttpJsonRpc { url, auth }`, so "an `acp-stdio` agent has a
+    command" cannot be forgotten by the supervisor that consumes it. Validation refuses rather
+    than guesses: an unknown key, a field the chosen transport has no meaning for (`sentinel`
+    on an ACP agent), a missing per-transport field (acp-stdio `command`; pty `command`,
+    `parser`, `sentinel`; http `url`), a duplicate or malformed `id`, a non-http `url`, and
+    `idle_timeout_ms = 0` — the one setting P0-2 showed truncates turns. Defaults are the
+    measured ones: pty idle backstop 5 s, submit delay 50 ms (P2-7 owns tuning it), restart
+    `never` (the docs write `on-crash` explicitly, so it is not the default).
+    **Secrets are resolved at load, not mid-turn.** `Secret` prints `<redacted>` in `Debug` and
+    `Display`, so an `AgentSpec` can be logged; `expose()` is the single path to a child's
+    environment. `env` values may be literals (`NO_COLOR = "1"`) or `keyring:<name>`
+    references — the prefix decides, so a secret cannot arrive as a literal by accident —
+    while `auth` must be a reference, because a plaintext token there has no non-secret
+    reading. The grammar is P4-5's: `keyring:<name>` is this profile, and
+    `keyring:<profile>/<name>` additionally requires `allow_cross_profile = true`, refused
+    here rather than left to the resolver. The backend is injected (`SecretResolver`), so this
+    crate has no keyring dependency yet; P4-5 supplies the OS keyring, tests supply
+    `MapResolver`, and the namespace (`acpilot` service, `<profile>/<name>` account) is decided
+    in one place when that lands.
+    **Reload is atomic and remembers why it failed.** A new file is parsed into a fresh
+    `Vec<Arc<AgentSpec>>` and only a complete success replaces the old one, so a typo while
+    sessions run costs a status line, not three dead sessions; `revision()` is unchanged and
+    `last_error()` carries the reason. A byte-identical save returns `false` rather than
+    bumping the revision, so UIs are not asked to refresh for whitespace. Watching holds the
+    **directory**, not the file: the tests cover a plain save, an editor's
+    write-temp-then-rename save (which replaces the inode and would kill a file watch after
+    one save), an unrelated `lsp.toml` edit in the same directory, a broken save followed by a
+    good one, and that dropping the watcher stops it. A burst of events from one save is
+    coalesced over 50 ms.
+    Three documents disagreed with each other and with the plan, and the code settled it:
+    README's snippet was a third schema (`[agents.<id>]` with `label`, `prompt`, and an
+    `oauth:` scheme that does not exist), `reference/manifest.md` had the keyring order
+    reversed (`keyring:<agent>/<profile>`) and no `url`/`auth` rows at all, and `secrets.md`
+    used `api_key`, which is not a field. All three now show the array form with `env`. On
+    spelling: the manifest accepts the documents' `acp-stdio` *and* the API's `acp_stdio`, so a
+    value copied out of `GET /v1/agents` can be pasted in, while the wire enum and its
+    snapshot are untouched. Not in this task: the keyring backend and namespace (P4-5), the
+    spawn (P2-2), running a `script:<path>` parser (P2-7), and availability — whether `command`
+    is on `PATH` is a host question, not a parse.
 - [ ] **P2-2** `acpilot-agent::supervisor`: spawn an `acp-stdio` agent via `agent-client-protocol` `process` feature; capture stderr into a ring buffer for the session log; restart policy (`never|on-crash`, max 3); clean process-tree kill (job object on Windows).
 - [ ] **P2-3** `acpilot-agent::session`: wrap `initialize`/`session/new`/`session/load`/`session/prompt`/`session/cancel`; translate ACP `session/update` into our `SessionEvent` enum (`MessageChunk{role}`, `Thought`, `ToolCall{status}`, `Plan`, `ModeChanged`, `Notice`, `Compaction`, `CommandsChanged`) with stable sequence numbers.
 - [ ] **P2-4** `acpilot-agent::fs`: implement ACP client-side `fs/read_text_file` and `fs/write_text_file` against the `Host` trait, with a **shadow-write guard**: writes go to disk only if the workspace policy allows, otherwise a pending grant is created and the call blocks.

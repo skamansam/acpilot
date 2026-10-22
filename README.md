@@ -138,29 +138,35 @@ API, never ambient state, so a client cannot accidentally act as the wrong ident
 
 ```toml
 # ~/.config/acpilot/profiles/work/agents.toml
-[agents.claude]
-label     = "Claude Code"
+schema_version = 1
+
+[[agents]]
+id        = "claude"
+name      = "Claude Code"
 transport = "acp-stdio"
 command   = "npx"
 args      = ["-y", "@zed-industries/claude-code-acp"]
 env       = { ANTHROPIC_API_KEY = "keyring:anthropic" }
 
-[agents.freebuff]
-label     = "Freebuff"
-transport = "pty"            # program-as-agent: no ACP, we drive it in a PTY
+[[agents]]
+id        = "freebuff"
+transport = "pty"                 # program-as-agent: no ACP, we drive it in a PTY
 command   = "freebuff"
-prompt    = "chat"           # how to hand it a turn
-parser    = "ansi-transcript" # built-in transcript adapters, see TODO P2-7
+parser    = "ansi-transcript"     # built-in transcript adapters, see TODO P2-7
+sentinel  = "▍Enter a coding task" # the input row back at rest ends the turn
 
-[agents.devin-remote]
+[[agents]]
+id        = "devin-remote"
 transport = "http-jsonrpc"
 url       = "https://devin.internal/acp"
-auth      = "oauth:devin"
+auth      = "keyring:devin"
 ```
 
 `transport = "acp-stdio"` is the native path and the one implemented first. `pty` is the
 "run any program as an agent" path: launch it in a PTY, stream the screen, detect turns,
 and expose it through the same session/turn API. `http-jsonrpc` covers hosted agents.
+`keyring:<name>` resolves in the profile the file belongs to; reaching into another one
+needs `keyring:<profile>/<name>` *and* `allow_cross_profile = true` on that agent.
 
 ### Profiles
 
@@ -185,7 +191,7 @@ silently is the failure mode with the worst consequences.
 
 | Scoped to a profile | Global |
 | --- | --- |
-| Agents and their credentials (`keyring:<profile>/<name>`) | Daemon settings (bind, token, log level) |
+| Agents and their credentials (`keyring:<name>`, resolved in this profile) | Daemon settings (bind, token, log level) |
 | Language servers and their settings | Profile registry and `active_profile` |
 | Permission policy, workspace trust, LSP trust pins | Host definitions (one machine, many identities) |
 | Editor, theme, keymap and UI preferences | |

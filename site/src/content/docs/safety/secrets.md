@@ -14,14 +14,17 @@ handled with three rules, in order.
 # agents.toml — what is on disk
 [[agents]]
 id = "claude-code"
+transport = "acp-stdio"
 command = "npx"
 args = ["-y", "@zed-industries/claude-code-acp"]
-api_key = "keyring:claude-code/work"
+env = { ANTHROPIC_API_KEY = "keyring:claude-code" }
 ```
 
-The value is a reference. The secret lives in the OS keyring under a
-profile-scoped name (`acpilot:work:claude-code`), so a copied config directory
-does not copy credentials.
+The value is a reference. The secret lives in the OS keyring under the service
+`acpilot` and the account `work/claude-code`, so a copied config directory does
+not copy credentials. The reference names only the entry; the profile is the
+directory the file lives in, which is why the same line means two different
+secrets in `profiles/work` and `profiles/personal`.
 
 ## 2. The API never returns a secret
 

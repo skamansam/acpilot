@@ -3,7 +3,7 @@ title: CLI
 description: A typed client for the daemon, designed so scripts can fly too.
 ---
 
-<span class="pill pill--boarding">boarding</span> &nbsp; `acpilot version` and the filesystem `ext` verbs exist today
+<span class="pill pill--boarding">boarding</span> &nbsp; `acpilot version`, the filesystem `ext` verbs, and `secret` exist today
 
 The CLI is not a second implementation of the product. It is a client of the
 daemon API with a nicer surface, which means anything the TUI can do, a script
@@ -54,9 +54,9 @@ acpilot ext add --from <dir> | import-theme --from <file> --id <publisher.name>
 acpilot ext verify --all | prune [--dry-run]
 acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
+acpilot secret set|list|rm [--profile <name>]
 acpilot serve [--http]
 acpilot doctor
-acpilot setup
 ```
 
 <Aside type="note" title="`doctor` earns its place">
@@ -64,6 +64,11 @@ acpilot setup
 each key, and every agent whose command is missing. It is the first thing to run
 when something is wrong, and the first command worth building well.
 </Aside>
+
+There is no `acpilot setup`. A fresh install launches with the shipped presets; the
+first use of a profile writes that profile's `agents.toml` — starting with its
+`$schema` line — and never replaces one that already exists. `doctor` is how you
+ask what a machine is missing, not a toll gate in front of the first prompt.
 
 ## What it looks like today
 
@@ -74,6 +79,28 @@ that cannot be run in CI is a corpus experiment nobody repeats.
 acpilot recipes run corpus-scraper "list the undocumented flags" --json \
   | jq '{stop: .stop_reason, ttft: .first_token_ms, warnings}'
 ```
+
+Credentials are the one thing the CLI owns without the daemon: a machine with a
+locked keyring or a stopped daemon still needs a way to repair its secrets.
+There is no `--value` flag, because an argument is visible in shell history and
+in `ps`; the value comes from stdin.
+
+```bash
+$ printf %s "$ANTHROPIC_API_KEY" | acpilot secret set anthropic --profile work
+stored work/anthropic in the acpilot keyring
+
+$ acpilot secret list --profile work
+present  work/anthropic
+missing  work/openai
+
+$ acpilot secret rm anthropic --profile work
+removed work/anthropic from the acpilot keyring
+```
+
+`list` reads the profile's `agents.toml` to know which entries should exist — the
+keyring has no portable way to enumerate — and reports presence, never a value.
+Removing an entry that is not there exits `3`, so a script can tell the
+difference.
 
 ```bash
 $ acpilot ext verify --all

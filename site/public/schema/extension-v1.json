@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rudeboy.dev/acpilot/schema/extension-v1.json",
+  "title": "Acpilot extension manifest",
+  "description": "`extension.toml`, the entire interface between an extension and the daemon. It names files and nothing else: there is no install script and no build step, every contribution is parsed by the same reader as a user's own configuration, and a contribution path may not leave the extension directory. The file is TOML — this schema describes it, it does not replace it — and an editor reads it from the `$schema` key or a `#:schema` first line.",
+  "$comment": "Apache-2.0. Generated from crates/acpilot-extensions/src/manifest.rs by `cargo xtask schema`; edit the Rust, not this file. This is the v1 document and is frozen: a change a `schema_version = 1` loader would read differently ships as extension-v2.json.",
+  "$defs": {
+    "Contribution": {
+      "description": "One asset named by the manifest.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Which registry the asset lands in.",
+          "$ref": "#/$defs/ExtensionKind"
+        },
+        "path": {
+          "description": "Path relative to the extension directory, with forward slashes. `.` and `..` segments are refused by the loader; this pattern cannot state that, so it states the other half — no leading slash, no backslash.",
+          "type": "string",
+          "pattern": "^[^/\\\\][^\\\\]*$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ]
+    },
+    "ExtensionKind": {
+      "description": "What an extension contributes.\n\nOne extension may contribute several kinds; a \"Rust pack\" is a bundle rather\nthan a category, which is why this is a list on the summary and a single value\non each contribution.",
+      "oneOf": [
+        {
+          "description": "A colour scheme shared by TUI, GUI, and web.",
+          "type": "string",
+          "const": "theme"
+        },
+        {
+          "description": "Language-server presets.",
+          "type": "string",
+          "const": "language_servers"
+        },
+        {
+          "description": "Agent presets (ACP commands and their docs).",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "A prebuilt tree-sitter grammar plus its queries.",
+          "type": "string",
+          "const": "grammars"
+        },
+        {
+          "description": "Per-language snippets.",
+          "type": "string",
+          "const": "snippets"
+        },
+        {
+          "description": "A keymap layer.",
+          "type": "string",
+          "const": "keymap"
+        },
+        {
+          "description": "A program-as-agent transcript parser. Tier 2; not in v0.1.",
+          "type": "string",
+          "const": "transcript_parser"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "publisher",
+    "description",
+    "contributes"
+  ],
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schema_version": {
+      "description": "Schema version; `1` today.",
+      "type": "integer",
+      "const": 1,
+      "minimum": 0
+    },
+    "id": {
+      "description": "Namespaced identifier, `publisher.id`.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,39}(\\.[a-z0-9][a-z0-9_-]{0,39})+$",
+      "maxLength": 128
+    },
+    "name": {
+      "description": "Display name.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Semantic version. The store keeps versions side by side.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "publisher": {
+      "description": "Who published it, matched against the index entry.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,39}$"
+    },
+    "description": {
+      "description": "One sentence, shown by `ext list`.",
+      "type": "string"
+    },
+    "homepage": {
+      "description": "Project page, reviewed by a human before the index accepts it.",
+      "type": "string"
+    },
+    "min_acpilot": {
+      "description": "Oldest acpilot this extension supports.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "contributes": {
+      "description": "Every asset this extension contributes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Contribution"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

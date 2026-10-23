@@ -11,6 +11,7 @@ and nothing to execute.
 
 ```toml
 # extensions/acpilot.rust-pack/extension.toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/extension-v1.json"
 schema_version = 1
 id = "acpilot.rust-pack"            # publisher.id — never a bare name
 name = "Rust pack"
@@ -45,6 +46,7 @@ path = "grammars/rust"              # manifest.toml + .wasm + queries there
 
 | Field | Type | Notes |
 | --- | --- | --- |
+| `$schema` | string? | Where the JSON Schema lives. Ignored by the loader; see [Schema](#schema) |
 | `schema_version` | integer | `1` today; a newer version is refused with the version named |
 | `id` | string | `publisher.id`, lowercase, dot-separated; also the store key |
 | `name` | string | Display name |
@@ -69,6 +71,47 @@ path = "grammars/rust"              # manifest.toml + .wasm + queries there
 Extension-provided presets land in the same typed registries as everything else,
 which is why an extension cannot invent a new transport or a new permission: the
 fragment is validated by the code that already validates your own files.
+
+An `agents` fragment is the same document a profile's `agents.toml` is — one
+reader parses both, so a PTY parser or an HTTP endpoint written in a pack means
+the same thing as one written in a profile. One rule is an extension's alone: it
+may not name a credential. `env`, `auth`, and `allow_cross_profile` are refused
+in a pack, because a pack that could name `keyring:work/token` could have another
+profile's secret handed to a process it also chose. Those belong in the profile's
+own `agents.toml`, which the same schema at
+[`agents-v1.json`](../reference/manifest/) describes.
+
+## Schema
+
+The file can identify its schema, so an editor completes keys and underlines
+typos before `ext add` ever sees them:
+
+```toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/extension-v1.json"
+```
+
+That document is published at
+`https://rudeboy.dev/acpilot/schema/extension-v1.json` — JSON Schema 2020-12,
+Apache-2.0 — and generated from the same Rust type the loader parses, so it
+cannot describe a key the loader would refuse. The four built-in manifests under
+`extensions/` are validated against it in CI, and a test checks that a file the
+schema rejects is a file the loader rejects. Taplo and Even Better TOML also read
+a first line of `#:schema <url>` if you would rather keep the document free of
+editor plumbing.
+
+What the schema checks: every field's type, `additionalProperties: false`, the
+shape of `id`, `version`, and `publisher`, the seven `kind` values, and at least
+one contribution. What it cannot check, because JSON Schema has no way to say it:
+two contributions with the same kind and path, and the `.`/`..` half of the path
+rule. **The loader stays the authority** — the schema is there so its refusals
+arrive as a squiggle rather than as a surprise on the next start.
+
+The `-v1` in the name is the major version, and this URL is frozen, the same rule
+as the agent manifest's schema (D6): within v1 the document may only gain
+optional keys or enum members, anything a `schema_version = 1` loader would read
+differently ships as `extension-v2.json`, and there is no `latest.json` to go
+stale in an editor's cache. `cargo xtask schema` regenerates both published
+documents together.
 
 ## Validation, before anything loads
 

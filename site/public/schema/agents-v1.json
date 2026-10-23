@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rudeboy.dev/acpilot/schema/agents-v1.json",
+  "title": "Acpilot agent manifest",
+  "description": "`agents.toml`, the file that tells Acpilot what an agent is and how to start it. One `[[agents]]` block per agent; `transport` decides which fields that block may carry. The file is TOML — this schema describes it, it does not replace it — and an editor reads it from the `$schema` key or a `#:schema` first line.",
+  "$comment": "Apache-2.0. Generated from crates/acpilot-agent/src/manifest.rs by `cargo xtask schema`; edit the Rust, not this file. This is the v1 document and is frozen: a change a `schema_version = 1` loader would read differently ships as agents-v2.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agents"
+  ],
+  "properties": {
+    "$schema": {
+      "description": "This document, so an editor can complete and check the file. Ignored by the loader.",
+      "type": "string",
+      "format": "uri"
+    },
+    "schema_version": {
+      "description": "Manifest schema major version; `1` is the only one this build speaks.",
+      "type": "integer",
+      "const": 1
+    },
+    "agents": {
+      "description": "Every agent in the profile. May not be empty: delete the file instead of emptying it.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "title": "acp-stdio agent",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "transport",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "description": "Stable identifier: lowercase letters, digits, `-`, and `_`, starting with\na letter or digit, at most 64 characters, unique within the profile.",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "name": {
+                "description": "Display name. Defaults to `id`.",
+                "type": "string"
+              },
+              "description": {
+                "description": "One sentence on what the agent is for.",
+                "type": "string"
+              },
+              "transport": {
+                "description": "How the daemon drives it: `acp-stdio`, `pty`, or `http-jsonrpc`.",
+                "type": "string",
+                "enum": [
+                  "acp-stdio",
+                  "acp_stdio"
+                ]
+              },
+              "command": {
+                "description": "`acp-stdio` and `pty`: the executable, resolved on the host the workspace\nlives on.",
+                "type": "string"
+              },
+              "args": {
+                "description": "`acp-stdio` and `pty`: arguments, passed verbatim.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "env": {
+                "description": "`acp-stdio` and `pty`: environment for the child. A value is a literal\n(`NO_COLOR = \"1\"`) or a `keyring:<name>` reference, resolved when the\nprofile loads.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {}
+              },
+              "restart": {
+                "description": "What the supervisor does when the process dies. Defaults to `never`.",
+                "$ref": "#/$defs/Restart"
+              },
+              "allow_cross_profile": {
+                "description": "Required before a `keyring:<profile>/<name>` reference is accepted.",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          {
+            "title": "pty agent",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "transport",
+              "command",
+              "parser",
+              "sentinel"
+            ],
+            "properties": {
+              "id": {
+                "description": "Stable identifier: lowercase letters, digits, `-`, and `_`, starting with\na letter or digit, at most 64 characters, unique within the profile.",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "name": {
+                "description": "Display name. Defaults to `id`.",
+                "type": "string"
+              },
+              "description": {
+                "description": "One sentence on what the agent is for.",
+                "type": "string"
+              },
+              "transport": {
+                "description": "How the daemon drives it: `acp-stdio`, `pty`, or `http-jsonrpc`.",
+                "type": "string",
+                "enum": [
+                  "pty"
+                ]
+              },
+              "command": {
+                "description": "`acp-stdio` and `pty`: the executable, resolved on the host the workspace\nlives on.",
+                "type": "string"
+              },
+              "args": {
+                "description": "`acp-stdio` and `pty`: arguments, passed verbatim.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "env": {
+                "description": "`acp-stdio` and `pty`: environment for the child. A value is a literal\n(`NO_COLOR = \"1\"`) or a `keyring:<name>` reference, resolved when the\nprofile loads.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {}
+              },
+              "restart": {
+                "description": "What the supervisor does when the process dies. Defaults to `never`.",
+                "$ref": "#/$defs/Restart"
+              },
+              "allow_cross_profile": {
+                "description": "Required before a `keyring:<profile>/<name>` reference is accepted.",
+                "type": "boolean",
+                "default": false
+              },
+              "parser": {
+                "description": "`pty`: `plain-transcript`, `ansi-transcript`, or `script:<path>`.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "const": "plain-transcript"
+                  },
+                  {
+                    "type": "string",
+                    "const": "ansi-transcript"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^script:.+$"
+                  }
+                ]
+              },
+              "prompt_row": {
+                "description": "`pty`: text that identifies the input row, so chrome above it can be cut\naway.",
+                "type": "string"
+              },
+              "sentinel": {
+                "description": "`pty`: the input row back at rest — the primary turn-complete signal.",
+                "type": "string"
+              },
+              "exit_command": {
+                "description": "`pty`: what to type to leave cleanly (for example `/exit`); `Ctrl-D` is\nnot universal.",
+                "type": "string"
+              },
+              "submit_delay_ms": {
+                "description": "`pty`: gap between the text and the Enter key, in milliseconds. 50 by\ndefault, because one write of `text\\r` is a paste rather than a submit in\nat least one TUI.",
+                "type": "integer",
+                "minimum": 0
+              },
+              "idle_timeout_ms": {
+                "description": "`pty`: backstop when the sentinel does not fire, in milliseconds. 5000 by\ndefault; `0` is refused.",
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "title": "http-jsonrpc agent",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "transport",
+              "url"
+            ],
+            "properties": {
+              "id": {
+                "description": "Stable identifier: lowercase letters, digits, `-`, and `_`, starting with\na letter or digit, at most 64 characters, unique within the profile.",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "name": {
+                "description": "Display name. Defaults to `id`.",
+                "type": "string"
+              },
+              "description": {
+                "description": "One sentence on what the agent is for.",
+                "type": "string"
+              },
+              "transport": {
+                "description": "How the daemon drives it: `acp-stdio`, `pty`, or `http-jsonrpc`.",
+                "type": "string",
+                "enum": [
+                  "http-jsonrpc",
+                  "http_json_rpc"
+                ]
+              },
+              "restart": {
+                "description": "What the supervisor does when the process dies. Defaults to `never`.",
+                "$ref": "#/$defs/Restart"
+              },
+              "allow_cross_profile": {
+                "description": "Required before a `keyring:<profile>/<name>` reference is accepted.",
+                "type": "boolean",
+                "default": false
+              },
+              "url": {
+                "description": "`http-jsonrpc`: where the agent answers; `http` or `https`.",
+                "type": "string",
+                "format": "uri"
+              },
+              "auth": {
+                "description": "`http-jsonrpc`: a `keyring:` reference. A plaintext token is refused.",
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "Restart": {
+      "description": "What the supervisor does when an agent's process dies.",
+      "oneOf": [
+        {
+          "description": "Leave it dead and report it. The default: the examples write\n`on-crash` where they mean it, so restarting silently would be a\nsurprise nobody asked for.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Restart it, up to the attempt limit the supervisor owns (three tries).",
+          "type": "string",
+          "const": "on-crash"
+        }
+      ]
+    }
+  }
+}

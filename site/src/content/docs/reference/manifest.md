@@ -12,6 +12,7 @@ adding an agent should never require a rebuild.
 
 ```toml
 # ~/.config/acpilot/profiles/work/agents.toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/agents-v1.json"
 schema_version = 1
 
 [[agents]]
@@ -77,9 +78,9 @@ property of the daemon, not of an agent.
 | `name` | string | Display name; defaults to the id |
 | `description` | string | One sentence on what the agent is for |
 | `transport` | enum | One of the three above |
-| `command` | string | Executable, resolved on the **host** the workspace lives on |
-| `args` | string[] | Passed verbatim |
-| `env` | table | Literal values (`NO_COLOR = "1"`), or `keyring:<name>` references |
+| `command` | string | `acp-stdio` and `pty`: executable, resolved on the **host** the workspace lives on |
+| `args` | string[] | `acp-stdio` and `pty`: passed verbatim |
+| `env` | table | `acp-stdio` and `pty`: literal values (`NO_COLOR = "1"`), or `keyring:<name>` references |
 | `url` | string | `http-jsonrpc` only: where the agent answers (http or https) |
 | `auth` | string | `http-jsonrpc` only: a `keyring:` reference. A plaintext token is refused |
 | `restart` | enum | `never` (the default) or `on-crash` (max 3 attempts) |
@@ -91,11 +92,43 @@ property of the daemon, not of an agent.
 | `submit_delay_ms` | integer | PTY only: gap between the text and the Enter key; one write of `text\r` is a paste, not a submit, in at least one TUI |
 | `idle_timeout_ms` | integer | PTY only: backstop when the sentinel does not fire. 5,000 avoided every truncated turn measured; smaller values did not |
 
+## Schema
+
+The file identifies its schema, so an editor completes keys and underlines typos
+before the loader ever sees them:
+
+```toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/agents-v1.json"
+```
+
+That document is published at
+`https://rudeboy.dev/acpilot/schema/agents-v1.json` — JSON Schema 2020-12,
+Apache-2.0 — and generated from the same Rust types the loader parses, so it
+cannot describe a key the loader would refuse. A test validates the presets we
+ship against it and checks that a file the schema rejects is a file the loader
+rejects. If you would rather keep the document free of editor plumbing, Taplo and
+Even Better TOML also read a first line of `#:schema <url>`.
+
+What the schema checks: the root keys, `schema_version`, and for each transport
+the fields it may carry and the ones it cannot load without. What it cannot
+check, because JSON Schema has no way to say it: a duplicate `id`, and a
+`keyring:` reference that does not resolve. **The loader stays the authority**;
+the schema is there so its refusals arrive as a squiggle rather than as a
+surprise on the next start.
+
+The `-v1` in the name is the major version, and this URL is frozen. Within v1 the
+document may only gain optional keys or enum members; any change a
+`schema_version = 1` loader would read differently ships as `agents-v2.json`
+alongside `schema_version = 2`, and the v1 file is never edited again. There is
+deliberately no `latest.json`: a moving URL is how an editor's cached schema
+falls out of step with the loader without anyone noticing.
+
 ## Validation
 
 A manifest is checked before use, not at spawn time:
 
-- Unknown keys are errors (same rule as configuration).
+- Unknown keys are errors (same rule as configuration). The one exception is
+  `"$schema"`, which is an editor's and is ignored here.
 - `transport` must be one of the three, and its required fields must be present.
 - A field that belongs to another transport is an error too. `sentinel` on an
   `acp-stdio` agent is a misunderstanding worth reporting, not a typo worth
@@ -105,7 +138,9 @@ A manifest is checked before use, not at spawn time:
 - `keyring:` references are resolved eagerly, so a missing credential is reported
   when the profile loads rather than mid-turn. `keyring:<name>` means this
   profile; `keyring:<profile>/<name>` means another one and additionally needs
-  `allow_cross_profile = true`.
+  `allow_cross_profile = true`. The entry lives in the OS keyring under the
+  `acpilot` service, with the account `<profile>/<name>` in both forms — so the
+  same line means two different secrets in `profiles/work` and `profiles/personal`.
 
 A file that fails any check does not load at all, and a profile whose file
 fails to reload keeps the agents it already had: the old snapshot is only

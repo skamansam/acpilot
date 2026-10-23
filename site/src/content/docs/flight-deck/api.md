@@ -15,9 +15,15 @@ short version.
 
 ```bash
 GET /v1/health          # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1"}
+GET /v1/agents          # configured agents, with availability (available | missing)
 GET /v1/openapi.json    # the contract, generated from the types
 GET /docs               # Swagger UI, only with --features docs
 ```
+
+`GET /v1/agents` answers from the active profile's `agents.toml` and reports
+availability from a `PATH` lookup on the daemon's host — no process is started,
+so listing agents cannot launch one. With no profile loaded the list is empty;
+handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
 
 ## Planned
 
@@ -25,7 +31,7 @@ GET /docs               # Swagger UI, only with --features docs
 | --- | --- |
 | Hosts | `GET/POST /v1/hosts`, `POST /v1/hosts/{id}/test` |
 | Workspaces | `GET/POST /v1/workspaces` |
-| Agents | `GET /v1/agents`, `POST /v1/agents/{id}/trust` |
+| Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
 | Sessions | `POST /v1/sessions`, `POST /v1/sessions/{id}/prompt`, `POST /v1/sessions/{id}/cancel` |
 | Events | `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` replay) |
 | Files | `GET/PUT /v1/files` with ETag and `If-Match`, `GET /v1/files/list` for directories |

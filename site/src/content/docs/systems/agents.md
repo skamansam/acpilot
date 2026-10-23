@@ -72,8 +72,41 @@ same reason your shell asks before running a downloaded script.
 
 ## What is built today
 
-Nothing in this page runs yet. P2 builds the registry, supervisor, and session
-layer headless, tested against a mock agent, so the daemon is trustworthy before
-a UI is built on top of it. Model-backed agents arrive in P4.5, on top of that
-same layer, and they inherit whatever P2 gets right — or wrong — without a
-second implementation to blame.
+The manifest and the process come first, because every later layer is built
+against them. `agents.toml` is parsed and validated, secrets are resolved when
+the profile loads, and the registry keeps one validated snapshot that a bad save
+cannot half-replace. The supervisor starts an `acp-stdio` agent, keeps its stderr
+in a bounded ring that is readable while it runs, restarts it on a crash when the
+manifest says `on-crash`, and ends the process tree rather than only the wrapper
+when a session closes.
+
+`GET /v1/agents` lists what the daemon was given, in declaration order, with
+`available` or `missing` from a `PATH` lookup on the daemon's host. That status
+costs no process: listing agents cannot start one. A handshake-dependent
+`unhealthy` or a trust-pinned `untrusted` arrives with sessions and trust storing,
+not before.
+
+A session is the client side of the protocol. It takes the supervisor's two
+pipes and speaks ACP over them, so the same code serves a child process, an SSH
+host, or a test. `initialize` completes before the handle is returned — no caller
+holds a session whose capabilities it has not seen — and every `session/update`
+becomes one numbered event before it is broadcast, so a slow subscriber drops
+events but cannot renumber them. One turn runs at a time: a second prompt is
+refused here rather than left to whatever an agent does with two. `session/cancel`
+is a notification, so it reaches an agent mid-turn.
+
+Two refusals matter while the rest is unbuilt. A permission request is answered
+with the agent's own reject option and recorded as a notice, because no grant
+should be implied by a session that has no policy yet. A request for a method
+this build does not implement — `fs/*`, `terminal/create` — is answered with
+`MethodNotFound` naming the method: not advertising a capability does not stop an
+agent asking, and a request with no answer is a hang, not a refusal. All of it is
+exercised against a mock agent that runs as a real child process, so the pipes,
+the handshake and the tree kill are run in CI rather than only type-checked.
+
+The permission broker (P2-6), the filesystem callbacks (P2-4) and terminals
+(P2-5) are not built yet. `pty` and `http-jsonrpc` agents are accepted by the
+schema but refused by the supervisor until their phases land, so the diagram
+above is still the target, not a full description of today's daemon.
+Model-backed agents arrive in P4.5, on top of the same layer, and inherit
+whatever P2 gets right — or wrong — without a second implementation to blame.

@@ -79,7 +79,7 @@ may not name a credential. `env`, `auth`, and `allow_cross_profile` are refused
 in a pack, because a pack that could name `keyring:work/token` could have another
 profile's secret handed to a process it also chose. Those belong in the profile's
 own `agents.toml`, which the same schema at
-[`agents-v1.json`](../reference/manifest/) describes.
+[`agents-v1.json`](../../reference/manifest/) describes.
 
 ## Schema
 

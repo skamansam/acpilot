@@ -112,6 +112,35 @@ pub enum ExtensionError {
         kind: &'static str,
     },
 
+    /// An `agents.toml` the agent manifest reader refused.
+    ///
+    /// The message is the reader's own, because there is one reader: it already
+    /// names the file or the agent, and re-wording it here would make the same
+    /// mistake read differently in `ext add` and in the registry.
+    #[error("{message}")]
+    AgentManifest {
+        /// The reader's message.
+        message: String,
+    },
+
+    /// An extension's agent asked for a credential.
+    ///
+    /// Only the profile's own `agents.toml` may do that: an extension that could
+    /// name `keyring:work/token` would be able to have another profile's secret
+    /// handed to a process it also chose.
+    #[error(
+        "{path}: agent {agent:?} sets {field}, which an extension may not; \
+         put it in the profile's own agents.toml"
+    )]
+    AgentCredential {
+        /// Path, relative to the extension root.
+        path: String,
+        /// Agent identifier.
+        agent: String,
+        /// Field name as written in the file.
+        field: &'static str,
+    },
+
     /// A theme is incomplete, or its `extends` chain is.
     #[error("theme {id}: {message}")]
     Theme {

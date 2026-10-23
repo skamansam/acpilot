@@ -199,4 +199,51 @@ fn help_is_stable() {
     let ext = acpilot(&["ext", "--help"]);
     assert!(ext.status.success());
     insta::assert_snapshot!("ext_help", stdout(&ext));
+
+    let secret = acpilot(&["secret", "--help"]);
+    assert!(secret.status.success());
+    insta::assert_snapshot!("secret_help", stdout(&secret));
+}
+
+#[test]
+fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
+    // `acpilot()` pipes an empty stdin. The command must refuse that rather than
+    // store a zero-length credential, and it must do so before any keyring call.
+    let output = acpilot(&["secret", "set", "anthropic"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("empty"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_secret_name_that_is_a_path_is_a_usage_error() {
+    for args in [
+        vec!["secret", "set", "../escape"],
+        vec!["secret", "rm", "work/api key"],
+    ] {
+        let output = acpilot(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).is_empty(), "{args:?} says why");
+    }
+}
+
+#[test]
+fn secret_list_does_not_need_a_keyring_to_report_a_missing_manifest() {
+    let config = TempDir::new();
+    let output = acpilot(&[
+        "secret",
+        "list",
+        "--config",
+        config.path().to_str().expect("utf-8 path"),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("agents.toml"),
+        "{}",
+        stdout(&output)
+    );
 }

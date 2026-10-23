@@ -52,7 +52,7 @@ fn the_built_ins_load_through_the_public_loader() {
     }
     for preset in registry.agents() {
         assert_eq!(preset.extension_id, "acpilot.agents");
-        assert!(!preset.command.is_empty(), "{} has no command", preset.id);
+        assert!(preset.command().is_some(), "{} has no command", preset.id());
     }
 }
 
@@ -144,18 +144,20 @@ fn the_audit_catches_an_unreadable_theme() {
 #[test]
 fn docs_theme_data_is_current() {
     let registry = Registry::built_in().expect("built-ins load");
-    let generated = docs::themes_json(&registry);
+    let generated: serde_json::Value =
+        serde_json::from_str(&docs::themes_json(&registry)).expect("generated JSON");
 
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/src/data/themes.json");
     let committed = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}; run `cargo xtask docs-data`", path.display()));
+    let committed: serde_json::Value = serde_json::from_str(&committed).expect("valid JSON");
 
+    // Compare the document, not its key order: `serde_json`'s `preserve_order`
+    // feature is decided by feature unification, so byte comparison makes this
+    // test pass or fail depending on which packages are built alongside it.
     assert_eq!(
         committed, generated,
         "site/src/data/themes.json is stale; run `cargo xtask docs-data`"
     );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&committed).expect("valid JSON")["aa_threshold"],
-        serde_json::json!(AA_NORMAL_TEXT)
-    );
+    assert_eq!(committed["aa_threshold"], serde_json::json!(AA_NORMAL_TEXT));
 }

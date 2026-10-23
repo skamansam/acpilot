@@ -516,3 +516,29 @@ fn a_blocked_active_extension_is_reported_and_invisible() {
     );
     assert_eq!(resolution.registry.themes().len(), 2, "built-ins only");
 }
+
+#[test]
+fn a_profile_may_use_the_whole_agent_manifest() {
+    // The bug this replaces: the profile layer read `agents.toml` with a narrower
+    // parser that refused a PTY parser or an HTTP endpoint, so `ext why` reported
+    // an error for a file the daemon loaded. One reader means one answer.
+    let store_root = TempDir::new();
+    let store = Store::new(store_root.path());
+    let profile_dir = TempDir::new();
+    profile_dir.write(
+        "agents.toml",
+        "schema_version = 1\n\n[[agents]]\nid = \"freebuff\"\ntransport = \"pty\"\n\
+         command = \"freebuff\"\nparser = \"ansi-transcript\"\nsentinel = \"Enter a task\"\n",
+    );
+    let profile = open(&store, &profile_dir);
+
+    let resolution = profile.effective().expect("the profile's manifest loads");
+    let agent = resolution
+        .registry
+        .agents()
+        .iter()
+        .find(|trace| trace.value.id() == "freebuff")
+        .expect("freebuff is in the profile layer");
+    assert_eq!(agent.value.definition.transport.name(), "pty");
+    assert_eq!(agent.value.extension_id, "profile");
+}

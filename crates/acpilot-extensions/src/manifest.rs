@@ -6,6 +6,7 @@
 //! fine" is not a category a path check gets to have.
 
 use acpilot_proto::extension::ExtensionKind;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ExtensionError;
@@ -23,9 +24,15 @@ const ACPILOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// Unknown keys are a parse error rather than a shrug: an extension that spills
 /// a typo should fail on the developer's machine, not quietly on a user's.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    // Self-identification, not configuration: TOML has no comment-preserving
+    // pointer to a schema other than this key or a `#:schema` first line, and
+    // `deny_unknown_fields` would otherwise refuse the one line that makes the
+    // file checkable before it is loaded.
+    #[serde(default, rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// Schema version; `1` today.
     pub schema_version: u32,
     /// Namespaced identifier, `publisher.id`.
@@ -49,7 +56,7 @@ pub struct Manifest {
 }
 
 /// One asset named by the manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Contribution {
     /// Which registry the asset lands in.

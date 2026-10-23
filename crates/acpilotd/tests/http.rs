@@ -1,7 +1,10 @@
 //! The HTTP contract, exercised through the router itself rather than a live port.
 
+use std::sync::Arc;
+
+use acpilot_agent::{MapResolver, Registry};
 use acpilot_core::AcpilotError;
-use acpilotd::{ApiError, router};
+use acpilotd::{ApiError, AppState, router, router_with};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
@@ -9,7 +12,11 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 async fn get(uri: &str) -> (StatusCode, serde_json::Value) {
-    let response = router()
+    get_from(router(), uri).await
+}
+
+async fn get_from(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
         .oneshot(
             Request::builder()
                 .uri(uri)
@@ -98,6 +105,12 @@ async fn openapi_is_served_and_valid() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["openapi"], "3.1.0");
     assert_eq!(body["info"]["title"], "Acpilot API");
+    // The daemon serves one path the proto document cannot name: the route it
+    // implements itself. A client generated from this document must see it.
+    assert_eq!(
+        body["paths"]["/v1/agents"]["get"]["responses"]["200"]["description"],
+        "Every configured agent, with its availability on this host"
+    );
 }
 
 #[tokio::test]
@@ -128,6 +141,61 @@ async fn errors_use_the_shared_envelope() {
     // Empty detail lists are omitted rather than serialised as `null`, so clients
     // can treat presence as meaningful.
     assert!(body.get("details").is_none());
+}
+
+fn agents_state(manifest: &str) -> AppState {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("agents.toml");
+    std::fs::write(&path, manifest).expect("write manifest");
+    let registry = Registry::load(path, Arc::new(MapResolver::new())).expect("registry loads");
+    AppState::with_registry(Arc::new(registry))
+}
+
+#[tokio::test]
+async fn agents_without_a_profile_is_an_empty_list_not_an_error() {
+    let (status, body) = get("/v1/agents").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn agents_are_served_from_the_registry_with_their_availability() {
+    // An executable that certainly exists on this machine, and one that certainly
+    // does not. Using the test binary keeps the test free of platform commands.
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n\
+         [[agents]]\nid = \"absent\"\ntransport = \"acp-stdio\"\n\
+         command = \"acpilot-no-such-program-anywhere\"\n"
+    );
+    let state = agents_state(&manifest);
+
+    let (status, body) = get_from(router_with(state), "/v1/agents").await;
+    assert_eq!(status, StatusCode::OK);
+    let agents = body.as_array().expect("a list");
+    assert_eq!(agents.len(), 2, "declaration order is preserved");
+
+    assert_eq!(agents[0]["id"], "present");
+    assert_eq!(agents[0]["name"], "Present");
+    assert_eq!(agents[0]["transport"], "acp_stdio");
+    assert_eq!(agents[0]["status"], "available");
+    assert!(
+        agents[0]["command"]
+            .as_str()
+            .expect("command")
+            .contains(&present.display().to_string()),
+        "the API reports what will be spawned"
+    );
+    // No handshake has happened, so there is no protocol version to claim.
+    assert!(agents[0].get("protocol_version").is_none());
+
+    assert_eq!(agents[1]["id"], "absent");
+    assert_eq!(
+        agents[1]["status"], "missing",
+        "a command that is not on PATH is the one status a list can prove"
+    );
 }
 
 /// The router under a real listener, not `oneshot`.
@@ -164,6 +232,47 @@ async fn the_api_answers_over_a_real_socket() {
         .await
         .expect("missing request");
     assert_eq!(missing.status(), 404);
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn a_profile_registry_is_served_over_a_real_socket() {
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n\
+         [[agents]]\nid = \"absent\"\ntransport = \"acp-stdio\"\n\
+         command = \"acpilot-no-such-program-anywhere\"\n"
+    );
+    let state = agents_state(&manifest);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral port");
+    let address = listener.local_addr().expect("local address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router_with(state))
+            .await
+            .expect("server runs");
+    });
+
+    // A client, not a `oneshot`: the daemon's JSON, the HTTP layer and the
+    // availability check have to agree over the wire the CLI will use.
+    let body: serde_json::Value = reqwest::get(format!("http://{address}/v1/agents"))
+        .await
+        .expect("agents request")
+        .json()
+        .await
+        .expect("agents json");
+    let agents = body.as_array().expect("a list");
+    assert_eq!(agents.len(), 2);
+    assert_eq!(agents[0]["id"], "present");
+    assert_eq!(agents[0]["status"], "available");
+    assert_eq!(agents[1]["id"], "absent");
+    assert_eq!(agents[1]["status"], "missing");
 
     server.abort();
     let _ = server.await;

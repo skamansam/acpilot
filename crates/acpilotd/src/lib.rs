@@ -7,10 +7,16 @@
 //! Note what is *not* here: no file contents on the keystroke path, no agent
 //! logic, no UI. The daemon is a control plane.
 
+use std::sync::Arc;
+
+use acpilot_agent::supervisor::availability;
+use acpilot_agent::{AgentSpec, Registry};
 use acpilot_core::AcpilotError;
+use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::{ApiDoc, ErrorBody};
 use axum::Json;
 use axum::Router;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -90,8 +96,100 @@ async fn health() -> Json<Health> {
     })
 }
 
+/// State the routes share.
+///
+/// The registry is optional for now: the daemon has no profile resolution yet
+/// (P4 owns it), so `acpilot serve` starts with none and the routes that need an
+/// agent list answer from whatever the daemon was handed. Tests construct a real
+/// [`Registry`], which is the same path the daemon will use once profiles land.
+#[derive(Debug, Clone, Default)]
+pub struct AppState {
+    agents: Option<Arc<Registry>>,
+}
+
+impl AppState {
+    /// No profile loaded: the agent list is empty.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Serve this profile's agents.
+    pub fn with_registry(registry: Arc<Registry>) -> Self {
+        Self {
+            agents: Some(registry),
+        }
+    }
+
+    /// The registry behind the agent routes, when the daemon has one.
+    pub fn registry(&self) -> Option<&Arc<Registry>> {
+        self.agents.as_ref()
+    }
+}
+
+/// One agent as the API reports it.
+///
+/// Availability is a `PATH` lookup on the host the daemon runs on (see
+/// [`availability`]). Nothing is spawned, so listing agents cannot start one; a
+/// handshake-dependent status is reported by the session routes, not here.
+fn summarize(spec: &AgentSpec) -> AgentSummary {
+    AgentSummary {
+        id: spec.id.clone(),
+        name: spec.name.clone(),
+        transport: spec.transport_kind(),
+        status: availability(spec),
+        // An HTTP agent has no command; the empty string is the honest answer
+        // rather than a URL in a field that means "what will be spawned".
+        command: spec
+            .command()
+            .map_or_else(String::new, acpilot_agent::CommandSpec::command_line),
+        protocol_version: None,
+    }
+}
+
+/// `GET /v1/agents`.
+///
+/// An empty list means the daemon has no registry loaded; there is no profile to
+/// answer 404 for yet.
+async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
+    let summaries = state.agents.as_ref().map_or_else(Vec::new, |registry| {
+        registry
+            .agents()
+            .iter()
+            .map(|spec| summarize(spec))
+            .collect()
+    });
+    Json(summaries)
+}
+
+/// OpenAPI registration for the route above.
+///
+/// The document lives in `acpilot-proto` and cannot name a daemon handler without
+/// depending on it, so the path is registered here, from the handler's own
+/// metadata. The function body is never called.
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/agents",
+    tag = "agents",
+    summary = "List agents in the active profile",
+    responses((
+        status = 200,
+        description = "Every configured agent, with its availability on this host",
+        body = Vec<AgentSummary>
+    ))
+)]
+fn agents_doc() {}
+
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
+    let mut document = ApiDoc::openapi();
+    document.paths.paths.insert(
+        "/v1/agents".to_owned(),
+        utoipa::openapi::path::PathItem::new(
+            utoipa::openapi::path::HttpMethod::Get,
+            <__path_agents_doc as utoipa::Path>::operation(),
+        ),
+    );
+    Json(document)
 }
 
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.
@@ -119,13 +217,23 @@ async fn docs() -> Html<&'static str> {
     )
 }
 
-/// Build the HTTP router.
+/// Build the HTTP router with no profile loaded.
 ///
 /// Kept separate from `main` so tests can exercise routes without binding a port.
 pub fn router() -> Router {
+    router_with(AppState::default())
+}
+
+/// Build the HTTP router over `state`.
+///
+/// The daemon's `main` calls [`router`] today because profile resolution is not
+/// built; a caller that has loaded a profile passes it here.
+pub fn router_with(state: AppState) -> Router {
     let app = Router::new()
         .route("/v1/health", get(health))
-        .route("/v1/openapi.json", get(openapi));
+        .route("/v1/agents", get(agents))
+        .route("/v1/openapi.json", get(openapi))
+        .with_state(state);
 
     #[cfg(feature = "docs")]
     let app = app.route("/docs", get(docs));

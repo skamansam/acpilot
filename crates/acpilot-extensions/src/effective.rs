@@ -141,14 +141,31 @@ impl Preset for LanguageServerPreset {
 
 impl Preset for AgentPreset {
     fn id(&self) -> &str {
-        &self.id
+        &self.definition.id
     }
 
     fn details(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("command", self.command.clone()),
-            ("args", format!("{:?}", self.args)),
-        ]
+        let mut details = vec![("transport", self.definition.transport.name().to_owned())];
+        if let Some(command) = self.command() {
+            details.push(("command", command.command_line()));
+        }
+        if let Some(description) = &self.definition.description {
+            details.push(("description", description.clone()));
+        }
+        // Names only. A value is either a literal or a reference, and a literal
+        // can be a key somebody pasted in before they had a keyring entry.
+        if !self.definition.env.is_empty() {
+            details.push((
+                "env",
+                self.definition
+                    .env
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+        details
     }
 }
 
@@ -279,7 +296,7 @@ impl EffectiveRegistry {
             out.push_str(&format!("language server {id}\n"));
             out.push_str(&trace.explain());
         }
-        if let Some(trace) = self.agents.iter().find(|trace| trace.value.id == id) {
+        if let Some(trace) = self.agents.iter().find(|trace| trace.value.id() == id) {
             out.push_str(&format!("agent {id}\n"));
             out.push_str(&trace.explain());
         }

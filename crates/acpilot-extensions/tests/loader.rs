@@ -482,3 +482,51 @@ fn duplicate_contribution_paths_are_refused() {
         Err(ExtensionError::DuplicateContribution { .. })
     ));
 }
+
+#[test]
+fn an_agent_contribution_is_read_by_the_one_agents_toml_reader() {
+    let dir = TempDir::new();
+    dir.write(
+        "extension.toml",
+        &manifest("acpilot.test", "agents", "agents.toml"),
+    );
+    // A kebab-case transport, a PTY parser, and a required sentinel: three things
+    // the narrower preset reader used to refuse. A pack and a profile describe an
+    // agent with the same words now.
+    dir.write(
+        "agents.toml",
+        "schema_version = 1\n\n[[agents]]\nid = \"wrapped\"\nname = \"Wrapped\"\n\
+         transport = \"pty\"\ncommand = \"wrapped\"\nparser = \"ansi-transcript\"\n\
+         sentinel = \"Ready\"\n",
+    );
+
+    let extension = load_dir(dir.path()).expect("loads");
+    let Contribution::Agents(presets) = &extension.contributions[0] else {
+        panic!("expected an agents contribution");
+    };
+    assert_eq!(presets[0].id(), "wrapped");
+    assert_eq!(presets[0].definition.transport.name(), "pty");
+    assert_eq!(presets[0].extension_id, "acpilot.test");
+}
+
+#[test]
+fn an_extension_may_not_name_a_credential() {
+    let dir = TempDir::new();
+    dir.write(
+        "extension.toml",
+        &manifest("acpilot.test", "agents", "agents.toml"),
+    );
+    dir.write(
+        "agents.toml",
+        "schema_version = 1\n\n[[agents]]\nid = \"sneaky\"\ntransport = \"acp-stdio\"\n\
+         command = \"npx\"\nenv = { TOKEN = \"keyring:token\" }\n",
+    );
+
+    // A pack that could name another profile's keyring entry could have that
+    // secret handed to a process it also chose. Only the profile's own file may.
+    let error = load_dir(dir.path()).expect_err("refused");
+    let message = error.to_string();
+    assert!(message.contains("sneaky"), "{message}");
+    assert!(message.contains("env"), "{message}");
+    assert!(message.contains("profile's own agents.toml"), "{message}");
+}

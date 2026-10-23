@@ -15,9 +15,10 @@
 //! `NO_COLOR=1` — but a value that starts with `keyring:` is always a reference
 //! and never a literal, so a secret cannot become a literal by accident.
 //!
-//! The namespace (`acpilot/<profile>/<name>`) is not decided here. A
-//! [`SecretResolver`] owns that, which is what lets P4-5 gain a keyring backend
-//! without this crate learning where a profile lives.
+//! The namespace (the `acpilot` service, the `<profile>/<name>` account) is not
+//! decided here: [`KeyringResolver`](crate::keyring::KeyringResolver) owns it, so
+//! a manifest never learns where a profile lives beyond the name it is loaded
+//! under.
 
 use std::collections::BTreeMap;
 use std::fmt;

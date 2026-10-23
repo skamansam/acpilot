@@ -9,8 +9,9 @@ use acpilot_core::AcpilotError;
 
 pub mod cli;
 pub mod ext;
+pub mod secret;
 
-pub use cli::{Cli, Command, ExtCommand};
+pub use cli::{Cli, Command, ExtCommand, SecretCommand};
 
 /// Exit code for a failed command.
 ///

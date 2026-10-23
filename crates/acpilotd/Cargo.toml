@@ -17,6 +17,7 @@ default = []
 docs = []
 
 [dependencies]
+acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-proto = { workspace = true }
 axum = { workspace = true }
@@ -32,6 +33,7 @@ utoipa = { workspace = true }
 [dev-dependencies]
 http-body-util = { workspace = true }
 reqwest = { workspace = true }
+tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

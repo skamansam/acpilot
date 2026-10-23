@@ -268,15 +268,105 @@ and deterministic.
     snapshot are untouched. Not in this task: the keyring backend and namespace (P4-5), the
     spawn (P2-2), running a `script:<path>` parser (P2-7), and availability — whether `command`
     is on `PATH` is a host question, not a parse.
-- [ ] **P2-2** `acpilot-agent::supervisor`: spawn an `acp-stdio` agent via `agent-client-protocol` `process` feature; capture stderr into a ring buffer for the session log; restart policy (`never|on-crash`, max 3); clean process-tree kill (job object on Windows).
-- [ ] **P2-3** `acpilot-agent::session`: wrap `initialize`/`session/new`/`session/load`/`session/prompt`/`session/cancel`; translate ACP `session/update` into our `SessionEvent` enum (`MessageChunk{role}`, `Thought`, `ToolCall{status}`, `Plan`, `ModeChanged`, `Notice`, `Compaction`, `CommandsChanged`) with stable sequence numbers.
+    **The schema is published, not described.** `manifest::json_schema` generates
+    `site/public/schema/agents-v1.json` (`cargo xtask schema`) from the same `AgentEntry` the
+    loader parses, so the artifact cannot name a key the loader refuses. `transport` becomes
+    an internally tagged `oneOf`: one branch per transport, each fixing the tag to the two
+    spellings it accepts and listing exactly `TransportName::allowed_fields` plus the shared
+    keys, with the branch's `required` taken from the same table the loader's refusals come
+    from. Three rules are written by hand because neither a derive nor a doc comment can say
+    them — the `id` pattern, the `parser` spellings, `url` as a URI — and `Option`/`u64`
+    output is pruned of `null` and `"format": "uint64"`, since a TOML file cannot hold
+    either. `"$schema"` is accepted as a root key so the file can point at the schema it is
+    checked against. Tests: the committed copy is current, every `$ref` resolves, the shipped
+    presets validate, and a list of eight refusals is checked twice — the schema rejects it
+    and the loader rejects it with the message that names the field.
+- [x] **P2-2** `acpilot-agent::supervisor`: spawn an `acp-stdio` agent; capture stderr into a ring buffer for the session log; restart policy (`never|on-crash`, max 3); clean process-tree kill. — **done 2026-10-22**
+  - **Result:** `supervisor` starts an `acp-stdio` spec and nothing else: `pty` (P2-7) and
+    `http-jsonrpc` (no local process) are refused by name, in the manifest's own spelling, so a program
+    is never started with the wrong transport and diagnosed later. The pipes are `std::process`'s rather
+    than `agent-client-protocol`'s `spawn_process`: P2-3 owns an async ACP connection, and a supervisor
+    that both spawned and spoke the protocol could not hand the child to it. `stdin` and `stdout` are
+    handed out once and never read here — draining stdout would eat JSON-RPC frames. stderr is a 64 KiB
+    ring filled by one reader thread: readable while the agent runs (so a status line does not wait for
+    an exit), lossily decoded, and marked truncated when the beginning was dropped. `AgentProcess`'s
+    `Debug` shows only the id, pid and buffer size; a resolved secret reaches the child through
+    `Secret::expose` and nowhere else.
+    **Kill is a tree kill.** unix starts the child as its own process-group leader and signals the group,
+    so `npx → node` dies with the wrapper and the stderr pipe reaches EOF; Windows uses `taskkill /T /F`
+    because a job object needs `unsafe`, which the workspace forbids (P2-5 owns the stronger guarantee).
+    `Drop` kills, then waits up to 500 ms for the reader and detaches it rather than blocking on a
+    grandchild that inherited the pipe. **Restart is a policy, not a loop**: `on-crash` restarts after a
+    non-zero exit up to three times on the same buffer, so the first crash is still readable after the
+    last attempt, and a clean exit is never restarted. `availability()` answers `available`/`missing`
+    from a local `PATH` lookup without starting anything. Eight tests run real `/bin/sh` processes;
+    the Windows path is type-checked by the cross-target build but has no Windows runner in this suite
+    yet, which is recorded here rather than papered over.
+- [x] **P2-3** `acpilot-agent::session`: wrap `initialize`/`session/new`/`session/load`/`session/prompt`/`session/cancel`; translate ACP `session/update` into our `SessionEvent` enum (`MessageChunk{role}`, `Thought`, `ToolCall{status}`, `Plan`, `ModeChanged`, `Notice`, `Compaction`, `CommandsChanged`) with stable sequence numbers. — **done 2026-10-22**
+  - **Result:** `session` owns an ACP connection in a background task and hands out
+    `Session` as a handle. `spawn(AgentProcess)` takes the supervisor's two pipes and runs them
+    through `blocking::Unblock`; `over(transport)` is the same code for an in-memory channel, an SSH
+    host (P3-9), or a test. `initialize` runs before the constructor returns, so a caller never holds a
+    session whose capabilities it has not seen. `session/new` and `session/load` store the agent's
+    id (the response is returned, modes and config options included), `session/prompt` is refused
+    with `NoSession` before either ran, and a second concurrent turn is refused with `Busy` here
+    rather than delegated to whatever an agent does with two prompts. The busy flag is a guard, so a
+    dropped prompt future releases it. `session/cancel` is a notification, sent through the same
+    connection, and works while a prompt is pending.
+    **Events are sequenced once, before broadcast.** Every `session/update` becomes one
+    `SessionEvent` with a sequence number starting at 1; a slow subscriber drops events but cannot
+    renumber them, and P3-3 adds replay on top of the same numbers. The closed kind enum is kept as
+    is; updates that have no kind of their own (`config_option_update`, `session_info_update`,
+    `usage_update`) become `Notice` with a `subject`, and a future ACP variant becomes a `Notice` with
+    its raw payload instead of disappearing. Payloads are explicit snake_case objects, documented
+    as a table in the module, rather than a passthrough of the ACP object: a consumer should not have
+    to know the wire schema to render a chunk. A tool-call update carries `patch: true` and the
+    *current* status tracked from earlier updates, so a patch that only changes a title still says
+    `in_progress`.
+    **Permissions are denied by default.** The session answers `session/request_permission` with the
+    agent's own `reject_once` (or `reject_always`, else `cancelled`) and records a `notice`, because
+    there is no policy engine until P2-6 and an implied grant is the one failure this product cannot
+    have. The client advertises session notices and compaction so agents may send them, and does not
+    advertise filesystem or terminal support until P2-4/P2-5 exist. Twelve tests: nine on the
+    translation and the refusal choice, three against an in-process mock agent over a channel
+    (initialize/new/prompt with ordered chunks, cancel reaching the agent, and the busy guard).
+    **Open:** the Windows side has no runner yet, as with P2-2. (The pipe wiring this task could
+    only type-check is process-tested now that P2-9's fixture is a real child; see P2-9.)
 - [ ] **P2-4** `acpilot-agent::fs`: implement ACP client-side `fs/read_text_file` and `fs/write_text_file` against the `Host` trait, with a **shadow-write guard**: writes go to disk only if the workspace policy allows, otherwise a pending grant is created and the call blocks.
 - [ ] **P2-5** `acpilot-agent::terminal`: implement `terminal/create|output|wait_for_exit|kill|release` on top of `Host::spawn_pty`; enforce output ring buffer (1 MiB) and idle reaping.
 - [ ] **P2-6** `acpilot-agent::permission`: the broker. `PermissionRequest { id, session, kind, title, detail, options }`; policy engine with rules (`allow`, `ask`, `deny` × tool glob × path glob × agent), default-deny for shell writes outside workspace; every decision appended to `audit` table.
 - [ ] **P2-7** `acpilot-agent::pty_agent`: the program-as-agent adapter from P0-2, behind `transport = "pty"`; ship two built-in parsers (`plain-transcript`, `ansi-transcript`), a shipped `freebuff` profile as the reference case, and an escape hatch `parser = "script:<path>"` later.
 - [ ] **P2-8** `acpilot-agent::transcript`: append-only `session.jsonl` (`events`, `grants`, `meta`), reader for replay, compaction into sqlite later.
-- [ ] **P2-9** Test fixture: `crates/acpilot-agent/tests/fixtures/mock_agent.rs` — a tiny ACP agent (using the SDK's `Agent` trait) that can be told to stream N chunks, request a permission, request a file write, open a terminal, and hang. All P2 tests run against it in-process.
-  - **DoD:** a `session_smoke` test that prompts the mock agent, receives streamed chunks in order, answers a permission, and asserts the grant appears in the audit log — under 200 ms.
+- [x] **P2-9** Test fixture: `crates/acpilot-agent/tests/fixtures/mock_agent.rs` — a tiny ACP agent (using the SDK's `Agent` trait) that can be told to stream N chunks, request a permission, request a file write, open a terminal, and hang. — **done 2026-10-23**
+  - **Result:** the fixture is a **process**, not an in-process helper, because the gap it was
+    written to close was the wiring only a child has: a supervisor's two pipes, taken once, and a
+    process that dies when the session does. It is built as `acpilot-mock-agent` (a `[[bin]]` in
+    `acpilot-agent` with `test = false`, so `cargo test` builds it and the tests name it through
+    `CARGO_BIN_EXE_` rather than guessing a target directory) and speaks ACP over real stdin and
+    stdout. What it does comes from the prompt text — `stream 3`, `permission`, `fs`, `terminal`,
+    `hang`, anything else echoes — so a test needs no argument and no environment variable. What it
+    *heard* comes back as a `Notice`: the client is the only side a test can observe, and a fixture
+    that decided the outcome and kept it to itself would be asserting nothing. Requests to the
+    client are sent from a task spawned on the connection, because awaiting one inside an incoming
+    handler deadlocks the dispatch loop (the SDK says so on `block_task`, and the first version of
+    this file proved it). The in-process mock in `tests/session.rs` stays where it is: a channel can
+    be observed from both ends, which is how the cancel test reads what the agent saw.
+    `tests/process.rs` has the five tests this buys: three chunks in order with seq 1..=3 and the
+    elapsed time asserted under 200 ms (the DoD's budget, reported with the measurement on failure),
+    a permission request answered with the agent's own `reject_once` option with both the refusal and
+    the agent's report as events, `fs/*` and `terminal/create` refused, a hung turn that stays
+    pending and still leaves the session usable for the next one, and a dropped session taking its
+    child with it (Linux, by pid).
+    **It found a real defect on the first run.** A request for a method this client does not
+    implement was left *unanswered*, so the agent blocked on it forever: `fs/read_text_file`,
+    `fs/write_text_file` and `terminal/create` now get a `MethodNotFound` naming the method, which
+    P2-4 and P2-5 replace with the real answer. Not advertising a capability does not stop an agent
+    asking for it, and a request has a response or it is a hang.
+  - **DoD:** a `session_smoke` test that prompts the mock agent, receives streamed chunks in order,
+    answers a permission, and asserts the grant appears in the audit log — under 200 ms.
+    **Met except the audit line:** there is no audit log to assert against until P2-6 owns the
+    broker — the "grant" this DoD expects recorded is P2-6's decision. What exists now is the
+    refusal path, and it is asserted end to end.
 
 ---
 
@@ -284,6 +374,15 @@ and deterministic.
 
 - [ ] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
 - [ ] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
+  - **Started 2026-10-22:** `GET /v1/agents` serves an injected `acpilot_agent::Registry` with
+    `AgentStatus` from `acpilot_agent::supervisor::availability` (a `PATH` lookup on the daemon's host,
+    never a spawn); the wire type is unchanged and the path is merged into the served OpenAPI document
+    from the handler's own metadata. With no profile loaded the list is empty — the daemon has no
+    profile resolution yet, and an empty list is the honest answer rather than a `404` for a profile
+    that does not exist. A second test binds a real ephemeral port and fetches `/v1/agents` with
+    `reqwest` against a `router_with(AppState::with_registry(...))`, so the socket, the JSON and the
+    `PATH` lookup are exercised the way the CLI will use them, not only through `oneshot`. Still open
+    here: every other route, the tower layers, and token auth.
 - [ ] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s, and answer an un-replayable id with `event: resync` carrying the latest seq instead of pretending to catch up (`docs/api.md`). Pending permissions are state, not history: the client fetches `GET /v1/permissions?status=pending` on connect and the stream only announces new requests.
 - [ ] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
 - [ ] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
@@ -327,6 +426,10 @@ Three rules:
 - [ ] **P4-2 · Config cascade** (1.5d)
   - Per-profile files: `profile.toml` (preferences), `agents.toml`, `lsp.toml`, `policy.toml`,
     `keymap.toml`, `theme.toml`.
+  - `agents.toml` has **one reader**: `acpilot_agent::manifest::parse_definitions`, which
+    `acpilot-extensions` calls for an extension's `agents` contribution too. Do not add a second
+    parser anywhere; the only rule that differs by owner is that an extension may not name a
+    credential (`env`, `auth`, `allow_cross_profile` are refused in a pack).
   - Layer order (`figment`): built-in defaults < global `config.toml` < profile files <
     workspace `.acpilot/config.toml` < `ACPILOT_*` env < CLI flags.
   - Merge is **per key**, not whole-file: arrays replace, except `disabled`/`deny` which union;
@@ -355,6 +458,19 @@ Three rules:
     for 10 profiles, otherwise build the index.
 
 - [ ] **P4-5 · Per-profile secrets** (1d)
+  - **Started 2026-10-22:** `acpilot-agent::keyring` implements the namespace. `KeyringResolver`
+    reads the OS store through `keyring` 4.2's `v1` API (Keychain, Credential Manager, Secret Service),
+    service `acpilot`, account `<profile>/<name>`, for both `keyring:<name>` and
+    `keyring:<profile>/<name>`. The store sits behind a `CredentialStore` trait, so two profiles
+    resolving the same entry name to different values, a missing account, and a locked keyring are all
+    tested without a desktop session. `CredentialStore` gained write and delete so the CLI can use the
+    same namespace rather than a second copy of the rule: `acpilot secret set` reads the value from
+    stdin (no `--value`, which would land in shell history and `ps`), `rm` of an absent entry exits
+    `3`, and `list` parses the profile's `agents.toml` with a recording resolver and prints only
+    `present`/`missing` per account — the keyring API cannot enumerate, so the manifest is the honest
+    list of what should exist. Still open: profile resolution (P4-2) supplies the name, legacy
+    unscoped entries are adopted into `default`, cross-profile resolutions warn on every use, and
+    `profile export` redacts.
   - Keyring service `acpilot`, account `<profile>/<name>`; `keyring:anthropic` resolves in the
     active profile only.
   - Cross-profile refs (`keyring:work/anthropic`) need `allow_cross_profile = true` on that
@@ -949,10 +1065,123 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
 - [ ] **P12-2** Versioning (`0.1.0`), `CHANGELOG.md` via `git-cliff`, release workflow with signed tags, reproducible builds documented.
 - [ ] **P12-3** Docs site (`docs/`): quickstart per interface, agent manifest reference, profile + config reference (`docs/config.md`, cascade and origin), host setup (ssh/wsl), policy reference, LSP server setup (`docs/lsp.md`), API reference from OpenAPI, troubleshooting (`acpilot doctor` output explained).
-- [ ] **P12-4** First-run experience: `acpilot setup` creates the `default` profile, detects agents on PATH (`claude`, `codex`, `gemini`, `freebuff`) and language servers, writes that profile's `agents.toml` + `lsp.toml`, tests one handshake, prints next steps.
+- [ ] **P12-4** First-run experience, with no setup command to run first. The first use of a profile materialises it: `Registry::open_or_create` creates `agents.toml` with the `$schema` line and the shipped presets, once, and never over a file that exists. `acpilot doctor` then detects agents on PATH (`claude`, `codex`, `gemini`, `freebuff`) and language servers, tests one handshake, and the first launch prints next steps. A program that needs no configuration launches with sane defaults and says nothing; a file appears only when there is a profile to save. Decided 2026-10-22: a required `setup` step is a toll booth in front of a product whose whole claim is that the manifest is a file you can edit.
 - [ ] **P12-5** Telemetry: **none** by default; optional crash reports via `sentry` behind an explicit flag and a documented payload.
 - [ ] **P12-6** Security review: token handling, path traversal, permission bypass attempts, command injection in manifests, LSP binary trust pins (P7-12), cross-profile secret leakage (P4-5), helper upload integrity (signature or hash pin), `cargo audit` clean.
 - [ ] **P12-7** Migration story: config/state paths stable from 0.1 (`~/.config/acpilot`, `~/.local/share/acpilot`, one subtree per profile), documented, with a tested upgrade path from a pre-profile layout.
+
+---
+
+## P13 — Chats, calls, and screen sharing (post-v1, ≈40 days)
+
+A chat is where a team decides what the agent should do next, so it belongs where the work
+does: one **global** chat per profile, and one **project** chat per workspace. A named agent
+joins a chat as a member and speaks only when `@`-mentioned. Calls are opt-in,
+human-to-human, and the agent never receives call media.
+
+P13 is deliberately after v0.1. The product is designed around one person and one machine;
+a chat adds a second person, which means identity, invites, a server to run, and a data
+boundary that did not exist before. Shipping a half-answer here would turn a local-first
+tool into an accidental social network.
+
+What is scoped out on purpose:
+
+- **“Global” is per profile, not per machine.** `work` and `personal` cannot enumerate each
+  other's chats, for the same reason their secrets cannot cross. A machine-wide chat would
+  be the first feature to leak an identity between profiles.
+- **Identity is required.** Every member has an account on the chat server, and every
+  message and call has a named author. Self-hosted first; a hosted service is a business
+  decision with a data-processing agreement attached, not a default.
+- **Text is the durable record; calls are ephemeral.** No recording by default. The daemon
+  may signal a call but never relays media, so a packet capture of the chat server is not
+  a recording of the room.
+- **The agent is a member, not a listener.** It is added by name, answers a mention with a
+  turn on its own daemon, streams the reply back as a message, and gets the chat history up
+  to that mention bounded by a token budget. It is not in the call, and a chat message is
+  not a permission grant.
+
+- [ ] **P13-1 · Chat domain and store** (6d)
+  - `Chat { id, scope: Profile | Workspace(WorkspaceId), name, topic, archived_at }`,
+    `Member { chat, principal, role }`, `Message { id, chat, author, at, body, edited_at,
+    reply_to, mentions }`. A separate chat database per profile
+    (`<data>/profiles/<name>/chat.sqlite`), so deleting a session does not delete the
+    conversation that produced it and `profile export` can redact chats independently.
+  - The global chat is created with the profile; a project chat is created from a
+    workspace and carries its id. Moving or renaming a workspace does not reparent a chat;
+    deleting a workspace archives its chats and leaves the history readable.
+  - Message bodies are stored as sent (markdown, code fences, file references), not
+    rendered HTML. A file shared into chat is a workspace-relative reference that the
+    receiver's daemon resolves locally; a secret never leaves its machine as an attachment.
+  - [decide] D21: one chat database per profile vs. chat tables in the profile database.
+    Recommendation: a separate file, because message retention and write volume differ
+    from session history and a corrupt session store must not take the chat with it.
+- [ ] **P13-2 · Chat server and sync** (9d)
+  - `acpilot chat serve`: invite-only accounts, per-chat membership, and a resumable
+    WebSocket. Every chat has a monotonic server sequence; a client reconnects with its
+    cursor and receives exactly the gap, or a snapshot when the gap is older than
+    retention — the same rule as SSE, with the same refusal to pretend to catch up.
+  - Message ids are server-assigned; retries de-duplicate on `(client, client_message_id)`
+    so a flaky phone cannot post twice. Edits and deletions are new records with a
+    reference, never in-place rewrites, so a reader that missed the edit can still see the
+    original.
+  - Presence, typing and read cursors are **not** stored history: they expire, and a
+    reconnecting client gets the current state rather than a replay of every keystroke.
+  - [decide] D22: self-hosted process + SQLite (recommended) vs. a hosted service. The
+    self-hosted form keeps the trust story the same as the daemon's; a hosted form needs
+    an operator, a retention policy, and a story for who can read the database.
+- [ ] **P13-3 · Agent participants** (7d)
+  - An agent member has a display name (`@rust-helper`), an agent id, and a permission
+    policy. Only the chat owner adds or removes one. A message without a mention is never
+    sent to it; a mention of a name it does not own is not a silent trigger.
+  - A mention opens a normal session (P2-3, P3-4) whose context is the thread up to the
+    mention, streams the reply into the chat as it arrives, and links the transcript to
+    the message. Cancelling edits the message to say so rather than leaving a half-reply.
+  - Its tool calls go through the permission broker (P2-6) exactly as in a session; the
+    chat cannot pre-approve a write, and an approval UI shows the chat and the agent that
+    asked. `/mute @name` silences an agent for a thread without removing it.
+  - The agent is never a call participant and receives no audio, video, or shared-screen
+    frames. A summary of a call is something a human writes, not something the agent
+    overhears.
+- [ ] **P13-4 · Calls: audio and video** (8d)
+  - WebRTC for the web UI and the desktop app. Mesh for calls up to four participants; an
+    SFU behind the same interface when a fifth joins, so the UI does not change when the
+    topology does. A TURN relay is required for symmetric NATs and is configuration, not
+    a cloud account; the chat server issues short-lived credentials.
+  - Join/leave, mute, camera on/off, device pickers, bandwidth caps via `setParameters`,
+    and a transmitting indicator that the UI cannot hide. Joining is muted and
+    camera-off; nothing is transmitted until the person turns it on.
+  - No recording, no transcription, no server-side mixing in the first cut. “We can add
+    recording later” is only true if the architecture does not require a mixer now, so it
+    does not.
+- [ ] **P13-5 · Screen sharing** (6d)
+  - Web: `getDisplayMedia` with a picker and a persistent indicator; a text profile
+    (1080p/5 fps) and a motion profile (720p/30), chosen by what is being shared and
+    switchable mid-call.
+  - Native: a platform seam for capture — ScreenCaptureKit on macOS, Windows Graphics
+    Capture, PipeWire portal on Linux — so the desktop app can share a window without a
+    browser. The seam lives under `src/platform/`, per D19; the picker and the indicator
+    are UI, not platform code.
+  - The sharer can stop from Acpilot's own chrome even when the shared window is covered;
+    ending the call or closing the window ends the track. Annotating a shared screen is
+    not in this phase.
+- [ ] **P13-6 · Clients** (6d)
+  - Chat panes in the GUI and the web UI: global chat beside the workspace list, project
+    chats in the workspace switcher, unread counts measured from your cursor rather than
+    from install. The TUI gets chat as a tab with the session keybindings.
+  - Mentions autocomplete members and agents; mentioning an agent shows the policy it will
+    run under before the message is sent. A message from an agent is visibly an agent's,
+    with a link to the session and the tool calls it made.
+- [ ] **P13-7 · Tests and privacy review** (4d)
+  - Two clients exchange messages across a disconnect and lose nothing; a retry duplicates
+    nothing; an agent replies to a mention and to nothing else; a three-way call connects
+    through a TURN relay; closing a shared window ends the track.
+  - Profile isolation: a member of `work`'s chat cannot enumerate or join `personal`'s,
+    even with a valid token for the same server. No message body reaches logs, crash
+    reports, or the OpenAPI document; the audit log records mentions and approvals, not
+    text.
+  - **DoD:** two teammates and one named agent in a project chat, a three-way call with one
+    screen share, a reconnect that neither duplicates nor drops a message, and a call whose
+    media never touches the daemon's API.
 
 ---
 
@@ -1176,7 +1405,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D3 · Web frontend: Svelte 5 + CodeMirror (recommended) vs Leptos/WASM.
 - [ ] D4 · Local IPC: HTTP over unix socket (recommended, one protocol everywhere) vs a second JSON-RPC transport.
 - [ ] D5 · Daemon auth for LAN exposure: static token (v0.1) vs OIDC device flow.
-- [ ] D6 · Licensing of agent manifest schema: Apache-2.0 so other editors can adopt it.
+- [x] D6 · Licence, URL and versioning of the agent manifest schema: **Apache-2.0, `https://rudeboy.dev/acpilot/schema/agents-v1.json`, major version in the filename, frozen once shipped** (decided 2026-10-22). *Licence:* Apache-2.0 rather than the repository's `MIT OR Apache-2.0`, because this artifact's whole job is to be vendored into another editor's tooling or a pack's CI, and the patent grant is the half MIT does not have; a dual offer just invites the weaker half. It is a subset of what the repo already offers, so nothing in-repo changes — `LICENSE-APACHE` is the text, and the statement sits in the schema's `$comment` and on the manifest page, where someone copying the file will see it. *URL:* the docs site already owns that domain and its Pages deployment, and the file lives at `site/public/schema/agents-v1.json`, so publishing the schema is the same commit as publishing the docs — no second service, no redirect chain to rot, and `skamansam.github.io/acpilot/schema/agents-v1.json` still resolves the same bytes. The `$id` **is** that URL, so the document's identity is the address people paste. *Versioning:* the major is in the filename and matches `schema_version`; within v1 the document may only gain optional keys or enum members, anything a `schema_version = 1` loader would read differently ships as `agents-v2.json` with `schema_version = 2`, and v1 is never edited or deleted again. No `latest.json` and no redirect: a moving URL is how an editor's cached copy falls out of step with the loader silently. Enforced rather than promised — the file is generated (`cargo xtask schema`) and a drift test fails when the committed copy differs, while another asserts the `$id`'s file name matches the committed path.
 - [ ] D7 · Whether `acpilot` ships as one binary with subcommands (recommended) or separate `acpilot`/`acpilotd` binaries everywhere.
 - [ ] D8 · LSP wire types: `gen-lsp-types` 0.11 with the `url` feature (recommended) vs `ls-types` 0.0.6 (3.18 proposals) vs `lsp-types` 0.97 (unmaintained, `fluent-uri`). Isolated behind `acpilot-lsp::wire` either way.
 - [x] D9 · Position encoding: **advertise `utf-8` + `utf-16`, use the server's answer, default to UTF-16 when it says nothing** (decided 2026-10-21 on P0-7's numbers). UTF-8 saves 10 ns per conversion and is what rust-analyzer picks; always-UTF-16 would be wrong for it, and assuming UTF-8 breaks the two servers that advertise nothing. Index rebuild, not conversion, is the cost that matters. See `docs/notes/lsp-servers.md`.
@@ -1191,10 +1420,15 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one.
 - [x] D19 · Platform order: **unix and macOS first, Windows last, and every OS branch under `src/platform/`** (decided 2026-10-21, ConPTY landed 2026-10-22). The Windows half is the one that cannot be developed on the machines the project is written on, so writing it first means writing it blind. `acpilot-host` has the seam: `Host::spawn` is portable (`std::process`) with one implementation; the local PTY is one implementation too, because `portable-pty` already branches (`platform/unix.rs` forkpty, `platform/windows.rs` ConPTY) and the platform files hold what differs *above* that — echo, `\r\n`, the terminal queries a ConPTY program blocks on, and the fact that killing a ConPTY child does not hang up its tree. `crates/acpilot-host/tests/local_host_windows.rs` asserts the property that matters (a ConPTY child sees a console where a piped child sees a redirection) and runs on `windows-latest` in CI. The rule is enforced, not remembered: a boundary test fails if `cfg(windows)`/`cfg(unix)`/`cfg(target_os…)` appears outside `src/platform/` in any crate, and `cargo xtask check` type-checks the crate for the windows-msvc and both apple targets from any host.
 - [x] D20 · Naming: **`probes/` and "probe", not `spikes/` and "spike"** (decided 2026-10-22). "Spike" is Extreme Programming jargon for a time-boxed investigation; it says nothing about measuring, which is what every one of these does, and it implies throwaway code, which `probes/wsl-helper` is not. A probe is one question, answered with numbers in `docs/notes/`, in a standalone crate with its own lockfile; it outlives its question only while something still runs it. The rule for what belongs there is in `CONTRIBUTING.md` §Probes.
+- [ ] D21 · Chat storage: a separate `chat.sqlite` per profile (recommended) vs. chat tables in the profile database. Message retention and write volume differ from session history, and a corrupt session store must not take the chat with it.
+- [ ] D22 · Chat server: self-hosted process + SQLite (recommended) vs. a hosted service. The self-hosted form keeps the trust story identical to the daemon's; a hosted form needs an operator, a retention policy, and a statement of who can read the database.
+- [x] D23 · Config format: **TOML for the files a person maintains, JSON only on the wire** (decided 2026-10-22). `[[agents]]` renders one agent as one block, so adding one is a clean hunk in review; the same data in JSON is an array element that puts a comma on the previous agent's last line in every diff of the file whose whole purpose is "add a line, never a rebuild". TOML has no `null`, so "absent means the default" has one spelling — the idiom `idle_timeout_ms` depends on, and the reason `config.toml` and the API are deliberately not interchangeable: compaction patches need absent-vs-cleared. Comments stay in the file the user owns, so the reason `submit_delay_ms` exists is a comment rather than a `description` field the parser has to carry; and a tool that edits these files must use `toml_edit` so the human's comments and ordering survive a rewrite, which a JSON writer would discard. `toml` also reports spans, so "unknown key" can name a line, which the config page already promises. JSONC was the real contender — it is what IDE settings use, and it has comments — but it has no readable array-of-tables, the `toml`/`serde_json` path we already have does not parse it, and its comments are a patch for a format that cannot express them rather than a structure we need. Depth is the one cost: `[a.b.c]` is about as deep as a file should go before the shape is asking for its own file. Publishing a JSON Schema for the TOML does not move the format — TOML self-identifies with a quoted `"$schema"` key or a `#:schema` line, both of which Taplo and Even Better TOML read — so D6 is the decision that governs how that artifact is licensed.
+- [x] D24 · `extension.toml` format: **stays TOML** (decided 2026-10-22), by D23's rule but on its own facts. It is a human-maintained file in the extension author's repository, reviewed by a human in a pull request against `marketplace/index.toml`, and written once. Its one JSON-shaped corner is `[[contributes]]`, which TOML renders as repeated inline tables where JSON would have an array of objects — the readability argument that decided D23 inverted — but a pack contributes one to five things, edited rarely, so the per-diff cost is small. Against flipping: a second syntax in the loader, a second error style in `ext add`, a second published schema, and a manifest page that has to agree with both. The rule to keep: if the manifest starts carrying *generated* fields — the signed index's per-version checksums (P4.6-4) are the likely ones — do not convert it and do not let a tool reformat it. Split the artifact instead: `extension.toml` hand-written, the generated store record (versions, checksums, signature) JSON. That is D23's "JSON for the wire and for generated state" applied to the store rather than to the manifest.
+- [x] D25 · The extension manifest's published schema: **`https://rudeboy.dev/acpilot/schema/extension-v1.json`, Apache-2.0, frozen once shipped, generated by the same command as the agent schema** (decided 2026-10-22). D6's argument applies unchanged — the artifact exists to be vendored into an extension author's editor and CI, the docs site already serves that directory, and `$id` is the address people paste — so this records only what differs. It is generated from `Manifest` by `schemars` and rewritten by `cargo xtask schema` alongside `agents-v1.json`: one command, one commit, no way to publish one document and forget the other, with a drift test in each crate regenerating its own file. `ExtensionKind` is published from `acpilot-proto`, where the loader's enum lives, rather than restated as a list beside the generator. What JSON Schema cannot say stays the loader's alone and is named in the document: two contributions with the same kind and path, and the `.`/`..` half of the path rule. This does not reopen D24 — the file stays TOML, and the schema describes it to an editor rather than replacing it.
 
 ## Definition of done for v0.1.0
 
-- [ ] `acpilot setup` → `acpilot tui` on macOS, Linux, Windows; open a workspace, edit, save.
+- [ ] fresh install → `acpilot tui` on macOS, Linux, Windows, with no setup step before it; open a workspace, edit, save.
 - [ ] One native ACP agent runs a full turn with streaming, tool calls, and an approved write.
 - [ ] One non-ACP program runs as an agent through the PTY adapter.
 - [ ] Same session reachable from a second terminal via `acpilot watch`.

@@ -19,15 +19,11 @@ use crate::builtin;
 use crate::effective::{EffectiveRegistry, ProfileLayer};
 use crate::error::ExtensionError;
 use crate::manifest::{SCHEMA_VERSION, validate_namespaced_id, validate_segment};
-use crate::preset::parse_agents;
-use crate::preset::parse_language_servers;
+use crate::preset::{PROFILE_OWNER, parse_agents, parse_language_servers};
 use crate::store::{ActiveSet, Store, StoredExtension};
 
 /// Name of the activation file inside a profile directory.
 pub const ACTIVATION_FILE: &str = "extensions.toml";
-
-/// Owner recorded on presets that come from the profile itself.
-const PROFILE_OWNER: &str = "profile";
 
 /// A profile's activation list, exactly as written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

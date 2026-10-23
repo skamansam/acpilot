@@ -145,4 +145,53 @@ pub enum AgentError {
         /// The underlying failure, rendered.
         message: String,
     },
+
+    /// A transport was asked to be spawned by code that does not drive it yet.
+    ///
+    /// Reported rather than guessed at: a `pty` agent started as if it spoke ACP
+    /// would fail on the first protocol line, and the manifest was not the thing
+    /// that was wrong.
+    #[error("agent {id:?}: transport {transport:?} is not supervised by this build")]
+    NotSupervisable {
+        /// Agent identifier.
+        id: String,
+        /// Transport as written in the manifest.
+        transport: &'static str,
+    },
+
+    /// The agent's process could not be started.
+    ///
+    /// `NotFound` is the common case: the command is not on `PATH` on the host
+    /// the workspace lives on, which is a fact about the host rather than a
+    /// malformed manifest.
+    #[error("agent {id:?}: cannot spawn {command:?}: {source}")]
+    Spawn {
+        /// Agent identifier.
+        id: String,
+        /// Command that was attempted, rendered for a human.
+        command: String,
+        /// The underlying failure.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The process started but its stderr could not be pumped.
+    #[error("agent {id:?}: cannot read stderr: {source}")]
+    Stderr {
+        /// Agent identifier.
+        id: String,
+        /// The underlying failure.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Waiting for the process failed.
+    #[error("agent {id:?}: cannot wait for the process: {source}")]
+    Wait {
+        /// Agent identifier.
+        id: String,
+        /// The underlying failure.
+        #[source]
+        source: io::Error,
+    },
 }

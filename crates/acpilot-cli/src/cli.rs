@@ -5,12 +5,14 @@
 
 use std::path::PathBuf;
 
+use acpilot_agent::keyring::KeyringResolver;
 use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
 use acpilot_proto::API_PREFIX;
 use clap::{Args, Parser, Subcommand};
 
 use crate::ext::{self, Paths};
+use crate::secret;
 
 /// `acpilot` command line.
 #[derive(Debug, Parser)]
@@ -35,6 +37,39 @@ pub enum Command {
         /// Which ext verb.
         #[command(subcommand)]
         command: ExtCommand,
+    },
+    /// Store, list, and remove credentials in the OS keyring.
+    Secret {
+        /// Which secret verb.
+        #[command(subcommand)]
+        command: SecretCommand,
+    },
+}
+
+/// Everything under `acpilot secret`.
+///
+/// `set` reads the value from stdin; there is deliberately no `--value`, because
+/// an argument is visible in shell history and in `ps`.
+#[derive(Debug, Subcommand)]
+pub enum SecretCommand {
+    /// Store a secret. Reads the value from stdin.
+    Set {
+        /// Entry name, `name` or `profile/name`, with or without `keyring:`.
+        name: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// List the secrets this profile references, and whether they are set.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Remove a secret.
+    Rm {
+        /// Entry name, `name` or `profile/name`, with or without `keyring:`.
+        name: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
     },
 }
 
@@ -150,6 +185,7 @@ pub fn run(cli: Cli) -> u8 {
             exit::SUCCESS
         }
         Some(Command::Ext { command }) => run_ext(command),
+        Some(Command::Secret { command }) => run_secret(command),
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
             // rather than pretending to do work.
@@ -281,6 +317,90 @@ fn run_ext(command: ExtCommand) -> u8 {
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
+            }
+        }
+    }
+}
+
+/// Run one `acpilot secret` verb against the OS keyring.
+fn run_secret(command: SecretCommand) -> u8 {
+    match command {
+        SecretCommand::Set { name, profile } => {
+            let reference = match secret::reference(&name) {
+                Ok(reference) => reference,
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return exit::USAGE;
+                }
+            };
+            let value = match secret::read_value(std::io::stdin().lock()) {
+                Ok(value) => value,
+                Err(message) => {
+                    eprintln!("acpilot secret set: {message}");
+                    return exit::FAILURE;
+                }
+            };
+            let resolver = KeyringResolver::new(profile.profile);
+            match secret::set(&resolver, &reference, &value) {
+                Ok(account) => {
+                    println!("stored {account} in the {} keyring", secret::service());
+                    exit::SUCCESS
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    exit::FAILURE
+                }
+            }
+        }
+        SecretCommand::List { profile } => {
+            let directory =
+                match secret::profile_dir(profile.config.config.as_ref(), &profile.profile) {
+                    Ok(directory) => directory,
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        return exit::FAILURE;
+                    }
+                };
+            let resolver = KeyringResolver::new(profile.profile);
+            match secret::list(&directory, &resolver) {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    exit::SUCCESS
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    exit::FAILURE
+                }
+            }
+        }
+        SecretCommand::Rm { name, profile } => {
+            let reference = match secret::reference(&name) {
+                Ok(reference) => reference,
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return exit::USAGE;
+                }
+            };
+            let resolver = KeyringResolver::new(profile.profile);
+            let account = resolver.account(&reference);
+            match secret::remove(&resolver, &reference) {
+                Ok(true) => {
+                    println!("removed {account} from the {} keyring", secret::service());
+                    exit::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!(
+                        "no secret at {account} in the {} keyring",
+                        secret::service()
+                    );
+                    exit::NOT_FOUND
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    exit::FAILURE
+                }
             }
         }
     }

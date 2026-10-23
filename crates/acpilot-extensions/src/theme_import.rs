@@ -123,6 +123,7 @@ pub fn from_tmtheme(id: &str, version: &str, text: &str) -> Result<ImportedTheme
         .next()
         .expect("a namespaced id has a publisher");
     let manifest = Manifest {
+        schema: None,
         schema_version: SCHEMA_VERSION,
         id: id.to_owned(),
         name: name.clone(),

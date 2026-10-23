@@ -8,14 +8,46 @@ license.workspace = true
 
 [dependencies]
 acpilot-proto = { workspace = true }
+agent-client-protocol = { workspace = true }
+blocking = { workspace = true }
+futures = { workspace = true }
+jiff = { workspace = true }
+keyring = { workspace = true }
 notify = { workspace = true }
+# The published `agents-v1.json` schema is generated from the same structs the
+# loader parses, so an editor's completion and a refusal cannot describe
+# different files.
+schemars = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+# A real ACP agent process, so `Session::spawn` is exercised against a child's
+# pipes and not only an in-memory channel. It lives under `tests/` because
+# nothing in the product runs it: `cargo test` builds it, and the only caller is
+# `env!("CARGO_BIN_EXE_acpilot-mock-agent")` in the session tests.
+[[bin]]
+name = "acpilot-mock-agent"
+path = "tests/fixtures/mock_agent.rs"
+test = false
+doc = false
+
 [dev-dependencies]
+# Validation against the published schema is a test, not a runtime cost, and
+# nothing here resolves a remote reference: the default features pull TLS and an
+# HTTP client for `$ref`s this schema does not have.
+jsonschema = { workspace = true, default-features = false }
 tempfile = { workspace = true }
+# The session tests run a mock agent in-process over an in-memory channel, so
+# they need a runtime of their own.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true

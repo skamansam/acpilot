@@ -16,13 +16,22 @@
 //! documents use (`acp-stdio`), because the value shown by `GET /v1/agents` is
 //! what people copy. The default it does *not* excuse is a typo: anything else
 //! is rejected with the list of valid values.
+//!
+//! [`json_schema`] publishes the same rules as JSON Schema for editors, and it is
+//! generated from these types rather than written by hand: a second copy of the
+//! field list would be a second thing to forget. The one rule the schema cannot
+//! carry is the loader's alone to state — a duplicate `id` (JSON Schema has no
+//! keyword for uniqueness by a key) and a `keyring:` reference that does not
+//! resolve.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use acpilot_proto::agent::AgentTransport;
+use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::error::AgentError;
@@ -33,6 +42,43 @@ pub const MANIFEST_FILE: &str = "agents.toml";
 
 /// Schema version this build understands.
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// Where the published JSON Schema for this file lives.
+///
+/// `site/public/schema/agents-v1.json` is served from the docs site under its
+/// base path, so publishing the docs publishes the schema: one commit, no second
+/// service and no redirect to go stale. The `-v1` is the major version, and that
+/// file is frozen once shipped — a change that would make a `schema_version = 1`
+/// manifest mean something else is `agents-v2.json` and [`SCHEMA_VERSION`] `2`.
+/// A moving URL is what silently puts an editor's cached copy out of step with
+/// the loader.
+pub const SCHEMA_URL: &str = "https://rudeboy.dev/acpilot/schema/agents-v1.json";
+
+/// The published schema, relative to the repository root.
+///
+/// Kept here so the generator, the drift test and the docs cannot disagree about
+/// where the artifact is committed.
+pub const SCHEMA_PATH: &str = "site/public/schema/agents-v1.json";
+
+/// The presets this build ships, embedded so a new profile can be written with a
+/// usable manifest before any extension store exists.
+///
+/// The same bytes are the `acpilot.agents` built-in, which is why a fresh profile
+/// and `ext why` agree until the user edits the copy. The path is relative to
+/// this file, and `include_str!` makes a moved preset a build error.
+const SHIPPED_PRESETS: &str = include_str!("../../../extensions/acpilot.agents/agents.toml");
+
+/// The manifest a new profile starts with: the `$schema` line, then the presets.
+///
+/// The schema key comes first because TOML would file a bare key under the last
+/// `[[agents]]` table, and it points at the published document so an editor can
+/// complete the file a person is about to edit. Writers use this rather than an
+/// empty template: `agents = []` is refused, and "delete the file instead of
+/// emptying it" is not a useful first instruction.
+#[must_use]
+pub fn initial_manifest() -> String {
+    format!("\"$schema\" = \"{SCHEMA_URL}\"\n\n{SHIPPED_PRESETS}")
+}
 
 /// Gap between typing a prompt and pressing Enter in a PTY agent.
 ///
@@ -88,6 +134,34 @@ pub struct CommandSpec {
     pub args: Vec<String>,
 }
 
+impl CommandSpec {
+    /// The command as one line, for a status row or an error message.
+    ///
+    /// Display only: this is not a shell string and must not be handed to one.
+    /// Arguments that would be ambiguous in a line are quoted so two different
+    /// commands cannot render identically.
+    pub fn command_line(&self) -> String {
+        let mut line = quoted(&self.program);
+        for arg in &self.args {
+            line.push(' ');
+            line.push_str(&quoted(arg));
+        }
+        line
+    }
+}
+
+fn quoted(part: &str) -> String {
+    let plain = !part.is_empty()
+        && part.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@')
+        });
+    if plain {
+        part.to_owned()
+    } else {
+        format!("{part:?}")
+    }
+}
+
 /// How an agent is driven.
 ///
 /// The variant is the transport, so a field that only one transport uses cannot
@@ -131,6 +205,16 @@ impl Transport {
         match self {
             Self::AcpStdio { command } | Self::Pty { command, .. } => Some(command),
             Self::HttpJsonRpc { .. } => None,
+        }
+    }
+
+    /// The transport as the manifest spells it, which is also what diagnostics
+    /// should say: a user edits this word, so an error should not translate it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::AcpStdio { .. } => "acp-stdio",
+            Self::Pty { .. } => "pty",
+            Self::HttpJsonRpc { .. } => "http-jsonrpc",
         }
     }
 }
@@ -188,7 +272,7 @@ impl Parser {
 }
 
 /// What the supervisor does when an agent's process dies.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Restart {
     /// Leave it dead and report it. The default: the examples write
@@ -196,52 +280,231 @@ pub enum Restart {
     /// surprise nobody asked for.
     #[default]
     Never,
-    /// Restart it, up to the attempt limit the supervisor owns (P2-2).
+    /// Restart it, up to the attempt limit the supervisor owns (three tries).
     OnCrash,
 }
 
-/// Parse and validate a manifest.
+/// One agent as the file defines it, with credentials still as references.
 ///
-/// Every `keyring:` reference is resolved here, so a missing credential fails
-/// the load instead of a turn. Nothing is cached: the caller decides what to do
-/// with the result, and the registry decides when to call this again.
+/// Validation stops at [`Self::resolve`]: the shape of an agent — its id, its
+/// transport's required fields, a command that is not empty — does not depend on
+/// whether a keyring can be opened. That split is what lets a store list presets
+/// without a profile, and what lets an extension's `agents` contribution be read
+/// by the same code as the profile's own `agents.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDefinition {
+    /// Stable identifier, used by `--agent` and in the API.
+    pub id: String,
+    /// Display name. Defaults to the id.
+    pub name: String,
+    /// One sentence on what the agent is for, when the manifest says.
+    pub description: Option<String>,
+    /// How the daemon drives it, with that transport's settings.
+    pub transport: TransportDefinition,
+    /// What to do when the process dies.
+    pub restart: Restart,
+    /// Environment for the child, values as written rather than resolved.
+    pub env: BTreeMap<String, EnvValue>,
+    /// Whether this agent may name another profile's keyring entries.
+    pub allow_cross_profile: bool,
+}
+
+impl AgentDefinition {
+    /// The transport as the API spells it.
+    pub fn transport_kind(&self) -> AgentTransport {
+        self.transport.kind()
+    }
+
+    /// The command that will be spawned, when this transport spawns one.
+    pub fn command(&self) -> Option<&CommandSpec> {
+        self.transport.command()
+    }
+
+    /// Fetch every credential this definition names.
+    ///
+    /// A missing secret is a load failure, not a turn failure: the point of
+    /// resolving here is that the agent either starts with everything it asked
+    /// for or does not start at all.
+    pub fn resolve(&self, resolver: &dyn SecretResolver) -> Result<AgentSpec, AgentError> {
+        let transport = match &self.transport {
+            TransportDefinition::AcpStdio { command } => Transport::AcpStdio {
+                command: command.clone(),
+            },
+            TransportDefinition::Pty { command, profile } => Transport::Pty {
+                command: command.clone(),
+                profile: profile.clone(),
+            },
+            TransportDefinition::HttpJsonRpc { url, auth } => Transport::HttpJsonRpc {
+                url: url.clone(),
+                auth: match auth {
+                    Some(reference) => Some(secret(self, "auth", reference, resolver)?),
+                    None => None,
+                },
+            },
+        };
+
+        let mut env = BTreeMap::new();
+        for (variable, value) in &self.env {
+            let value = match value {
+                EnvValue::Literal(text) => Secret::new(text),
+                EnvValue::Reference(reference) => secret(self, variable, reference, resolver)?,
+            };
+            env.insert(variable.clone(), value);
+        }
+
+        Ok(AgentSpec {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            description: self.description.clone(),
+            transport,
+            restart: self.restart,
+            env,
+            allow_cross_profile: self.allow_cross_profile,
+        })
+    }
+}
+
+/// One environment value as written.
+///
+/// The two cases are deliberately not a `String`: whether a value is a literal or
+/// a reference decides whether it is fetched from the keyring or passed through,
+/// and a type that keeps them apart cannot hand a reference to a child process as
+/// if it were the secret.
+#[derive(Clone, PartialEq, Eq)]
+pub enum EnvValue {
+    /// Passed to the child verbatim.
+    Literal(String),
+    /// Fetched from the keyring when the profile loads.
+    Reference(SecretRef),
+}
+
+impl std::fmt::Debug for EnvValue {
+    /// Never prints a literal: a manifest may write a key inline, and a debug
+    /// line is the last place it should turn up.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Literal(_) => f.write_str("Literal(<redacted>)"),
+            Self::Reference(reference) => write!(f, "Reference({})", reference.reference()),
+        }
+    }
+}
+
+/// A transport as defined, before its credential is fetched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportDefinition {
+    /// Native ACP over stdio.
+    AcpStdio {
+        /// The program that speaks ACP.
+        command: CommandSpec,
+    },
+    /// A program driven through a PTY and a transcript parser.
+    Pty {
+        /// The program to drive.
+        command: CommandSpec,
+        /// How its screen becomes a transcript.
+        profile: PtyProfile,
+    },
+    /// ACP over HTTP/JSON-RPC.
+    HttpJsonRpc {
+        /// Where the agent answers.
+        url: Url,
+        /// The credential, when the endpoint needs one.
+        auth: Option<SecretRef>,
+    },
+}
+
+impl TransportDefinition {
+    /// The transport as the API spells it.
+    pub fn kind(&self) -> AgentTransport {
+        match self {
+            Self::AcpStdio { .. } => AgentTransport::AcpStdio,
+            Self::Pty { .. } => AgentTransport::Pty,
+            Self::HttpJsonRpc { .. } => AgentTransport::HttpJsonRpc,
+        }
+    }
+
+    /// The program this transport spawns, if any.
+    pub fn command(&self) -> Option<&CommandSpec> {
+        match self {
+            Self::AcpStdio { command } | Self::Pty { command, .. } => Some(command),
+            Self::HttpJsonRpc { .. } => None,
+        }
+    }
+
+    /// The transport as the manifest spells it, for diagnostics.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::AcpStdio { .. } => "acp-stdio",
+            Self::Pty { .. } => "pty",
+            Self::HttpJsonRpc { .. } => "http-jsonrpc",
+        }
+    }
+}
+
+/// Parse and validate a manifest, resolving every `keyring:` reference.
+///
+/// A missing credential fails the load instead of a turn. Nothing is cached: the
+/// caller decides what to do with the result, and the registry decides when to
+/// call this again.
 pub fn parse(
     path: &Path,
     text: &str,
     resolver: &dyn SecretResolver,
 ) -> Result<Vec<AgentSpec>, AgentError> {
+    parse_definitions(&path.display().to_string(), text)?
+        .iter()
+        .map(|definition| definition.resolve(resolver))
+        .collect()
+}
+
+/// Read and validate a manifest, resolving nothing.
+///
+/// This is the reader. The registry and an extension's `agents` contribution both
+/// come through here, so a file cannot be one thing to the daemon and another to
+/// `acpilot ext why`; the only difference left is who owns the presets and whether
+/// a credential may be named at all.
+pub fn parse_definitions(path: &str, text: &str) -> Result<Vec<AgentDefinition>, AgentError> {
     let file: AgentsFile = toml::from_str(text).map_err(|error| AgentError::Toml {
-        path: path.display().to_string(),
+        path: path.to_owned(),
         message: error.to_string(),
     })?;
     if file.schema_version != SCHEMA_VERSION {
         return Err(AgentError::SchemaVersion {
-            path: path.display().to_string(),
+            path: path.to_owned(),
             found: u64::from(file.schema_version),
             expected: SCHEMA_VERSION,
         });
     }
     if file.agents.is_empty() {
         return Err(AgentError::NoAgents {
-            path: path.display().to_string(),
+            path: path.to_owned(),
         });
     }
 
-    let mut specs: Vec<AgentSpec> = Vec::with_capacity(file.agents.len());
+    let mut definitions: Vec<AgentDefinition> = Vec::with_capacity(file.agents.len());
     for entry in file.agents {
-        let spec = build(entry, resolver)?;
-        if specs.iter().any(|existing| existing.id == spec.id) {
-            return Err(AgentError::Duplicate { id: spec.id });
+        let definition = definition(entry)?;
+        if definitions
+            .iter()
+            .any(|existing| existing.id == definition.id)
+        {
+            return Err(AgentError::Duplicate { id: definition.id });
         }
-        specs.push(spec);
+        definitions.push(definition);
     }
-    Ok(specs)
+    Ok(definitions)
 }
 
 /// The file as it is written, before any of it is trusted.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentsFile {
+    // Self-identification, not configuration: TOML has no comment-preserving
+    // pointer to a schema other than this key or a `#:schema` first line, and
+    // `deny_unknown_fields` would otherwise refuse the one line that makes the
+    // file checkable before it is loaded.
+    #[serde(default, rename = "$schema")]
+    _schema: Option<String>,
     schema_version: u32,
     // Defaulted so that a version problem is reported as a version problem
     // rather than as "missing field `agents`" in a two-line file.
@@ -249,42 +512,70 @@ struct AgentsFile {
     agents: Vec<AgentEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+/// One `[[agents]]` block as it is written.
+///
+/// This is the type [`json_schema`] is generated from, which is why every field
+/// carries a doc comment: the comment is the `description` an editor shows, and a
+/// field described in two places is a field described two different ways.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AgentEntry {
+    /// Stable identifier: lowercase letters, digits, `-`, and `_`, starting with
+    /// a letter or digit, at most 64 characters, unique within the profile.
     id: String,
+    /// Display name. Defaults to `id`.
     #[serde(default)]
     name: Option<String>,
+    /// One sentence on what the agent is for.
     #[serde(default)]
     description: Option<String>,
+    /// How the daemon drives it: `acp-stdio`, `pty`, or `http-jsonrpc`.
     transport: TransportName,
-    // acp-stdio and pty
+    /// `acp-stdio` and `pty`: the executable, resolved on the host the workspace
+    /// lives on.
     #[serde(default)]
     command: Option<String>,
+    /// `acp-stdio` and `pty`: arguments, passed verbatim.
     #[serde(default)]
     args: Vec<String>,
+    /// `acp-stdio` and `pty`: environment for the child. A value is a literal
+    /// (`NO_COLOR = "1"`) or a `keyring:<name>` reference, resolved when the
+    /// profile loads.
     #[serde(default)]
     env: BTreeMap<String, String>,
+    /// What the supervisor does when the process dies. Defaults to `never`.
     #[serde(default)]
     restart: Restart,
+    /// Required before a `keyring:<profile>/<name>` reference is accepted.
     #[serde(default)]
     allow_cross_profile: bool,
-    // http-jsonrpc
+    /// `http-jsonrpc`: where the agent answers; `http` or `https`.
     #[serde(default)]
     url: Option<String>,
+    /// `http-jsonrpc`: a `keyring:` reference. A plaintext token is refused.
     #[serde(default)]
     auth: Option<String>,
-    // pty
+    /// `pty`: `plain-transcript`, `ansi-transcript`, or `script:<path>`.
     #[serde(default)]
     parser: Option<String>,
+    /// `pty`: text that identifies the input row, so chrome above it can be cut
+    /// away.
     #[serde(default)]
     prompt_row: Option<String>,
+    /// `pty`: the input row back at rest — the primary turn-complete signal.
     #[serde(default)]
     sentinel: Option<String>,
+    /// `pty`: what to type to leave cleanly (for example `/exit`); `Ctrl-D` is
+    /// not universal.
     #[serde(default)]
     exit_command: Option<String>,
+    /// `pty`: gap between the text and the Enter key, in milliseconds. 50 by
+    /// default, because one write of `text\r` is a paste rather than a submit in
+    /// at least one TUI.
     #[serde(default)]
     submit_delay_ms: Option<u64>,
+    /// `pty`: backstop when the sentinel does not fire, in milliseconds. 5000 by
+    /// default; `0` is refused.
     #[serde(default)]
     idle_timeout_ms: Option<u64>,
 }
@@ -295,7 +586,7 @@ struct AgentEntry {
 /// the API returns, and accepting it means a value copied out of `GET
 /// /v1/agents` can be pasted into the file. The wire enum itself is untouched:
 /// the API has exactly one spelling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 enum TransportName {
     // Named individually rather than with `rename_all`: serde's kebab-case
     // would spell the third variant `http-json-rpc`, and the documents say
@@ -309,12 +600,39 @@ enum TransportName {
 }
 
 impl TransportName {
+    /// Every transport, in the order the documents list them.
+    const ALL: [Self; 3] = [Self::AcpStdio, Self::Pty, Self::HttpJsonRpc];
+
     /// The spelling used in diagnostics, which is the one in the documents.
     fn as_str(self) -> &'static str {
         match self {
             Self::AcpStdio => "acp-stdio",
             Self::Pty => "pty",
             Self::HttpJsonRpc => "http-jsonrpc",
+        }
+    }
+
+    /// The spelling `GET /v1/agents` returns, which this file accepts too.
+    ///
+    /// `None` where the two spellings are the same word, so the schema cannot
+    /// list a duplicate.
+    fn wire_spelling(self) -> Option<&'static str> {
+        match self {
+            Self::AcpStdio => Some("acp_stdio"),
+            Self::Pty => None,
+            Self::HttpJsonRpc => Some("http_json_rpc"),
+        }
+    }
+
+    /// Fields this transport cannot load without.
+    ///
+    /// The loader states this with its own error messages; the published schema
+    /// states it as `required`. A test holds the two together.
+    fn required_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::AcpStdio => &["command"],
+            Self::Pty => &["command", "parser", "sentinel"],
+            Self::HttpJsonRpc => &["url"],
         }
     }
 
@@ -340,29 +658,272 @@ impl TransportName {
     }
 }
 
-/// Turn one entry into a spec, or say which field is wrong.
-fn build(entry: AgentEntry, resolver: &dyn SecretResolver) -> Result<AgentSpec, AgentError> {
+/// The shape of an `id`, as a pattern.
+///
+/// [`validate_id`] is the authority — it produces the error a person reads — and
+/// this is the same rule in the one form an editor can check against. The schema
+/// tests feed the same ids to both.
+const ID_PATTERN: &str = "^[a-z0-9][a-z0-9_-]{0,63}$";
+
+/// A `script:` parser, as far as a pattern can see it.
+///
+/// Deliberately permissive: it refuses an empty path but accepts `script: `,
+/// which [`Parser::parse`] then refuses for the whitespace. A schema that
+/// rejected a file the loader accepts would be worse than one that misses it.
+const SCRIPT_PARSER_PATTERN: &str = "^script:.+$";
+
+/// Fields every agent may carry, whatever its transport.
+const SHARED_FIELDS: [&str; 6] = [
+    "id",
+    "name",
+    "description",
+    "transport",
+    "restart",
+    "allow_cross_profile",
+];
+
+/// [`json_schema`] as the committed file has it: pretty JSON, one trailing
+/// newline.
+///
+/// One renderer for the generator and the drift test, so a difference between
+/// them can only ever be a difference in what the schema says.
+#[must_use]
+pub fn schema_json_text() -> String {
+    let mut text = serde_json::to_string_pretty(&json_schema())
+        .expect("the generated schema is always serialisable");
+    text.push('\n');
+    text
+}
+
+/// The published JSON Schema for `agents.toml`.
+///
+/// `transport` is an internally tagged enum, so the schema is a `oneOf` of three
+/// objects: each fixes `transport` to one spelling and names exactly the fields
+/// that transport may carry. That is the rule [`TransportName::allowed_fields`]
+/// enforces at load, taken from the same table, so an editor cannot offer
+/// `sentinel` on an ACP agent.
+///
+/// Generated rather than stored: the drift test regenerates this and compares it
+/// with the committed `site/public/schema/agents-v1.json`, so a renamed field
+/// shows up as a diff in review instead of a bug report from an editor.
+///
+/// Two rules stay the loader's alone, because JSON Schema cannot say them: a
+/// duplicate `id` (there is no keyword for uniqueness by a property) and a
+/// `keyring:` reference that does not resolve.
+#[must_use]
+pub fn json_schema() -> Value {
+    let generated = serde_json::to_value(schemars::schema_for!(AgentEntry))
+        .expect("a generated schema is always serialisable");
+    let mut defs = generated
+        .get("$defs")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    // `schema_for!` inlines the type it was asked about and nests only what that
+    // type refers to, so the entry is normally the document itself.
+    let entry = defs.remove("AgentEntry").unwrap_or(generated);
+    let mut properties = entry
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("the entry is an object with properties")
+        .clone();
+    // The `transport` property is the only reference to this definition, and it
+    // is replaced below with the spelling that branch accepts.
+    defs.remove("TransportName");
+
+    // Three rules neither a doc comment nor a derive can carry: the shape of an
+    // `id`, the spellings of `parser`, and that `url` is a URL. Each is written
+    // beside the code that enforces it, and the drift test checks the loader and
+    // the schema on the same values.
+    if let Some(Value::Object(id)) = properties.get_mut("id") {
+        id.insert("pattern".to_owned(), json!(ID_PATTERN));
+    }
+    if properties.contains_key("parser") {
+        properties.insert(
+            "parser".to_owned(),
+            json!({
+                "description": "`pty`: `plain-transcript`, `ansi-transcript`, or `script:<path>`.",
+                "oneOf": [
+                    { "type": "string", "const": "plain-transcript" },
+                    { "type": "string", "const": "ansi-transcript" },
+                    { "type": "string", "pattern": SCRIPT_PARSER_PATTERN },
+                ],
+            }),
+        );
+    }
+    if let Some(Value::Object(url)) = properties.get_mut("url") {
+        url.insert("format".to_owned(), json!("uri"));
+    }
+
+    let agents: Vec<Value> = TransportName::ALL
+        .into_iter()
+        .map(|transport| {
+            let mut branch = Map::new();
+            for (name, schema) in &properties {
+                if SHARED_FIELDS.contains(&name.as_str())
+                    || transport.allowed_fields().contains(&name.as_str())
+                {
+                    branch.insert(name.clone(), schema.clone());
+                }
+            }
+
+            let mut spellings = vec![transport.as_str()];
+            spellings.extend(transport.wire_spelling());
+            let mut tag = properties
+                .get("transport")
+                .cloned()
+                .unwrap_or_else(|| json!({ "type": "string" }));
+            if let Value::Object(tag) = &mut tag {
+                // The doc comment describes all three; this branch describes one.
+                tag.remove("allOf");
+                tag.remove("$ref");
+                tag.insert("type".to_owned(), json!("string"));
+                tag.insert("enum".to_owned(), json!(spellings));
+            }
+            branch.insert("transport".to_owned(), tag);
+
+            let mut required: Vec<&str> = vec!["id", "transport"];
+            required.extend_from_slice(transport.required_fields());
+
+            json!({
+                "title": format!("{} agent", transport.as_str()),
+                "type": "object",
+                "additionalProperties": false,
+                "required": required,
+                "properties": branch,
+            })
+        })
+        .collect();
+
+    let mut root = Map::new();
+    root.insert(
+        "$schema".to_owned(),
+        json!("https://json-schema.org/draft/2020-12/schema"),
+    );
+    root.insert("$id".to_owned(), json!(SCHEMA_URL));
+    root.insert("title".to_owned(), json!("Acpilot agent manifest"));
+    root.insert(
+        "description".to_owned(),
+        json!(
+            "`agents.toml`, the file that tells Acpilot what an agent is and how to start \
+             it. One `[[agents]]` block per agent; `transport` decides which fields that \
+             block may carry. The file is TOML — this schema describes it, it does not \
+             replace it — and an editor reads it from the `$schema` key or a `#:schema` \
+             first line."
+        ),
+    );
+    root.insert(
+        "$comment".to_owned(),
+        json!(format!(
+            "Apache-2.0. Generated from crates/acpilot-agent/src/manifest.rs by \
+             `cargo xtask schema`; edit the Rust, not this file. This is the v1 document \
+             and is frozen: a change a `schema_version = {SCHEMA_VERSION}` loader would \
+             read differently ships as agents-v2.json."
+        )),
+    );
+    root.insert("type".to_owned(), json!("object"));
+    root.insert("additionalProperties".to_owned(), json!(false));
+    root.insert("required".to_owned(), json!(["schema_version", "agents"]));
+    root.insert(
+        "properties".to_owned(),
+        json!({
+            "$schema": {
+                "description": "This document, so an editor can complete and check the file. Ignored by the loader.",
+                "type": "string",
+                "format": "uri",
+            },
+            "schema_version": {
+                "description": format!(
+                    "Manifest schema major version; `{SCHEMA_VERSION}` is the only one this build speaks."
+                ),
+                "type": "integer",
+                "const": SCHEMA_VERSION,
+            },
+            "agents": {
+                "description": "Every agent in the profile. May not be empty: delete the file instead of emptying it.",
+                "type": "array",
+                "minItems": 1,
+                "items": { "oneOf": agents },
+            },
+        }),
+    );
+    root.insert("$defs".to_owned(), Value::Object(defs));
+
+    let mut root = Value::Object(root);
+    for_toml(&mut root);
+    root
+}
+
+/// Make the generated types say only what a TOML file can say.
+///
+/// - `Option<T>` generates `"type": ["string", "null"]`. TOML has no null, so
+///   publishing it would describe a file nobody can write and offer an editor a
+///   completion that does not parse. "Absent" is the only way to say "not set".
+/// - `u64` generates `"format": "uint64"`, which is a Rust type name rather
+///   than a keyword from the standard. `minimum: 0` already carries the fact
+///   that matters; the annotation would only be noise in an editor's tooltip.
+fn for_toml(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(types)) = map.get_mut("type") {
+                types.retain(|kind| kind != "null");
+            }
+            if let Some(Value::Array(members)) = map.get_mut("anyOf") {
+                members.retain(|member| member.get("type") != Some(&Value::from("null")));
+            }
+            if map.get("default") == Some(&Value::Null) {
+                map.remove("default");
+            }
+            let rust_integer = map
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(|format| format.starts_with("uint") || format.starts_with("int"));
+            if rust_integer {
+                map.remove("format");
+            }
+            // A one-item `type` array is noise; JSON Schema accepts the string.
+            let single = match map.get("type") {
+                Some(Value::Array(types)) if types.len() == 1 => types.first().cloned(),
+                _ => None,
+            };
+            if let Some(single) = single {
+                map.insert("type".to_owned(), single);
+            }
+            for child in map.values_mut() {
+                for_toml(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                for_toml(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Turn one entry into a definition, or say which field is wrong.
+fn definition(entry: AgentEntry) -> Result<AgentDefinition, AgentError> {
     validate_id(&entry.id)?;
 
     // Required fields first: a manifest that cannot run at all is the more
     // urgent fact than a field that would be ignored.
     let transport = match entry.transport {
-        TransportName::AcpStdio => Transport::AcpStdio {
+        TransportName::AcpStdio => TransportDefinition::AcpStdio {
             command: require_command(&entry)?,
         },
-        TransportName::Pty => Transport::Pty {
+        TransportName::Pty => TransportDefinition::Pty {
             command: require_command(&entry)?,
             profile: require_pty_profile(&entry)?,
         },
-        TransportName::HttpJsonRpc => {
-            let url = require_url(&entry)?;
-            let auth = resolve_auth(&entry, resolver)?;
-            Transport::HttpJsonRpc { url, auth }
-        }
+        TransportName::HttpJsonRpc => TransportDefinition::HttpJsonRpc {
+            url: require_url(&entry)?,
+            auth: require_auth(&entry)?,
+        },
     };
     refuse_unexpected_fields(&entry)?;
 
-    let env = resolve_env(&entry, resolver)?;
+    let env = env_values(&entry)?;
 
     let name = match entry.name.as_deref() {
         Some(name) if name.trim().is_empty() => {
@@ -375,7 +936,7 @@ fn build(entry: AgentEntry, resolver: &dyn SecretResolver) -> Result<AgentSpec, 
         None => entry.id.clone(),
     };
 
-    Ok(AgentSpec {
+    Ok(AgentDefinition {
         id: entry.id,
         name,
         description: entry.description,
@@ -518,10 +1079,8 @@ fn require_url(entry: &AgentEntry) -> Result<Url, AgentError> {
     Ok(url)
 }
 
-fn resolve_auth(
-    entry: &AgentEntry,
-    resolver: &dyn SecretResolver,
-) -> Result<Option<Secret>, AgentError> {
+/// Check `auth` as a reference the agent is allowed to name, without fetching it.
+fn require_auth(entry: &AgentEntry) -> Result<Option<SecretRef>, AgentError> {
     let Some(raw) = entry.auth.as_deref() else {
         return Ok(None);
     };
@@ -538,21 +1097,17 @@ fn resolve_auth(
         message: error.to_string(),
     })?;
     check_cross_profile(entry, &reference, "auth")?;
-    resolver
-        .resolve(&reference)
-        .map(Some)
-        .map_err(|error| AgentError::Secret {
-            id: entry.id.clone(),
-            variable: "auth".to_owned(),
-            message: error.to_string(),
-        })
+    Ok(Some(reference))
 }
 
-fn resolve_env(
-    entry: &AgentEntry,
-    resolver: &dyn SecretResolver,
-) -> Result<BTreeMap<String, Secret>, AgentError> {
-    let mut resolved = BTreeMap::new();
+/// Check every environment entry and keep it as written.
+///
+/// The name and the reference are checked here, at load, even though the value is
+/// not fetched until [`AgentDefinition::resolve`]: a manifest that names a
+/// variable a child process cannot receive is wrong whether or not the keyring is
+/// open.
+fn env_values(entry: &AgentEntry) -> Result<BTreeMap<String, EnvValue>, AgentError> {
+    let mut values = BTreeMap::new();
     for (variable, raw) in &entry.env {
         if variable.is_empty()
             || variable.contains('=')
@@ -575,19 +1130,29 @@ fn resolve_env(
                 message: error.to_string(),
             })?;
             check_cross_profile(entry, &reference, variable)?;
-            resolver
-                .resolve(&reference)
-                .map_err(|error| AgentError::Secret {
-                    id: entry.id.clone(),
-                    variable: variable.clone(),
-                    message: error.to_string(),
-                })?
+            EnvValue::Reference(reference)
         } else {
-            Secret::new(raw)
+            EnvValue::Literal(raw.clone())
         };
-        resolved.insert(variable.clone(), value);
+        values.insert(variable.clone(), value);
     }
-    Ok(resolved)
+    Ok(values)
+}
+
+/// Fetch one reference, naming the agent and the variable it was for.
+fn secret(
+    definition: &AgentDefinition,
+    variable: &str,
+    reference: &SecretRef,
+    resolver: &dyn SecretResolver,
+) -> Result<Secret, AgentError> {
+    resolver
+        .resolve(reference)
+        .map_err(|error| AgentError::Secret {
+            id: definition.id.clone(),
+            variable: variable.to_owned(),
+            message: error.to_string(),
+        })
 }
 
 fn check_cross_profile(
@@ -666,12 +1231,6 @@ fn validate_id(id: &str) -> Result<(), AgentError> {
 mod tests {
     use super::*;
 
-    /// The presets we ship, through the same parser a user's file goes through.
-    ///
-    /// This is the first test of the schema: if `acpilot.agents` stops parsing,
-    /// the build fails rather than a user's first run.
-    const SHIPPED_PRESETS: &str = include_str!("../../../extensions/acpilot.agents/agents.toml");
-
     fn load(text: &str) -> Result<Vec<AgentSpec>, AgentError> {
         let resolver = crate::secret::MapResolver::new().with("anthropic", "sk-ant-test");
         parse(Path::new("agents.toml"), text, &resolver)
@@ -688,6 +1247,26 @@ mod tests {
     }
 
     const HEADER: &str = "schema_version = 1\n";
+
+    #[test]
+    fn a_new_manifest_points_at_the_published_schema_and_still_parses() {
+        // The presets we ship, through the same parser a user's file goes
+        // through: the first test of the schema, and the text a new profile is
+        // written with. If `acpilot.agents` stops parsing, the build fails
+        // rather than a user's first run.
+        let text = initial_manifest();
+        let first = text.lines().next().expect("at least one line");
+        assert_eq!(first, format!("\"$schema\" = \"{SCHEMA_URL}\""));
+
+        let agents = parse(
+            Path::new("agents.toml"),
+            &text,
+            &crate::secret::MapResolver::new(),
+        )
+        .expect("a new profile's manifest loads");
+        assert_eq!(agents.len(), 4, "the four shipped presets");
+        assert_eq!(agents[0].id, "claude-code");
+    }
 
     #[test]
     fn the_shipped_presets_parse() {

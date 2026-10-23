@@ -16,6 +16,7 @@ license = "MIT OR Apache-2.0"
 acpilot-proto = { version = "0.1.0", path = "crates/acpilot-proto" }
 acpilot-core = { version = "0.1.0", path = "crates/acpilot-core" }
 acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
+acpilot-agent = { version = "0.1.0", path = "crates/acpilot-agent" }
 acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 
 # protocol
@@ -25,6 +26,13 @@ agent-client-protocol-schema = "1.12" # versioned separately from the 3.x runtim
 # runtime
 tokio = { version = "1.54", features = ["full"] }
 futures = "0.3"
+# The ACP SDK reads and writes agent pipes on its own threads. `blocking` is the
+# adapter between the supervisor's std::process pipes and the SDK's async
+# transport, so no pipe is polled from a runtime thread.
+blocking = "1"
+# Process-group signals for the agent supervisor's tree kill. Safe API on
+# purpose: the workspace forbids unsafe code, so `libc::kill` is not available.
+rustix = { version = "1", features = ["process"] }
 
 # api
 axum = "0.8"
@@ -85,7 +93,9 @@ portable-pty = "0.9"
 rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2"
 figment = "0.10"
-keyring = "4.2"
+# `v1` is the platform-independent Entry API (Keychain, Credential Manager,
+# Secret Service). Without a feature the crate compiles but offers no store.
+keyring = { version = "4.2", features = ["v1"] }
 directories = "6"
 
 # misc
@@ -96,6 +106,9 @@ serde_json = "1"
 # successor to serde_yaml; only the deserializer is linked.
 serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
 schemars = "1"
+# The published manifest schema is checked against the presets in a test. Local
+# `$ref`s only, so the TLS and HTTP resolver features are off at the call site.
+jsonschema = { version = "0.58", default-features = false }
 toml = "1.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = "0.2"

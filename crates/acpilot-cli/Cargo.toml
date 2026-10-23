@@ -11,6 +11,7 @@ name = "acpilot"
 path = "src/main.rs"
 
 [dependencies]
+acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-proto = { workspace = true }
@@ -18,6 +19,7 @@ clap = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -18,6 +18,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::{self, JoinHandle};
@@ -88,6 +89,27 @@ impl Registry {
                 last_error: None,
             }),
         })
+    }
+
+    /// Open a profile's manifest, writing the default one first if it is absent.
+    ///
+    /// A profile nobody has used yet has no `agents.toml`, and an empty one is
+    /// refused, so there is no useful empty template. The file is materialised the
+    /// first time something asks for the profile rather than by a setup command: it
+    /// starts with the published `$schema` line, so an editor knows the shape
+    /// before the first edit, and with the presets this build ships, so a profile
+    /// can be launched before it is configured.
+    ///
+    /// The file is created with `create_new`, not written over: if two processes
+    /// start at once, the loser loads what the winner wrote rather than replacing
+    /// it.
+    pub fn open_or_create(
+        path: impl Into<PathBuf>,
+        resolver: Arc<dyn SecretResolver>,
+    ) -> Result<Self, AgentError> {
+        let path = path.into();
+        create(&path)?;
+        Self::load(path, resolver)
     }
 
     /// Re-read the manifest, replacing the snapshot only if it validates.
@@ -237,6 +259,54 @@ impl Drop for AgentWatcher {
             let _ = thread.join();
         }
     }
+}
+
+/// Write the starting manifest at `path` unless something is already there.
+///
+/// A failed write removes what it created: a half-written manifest would be a
+/// profile that refuses to load on every later start, which is worse than one that
+/// has to be created twice.
+fn create(path: &Path) -> Result<(), AgentError> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|source| AgentError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        // Another process created it between the check and the open, which is
+        // exactly the case `create_new` is here for.
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => return Ok(()),
+        Err(source) => {
+            return Err(AgentError::Io {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+
+    let text = manifest::initial_manifest();
+    if let Err(source) = file.write_all(text.as_bytes()) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(AgentError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
 }
 
 fn touches(event: &Event, file_name: &OsStr) -> bool {

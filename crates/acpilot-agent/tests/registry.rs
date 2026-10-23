@@ -307,3 +307,43 @@ fn dropping_the_watcher_stops_the_watching() {
     // The registry is still usable without one.
     assert!(registry.reload().expect("manual reload"));
 }
+
+#[test]
+fn a_profile_that_is_asked_for_is_given_a_manifest_that_names_the_schema() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Deliberately not created: this is the first start of a profile.
+    let path = dir
+        .path()
+        .join("profiles")
+        .join("default")
+        .join("agents.toml");
+
+    let registry = Registry::open_or_create(&path, resolver()).expect("open a new profile");
+    assert_eq!(registry.agents().len(), 4, "the shipped presets");
+
+    let text = fs::read_to_string(&path).expect("the manifest was written");
+    let first = text.lines().next().expect("at least one line");
+    assert_eq!(
+        first,
+        format!("\"$schema\" = \"{}\"", acpilot_agent::SCHEMA_URL),
+        "the schema line comes first so an editor sees it before the first edit"
+    );
+    // It parses through the same reader a hand-written file does, so the two
+    // cannot describe different files.
+    assert!(text.contains("schema_version = 1"));
+}
+
+#[test]
+fn opening_existing_manifests_never_rewrites_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), FIRST);
+
+    Registry::open_or_create(manifest_path(dir.path()), resolver()).expect("load");
+    Registry::open_or_create(manifest_path(dir.path()), resolver()).expect("load again");
+
+    assert_eq!(
+        fs::read_to_string(manifest_path(dir.path())).expect("read"),
+        FIRST,
+        "a file the user owns is never replaced"
+    );
+}

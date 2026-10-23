@@ -79,12 +79,13 @@ impl Registry {
             for contribution in &extension.contributions {
                 if let Contribution::Agents(presets) = contribution {
                     for preset in presets {
-                        if let Some(existing) =
-                            agents.iter().find(|existing| existing.id == preset.id)
+                        if let Some(existing) = agents
+                            .iter()
+                            .find(|existing| existing.definition.id == preset.definition.id)
                         {
                             errors.push(ExtensionError::Duplicate {
                                 what: "agent preset",
-                                id: preset.id.clone(),
+                                id: preset.definition.id.clone(),
                                 owner: existing.extension_id.clone(),
                             });
                         } else {
@@ -94,7 +95,7 @@ impl Registry {
                 }
             }
         }
-        agents.sort_by(|a, b| a.id.cmp(&b.id));
+        agents.sort_by(|a, b| a.definition.id.cmp(&b.definition.id));
 
         if !errors.is_empty() {
             return Err(errors);

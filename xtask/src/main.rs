@@ -29,6 +29,8 @@ enum Task {
     Probe,
     /// Regenerate the theme data the documentation site renders.
     DocsData,
+    /// Write the published `agents.toml` JSON Schema.
+    Schema,
     /// Run the daemon and the web dev server together (needs a built web UI).
     Dev,
     /// Build the web UI into `web/dist` for embedding.
@@ -48,6 +50,7 @@ fn main() -> ExitCode {
             }
         }
         Task::DocsData => run_docs_data(),
+        Task::Schema => run_schema(),
         Task::Dev => not_yet("dev", "P3 owns the daemon and P11 the web dev server"),
         Task::WebBuild => not_yet("web-build", "P11 adds the web frontend"),
         Task::Dist => not_yet("dist", "P12 adds packaging"),
@@ -330,6 +333,45 @@ fn run_docs_data() -> ExitCode {
     }
 
     println!("wrote {}", path.display());
+    ExitCode::SUCCESS
+}
+
+/// Write every published JSON Schema under `site/public/schema/`.
+///
+/// The files are in `public/` because that is where the docs site serves them
+/// from, and each schema's `$id` is that URL: publishing the docs publishes the
+/// schema. Generated rather than hand-edited, so an artifact cannot describe a
+/// file the loader refuses — a drift test in each crate compares this output with
+/// the committed copy.
+fn run_schema() -> ExitCode {
+    let schemas = [
+        (
+            acpilot_agent::SCHEMA_PATH,
+            acpilot_agent::schema_json_text(),
+        ),
+        (
+            acpilot_extensions::SCHEMA_PATH,
+            acpilot_extensions::schema_json_text(),
+        ),
+    ];
+
+    for (relative, text) in schemas {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(relative);
+        if let Some(parent) = path.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            eprintln!("{}: {error}", parent.display());
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = fs::write(&path, &text) {
+            eprintln!("{}: {error}", path.display());
+            return ExitCode::FAILURE;
+        }
+        println!("wrote {} ({} bytes)", path.display(), text.len());
+    }
+
     ExitCode::SUCCESS
 }
 

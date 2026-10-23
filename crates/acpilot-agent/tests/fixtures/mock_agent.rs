@@ -11,10 +11,14 @@
 //! | --- | --- |
 //! | `stream <n>` | emits `n` message chunks numbered from 1, then ends the turn |
 //! | `permission` | asks the client to allow a shell command, reports the answer, ends the turn |
-//! | `fs` | asks the client to read and then write a file, reports each answer, ends the turn |
+//! | `fs` | reads `seed.txt` in the session's cwd, reads `/etc/passwd`, writes a file in the cwd, reports each answer, ends the turn |
+//! | `write <path>` | writes one file at the absolute path given, reports the answer, ends the turn |
 //! | `terminal` | asks the client to open a terminal, reports the answer, ends the turn |
 //! | `hang` | never answers, so the request stays pending |
 //! | anything else | echoes the prompt as one chunk |
+//!
+//! The session's cwd comes from `session/new`, which is how a real agent learns
+//! its workspace; the fixture does not assume one.
 //!
 //! Each answer it hears comes back to the test as a `Notice`, because the
 //! client is the only side a test can observe: a fixture that decided the
@@ -25,6 +29,8 @@
 //! deadlocks the dispatch loop, which is documented on `SentRequest::block_task`
 //! and is why `permission` asks after the handler has returned.
 
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use agent_client_protocol::schema::v1::{
@@ -38,6 +44,10 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio, on_receive_request};
 
 static SESSIONS: AtomicU32 = AtomicU32::new(0);
+
+/// The cwd the client gave the session, which is the workspace an agent would
+/// treat as its own.
+static WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
 
 #[tokio::main]
 async fn main() {
@@ -57,7 +67,8 @@ async fn main() {
             on_receive_request!(),
         )
         .on_receive_request(
-            async |_request: NewSessionRequest, responder, _cx| {
+            async |request: NewSessionRequest, responder, _cx| {
+                let _ = WORKSPACE.set(request.cwd.clone());
                 let id = SESSIONS.fetch_add(1, Ordering::Relaxed) + 1;
                 responder.respond(NewSessionResponse::new(format!("acp-{id}")))
             },
@@ -80,14 +91,18 @@ async fn main() {
                         // which is what a hung agent looks like.
                         Ok(())
                     }
-                    Directive::Permission | Directive::Fs | Directive::Terminal => {
+                    asked @ (Directive::Permission
+                    | Directive::Fs
+                    | Directive::Write(_)
+                    | Directive::Terminal) => {
                         let task = connection.clone();
                         connection.spawn(async move {
                             let report = match asked {
                                 Directive::Permission => ask_permission(&task, &session).await,
                                 Directive::Fs => exercise_files(&task, &session).await,
+                                Directive::Write(path) => write_file(&task, &session, path).await,
                                 Directive::Terminal => exercise_terminal(&task, &session).await,
-                                // `spawn` is only reached for the three above.
+                                // `spawn` is only reached for the four above.
                                 Directive::Stream(_) | Directive::Hang => Vec::new(),
                             };
                             for line in report {
@@ -110,11 +125,12 @@ async fn main() {
 }
 
 /// What a prompt asks for. See the table in the module docs.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Directive {
     Stream(usize),
     Permission,
     Fs,
+    Write(PathBuf),
     Terminal,
     Hang,
 }
@@ -127,9 +143,20 @@ fn directive(text: &str) -> Directive {
         "hang" => Directive::Hang,
         other => match other.strip_prefix("stream ") {
             Some(count) => Directive::Stream(count.trim().parse().unwrap_or(1)),
-            None => Directive::Stream(1),
+            None => match other.strip_prefix("write ") {
+                Some(path) => Directive::Write(PathBuf::from(path.trim())),
+                None => Directive::Stream(1),
+            },
         },
     }
+}
+
+/// The workspace the client named at `session/new`.
+fn workspace() -> PathBuf {
+    WORKSPACE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 fn prompt_text(request: &PromptRequest) -> String {
@@ -188,26 +215,47 @@ async fn ask_permission(connection: &ConnectionTo<Client>, session: &SessionId) 
 }
 
 async fn exercise_files(connection: &ConnectionTo<Client>, session: &SessionId) -> Vec<String> {
-    let read = connection
+    let workspace = workspace();
+    let inside = connection
         .send_request(ReadTextFileRequest::new(
             session.clone(),
-            std::path::PathBuf::from("/etc/passwd"),
+            workspace.join("seed.txt"),
         ))
         .block_task()
         .await;
-    let write = connection
-        .send_request(WriteTextFileRequest::new(
+    // Outside the workspace by construction, whatever the workspace is.
+    let outside = connection
+        .send_request(ReadTextFileRequest::new(
             session.clone(),
-            std::path::PathBuf::from("written-by-the-agent.txt"),
-            "hello\n",
+            PathBuf::from("/etc/passwd"),
         ))
         .block_task()
         .await;
+    let write = write_file(
+        connection,
+        session,
+        workspace.join("written-by-the-agent.txt"),
+    )
+    .await;
 
-    vec![
-        format!("fs/read_text_file {}", outcome(&read)),
-        format!("fs/write_text_file {}", outcome(&write)),
-    ]
+    let mut report = vec![
+        format!("fs/read_text_file (inside) {}", outcome(&inside)),
+        format!("fs/read_text_file (outside) {}", outcome(&outside)),
+    ];
+    report.extend(write);
+    report
+}
+
+async fn write_file(
+    connection: &ConnectionTo<Client>,
+    session: &SessionId,
+    path: PathBuf,
+) -> Vec<String> {
+    let written = connection
+        .send_request(WriteTextFileRequest::new(session.clone(), path, "hello\n"))
+        .block_task()
+        .await;
+    vec![format!("fs/write_text_file {}", outcome(&written))]
 }
 
 async fn exercise_terminal(connection: &ConnectionTo<Client>, session: &SessionId) -> Vec<String> {

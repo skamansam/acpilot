@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The agent's `fs/*` callbacks go through this seam, so a remote workspace reads
+# and writes over SSH in P3-9 without the session code knowing. No default
+# features: the engine only needs the trait, not the SSH transport.
+acpilot-host = { workspace = true }
 acpilot-proto = { workspace = true }
 agent-client-protocol = { workspace = true }
 blocking = { workspace = true }

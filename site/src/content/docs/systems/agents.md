@@ -98,15 +98,51 @@ is a notification, so it reaches an agent mid-turn.
 Two refusals matter while the rest is unbuilt. A permission request is answered
 with the agent's own reject option and recorded as a notice, because no grant
 should be implied by a session that has no policy yet. A request for a method
-this build does not implement — `fs/*`, `terminal/create` — is answered with
+this build does not implement — today, `terminal/create` — is answered with
 `MethodNotFound` naming the method: not advertising a capability does not stop an
 agent asking, and a request with no answer is a hang, not a refusal. All of it is
 exercised against a mock agent that runs as a real child process, so the pipes,
 the handshake and the tree kill are run in CI rather than only type-checked.
 
-The permission broker (P2-6), the filesystem callbacks (P2-4) and terminals
-(P2-5) are not built yet. `pty` and `http-jsonrpc` agents are accepted by the
-schema but refused by the supervisor until their phases land, so the diagram
-above is still the target, not a full description of today's daemon.
+## Files
+
+An agent does not open files; it asks its client to. A session is given a
+workspace, and `fs/read_text_file` and `fs/write_text_file` are served from it
+through the same host seam the daemon edits and runs processes through — so the
+same code reads a laptop's disk and, once the SFTP channel lands, an SSH
+workspace's.
+
+The path an agent asks about is resolved **on the host**, symlinks followed,
+before it is compared with the workspace. Comparing the text that arrived would
+miss `workspace/link`, which is a path that looks contained and points at `/etc`.
+A relative path is refused rather than joined onto the workspace: the protocol
+says absolute, and guessing a base directory turns an agent's bug into a file in
+an unexpected place.
+
+Reads outside the workspace are refused by name. Writes outside it are not
+refused — they wait. The request is published as a pending grant, the turn
+blocks, and the file is untouched until somebody approves it. That is the whole
+point of calling it a shadow write: the old contents are still the contents
+while the decision is open, so a diff can be shown against a file that has not
+moved, and a crash leaves the disk as it was. Nothing is written speculatively
+and rolled back, because a file restored by a rollback is not the same inode the
+editor had open.
+
+Two rules keep a blocked write from becoming a hang. If nothing is listening for
+pending grants the write is refused immediately, since an approval that nobody
+can give is not worth waiting for; and a grant nobody answers expires after five
+minutes. Either way the agent gets a denial, and the refusal is recorded as a
+notice, so the transcript shows what the agent was told.
+
+A session without a workspace advertises no filesystem at all, and refuses a
+request that arrives anyway. The capability and the handler are one decision:
+advertising something this client cannot serve is the same bug as refusing
+something it advertised.
+
+The permission broker (P2-6) and terminals (P2-5) are not built yet, and policy
+is not decided here — inside the workspace or not is the only rule the filesystem
+layer has. `pty` and `http-jsonrpc` agents are accepted by the schema but refused
+by the supervisor until their phases land, so the diagram above is still the
+target, not a full description of today's daemon.
 Model-backed agents arrive in P4.5, on top of the same layer, and inherit
 whatever P2 gets right — or wrong — without a second implementation to blame.

@@ -8,12 +8,22 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use acpilot_host::{ExecCommand, Host, LocalHost, Size};
+use acpilot_host::{ExecCommand, Host, HostError, LocalHost, Size};
+
+/// A directory this test owns. Named for the process so two tests running at
+/// once do not collide, and removed by the test that created it.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let directory =
+        std::env::temp_dir().join(format!("acpilot-host-{name}-{}", std::process::id()));
+    fs::create_dir_all(&directory).expect("create temp dir");
+    directory
+}
 
 /// Read a PTY until `needle` arrives, the child closes the terminal, or the
 /// deadline passes. A PTY has no message boundaries, so "read one line" would
@@ -70,8 +80,7 @@ fn exec_keeps_streams_apart_and_reports_the_exit_code() {
 
 #[test]
 fn exec_runs_in_the_given_directory_with_the_given_environment() {
-    let directory = std::env::temp_dir().join(format!("acpilot-host-{}", std::process::id()));
-    fs::create_dir_all(&directory).expect("create temp dir");
+    let directory = scratch("exec");
     fs::write(directory.join("marker.txt"), "here").expect("write marker");
 
     let mut child = LocalHost
@@ -147,4 +156,80 @@ fn a_pty_can_be_resized_and_killed() {
     pty.kill().expect("kill");
     let exit = pty.wait().expect("wait");
     assert!(!exit.success, "a killed process did not succeed: {exit:?}");
+}
+
+#[test]
+fn files_are_read_and_written_as_bytes_and_missing_ones_are_errors() {
+    let directory = scratch("files");
+    let text = directory.join("notes.txt");
+    let binary = directory.join("bytes.bin");
+
+    LocalHost
+        .write_file(&text, b"one\ntwo\n")
+        .expect("write text");
+    assert_eq!(
+        LocalHost.read_file(&text).expect("read text"),
+        b"one\ntwo\n"
+    );
+
+    // Bytes, not text: the caller decides what to refuse, and a lossy conversion
+    // here would hand back something that is not the file.
+    LocalHost
+        .write_file(&binary, &[0xff, 0x00, 0xfe])
+        .expect("write bytes");
+    assert_eq!(
+        LocalHost.read_file(&binary).expect("read bytes"),
+        [0xff, 0x00, 0xfe]
+    );
+
+    let missing = directory.join("absent.txt");
+    match LocalHost.read_file(&missing) {
+        Err(HostError::ReadFile { path, source }) => {
+            assert_eq!(path, missing);
+            assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        }
+        other => panic!("a missing file must name itself: {other:?}"),
+    }
+
+    // A missing parent is an error, not a directory tree to build.
+    let orphan = directory.join("no/such/dir/file.txt");
+    assert!(
+        LocalHost.write_file(&orphan, b"x").is_err(),
+        "writing under a missing parent must fail"
+    );
+    assert!(!directory.join("no").exists());
+
+    fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn canonicalize_resolves_a_symlink_out_of_its_directory() {
+    let directory = scratch("canonicalize");
+    let outside = scratch("canonicalize-outside");
+    let target = outside.join("secret.txt");
+    fs::write(&target, "not for the agent").expect("write target");
+
+    let link = directory.join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    let resolved = LocalHost.canonicalize(&link).expect("resolve the link");
+    assert_eq!(
+        resolved,
+        fs::canonicalize(&target).expect("resolve the target"),
+        "a containment check must see where the link goes, not where it sits"
+    );
+    assert!(!resolved.starts_with(&directory));
+
+    // A path that does not exist cannot be resolved, which is why a write
+    // resolves its parent instead.
+    assert!(LocalHost.canonicalize(&directory.join("new.txt")).is_err());
+    assert_eq!(
+        LocalHost
+            .canonicalize(Path::new(&directory))
+            .expect("resolve the directory"),
+        fs::canonicalize(&directory).expect("resolve locally")
+    );
+
+    fs::remove_dir_all(&directory).ok();
+    fs::remove_dir_all(&outside).ok();
 }

@@ -54,13 +54,22 @@
 //! is the only safe default before P2-6 owns the broker: no grant is ever
 //! implied by a session that has no policy yet.
 //!
+//! # Files
+//!
+//! `fs/read_text_file` and `fs/write_text_file` are served by [`crate::fs`] when
+//! the session was given one, and that is the same condition as advertising the
+//! capability at `initialize`: a session either has a workspace and says so, or
+//! has none and refuses. A refusal is recorded as a `notice` before it is
+//! returned, so an operator reading the event stream sees the same refusals the
+//! agent does.
+//!
 //! # Requests this build cannot serve
 //!
-//! The client advertises no filesystem or terminal support until P2-4 and P2-5
-//! exist, but an agent may ask anyway. Each such request is answered with
-//! `MethodNotFound` and a message naming the gap. Answering is not politeness:
-//! a request with no response leaves the agent waiting forever, which is how the
-//! P2-9 fixture found this, and an error is the one thing an agent can act on.
+//! Terminals arrive with P2-5, but an agent may ask before then. Each request is
+//! answered with `MethodNotFound` and a message naming the gap. Answering is not
+//! politeness: a request with no response leaves the agent waiting forever, which
+//! is how the P2-9 fixture found this, and an error is the one thing an agent can
+//! act on.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -74,13 +83,14 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
     CompactionCapabilities, CompactionSummaryChunk, CompactionUpdate, ContentBlock, ContentChunk,
-    CreateTerminalRequest, CurrentModeUpdate, Implementation, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, Notice, NoticeCapabilities, NoticeSeverity, PermissionOptionKind,
-    PromptRequest, PromptResponse, ReadTextFileRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionInfoUpdate, SessionNotification, SessionUpdate, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, UsageUpdate, WriteTextFileRequest,
+    CreateTerminalRequest, CurrentModeUpdate, FileSystemCapabilities, Implementation,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, Notice, NoticeCapabilities, NoticeSeverity,
+    PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionInfoUpdate, SessionNotification, SessionUpdate, TextContent,
+    ToolCall, ToolCallStatus, ToolCallUpdate, UsageUpdate, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
 use serde::Serialize;
@@ -89,6 +99,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::fs::Fs;
 use crate::supervisor::{AgentProcess, StderrRing};
 
 /// How many events a subscriber may fall behind before the oldest are dropped.
@@ -108,6 +119,13 @@ pub struct SessionOptions {
     pub client_version: String,
     /// Broadcast capacity; see [`EVENT_CAPACITY`].
     pub event_capacity: usize,
+    /// The workspace the agent's `fs/*` requests are served from.
+    ///
+    /// `None` means the session has no filesystem: the client does not advertise
+    /// the capability, and a request that arrives anyway is refused. The two must
+    /// agree, because advertising a capability this client cannot serve is the
+    /// same bug as refusing one it advertised.
+    pub fs: Option<Arc<Fs>>,
 }
 
 impl SessionOptions {
@@ -118,7 +136,15 @@ impl SessionOptions {
             client_name: "acpilot".to_owned(),
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             event_capacity: EVENT_CAPACITY,
+            fs: None,
         }
+    }
+
+    /// Serve this session's `fs/*` requests from `fs`.
+    #[must_use]
+    pub fn fs(mut self, fs: Arc<Fs>) -> Self {
+        self.fs = Some(fs);
+        self
     }
 }
 
@@ -235,14 +261,30 @@ impl Session {
 
         let notification_log = Arc::clone(&log);
         let permission_log = Arc::clone(&log);
+        let read_log = Arc::clone(&log);
+        let write_log = Arc::clone(&log);
+        let read_files = options.fs.clone();
+        let write_files = options.fs.clone();
+        // The daemon's name for this session, which is what a pending grant
+        // carries: a person approving a write needs the conversation it belongs
+        // to, not the agent's own id for it.
+        let session_label = options.id.clone();
+
+        let mut capabilities = ClientCapabilities::new().session(
+            ClientSessionCapabilities::new()
+                .notices(NoticeCapabilities::default())
+                .compaction(CompactionCapabilities::default()),
+        );
+        // The capability and the handler are one decision: a session with no
+        // workspace says it has no filesystem, and refuses if asked anyway.
+        if options.fs.is_some() {
+            capabilities = capabilities.fs(FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true));
+        }
+
         let initialize = InitializeRequest::new(ProtocolVersion::V1)
-            .client_capabilities(
-                ClientCapabilities::new().session(
-                    ClientSessionCapabilities::new()
-                        .notices(NoticeCapabilities::default())
-                        .compaction(CompactionCapabilities::default()),
-                ),
-            )
+            .client_capabilities(capabilities)
             .client_info(Implementation::new(
                 options.client_name.clone(),
                 options.client_version.clone(),
@@ -268,17 +310,40 @@ impl Session {
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
-                // Advertised as unsupported, and refused if asked anyway. See
-                // the module note on requests this build cannot serve.
                 .on_receive_request(
-                    async |_request: ReadTextFileRequest, responder, _cx| {
-                        responder.respond_with_error(not_served("fs/read_text_file"))
+                    async move |request: ReadTextFileRequest, responder, _cx| {
+                        let Some(fs) = read_files.clone() else {
+                            return responder.respond_with_error(not_served("fs/read_text_file"));
+                        };
+                        match fs.read(&request.path, request.line, request.limit).await {
+                            Ok(content) => responder.respond(ReadTextFileResponse::new(content)),
+                            Err(error) => {
+                                record_warning(&read_log, "File read refused", &error.to_string());
+                                responder.respond_with_error(error.into_protocol())
+                            }
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async |_request: WriteTextFileRequest, responder, _cx| {
-                        responder.respond_with_error(not_served("fs/write_text_file"))
+                    async move |request: WriteTextFileRequest, responder, _cx| {
+                        let Some(fs) = write_files.clone() else {
+                            return responder.respond_with_error(not_served("fs/write_text_file"));
+                        };
+                        // One session per connection, so the daemon's id is the
+                        // session this write belongs to whatever the request says.
+                        let session = session_label.clone();
+                        match fs.write(&session, &request.path, &request.content).await {
+                            Ok(()) => responder.respond(WriteTextFileResponse::new()),
+                            Err(error) => {
+                                record_warning(
+                                    &write_log,
+                                    "File write refused",
+                                    &error.to_string(),
+                                );
+                                responder.respond_with_error(error.into_protocol())
+                            }
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -514,9 +579,15 @@ fn record(log: &Arc<Mutex<EventLog>>, update: &SessionUpdate) {
 }
 
 fn record_permission_denied(log: &Arc<Mutex<EventLog>>, description: &str) {
+    record_warning(log, "Permission request denied", description);
+}
+
+/// Record a refusal on the event stream, so the operator sees what the agent
+/// sees. The agent gets the JSON-RPC error; this is the same decision in the
+/// transcript.
+fn record_warning(log: &Arc<Mutex<EventLog>>, title: &str, description: &str) {
     let notice = SessionUpdate::Notice(
-        Notice::new(NoticeSeverity::Warning, "Permission request denied")
-            .description(description.to_owned()),
+        Notice::new(NoticeSeverity::Warning, title).description(description.to_owned()),
     );
     record(log, &notice);
 }

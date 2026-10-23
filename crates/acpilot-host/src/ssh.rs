@@ -33,7 +33,7 @@
 //! escaping is one function with tests rather than sprinkled through the file.
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -249,6 +249,31 @@ impl Host for SshHost {
             }),
             size,
         ))
+    }
+
+    // Refused rather than served from this machine's disk: the path an agent
+    // asks about belongs to the remote filesystem, so answering it with a local
+    // file would be a wrong answer that looks like a right one. P3-9 owns the
+    // SFTP channel that makes these three real, and canonicalize must come with
+    // it — a containment check cannot be sound without it.
+    fn canonicalize(&self, _path: &Path) -> Result<PathBuf, HostError> {
+        Err(files_over_ssh())
+    }
+
+    fn read_file(&self, _path: &Path) -> Result<Vec<u8>, HostError> {
+        Err(files_over_ssh())
+    }
+
+    fn write_file(&self, _path: &Path, _contents: &[u8]) -> Result<(), HostError> {
+        Err(files_over_ssh())
+    }
+}
+
+fn files_over_ssh() -> HostError {
+    HostError::Unsupported {
+        feature: "Host file access",
+        platform: "ssh",
+        owner: "P3-9 adds the SFTP channel",
     }
 }
 

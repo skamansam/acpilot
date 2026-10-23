@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acpilot_agent::{AgentProcess, MapResolver, Registry, Session, SessionOptions};
+use acpilot_agent::{AgentProcess, Fs, MapResolver, Registry, Session, SessionOptions};
+use acpilot_host::LocalHost;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use agent_client_protocol::schema::v1::StopReason;
 use tokio::sync::broadcast::Receiver;
@@ -52,21 +53,58 @@ fn manifest(dir: &Path) -> PathBuf {
 
 /// Load the manifest, start the child, and open a session over its pipes.
 async fn open(dir: &Path) -> Session {
+    open_with(dir, None).await
+}
+
+/// The same, with a workspace the agent's `fs/*` requests can be served from.
+async fn open_with(dir: &Path, fs: Option<Arc<Fs>>) -> Session {
     let registry =
         Registry::load(manifest(dir), Arc::new(MapResolver::new())).expect("the manifest loads");
     let spec = registry.get("mock").expect("the mock agent is declared");
     let process = AgentProcess::spawn(spec).expect("the fixture spawns");
-    Session::spawn(process, SessionOptions::new("session-1"))
+    let mut options = SessionOptions::new("session-1");
+    if let Some(fs) = fs {
+        options = options.fs(fs);
+    }
+    Session::spawn(process, options)
         .await
         .expect("the fixture initializes")
 }
 
+/// A filesystem rooted at `dir`, on this machine.
+fn workspace(dir: &Path) -> Arc<Fs> {
+    Arc::new(Fs::new(Arc::new(LocalHost), dir).expect("the workspace resolves"))
+}
+
+/// How long a step in these tests may take before it is a finding.
+const PATIENCE: Duration = Duration::from_secs(10);
+
 /// The next event, or a failure that names the wait rather than hanging the run.
 async fn next(events: &mut Receiver<SessionEvent>) -> SessionEvent {
-    timeout(Duration::from_secs(10), events.recv())
+    timeout(PATIENCE, events.recv())
         .await
         .expect("an event arrives")
         .expect("the stream is open")
+}
+
+/// The fixture reports each answer it heard as a notice; collect `count` of the
+/// ones that start with `prefix`, in arrival order.
+///
+/// The prefix matters: the client records its own refusal notices, and a test
+/// that took the first notice it saw would be asserting on its own log line
+/// rather than on what the agent was told.
+async fn reports(events: &mut Receiver<SessionEvent>, count: usize, prefix: &str) -> Vec<String> {
+    let mut reports = Vec::new();
+    while reports.len() < count {
+        let event = next(events).await;
+        if event.kind == SessionEventKind::Notice
+            && let Some(message) = event.payload["message"].as_str()
+            && message.starts_with(prefix)
+        {
+            reports.push(message.to_owned());
+        }
+    }
+    reports
 }
 
 #[tokio::test]
@@ -153,7 +191,14 @@ async fn file_and_terminal_requests_are_refused_because_nothing_advertises_them(
         .expect("session/new works");
 
     for (prompt, expected) in [
-        ("fs", &["fs/read_text_file", "fs/write_text_file"][..]),
+        (
+            "fs",
+            &[
+                "fs/read_text_file",
+                "fs/read_text_file",
+                "fs/write_text_file",
+            ][..],
+        ),
         ("terminal", &["terminal/create"][..]),
     ] {
         session.prompt(prompt).await.expect("the turn ends");
@@ -199,6 +244,124 @@ async fn a_hung_turn_stays_pending_and_does_not_wedge_the_session() {
     assert_eq!(response.stop_reason, StopReason::EndTurn);
     let event = next(&mut events).await;
     assert_eq!(event.payload["content"]["text"], "chunk 1");
+}
+
+/// The client serves `fs/*` from the session's workspace: a file inside it is
+/// read, a file outside it is refused by name, and a write inside lands on disk.
+#[tokio::test]
+async fn files_inside_the_workspace_are_served_and_a_file_outside_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    fs::write(dir.path().join("seed.txt"), "seeded\n").expect("write the seed");
+    let mut session = open_with(dir.path(), Some(workspace(dir.path()))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+
+    let response = session.prompt("fs").await.expect("prompt works");
+    assert_eq!(response.stop_reason, StopReason::EndTurn);
+
+    let report = reports(&mut events, 3, "fs/").await;
+    assert!(
+        report[0].starts_with("fs/read_text_file (inside) accepted"),
+        "a file in the workspace is read: {report:?}"
+    );
+    assert!(
+        report[1].contains("outside the workspace"),
+        "a file outside it is refused for that reason: {report:?}"
+    );
+    assert!(
+        report[2].starts_with("fs/write_text_file accepted"),
+        "a write in the workspace is not queued for approval: {report:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("written-by-the-agent.txt")).expect("the agent's file"),
+        "hello\n"
+    );
+}
+
+/// The shadow-write guard, with the two ends finally in the same test: the agent
+/// is blocked mid-turn, the file is untouched, and the approval writes it.
+#[tokio::test]
+async fn a_write_outside_the_workspace_holds_the_turn_until_it_is_approved() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let elsewhere = tempfile::tempdir().expect("temp dir");
+    let files = workspace(dir.path());
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+    let mut grants = files.grants().subscribe();
+
+    let target = elsewhere.path().join("outside.txt");
+    let resolved = fs::canonicalize(elsewhere.path())
+        .expect("resolve the target directory")
+        .join("outside.txt");
+
+    let approval = async {
+        let request = timeout(PATIENCE, grants.recv())
+            .await
+            .expect("a grant is announced")
+            .expect("the stream is open");
+        assert_eq!(request.path, resolved);
+        assert_eq!(request.session, "session-1");
+        assert!(
+            !target.exists(),
+            "nothing is written while the grant is pending"
+        );
+        assert!(files.grants().approve(request.id));
+    };
+    let (response, ()) = tokio::join!(
+        session.prompt(format!("write {}", target.display())),
+        approval
+    );
+    response.expect("the turn ends after the approval");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read the written file"),
+        "hello\n"
+    );
+}
+
+#[tokio::test]
+async fn a_denied_write_is_reported_and_the_turn_still_ends() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let elsewhere = tempfile::tempdir().expect("temp dir");
+    let files = workspace(dir.path());
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+    let mut grants = files.grants().subscribe();
+
+    let target = elsewhere.path().join("outside.txt");
+    let denial = async {
+        let request = timeout(PATIENCE, grants.recv())
+            .await
+            .expect("a grant is announced")
+            .expect("the stream is open");
+        assert!(files.grants().deny(request.id));
+    };
+    let (response, ()) = tokio::join!(
+        session.prompt(format!("write {}", target.display())),
+        denial
+    );
+    assert_eq!(
+        response
+            .expect("a refused write does not end the session")
+            .stop_reason,
+        StopReason::EndTurn
+    );
+
+    let report = reports(&mut events, 1, "fs/").await;
+    assert!(
+        report[0].contains("was not approved"),
+        "the agent is told why: {report:?}"
+    );
+    assert!(!target.exists(), "a denied write writes nothing");
 }
 
 /// P2-2 and P2-3 both recorded the same gap: their pipe wiring was type-checked

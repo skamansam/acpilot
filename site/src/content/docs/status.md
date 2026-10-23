@@ -20,7 +20,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Swagger UI | <span class="pill pill--flying">flying</span> | `--features docs`, at `/docs` |
 | CLI | <span class="pill pill--boarding">boarding</span> | `acpilot version` only; the rest is P5 |
 | TUI, desktop, web | <span class="pill pill--hangar">hangar</span> | Crates exist so the layout is real; the UIs are P6/P10/P11 |
-| Agents, sessions, permissions | <span class="pill pill--boarding">boarding</span> | P2 — manifest registry, supervisor (stderr ring, restart, tree kill), sessions (initialize/new/load/prompt/cancel, numbered events, permissions refused by default) and `GET /v1/agents` with `available`/`missing` from `PATH`; the permission broker, `fs/*` and terminals next |
+| Agents, sessions, permissions | <span class="pill pill--boarding">boarding</span> | P2 — manifest registry, supervisor (stderr ring, restart, tree kill), sessions (initialize/new/load/prompt/cancel, numbered events, permissions refused by default), the agent-facing file callbacks (workspace-scoped reads, writes outside it held for approval) and `GET /v1/agents` with `available`/`missing` from `PATH`; the permission broker and terminals next |
 | Language servers | <span class="pill pill--hangar">hangar</span> | P7 |
 | Profiles | <span class="pill pill--hangar">hangar</span> | P4 |
 | Local models (LM Studio) | <span class="pill pill--boarding">boarding</span> | P4.5 — `acpilot-model` discovers models and probes capabilities against a mock server; no daemon route or CLI verb yet, so you cannot reach it from the app |
@@ -39,7 +39,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | --- | --- | --- |
 | P0 | Probes: ACP handshake, PTY agent, gpui text benchmark, SSH, WSL, LSP | in progress — ACP handshake, PTY agent and LSP round-trips done |
 | P1 | Workspace skeleton, error model, CI, OpenAPI snapshot | **done** |
-| P2 | ACP engine, sessions, permission broker (headless, mock agent) | in progress — registry, supervisor and sessions done |
+| P2 | ACP engine, sessions, permission broker (headless, mock agent) | in progress — registry, supervisor, sessions and the filesystem callbacks done |
 | P3 | Daemon API: SSE, files, terminals, SQLite | |
 | P4 | Profiles and preferences | |
 | P4.5 | Local models: LM Studio, the model lab, promotion, ACP bridge for remote drivers | contract only |

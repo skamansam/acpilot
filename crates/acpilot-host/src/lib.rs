@@ -43,7 +43,7 @@ pub mod ssh;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 pub use pty::Pty;
@@ -295,11 +295,15 @@ impl Child {
 
 /// What a host must be able to do for the daemon to run anything on it.
 ///
-/// Three methods, because that is what P0-4 measured and what P2 needs first:
-/// run a command with pipes, run a command under a PTY, and let the caller kill
-/// either. File and LSP operations join this trait later, when their callers
-/// exist — a trait invented ahead of its implementations is a guess with a
-/// version number.
+/// Two processes — one with pipes, one under a PTY — and three file operations,
+/// because that is what P0-4 measured and what the agent engine asks for first.
+/// LSP operations join this trait later, when their caller exists: a trait
+/// invented ahead of its implementations is a guess with a version number.
+///
+/// The file operations are deliberately narrow. They read and write whole
+/// files, and they resolve a path *on the host*. Whether a file is text, what
+/// its encoding is, and whether a write is allowed are questions for the caller;
+/// answering them here would put policy in the transport.
 pub trait Host: fmt::Debug + Send + Sync {
     fn kind(&self) -> HostKind;
 
@@ -316,6 +320,29 @@ pub trait Host: fmt::Debug + Send + Sync {
     /// opens a TUI. Both local platforms can make one: `forkpty` on unix, ConPTY
     /// on Windows.
     fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError>;
+
+    /// Resolve `path` the way this host's filesystem would: symlinks followed,
+    /// `..` collapsed.
+    ///
+    /// This belongs on the host, not in the caller, because it is the only way a
+    /// containment check can be sound: `workspace/link` may be a symlink to
+    /// `/etc`, and a guard comparing path strings would call that contained. It
+    /// fails for a path that does not exist, which is why a caller writing a new
+    /// file resolves its parent instead.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, HostError>;
+
+    /// Read a whole file as bytes.
+    ///
+    /// Bytes rather than `String`: an agent asking for a binary is a refusal the
+    /// caller should report, and a lossy conversion here would return something
+    /// plausible instead.
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, HostError>;
+
+    /// Replace a file's contents.
+    ///
+    /// Directories are not created: a path whose parent is missing is a mistake
+    /// to report, not a tree to build behind the caller's back.
+    fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), HostError>;
 }
 
 /// This machine.
@@ -376,6 +403,27 @@ impl Host for LocalHost {
     fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
         platform::spawn_pty(command, size)
     }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, HostError> {
+        std::fs::canonicalize(path).map_err(|source| HostError::Io {
+            operation: "canonicalize",
+            source,
+        })
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, HostError> {
+        std::fs::read(path).map_err(|source| HostError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
+    fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), HostError> {
+        std::fs::write(path, contents).map_err(|source| HostError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
 }
 
 /// Why a host operation did not happen.
@@ -401,6 +449,20 @@ pub enum HostError {
 
     #[error("pty for `{command}`: {message}")]
     Pty { command: String, message: String },
+
+    #[error("read {}: {source}", path.display())]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("write {}: {source}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 
     /// The SSH side of the seam: connecting, authenticating, or opening a
     /// channel. `operation` is one of "connect", "authenticate", "exec", "pty".

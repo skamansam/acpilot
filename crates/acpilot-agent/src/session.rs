@@ -49,10 +49,13 @@
 //!
 //! # Permissions
 //!
-//! A permission request is answered here with the agent's own reject option, or
-//! cancelled when it offers none, and a `notice` event records the refusal. That
-//! is the only safe default before P2-6 owns the broker: no grant is ever
-//! implied by a session that has no policy yet.
+//! A permission request is classified (file read, file write, terminal, tool,
+//! other) and handed to the [`crate::permission::Broker`], which answers from the
+//! rules, from the defaults, or by asking a person. An allow selects the agent's
+//! own allow option, a refusal its reject option, and each is recorded as a
+//! `notice` so the transcript says what the agent was told. A session with no
+//! broker refuses everything with the agent's own reject option: no grant is ever
+//! implied by a session that has no policy.
 //!
 //! # Files
 //!
@@ -72,11 +75,12 @@
 //! act on.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use acpilot_proto::event::{EventSeq, SessionEvent, SessionEventKind};
+use acpilot_proto::permission::PermissionKind as RequestKind;
 use acpilot_proto::session::SessionId;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
@@ -89,7 +93,7 @@ use agent_client_protocol::schema::v1::{
     PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionInfoUpdate, SessionNotification, SessionUpdate, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, UsageUpdate, WriteTextFileRequest,
+    ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WriteTextFileRequest,
     WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
@@ -100,6 +104,7 @@ use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::fs::Fs;
+use crate::permission::{Broker, DecidedBy, Subject};
 use crate::supervisor::{AgentProcess, StderrRing};
 
 /// How many events a subscriber may fall behind before the oldest are dropped.
@@ -126,6 +131,20 @@ pub struct SessionOptions {
     /// agree, because advertising a capability this client cannot serve is the
     /// same bug as refusing one it advertised.
     pub fs: Option<Arc<Fs>>,
+    /// The broker that decides what this agent may do.
+    ///
+    /// `None` means the session has no policy, which is not the same as a
+    /// permissive one: every permission request is refused. [`SessionOptions::fs`]
+    /// fills this in from the filesystem's broker, because a session that serves
+    /// writes must be able to ask about them.
+    pub permission: Option<Arc<Broker>>,
+    /// Agent id this session runs, so a rule can be scoped to it.
+    ///
+    /// [`Session::spawn`] fills this from the process it was given; a session over
+    /// another transport sets it here. `None` means a rule that names an agent
+    /// never matches this session's requests, which is the honest answer when
+    /// nobody said which agent is at the other end.
+    pub agent: Option<String>,
 }
 
 impl SessionOptions {
@@ -137,13 +156,35 @@ impl SessionOptions {
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             event_capacity: EVENT_CAPACITY,
             fs: None,
+            permission: None,
+            agent: None,
         }
     }
 
+    /// Record which agent this session runs, for agent-scoped rules.
+    #[must_use]
+    pub fn agent(mut self, agent: impl Into<String>) -> Self {
+        self.agent = Some(agent.into());
+        self
+    }
+
     /// Serve this session's `fs/*` requests from `fs`.
+    ///
+    /// The filesystem's broker comes with it unless one was set already: the file
+    /// callbacks are decided by that broker's policy, and a session that served
+    /// writes without it would be bypassing the policy it was given.
     #[must_use]
     pub fn fs(mut self, fs: Arc<Fs>) -> Self {
+        self.permission
+            .get_or_insert_with(|| Arc::clone(fs.broker()));
         self.fs = Some(fs);
+        self
+    }
+
+    /// Decide this session's requests with `broker`.
+    #[must_use]
+    pub fn permission(mut self, broker: Arc<Broker>) -> Self {
+        self.permission = Some(broker);
         self
     }
 }
@@ -222,8 +263,13 @@ impl Session {
     /// the session from here on, so it dies with it.
     pub async fn spawn(
         mut process: AgentProcess,
-        options: SessionOptions,
+        mut options: SessionOptions,
     ) -> Result<Self, SessionError> {
+        // The supervisor is the one place that knows which spec was started, so
+        // the session's policy sees the same agent id the manifest declared.
+        if options.agent.is_none() {
+            options.agent = Some(process.id().to_owned());
+        }
         let stdin = process.take_stdin();
         let stdout = process.take_stdout();
         let (Some(stdin), Some(stdout)) = (stdin, stdout) else {
@@ -265,10 +311,14 @@ impl Session {
         let write_log = Arc::clone(&log);
         let read_files = options.fs.clone();
         let write_files = options.fs.clone();
-        // The daemon's name for this session, which is what a pending grant
+        let permission_broker = options.permission.clone();
+        let permission_agent = options.agent.clone();
+        // The daemon's name for this session, which is what a pending request
         // carries: a person approving a write needs the conversation it belongs
         // to, not the agent's own id for it.
-        let session_label = options.id.clone();
+        let read_session = options.id.clone();
+        let write_session = options.id.clone();
+        let permission_session = options.id.clone();
 
         let mut capabilities = ClientCapabilities::new().session(
             ClientSessionCapabilities::new()
@@ -304,8 +354,25 @@ impl Session {
                 )
                 .on_receive_request(
                     async move |request: RequestPermissionRequest, responder, _cx| {
-                        let (response, description) = deny(&request);
-                        record_permission_denied(&permission_log, &description);
+                        let Some(broker) = permission_broker.clone() else {
+                            let (response, description) = deny(&request);
+                            record_permission_denied(&permission_log, &description);
+                            return responder.respond(response);
+                        };
+                        let classified = classify(&request);
+                        let mut subject = Subject::new(classified.kind, classified.title.clone())
+                            .tool(&classified.tool)
+                            .detail(classified.detail.clone());
+                        if let Some(path) = &classified.path {
+                            subject = subject.path(path);
+                        }
+                        if let Some(agent) = permission_agent.as_deref() {
+                            subject = subject.agent(agent);
+                        }
+                        let answer = broker.ask(&permission_session, subject).await;
+                        let (response, description) =
+                            selection(&request, answer.allowed(), &answer.decided_by);
+                        record_permission(&permission_log, answer.allowed(), &description);
                         responder.respond(response)
                     },
                     agent_client_protocol::on_receive_request!(),
@@ -315,7 +382,10 @@ impl Session {
                         let Some(fs) = read_files.clone() else {
                             return responder.respond_with_error(not_served("fs/read_text_file"));
                         };
-                        match fs.read(&request.path, request.line, request.limit).await {
+                        match fs
+                            .read(&read_session, &request.path, request.line, request.limit)
+                            .await
+                        {
                             Ok(content) => responder.respond(ReadTextFileResponse::new(content)),
                             Err(error) => {
                                 record_warning(&read_log, "File read refused", &error.to_string());
@@ -332,8 +402,10 @@ impl Session {
                         };
                         // One session per connection, so the daemon's id is the
                         // session this write belongs to whatever the request says.
-                        let session = session_label.clone();
-                        match fs.write(&session, &request.path, &request.content).await {
+                        match fs
+                            .write(&write_session, &request.path, &request.content)
+                            .await
+                        {
                             Ok(()) => responder.respond(WriteTextFileResponse::new()),
                             Err(error) => {
                                 record_warning(
@@ -632,6 +704,129 @@ fn deny(request: &RequestPermissionRequest) -> (RequestPermissionResponse, Strin
     (RequestPermissionResponse::new(outcome), description)
 }
 
+/// One line of the agent's request, in the broker's vocabulary.
+struct Classified {
+    kind: RequestKind,
+    tool: String,
+    path: Option<PathBuf>,
+    title: String,
+    detail: String,
+}
+
+/// Read a `session/request_permission` as a policy subject.
+///
+/// The tool kind is the agent's own description of what it is about to do, so it
+/// is what the classification trusts; the title and raw input are what a person
+/// is shown. A request with no kind is `Other`, which the shipped policy asks
+/// about — "we did not recognise it" is not a reason to allow it.
+fn classify(request: &RequestPermissionRequest) -> Classified {
+    let fields = &request.tool_call.fields;
+    let kind = match fields.kind {
+        Some(ToolKind::Read | ToolKind::Search) => RequestKind::FileRead,
+        Some(ToolKind::Edit | ToolKind::Delete | ToolKind::Move) => RequestKind::FileWrite,
+        Some(ToolKind::Execute) => RequestKind::Terminal,
+        Some(ToolKind::Fetch) => RequestKind::ToolCall,
+        // `ToolKind` is non-exhaustive on purpose: an agent may send a kind
+        // newer than this client, and an unrecognised one (like `None`) is
+        // asked about rather than guessed at.
+        _ => RequestKind::Other,
+    };
+    let tool = fields.kind.map_or_else(
+        || "tool".to_owned(),
+        |kind| format!("{kind:?}").to_lowercase(),
+    );
+    let path = fields
+        .locations
+        .as_ref()
+        .and_then(|locations| locations.first())
+        .map(|location| location.path.clone());
+
+    let mut detail = fields
+        .raw_input
+        .as_ref()
+        .map(serde_json::Value::to_string)
+        .unwrap_or_default();
+    if let Some(locations) = &fields.locations {
+        if !detail.is_empty() {
+            detail.push('\n');
+        }
+        let listed: Vec<String> = locations
+            .iter()
+            .map(|location| location.path.display().to_string())
+            .collect();
+        detail.push_str(&listed.join(", "));
+    }
+
+    Classified {
+        kind,
+        tool,
+        path,
+        title: request_title(request),
+        detail,
+    }
+}
+
+fn request_title(request: &RequestPermissionRequest) -> String {
+    request
+        .tool_call
+        .fields
+        .title
+        .clone()
+        .unwrap_or_else(|| request.tool_call.tool_call_id.0.to_string())
+}
+
+/// The agent's own option for the broker's answer, and a line for the notice.
+///
+/// The ids are the agent's, not ours: an agent that called its allow option
+/// `yolo` must receive `yolo`. When the agent offers no option of the kind the
+/// decision needs, the request is cancelled — approving something the agent
+/// never offered is not ours to do.
+fn selection(
+    request: &RequestPermissionRequest,
+    allowed: bool,
+    decided_by: &DecidedBy,
+) -> (RequestPermissionResponse, String) {
+    let wanted = if allowed {
+        [
+            PermissionOptionKind::AllowOnce,
+            PermissionOptionKind::AllowAlways,
+        ]
+    } else {
+        [
+            PermissionOptionKind::RejectOnce,
+            PermissionOptionKind::RejectAlways,
+        ]
+    };
+    let chosen = wanted
+        .iter()
+        .find_map(|kind| request.options.iter().find(|option| option.kind == *kind));
+
+    let description = format!(
+        "{}: {} by {decided_by}",
+        request_title(request),
+        if allowed { "allowed" } else { "refused" }
+    );
+    let outcome = match chosen {
+        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            option.option_id.clone(),
+        )),
+        None => RequestPermissionOutcome::Cancelled,
+    };
+    (RequestPermissionResponse::new(outcome), description)
+}
+
+/// Record an answer on the event stream, at the severity it deserves.
+fn record_permission(log: &Arc<Mutex<EventLog>>, allowed: bool, description: &str) {
+    let (severity, title) = if allowed {
+        (NoticeSeverity::Info, "Permission granted")
+    } else {
+        (NoticeSeverity::Warning, "Permission request denied")
+    };
+    let notice =
+        SessionUpdate::Notice(Notice::new(severity, title).description(description.to_owned()));
+    record(log, &notice);
+}
+
 /// The session's event counter and its translation state.
 struct EventLog {
     session_id: SessionId,
@@ -908,8 +1103,8 @@ mod tests {
 
     use super::*;
     use agent_client_protocol::schema::v1::{
-        AvailableCommandsUpdate, CompactionStatus, PermissionOption, Plan, ToolCallUpdateFields,
-        ToolKind,
+        AvailableCommandsUpdate, CompactionStatus, PermissionOption, Plan, ToolCallLocation,
+        ToolCallUpdateFields, ToolKind,
     };
 
     fn log() -> EventLog {
@@ -1077,6 +1272,92 @@ mod tests {
             PermissionOptionKind::AllowOnce,
         )]);
         let (response, _) = deny(&request);
+        assert_eq!(response.outcome, RequestPermissionOutcome::Cancelled);
+    }
+
+    #[test]
+    fn a_request_is_classified_by_its_tool_kind_and_its_first_location() {
+        let path = PathBuf::from("/work/repo/src/main.rs");
+        let request = RequestPermissionRequest::new(
+            "s1",
+            ToolCallUpdate::new(
+                "t1",
+                ToolCallUpdateFields::new()
+                    .kind(ToolKind::Edit)
+                    .title("Edit src/main.rs")
+                    .locations(vec![ToolCallLocation::new(path.clone())])
+                    .raw_input(serde_json::json!({ "path": "/work/repo/src/main.rs" })),
+            ),
+            vec![],
+        );
+
+        let classified = classify(&request);
+        assert_eq!(classified.kind, RequestKind::FileWrite);
+        assert_eq!(classified.tool, "edit");
+        assert_eq!(classified.path, Some(path));
+        assert_eq!(classified.title, "Edit src/main.rs");
+        assert!(
+            classified.detail.contains("main.rs"),
+            "the detail shows a person the target: {}",
+            classified.detail
+        );
+
+        let execute = RequestPermissionRequest::new(
+            "s1",
+            ToolCallUpdate::new("t2", ToolCallUpdateFields::new().kind(ToolKind::Execute)),
+            vec![],
+        );
+        let classified = classify(&execute);
+        assert_eq!(classified.kind, RequestKind::Terminal);
+        assert_eq!(classified.tool, "execute");
+        assert!(classified.path.is_none(), "a command names no path here");
+        assert_eq!(
+            classified.title, "t2",
+            "a request without a title falls back to its id"
+        );
+    }
+
+    #[test]
+    fn an_allowed_request_selects_the_agents_own_allow_option() {
+        let request = permission_request(vec![
+            PermissionOption::new("yolo", "Allow", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("nope", "Deny", PermissionOptionKind::RejectOnce),
+        ]);
+
+        let (response, description) = selection(&request, true, &DecidedBy::User);
+        match response.outcome {
+            RequestPermissionOutcome::Selected(selected) => {
+                assert_eq!(&*selected.option_id.0, "yolo");
+            }
+            other => panic!("expected the agent's allow option, got {other:?}"),
+        }
+        assert!(
+            description.contains("allowed") && description.contains("Edit src/main.rs"),
+            "the notice says what was allowed and who allowed it: {description}"
+        );
+
+        let (response, description) =
+            selection(&request, false, &DecidedBy::Policy("no-secrets".to_owned()));
+        match response.outcome {
+            RequestPermissionOutcome::Selected(selected) => {
+                assert_eq!(&*selected.option_id.0, "nope");
+            }
+            other => panic!("expected the agent's reject option, got {other:?}"),
+        }
+        assert!(
+            description.contains("refused") && description.contains("policy:no-secrets"),
+            "the notice names the rule: {description}"
+        );
+    }
+
+    #[test]
+    fn an_allow_the_agent_never_offered_is_cancelled() {
+        let request = permission_request(vec![PermissionOption::new(
+            "nope",
+            "Deny",
+            PermissionOptionKind::RejectOnce,
+        )]);
+        let (response, _) = selection(&request, true, &DecidedBy::User);
         assert_eq!(response.outcome, RequestPermissionOutcome::Cancelled);
     }
 }

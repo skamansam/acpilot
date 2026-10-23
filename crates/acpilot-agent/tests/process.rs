@@ -16,9 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acpilot_agent::{AgentProcess, Fs, MapResolver, Registry, Session, SessionOptions};
+use acpilot_agent::{
+    AgentProcess, Broker, DecidedBy, Decision, Fs, MapResolver, Policy, Registry, Rule, Session,
+    SessionOptions,
+};
 use acpilot_host::LocalHost;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
+use acpilot_proto::permission::PermissionOption;
 use agent_client_protocol::schema::v1::StopReason;
 use tokio::sync::broadcast::Receiver;
 use tokio::time::{sleep, timeout};
@@ -281,8 +285,45 @@ async fn files_inside_the_workspace_are_served_and_a_file_outside_is_refused() {
     );
 }
 
+/// A rule may be scoped to one agent, which only works if the subject says which
+/// agent is asking. The session takes that from the spec its process was started
+/// from, so a rule naming the manifest's `id` matches the agent it meant.
+#[tokio::test]
+async fn a_rule_naming_the_agent_decides_that_agents_request() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let broker = Arc::new(Broker::new(
+        Policy::with_rules(vec![Rule::new("allow-mock", Decision::Allow).agent("mock")])
+            .with_tool(Decision::Deny),
+        fs::canonicalize(dir.path()).expect("the workspace resolves"),
+    ));
+    let files = Arc::new(Fs::with_broker(Arc::new(LocalHost), Arc::clone(&broker)));
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+
+    session.prompt("permission").await.expect("the turn ends");
+
+    let report = reports(&mut events, 1, "permission ").await;
+    assert!(
+        report[0].contains("selected allow"),
+        "the rule allows it, so the agent's own allow option comes back: {report:?}"
+    );
+    let audit = broker.audit();
+    assert_eq!(audit[0].agent.as_deref(), Some("mock"));
+    assert_eq!(
+        audit[0].decided_by,
+        DecidedBy::Policy("allow-mock".to_owned())
+    );
+}
+
 /// The shadow-write guard, with the two ends finally in the same test: the agent
 /// is blocked mid-turn, the file is untouched, and the approval writes it.
+///
+/// This is the whole point of a pending request rather than a retry: a turn that
+/// wanted three files must not land one of them and give up on the rest.
 #[tokio::test]
 async fn a_write_outside_the_workspace_holds_the_turn_until_it_is_approved() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -293,25 +334,30 @@ async fn a_write_outside_the_workspace_holds_the_turn_until_it_is_approved() {
         .new_session(dir.path())
         .await
         .expect("session/new works");
-    let mut grants = files.grants().subscribe();
+    let mut pending = files.broker().subscribe();
 
     let target = elsewhere.path().join("outside.txt");
-    let resolved = fs::canonicalize(elsewhere.path())
-        .expect("resolve the target directory")
-        .join("outside.txt");
 
     let approval = async {
-        let request = timeout(PATIENCE, grants.recv())
+        let request = timeout(PATIENCE, pending.recv())
             .await
-            .expect("a grant is announced")
+            .expect("a request is announced")
             .expect("the stream is open");
-        assert_eq!(request.path, resolved);
-        assert_eq!(request.session, "session-1");
+        assert_eq!(request.session_id, "session-1");
+        assert!(
+            request.detail.contains("outside.txt"),
+            "the person is told what would be written where: {}",
+            request.detail
+        );
         assert!(
             !target.exists(),
-            "nothing is written while the grant is pending"
+            "nothing is written while the request is pending"
         );
-        assert!(files.grants().approve(request.id));
+        assert!(
+            files
+                .broker()
+                .answer(&request.id, PermissionOption::AllowOnce)
+        );
     };
     let (response, ()) = tokio::join!(
         session.prompt(format!("write {}", target.display())),
@@ -324,6 +370,8 @@ async fn a_write_outside_the_workspace_holds_the_turn_until_it_is_approved() {
     );
 }
 
+/// A refusal is an answer, not a failure: the write does not happen, the agent is
+/// told so, and the turn still finishes.
 #[tokio::test]
 async fn a_denied_write_is_reported_and_the_turn_still_ends() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -335,15 +383,15 @@ async fn a_denied_write_is_reported_and_the_turn_still_ends() {
         .new_session(dir.path())
         .await
         .expect("session/new works");
-    let mut grants = files.grants().subscribe();
+    let mut pending = files.broker().subscribe();
 
     let target = elsewhere.path().join("outside.txt");
     let denial = async {
-        let request = timeout(PATIENCE, grants.recv())
+        let request = timeout(PATIENCE, pending.recv())
             .await
-            .expect("a grant is announced")
+            .expect("a request is announced")
             .expect("the stream is open");
-        assert!(files.grants().deny(request.id));
+        assert!(files.broker().answer(&request.id, PermissionOption::Deny));
     };
     let (response, ()) = tokio::join!(
         session.prompt(format!("write {}", target.display())),

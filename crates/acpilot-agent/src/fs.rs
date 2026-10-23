@@ -23,12 +23,15 @@
 //!
 //! # The shadow write
 //!
-//! A write inside the workspace goes straight to disk. A write outside it does
-//! not touch anything: a [`PendingWrite`] is published on [`Grants`], the call
-//! waits for an approval or a denial, and the file is written only after the
-//! approval. That is what makes it a *shadow* write — while the request is
-//! pending, the old contents are still the contents, so a UI can show the diff
-//! against a file that has not moved, and a crash leaves the disk as it was.
+//! Whether a write lands is [`crate::permission`]'s decision, not this module's.
+//! The shipped policy asks about a write inside the workspace and denies one
+//! outside it, and a rule is how a workspace changes either answer. When the
+//! answer is *ask*, the file does not change at all: a request is published on
+//! the [`Broker`], the call waits for an approval or a denial, and the file is
+//! written only after the approval. That is what makes it a *shadow* write —
+//! while the request is pending the old contents are still the contents, so a UI
+//! can show the diff against a file that has not moved, and a crash leaves the
+//! disk as it was.
 //!
 //! Nothing is written speculatively and rolled back. Rolling back is a second
 //! chance to write the wrong thing, and a file restored by a rollback is not the
@@ -36,44 +39,30 @@
 //!
 //! # Refusal is the default
 //!
-//! If nothing is listening for pending writes, the request is refused immediately
-//! rather than waiting for an approval that cannot arrive. If something is
-//! listening and never answers, [`GRANT_TIMEOUT`] ends the wait. The agent gets a
-//! denial either way: a blocked agent with no path to a decision is a hang, and a
-//! hang is what P2-9 found when an unimplemented method went unanswered.
+//! If nothing is listening, an asked request is refused immediately rather than
+//! waiting for an approval that cannot arrive. If something is listening and
+//! never answers, [`ASK_TIMEOUT`](crate::permission::ASK_TIMEOUT) ends the wait.
+//! The agent gets a denial either way: a blocked agent with no path to a decision
+//! is a hang, and a hang is what P2-9 found when an unimplemented method went
+//! unanswered.
 //!
 //! # What this module is not
 //!
-//! Policy is P2-6: rules, path globs, the audit table. This module has exactly one
-//! rule — inside the workspace or not — and no opinion about which agents get
-//! which exception. Binary detection and the 10 MiB cap belong to the files API
-//! (P3-5); a file that is not UTF-8 is refused here rather than converted.
+//! Binary detection and the 10 MiB cap belong to the files API (P3-5); a file
+//! that is not UTF-8 is refused here rather than converted. Reads outside the
+//! workspace are refused structurally rather than by policy — a rule can deny a
+//! read inside, but there is no approval flow that could ever allow one outside.
 
-use std::collections::HashMap;
-use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::Arc;
 
 use acpilot_host::{Host, HostError};
+use acpilot_proto::permission::PermissionKind;
 use agent_client_protocol::schema::v1::ErrorCode;
 use thiserror::Error;
-use tokio::sync::{broadcast, oneshot};
 
-/// How long a write waits for approval before it is refused.
-///
-/// A person may be reading the diff, so this is minutes rather than seconds. An
-/// agent that is blocked on it is meant to be blocked; the timeout exists so it
-/// does not stay blocked after the person has gone home.
-pub const GRANT_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// How many pending-write announcements a subscriber may fall behind on.
-///
-/// The same number as [`EVENT_CAPACITY`](crate::session::EVENT_CAPACITY) and for
-/// the same reason: a stalled UI should miss announcements, not grow the queue.
-pub const GRANT_CAPACITY: usize = 16;
+use crate::permission::{Broker, Policy, Subject};
 
 /// What went wrong reading or writing a file for an agent.
 #[derive(Debug, Error)]
@@ -101,10 +90,10 @@ pub enum FsError {
         path: PathBuf,
     },
 
-    /// A write the workspace would not allow on its own, with no approval given.
+    /// A write the policy refused, or one nobody approved.
     #[error("{} was not approved for writing", path.display())]
     Denied {
-        /// The path that needed a grant.
+        /// The path that needed an approval.
         path: PathBuf,
     },
 
@@ -200,28 +189,17 @@ fn host_code(error: &HostError) -> ErrorCode {
 pub struct Fs {
     host: Arc<dyn Host>,
     workspace: PathBuf,
-    grants: Arc<Grants>,
+    broker: Arc<Broker>,
 }
 
 impl Fs {
-    /// Serve `workspace` on `host`, with a fresh [`Grants`].
+    /// Serve `workspace` on `host` under the shipped policy.
     ///
     /// The workspace is resolved through the host once, here, so every later
     /// check compares against the real path rather than whatever the caller
-    /// spelled.
+    /// spelled — and so the broker's "inside or outside" answer is about the same
+    /// path a symlink actually leads to.
     pub fn new(host: Arc<dyn Host>, workspace: impl AsRef<Path>) -> Result<Self, FsError> {
-        Self::with_grants(host, workspace, Arc::new(Grants::new()))
-    }
-
-    /// Serve `workspace` on `host`, sharing an existing grant table.
-    ///
-    /// A daemon creates one [`Grants`] for the process and passes it in, so every
-    /// session's pending writes appear in the same list.
-    pub fn with_grants(
-        host: Arc<dyn Host>,
-        workspace: impl AsRef<Path>,
-        grants: Arc<Grants>,
-    ) -> Result<Self, FsError> {
         let workspace = workspace.as_ref();
         let resolved = host
             .canonicalize(workspace)
@@ -229,11 +207,27 @@ impl Fs {
                 path: workspace.to_path_buf(),
                 source,
             })?;
+        let broker = Arc::new(Broker::new(Policy::shipped(), resolved.clone()));
         Ok(Self {
             host,
             workspace: resolved,
-            grants,
+            broker,
         })
+    }
+
+    /// Serve files from a broker's workspace, under its policy.
+    ///
+    /// A daemon creates one [`Broker`] for the process and passes it to every
+    /// session, so the pending list and the audit log are one list and one log.
+    /// The broker's workspace is expected to be canonical, which [`Fs::new`] and
+    /// [`Broker::new`] both ensure.
+    #[must_use]
+    pub fn with_broker(host: Arc<dyn Host>, broker: Arc<Broker>) -> Self {
+        Self {
+            host,
+            workspace: broker.workspace().to_path_buf(),
+            broker,
+        }
     }
 
     /// The resolved workspace root.
@@ -242,10 +236,10 @@ impl Fs {
         &self.workspace
     }
 
-    /// The pending-write table this client publishes to.
+    /// The broker every request here is decided by.
     #[must_use]
-    pub fn grants(&self) -> &Arc<Grants> {
-        &self.grants
+    pub fn broker(&self) -> &Arc<Broker> {
+        &self.broker
     }
 
     /// Read a file inside the workspace, optionally one range of lines.
@@ -253,8 +247,11 @@ impl Fs {
     /// `line` is 1-based and `limit` counts lines, as ACP defines them. Lines
     /// keep their terminators, so a range of a file reads back as text that can
     /// be written to another file unchanged.
+    ///
+    /// `session` is what makes the audit line say who read it.
     pub async fn read(
         &self,
+        session: &str,
         path: &Path,
         line: Option<u32>,
         limit: Option<u32>,
@@ -266,21 +263,61 @@ impl Fs {
                 workspace: self.workspace.clone(),
             });
         }
+        let answer = self
+            .broker
+            .ask(
+                session,
+                Subject::new(
+                    PermissionKind::FileRead,
+                    format!("Read {}", label(&self.workspace, &real)),
+                )
+                .tool("fs/read_text_file")
+                .path(&real)
+                .detail(format!(
+                    "{} (inside {})",
+                    real.display(),
+                    self.workspace.display()
+                )),
+            )
+            .await;
+        if !answer.allowed() {
+            return Err(FsError::Denied { path: real });
+        }
         let bytes = self.read_bytes(real.clone()).await?;
         slice(&real, &bytes, line, limit)
     }
 
-    /// Write a file, waiting for approval when it lies outside the workspace.
+    /// Write a file, if the policy allows it or somebody approves it.
     ///
-    /// `session` is carried on the grant so whoever approves it knows which
-    /// conversation asked. It is not used for the decision: policy is P2-6's.
+    /// `session` is carried on the request so whoever approves it knows which
+    /// conversation asked, and so an `allow always` is scoped to that
+    /// conversation.
     pub async fn write(&self, session: &str, path: &Path, content: &str) -> Result<(), FsError> {
         let real = self.resolve_for_write(path)?;
-        if !real.starts_with(&self.workspace) {
-            let approved = self.grants.ask(session, &real, &self.workspace).await;
-            if !approved {
-                return Err(FsError::Denied { path: real });
-            }
+        let answer = self
+            .broker
+            .ask(
+                session,
+                Subject::new(
+                    PermissionKind::FileWrite,
+                    format!("Write {}", label(&self.workspace, &real)),
+                )
+                .tool("fs/write_text_file")
+                .path(&real)
+                .detail(format!(
+                    "{} ({} the workspace {})",
+                    real.display(),
+                    if real.starts_with(&self.workspace) {
+                        "inside"
+                    } else {
+                        "outside"
+                    },
+                    self.workspace.display()
+                )),
+            )
+            .await;
+        if !answer.allowed() {
+            return Err(FsError::Denied { path: real });
         }
         self.write_bytes(real, content).await
     }
@@ -390,188 +427,28 @@ fn slice(
         .collect())
 }
 
-/// The writes waiting for a person to decide.
-///
-/// One table for the process. A subscriber (the daemon's event stream, later a
-/// dialog) receives every pending write; [`Grants::approve`] and
-/// [`Grants::deny`] are how it answers. A decision is delivered once: the entry
-/// is removed before the answer is sent, so approving the same id twice is a
-/// `false`, not a second write.
-#[derive(Debug)]
-pub struct Grants {
-    next: AtomicU64,
-    timeout: Option<Duration>,
-    table: Mutex<Table>,
-    announce: broadcast::Sender<PendingWrite>,
-}
-
-#[derive(Debug, Default)]
-struct Table {
-    pending: HashMap<GrantId, (PendingWrite, oneshot::Sender<bool>)>,
-}
-
-impl Default for Grants {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Grants {
-    /// A table that waits [`GRANT_TIMEOUT`] for an answer.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::with_timeout(Some(GRANT_TIMEOUT))
-    }
-
-    /// A table with an explicit wait. `None` waits for as long as the session
-    /// lives, which is what a test asserting that a call *blocks* needs.
-    #[must_use]
-    pub fn with_timeout(timeout: Option<Duration>) -> Self {
-        let (announce, _) = broadcast::channel(GRANT_CAPACITY);
-        Self {
-            next: AtomicU64::new(1),
-            timeout,
-            table: Mutex::new(Table::default()),
-            announce,
-        }
-    }
-
-    /// Receive every write that needs a decision.
-    pub fn subscribe(&self) -> broadcast::Receiver<PendingWrite> {
-        self.announce.subscribe()
-    }
-
-    /// The writes waiting right now, oldest first.
-    ///
-    /// A daemon answers `GET /v1/permissions?status=pending` from here: a pending
-    /// request is state, not history, and a client that connects after the
-    /// announcement still has to see it.
-    #[must_use]
-    pub fn pending(&self) -> Vec<PendingWrite> {
-        let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut pending: Vec<_> = table
-            .pending
-            .values()
-            .map(|(request, _)| request.clone())
-            .collect();
-        pending.sort_by_key(|request| request.id);
-        pending
-    }
-
-    /// Let the write go ahead. `false` if no such request is pending.
-    pub fn approve(&self, id: GrantId) -> bool {
-        self.decide(id, true)
-    }
-
-    /// Refuse the write. `false` if no such request is pending.
-    pub fn deny(&self, id: GrantId) -> bool {
-        self.decide(id, false)
-    }
-
-    fn decide(&self, id: GrantId, allowed: bool) -> bool {
-        let entry = {
-            let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-            table.pending.remove(&id)
-        };
-        match entry {
-            Some((_, decision)) => {
-                let _ = decision.send(allowed);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Publish a request and wait for the answer.
-    ///
-    /// `false` covers every way an approval can fail to happen: nobody listening,
-    /// the listener went away, a denial, or the timeout. The caller reports which
-    /// one with the path, because from an agent's side they are all "not written".
-    async fn ask(&self, session: &str, path: &Path, workspace: &Path) -> bool {
-        if self.announce.receiver_count() == 0 {
-            tracing::warn!(
-                path = %path.display(),
-                "a write needs approval and nothing is listening; refusing"
-            );
-            return false;
-        }
-
-        let request = PendingWrite {
-            id: self.next_id(),
-            session: session.to_owned(),
-            path: path.to_path_buf(),
-            workspace: workspace.to_path_buf(),
-        };
-        let (decision, answer) = oneshot::channel();
-        {
-            let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-            table
-                .pending
-                .insert(request.id, (request.clone(), decision));
-        }
-
-        // A send with no receivers is the same "nobody can answer" as above,
-        // caught at the moment it matters rather than a moment earlier.
-        if self.announce.send(request.clone()).is_err() {
-            self.forget(request.id);
-            return false;
-        }
-
-        let allowed = match self.timeout {
-            Some(limit) => match tokio::time::timeout(limit, answer).await {
-                Ok(Ok(allowed)) => allowed,
-                Ok(Err(_)) | Err(_) => false,
-            },
-            None => matches!(answer.await, Ok(true)),
-        };
-        // Approve and deny remove the entry themselves; a timeout or a dropped
-        // answer leaves it behind, and a stale pending write is a dialog a person
-        // can still click.
-        self.forget(request.id);
-        allowed
-    }
-
-    fn next_id(&self) -> GrantId {
-        GrantId(self.next.fetch_add(1, Ordering::Relaxed))
-    }
-
-    fn forget(&self, id: GrantId) {
-        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-        table.pending.remove(&id);
-    }
-}
-
-/// Identifies one pending write, for the answer that approves or denies it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GrantId(u64);
-
-impl fmt::Display for GrantId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "grant-{}", self.0)
-    }
-}
-
-/// A write outside the workspace, waiting for someone to allow it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingWrite {
-    /// What [`Grants::approve`] and [`Grants::deny`] take.
-    pub id: GrantId,
-    /// The session that asked, as the daemon names it.
-    pub session: String,
-    /// The resolved path the write would land on.
-    pub path: PathBuf,
-    /// The workspace it is outside of.
-    pub workspace: PathBuf,
+/// The path as a person reads it: relative to the workspace when it is inside
+/// it, and the whole path when it is not.
+fn label(workspace: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use acpilot_host::LocalHost;
+    use acpilot_proto::permission::{PermissionOption, PermissionRequest};
+    use tokio::sync::broadcast::Receiver;
     use tokio::time::timeout;
 
     use super::*;
+    use crate::permission::{Broker, DecidedBy, Decision, Policy, Rule};
 
     fn workspace() -> tempfile::TempDir {
         tempfile::tempdir().expect("temp dir")
@@ -581,9 +458,24 @@ mod tests {
         Fs::new(Arc::new(LocalHost), workspace).expect("the workspace resolves")
     }
 
+    /// A client and the broker behind it, so a test can be the person answering.
+    fn shared(dir: &Path, policy: Policy, timeout: Option<Duration>) -> (Arc<Fs>, Arc<Broker>) {
+        let resolved = std::fs::canonicalize(dir).expect("the workspace resolves");
+        let broker = Arc::new(Broker::with_timeout(policy, resolved, timeout));
+        let fs = Arc::new(Fs::with_broker(Arc::new(LocalHost), Arc::clone(&broker)));
+        (fs, broker)
+    }
+
     /// Every wait in this module is bounded: a test that blocks forever is a test
     /// that reports nothing.
     const PATIENCE: Duration = Duration::from_secs(5);
+
+    async fn announced(pending: &mut Receiver<PermissionRequest>) -> PermissionRequest {
+        timeout(PATIENCE, pending.recv())
+            .await
+            .expect("a question is announced")
+            .expect("the stream is open")
+    }
 
     #[tokio::test]
     async fn a_file_in_the_workspace_is_read_from_disk() {
@@ -592,7 +484,7 @@ mod tests {
         let fs = client(dir.path());
 
         let content = fs
-            .read(&dir.path().join("notes.txt"), None, None)
+            .read("session-1", &dir.path().join("notes.txt"), None, None)
             .await
             .expect("the read happens");
         assert_eq!(content, "one\ntwo\n");
@@ -606,7 +498,7 @@ mod tests {
         let path = dir.path().join("notes.txt");
 
         let range = fs
-            .read(&path, Some(2), Some(2))
+            .read("session-1", &path, Some(2), Some(2))
             .await
             .expect("the read happens");
         assert_eq!(range, "two\nthree\n");
@@ -614,7 +506,7 @@ mod tests {
         // Past the end is an empty answer, not an error: the file exists and the
         // agent asked for a window that does not overlap it.
         let beyond = fs
-            .read(&path, Some(9), None)
+            .read("session-1", &path, Some(9), None)
             .await
             .expect("the read happens");
         assert_eq!(beyond, "");
@@ -622,7 +514,9 @@ mod tests {
         // A file with no trailing newline keeps that too.
         fs::write(&path, "only").expect("write");
         assert_eq!(
-            fs.read(&path, None, None).await.expect("the read happens"),
+            fs.read("session-1", &path, None, None)
+                .await
+                .expect("the read happens"),
             "only"
         );
     }
@@ -635,7 +529,10 @@ mod tests {
         fs::write(&secret, "not for the agent").expect("write");
         let fs = client(dir.path());
 
-        let error = fs.read(&secret, None, None).await.expect_err("refused");
+        let error = fs
+            .read("session-1", &secret, None, None)
+            .await
+            .expect_err("refused");
         assert!(
             matches!(&error, FsError::OutsideWorkspace { workspace, .. } if workspace == dir.path()),
             "the refusal names the workspace: {error:?}"
@@ -653,7 +550,7 @@ mod tests {
         std::os::unix::fs::symlink(&secret, &link).expect("symlink");
 
         let error = client(dir.path())
-            .read(&link, None, None)
+            .read("session-1", &link, None, None)
             .await
             .expect_err("the link is resolved before it is trusted");
         assert!(
@@ -668,7 +565,7 @@ mod tests {
         let fs = client(dir.path());
 
         let error = fs
-            .read(Path::new("notes.txt"), None, None)
+            .read("session-1", Path::new("notes.txt"), None, None)
             .await
             .expect_err("a relative path is not resolved against the workspace");
         assert!(matches!(error, FsError::NotAbsolute { .. }), "{error:?}");
@@ -681,7 +578,7 @@ mod tests {
         let fs = client(dir.path());
 
         let error = fs
-            .read(&dir.path().join("bytes.bin"), None, None)
+            .read("session-1", &dir.path().join("bytes.bin"), None, None)
             .await
             .expect_err("not text");
         assert!(matches!(error, FsError::NotText { .. }), "{error:?}");
@@ -693,7 +590,7 @@ mod tests {
         let fs = client(dir.path());
 
         let error = fs
-            .read(&dir.path().join("absent.txt"), None, None)
+            .read("session-1", &dir.path().join("absent.txt"), None, None)
             .await
             .expect_err("no such file");
         assert_eq!(error.code(), ErrorCode::ResourceNotFound);
@@ -704,81 +601,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_write_inside_the_workspace_lands_on_disk_without_asking() {
+    async fn a_deny_rule_refuses_a_read_the_default_would_allow() {
         let dir = workspace();
-        let fs = client(dir.path());
-        let path = dir.path().join("written.txt");
+        fs::write(dir.path().join(".env"), "TOKEN=1\n").expect("write");
+        let (fs, broker) = shared(
+            dir.path(),
+            Policy::with_rules(vec![
+                Rule::new("no-secrets", Decision::Deny).path("**/.env"),
+            ]),
+            None,
+        );
 
-        fs.write("session-1", &path, "hello\n")
+        let error = fs
+            .read("session-1", &dir.path().join(".env"), None, None)
             .await
-            .expect("an inside write needs no grant");
-        assert_eq!(fs::read_to_string(&path).expect("read back"), "hello\n");
-        assert!(
-            fs.grants().pending().is_empty(),
-            "nothing was queued for approval"
+            .expect_err("the rule refuses the read");
+        assert!(matches!(error, FsError::Denied { .. }), "{error:?}");
+
+        let audit = broker.audit();
+        assert_eq!(audit.len(), 1, "the refusal is on the record");
+        assert_eq!(audit[0].kind, PermissionKind::FileRead);
+        assert_eq!(
+            audit[0].decided_by,
+            DecidedBy::Policy("no-secrets".to_owned())
         );
     }
 
     #[tokio::test]
-    async fn a_write_outside_the_workspace_waits_and_writes_nothing_first() {
+    async fn a_write_inside_the_workspace_lands_without_asking() {
         let dir = workspace();
-        let elsewhere = workspace();
-        let grants = Arc::new(Grants::with_timeout(None));
-        let fs = Arc::new(
-            Fs::with_grants(Arc::new(LocalHost), dir.path(), Arc::clone(&grants))
-                .expect("the workspace resolves"),
-        );
-        let mut announced = grants.subscribe();
-        let target = elsewhere.path().join("outside.txt");
-        let resolved = fs::canonicalize(elsewhere.path())
-            .expect("resolve")
-            .join("outside.txt");
+        let (fs, broker) = shared(dir.path(), Policy::shipped(), None);
+        let target = dir.path().join("written.txt");
 
-        let write = tokio::spawn({
-            let fs = Arc::clone(&fs);
-            let target = target.clone();
-            async move { fs.write("session-7", &target, "hello\n").await }
-        });
-
-        let request = timeout(PATIENCE, announced.recv())
+        fs.write("session-7", &target, "hello\n")
             .await
-            .expect("a grant is announced")
-            .expect("the stream is open");
-        assert_eq!(request.path, resolved);
-        assert_eq!(request.session, "session-7");
-        assert_eq!(grants.pending(), vec![request.clone()]);
-        assert!(
-            !target.exists(),
-            "the file must not exist while the grant is pending"
-        );
-
-        assert!(grants.approve(request.id), "the grant is still pending");
-        write
-            .await
-            .expect("the task finishes")
-            .expect("the approved write happens");
+            .expect("an edit inside the workspace needs no signature");
         assert_eq!(fs::read_to_string(&target).expect("read back"), "hello\n");
-        assert!(
-            grants.pending().is_empty(),
-            "an answered grant is not pending"
+
+        let audit = broker.audit();
+        assert_eq!(audit.len(), 1, "the write is on the record anyway");
+        assert_eq!(audit[0].session, "session-7");
+        assert_eq!(audit[0].kind, PermissionKind::FileWrite);
+        assert_eq!(audit[0].option, PermissionOption::AllowOnce);
+        assert_eq!(audit[0].decided_by, DecidedBy::Default);
+        assert!(broker.pending().is_empty(), "nothing was left waiting");
+    }
+
+    #[tokio::test]
+    async fn a_policy_that_asks_and_nobody_is_listening_refuses_at_once() {
+        let dir = workspace();
+        let (fs, broker) = shared(
+            dir.path(),
+            Policy::shipped().with_write(Decision::Ask),
+            None,
         );
-        assert!(
-            !grants.approve(request.id),
-            "a decision is delivered once, not twice"
-        );
+        let target = dir.path().join("written.txt");
+
+        let error = timeout(PATIENCE, fs.write("session-1", &target, "hello\n"))
+            .await
+            .expect("the refusal is immediate")
+            .expect_err("nothing can approve it");
+        assert!(matches!(error, FsError::Denied { .. }), "{error:?}");
+        assert!(!target.exists());
+        assert!(broker.pending().is_empty());
+        assert_eq!(broker.audit()[0].decided_by, DecidedBy::Unattended);
     }
 
     #[tokio::test]
     async fn a_denied_write_leaves_the_file_alone() {
         let dir = workspace();
-        let elsewhere = workspace();
-        let grants = Arc::new(Grants::with_timeout(None));
-        let fs = Arc::new(
-            Fs::with_grants(Arc::new(LocalHost), dir.path(), Arc::clone(&grants))
-                .expect("the workspace resolves"),
+        let (fs, broker) = shared(
+            dir.path(),
+            Policy::shipped().with_write(Decision::Ask),
+            None,
         );
-        let mut announced = grants.subscribe();
-        let target = elsewhere.path().join("outside.txt");
+        let mut pending = broker.subscribe();
+        let target = dir.path().join("written.txt");
 
         let write = tokio::spawn({
             let fs = Arc::clone(&fs);
@@ -786,11 +684,8 @@ mod tests {
             async move { fs.write("session-1", &target, "hello\n").await }
         });
 
-        let request = timeout(PATIENCE, announced.recv())
-            .await
-            .expect("a grant is announced")
-            .expect("the stream is open");
-        assert!(grants.deny(request.id));
+        let request = announced(&mut pending).await;
+        assert!(broker.answer(&request.id, PermissionOption::Deny));
 
         let error = write
             .await
@@ -802,30 +697,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_write_with_nobody_listening_is_refused_instead_of_hanging() {
+    async fn a_policy_that_denies_outside_writes_writes_nothing() {
         let dir = workspace();
         let elsewhere = workspace();
-        let fs = client(dir.path());
+        let (fs, broker) = shared(
+            dir.path(),
+            Policy::shipped().with_outside(Decision::Deny),
+            None,
+        );
+        let _pending = broker.subscribe();
         let target = elsewhere.path().join("outside.txt");
 
-        let error = timeout(PATIENCE, fs.write("session-1", &target, "hello\n"))
+        let error = fs
+            .write("session-1", &target, "hello\n")
             .await
-            .expect("the refusal is immediate")
-            .expect_err("nothing can approve it");
+            .expect_err("outside is denied, not asked about");
         assert!(matches!(error, FsError::Denied { .. }), "{error:?}");
         assert!(!target.exists());
-        assert!(fs.grants().pending().is_empty());
+        assert!(broker.pending().is_empty());
+        assert_eq!(broker.audit()[0].decided_by, DecidedBy::Default);
     }
 
     #[tokio::test]
-    async fn a_grant_nobody_answers_expires() {
+    async fn an_outside_write_waits_for_approval() {
         let dir = workspace();
         let elsewhere = workspace();
-        let grants = Arc::new(Grants::with_timeout(Some(Duration::from_millis(50))));
-        let fs = Fs::with_grants(Arc::new(LocalHost), dir.path(), Arc::clone(&grants))
-            .expect("the workspace resolves");
+        let (fs, broker) = shared(dir.path(), Policy::shipped(), None);
+        let mut pending = broker.subscribe();
+        let target = elsewhere.path().join("outside.txt");
+
+        let write = tokio::spawn({
+            let fs = Arc::clone(&fs);
+            let target = target.clone();
+            async move { fs.write("session-1", &target, "hello\n").await }
+        });
+
+        let request = announced(&mut pending).await;
+        assert!(
+            request.detail.contains("outside"),
+            "the person is told it is outside the workspace: {}",
+            request.detail
+        );
+        assert!(
+            !target.exists(),
+            "the file must not exist while the request is pending"
+        );
+        assert_eq!(
+            broker.audit().len(),
+            0,
+            "nothing is decided until somebody answers"
+        );
+
+        assert!(broker.answer(&request.id, PermissionOption::AllowOnce));
+        write
+            .await
+            .expect("the task finishes")
+            .expect("the approved write happens");
+        assert_eq!(fs::read_to_string(&target).expect("read back"), "hello\n");
+    }
+
+    #[tokio::test]
+    async fn a_request_nobody_answers_expires_and_writes_nothing() {
+        let dir = workspace();
+        let elsewhere = workspace();
+        let (fs, broker) = shared(
+            dir.path(),
+            Policy::shipped(),
+            Some(Duration::from_millis(50)),
+        );
         // Held so the request is published; never read.
-        let _announced = grants.subscribe();
+        let _pending = broker.subscribe();
         let target = elsewhere.path().join("outside.txt");
 
         let error = timeout(PATIENCE, fs.write("session-1", &target, "hello\n"))
@@ -834,9 +775,7 @@ mod tests {
             .expect_err("nobody approved it");
         assert!(matches!(error, FsError::Denied { .. }), "{error:?}");
         assert!(!target.exists());
-        assert!(
-            grants.pending().is_empty(),
-            "an expired grant is not still pending"
-        );
+        assert!(broker.pending().is_empty());
+        assert_eq!(broker.audit()[0].decided_by, DecidedBy::Timeout);
     }
 }

@@ -95,14 +95,20 @@ events but cannot renumber them. One turn runs at a time: a second prompt is
 refused here rather than left to whatever an agent does with two. `session/cancel`
 is a notification, so it reaches an agent mid-turn.
 
-Two refusals matter while the rest is unbuilt. A permission request is answered
-with the agent's own reject option and recorded as a notice, because no grant
-should be implied by a session that has no policy yet. A request for a method
-this build does not implement — today, `terminal/create` — is answered with
-`MethodNotFound` naming the method: not advertising a capability does not stop an
-agent asking, and a request with no answer is a hang, not a refusal. All of it is
-exercised against a mock agent that runs as a real child process, so the pipes,
-the handshake and the tree kill are run in CI rather than only type-checked.
+A permission request is classified — file read, file write, terminal, tool,
+other — and handed to the broker, which answers from a rule, from the defaults,
+or by asking a person. The agent's own option ids are used for the answer, so an
+agent that called its allow option `yolo` receives `yolo`; a decision the agent
+offered no option for cancels the request rather than inventing an approval. A
+session with no broker refuses everything with the agent's own reject option,
+because no grant should be implied by a session that has no policy. Either way
+the answer is recorded as a notice, so the transcript says what the agent was
+told. A request for a method this build does not implement — today,
+`terminal/create` — is answered with `MethodNotFound` naming the method: not
+advertising a capability does not stop an agent asking, and a request with no
+answer is a hang, not a refusal. All of it is exercised against a mock agent that
+runs as a real child process, so the pipes, the handshake and the tree kill are
+run in CI rather than only type-checked.
 
 ## Files
 
@@ -120,7 +126,7 @@ says absolute, and guessing a base directory turns an agent's bug into a file in
 an unexpected place.
 
 Reads outside the workspace are refused by name. Writes outside it are not
-refused — they wait. The request is published as a pending grant, the turn
+refused — they wait. The broker publishes a pending permission request, the turn
 blocks, and the file is untouched until somebody approves it. That is the whole
 point of calling it a shadow write: the old contents are still the contents
 while the decision is open, so a diff can be shown against a file that has not
@@ -129,19 +135,22 @@ and rolled back, because a file restored by a rollback is not the same inode the
 editor had open.
 
 Two rules keep a blocked write from becoming a hang. If nothing is listening for
-pending grants the write is refused immediately, since an approval that nobody
-can give is not worth waiting for; and a grant nobody answers expires after five
-minutes. Either way the agent gets a denial, and the refusal is recorded as a
-notice, so the transcript shows what the agent was told.
+pending requests the write is refused immediately, since an approval that nobody
+can give is not worth waiting for; and a request nobody answers expires after
+five minutes. Either way the agent gets a denial, and the refusal is recorded as
+a notice, so the transcript shows what the agent was told.
 
 A session without a workspace advertises no filesystem at all, and refuses a
 request that arrives anyway. The capability and the handler are one decision:
 advertising something this client cannot serve is the same bug as refusing
 something it advertised.
 
-The permission broker (P2-6) and terminals (P2-5) are not built yet, and policy
-is not decided here — inside the workspace or not is the only rule the filesystem
-layer has. `pty` and `http-jsonrpc` agents are accepted by the schema but refused
+Terminals (P2-5) are not built yet, and the shipped policy is deliberately plain:
+files inside the workspace are read and written, a shell or an unrecognised tool
+is asked about, and anything outside is asked about too. A rule — `allow`, `ask`
+or `deny`, optionally scoped by agent, tool and path glob — is how a workspace
+narrows that, and every decision lands on the broker's audit log with the rule
+that made it. `pty` and `http-jsonrpc` agents are accepted by the schema but refused
 by the supervisor until their phases land, so the diagram above is still the
 target, not a full description of today's daemon.
 Model-backed agents arrive in P4.5, on top of the same layer, and inherit

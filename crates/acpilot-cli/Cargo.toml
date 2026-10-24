@@ -15,6 +15,9 @@ acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-proto = { workspace = true }
+# `acpilot tui` starts in this binary rather than as a second executable: one
+# process per surface, and the TUI inherits the same argument surface.
+acpilot-tui = { workspace = true }
 clap = { workspace = true }
 
 [dev-dependencies]

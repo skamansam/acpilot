@@ -1,12 +1,21 @@
 [package]
 name = "acpilot-tui"
-description = "The terminal editor and agent cockpit"
+description = "The terminal UI: sessions, transcript, and permission cards, as a client of the daemon"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+acpilot-client = { workspace = true }
+acpilot-proto = { workspace = true }
+crossterm = { workspace = true }
+futures = { workspace = true }
+ratatui = { workspace = true }
+# Session events carry their payload as JSON, because the ACP updates they come
+# from are not one shape; reading them is the app's job, not a typed bypass.
+serde_json = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

@@ -19,6 +19,9 @@ docs = []
 [dependencies]
 acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
+# Sessions serve an agent's `fs/*` calls from a workspace, and the local host is
+# where those files live until remote hosts land (P8).
+acpilot-host = { workspace = true }
 # A decision carries the time it was made, and the broker's audit rows use the
 # same clock; two spellings of a timestamp in one product is a bug waiting for a
 # consumer to parse the wrong one.

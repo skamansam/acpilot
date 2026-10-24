@@ -1,6 +1,6 @@
 ---
 source: crates/acpilot-proto/tests/openapi_snapshot.rs
-expression: document
+expression: canonical(document)
 ---
 {
   "components": {
@@ -236,6 +236,26 @@ expression: document
           "http_json_rpc"
         ],
         "type": "string"
+      },
+      "CancelAccepted": {
+        "description": "Response to a cancel request.\n\n`cancelled` is false when the session had no turn in flight: the caller's\nintent (\"stop\") was already true, which is not an error.",
+        "properties": {
+          "cancelled": {
+            "description": "Whether a turn was in flight when the cancel arrived.",
+            "type": "boolean"
+          },
+          "turn_id": {
+            "description": "The turn that was running, when one was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "type": "object"
       },
       "ContextBudget": {
         "description": "The budget for one run, in tokens except where stated.",

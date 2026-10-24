@@ -55,6 +55,7 @@ acpilot ext verify --all | prune [--dry-run]
 acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
+acpilot tui [--api-url <url>]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -71,6 +72,15 @@ first use of a profile writes that profile's `agents.toml` — starting with its
 ask what a machine is missing, not a toll gate in front of the first prompt.
 
 ## What it looks like today
+
+`acpilot tui` opens the terminal UI against a running daemon: the session list,
+the open session's transcript as it streams, and a permission card that answers
+with `y`, `a` or `n`. It is a client of the same API as everything else, so the
+editor phase (P6) grows this window rather than a second engine.
+
+```bash
+$ acpilot tui --api-url http://127.0.0.1:7777
+```
 
 Scripting the lab is a first-class case, not a workaround: a corpus experiment
 that cannot be run in CI is a corpus experiment nobody repeats.

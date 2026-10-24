@@ -19,6 +19,11 @@ acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
 acpilot-agent = { version = "0.1.0", path = "crates/acpilot-agent" }
 acpilot-profile = { version = "0.1.0", path = "crates/acpilot-profile" }
 acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
+# The daemon API as a library: every UI (CLI, TUI, later the GUI and web) calls
+# the same surface, so a route cannot be reachable from one frontend and not
+# another.
+acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
+acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
 # The Host seam: where files and processes actually live. Default features are
 # off at this entry point so a consumer that only needs the trait — the agent
 # engine's filesystem guard — links no crypto stack. A consumer that offers

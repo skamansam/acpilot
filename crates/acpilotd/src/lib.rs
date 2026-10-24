@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
+mod sessions;
+
+pub use sessions::{REPLAY_CAPACITY, Sessions};
+
 #[cfg(feature = "docs")]
 use axum::response::Html;
 
@@ -147,11 +151,29 @@ async fn health() -> Json<Health> {
 /// The registry is optional for now: the daemon has no profile resolution yet
 /// (the profiles phase, P4, owns it), so `acpilot serve` starts with none and the routes that need an
 /// agent list answer from whatever the daemon was handed. Tests construct a real
+/// The one workspace this daemon serves.
+///
+/// Workspaces become first-class and plural in the service phase (P3); until
+/// then the daemon is started against a root and every session opens there, so
+/// a client is told the id rather than allowed to name a directory the agent
+/// will not actually edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Workspace {
+    /// Identifier the API uses, derived from the directory's basename.
+    pub id: String,
+    /// Resolved root the broker compares with and the agent is given.
+    pub root: std::path::PathBuf,
+}
+
 /// [`Registry`], which is the same path the daemon will use once profiles land.
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
     agents: Option<Arc<Registry>>,
     broker: Option<Arc<Broker>>,
+    /// The workspace sessions open in, when the daemon was given one.
+    workspace: Option<Workspace>,
+    /// Every session this daemon owns.
+    sessions: Sessions,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -194,6 +216,23 @@ impl AppState {
     /// The broker behind the permission routes, when the daemon has one.
     pub fn broker(&self) -> Option<&Arc<Broker>> {
         self.broker.as_ref()
+    }
+
+    /// Serve this workspace, and open every session in it.
+    #[must_use]
+    pub fn with_workspace(mut self, workspace: Workspace) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+
+    /// The workspace sessions open in.
+    pub fn workspace(&self) -> Option<&Workspace> {
+        self.workspace.as_ref()
+    }
+
+    /// The session store the session routes drive.
+    pub fn sessions(&self) -> &Sessions {
+        &self.sessions
     }
 
     fn decision(&self, id: &str) -> Option<PermissionDecision> {
@@ -260,8 +299,17 @@ pub fn state_for_profile(
         rules = policy.rules().len(),
         "policy loaded"
     );
-    let broker = Arc::new(Broker::with_timeout(policy, workspace, None));
-    let state = AppState::new().with_broker(broker);
+    let id = workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| "workspace".to_owned(), str::to_owned);
+    let broker = Arc::new(Broker::with_timeout(policy, workspace.clone(), None));
+    let state = AppState::new()
+        .with_broker(broker)
+        .with_workspace(Workspace {
+            id,
+            root: workspace,
+        });
     Ok(match load_agents(&profile)? {
         Some(registry) => state.with_registry(registry),
         None => state,
@@ -592,6 +640,16 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_events_doc as utoipa::Path>::operation(),
         ),
     );
+    // Sessions add several methods per path, so they append rather than overwrite.
+    for (path, method, operation) in sessions::operations() {
+        let item = paths.entry(path.to_owned()).or_default();
+        match method {
+            utoipa::openapi::path::HttpMethod::Get => item.get = Some(operation),
+            utoipa::openapi::path::HttpMethod::Post => item.post = Some(operation),
+            utoipa::openapi::path::HttpMethod::Delete => item.delete = Some(operation),
+            _ => {}
+        }
+    }
     Json(document)
 }
 
@@ -689,6 +747,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
+        .merge(sessions::routes())
         .with_state(state);
 
     #[cfg(feature = "docs")]

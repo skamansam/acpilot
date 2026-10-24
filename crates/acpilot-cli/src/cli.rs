@@ -44,6 +44,21 @@ pub enum Command {
         #[command(subcommand)]
         command: SecretCommand,
     },
+    /// Open the terminal UI against a running daemon.
+    ///
+    /// The TUI is a client, not a second engine: it opens sessions, sends
+    /// prompts and answers permissions over the same API the CLI and the GUI
+    /// use, so nothing it does can drift from what the daemon records.
+    Tui {
+        /// Base URL of the daemon.
+        #[arg(
+            long,
+            env = "ACPILOT_API_URL",
+            default_value = "http://127.0.0.1:7777",
+            value_name = "URL"
+        )]
+        api_url: String,
+    },
 }
 
 /// Everything under `acpilot secret`.
@@ -186,6 +201,13 @@ pub fn run(cli: Cli) -> u8 {
         }
         Some(Command::Ext { command }) => run_ext(command),
         Some(Command::Secret { command }) => run_secret(command),
+        Some(Command::Tui { api_url }) => match acpilot_tui::run(&api_url) {
+            Ok(()) => exit::SUCCESS,
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                exit::FAILURE
+            }
+        },
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
             // rather than pretending to do work.

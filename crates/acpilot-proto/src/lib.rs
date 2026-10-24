@@ -64,6 +64,7 @@ pub const API_PREFIX: &str = "/v1";
         session::CreateSessionRequest,
         session::PromptRequest,
         session::PromptAccepted,
+        session::CancelAccepted,
         event::SessionEvent,
         event::SessionEventKind,
         permission::PermissionKind,

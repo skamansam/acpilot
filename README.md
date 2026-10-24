@@ -535,10 +535,11 @@ acpilot/
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
 │   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
 │   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
+│   ├── acpilot-client/        # typed client for the daemon API: REST + SSE
 │   ├── acpilotd/              # daemon: axum API, sqlite, event bus
 │   ├── acpilotd-helper/       # tiny in-host shim for SSH/WSL (stdio JSON-RPC)
 │   ├── acpilot-cli/           # `acpilot` binary: CLI + subcommand dispatch
-│   ├── acpilot-tui/           # ratatui UI
+│   ├── acpilot-tui/           # ratatui UI, started by `acpilot tui`
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
 ├── extensions/                # built-in extensions (themes, presets), embedded in the binary

@@ -1,0 +1,23 @@
+[package]
+name = "acpilot-client"
+description = "Typed client for the daemon API: REST calls and event streams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acpilot-proto = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

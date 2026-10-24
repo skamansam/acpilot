@@ -123,9 +123,48 @@ pub const API_PREFIX: &str = "/v1";
         extension::InstallExtensionRequest,
         extension::ThemeAppearance,
         extension::ThemeSummary
-    ))
+    )),
+    modifiers(&BearerToken)
 )]
 pub struct ApiDoc;
+
+/// Declares the token one transport requires, so a client generated from this
+/// document knows to send it and a person reading `/docs` gets an Authorize
+/// button.
+///
+/// It is a requirement on the document rather than on every operation because it
+/// is true of the document: an HTTP client reaches this API over TCP, where
+/// authentication is the token, or over the unix socket, where it is the mode bits
+/// of the file and this header buys nothing. The description says so, because a
+/// bearer requirement with no note is read as "every route, every platform" —
+/// which is the one thing the socket proves false.
+struct BearerToken;
+
+impl utoipa::Modify for BearerToken {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{
+            Http, HttpAuthScheme, SecurityRequirement, SecurityScheme,
+        };
+        use utoipa::openapi::{Components, RefOr};
+
+        let mut scheme = Http::new(HttpAuthScheme::Bearer);
+        scheme.description = Some(
+            "A TCP listener requires this on every request. The daemon writes the token to a \
+             `0600` file in its runtime directory (`token`, beside the socket) and logs the path \
+             when it binds. A request over the unix socket needs none: that transport's access \
+             control is the filesystem."
+                .to_owned(),
+        );
+        let components = openapi.components.get_or_insert_with(Components::default);
+        components
+            .security_schemes
+            .insert("bearer".to_owned(), RefOr::T(SecurityScheme::Http(scheme)));
+        openapi.security = Some(vec![SecurityRequirement::new(
+            "bearer",
+            Vec::<String>::new(),
+        )]);
+    }
+}
 
 /// Render the OpenAPI document as pretty JSON.
 ///
@@ -148,6 +187,24 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(value["openapi"], "3.1.0");
         assert_eq!(value["info"]["title"], "Acpilot API");
+    }
+
+    #[test]
+    fn the_bearer_scheme_is_declared_so_a_client_knows_to_send_it() {
+        let document = ApiDoc::openapi();
+        let components = document.components.expect("components are registered");
+        assert!(
+            components.security_schemes.contains_key("bearer"),
+            "a generated client with no scheme sends no token and gets a 401 from every port"
+        );
+        let requirement = document
+            .security
+            .expect("the requirement is on the document");
+        assert_eq!(
+            requirement.len(),
+            1,
+            "one requirement, naming the one scheme"
+        );
     }
 
     #[test]

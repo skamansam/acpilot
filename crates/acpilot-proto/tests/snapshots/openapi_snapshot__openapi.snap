@@ -2110,6 +2110,13 @@ expression: canonical(document)
         "minimum": 0,
         "type": "integer"
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "description": "A TCP listener requires this on every request. The daemon writes the token to a `0600` file in its runtime directory (`token`, beside the socket) and logs the path when it binds. A request over the unix socket needs none: that transport's access control is the filesystem.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -2121,5 +2128,10 @@ expression: canonical(document)
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
-  "paths": {}
+  "paths": {},
+  "security": [
+    {
+      "bearer": []
+    }
+  ]
 }

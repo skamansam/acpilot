@@ -32,9 +32,13 @@ right and this file is a bug.
   generated on first use and reused afterwards; `acpilot tui --token` or
   `ACPILOT_TOKEN` names one instead. The one route that answers without it is the
   Swagger page at `/docs`, which is where a browser pastes one — it then sends it on
-  the contract fetch and on every call the page makes. A missing or wrong token is
-  `401 unauthorized`, in the usual envelope, and the scheme is case-insensitive
-  while the token is not.
+  the contract fetch and on every call the page makes. The document declares the
+  scheme (`components.securitySchemes.bearer`) and requires it document-wide, so a
+  client generated from it sends the header and Swagger's Authorize button exists;
+  the socket exemption is in the scheme's description rather than in no scheme at
+  all, because a document that says nothing produces a client that cannot work.
+  A missing or wrong token is `401 unauthorized`, in the usual envelope, and the
+  scheme is case-insensitive while the token is not.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 

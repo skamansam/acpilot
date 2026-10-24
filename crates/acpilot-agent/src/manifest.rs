@@ -153,12 +153,16 @@ impl CommandSpec {
 fn quoted(part: &str) -> String {
     let plain = !part.is_empty()
         && part.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@')
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '\\')
         });
     if plain {
         part.to_owned()
     } else {
-        format!("{part:?}")
+        // Plain quotes rather than `{:?}`: this line is shown to a person and
+        // pasted into a shell, and Rust's debug escaping doubles every backslash
+        // — so `C:\Program Files\node.exe` came out as `"C:\\Program
+        // Files\\node.exe"`. Only an embedded quote needs escaping.
+        format!("\"{}\"", part.replace('"', "\\\""))
     }
 }
 
@@ -1247,6 +1251,34 @@ mod tests {
     }
 
     const HEADER: &str = "schema_version = 1\n";
+
+    #[test]
+    fn a_windows_path_is_shown_with_its_own_separators() {
+        // The status row and the agents API show this line. Quoting it with
+        // Rust's `{:?}` — which is what it used to be — doubles every backslash,
+        // so `C:\\Program Files\\node.exe` reached the user as
+        // `"C:\\\\Program Files\\\\node.exe"` on the one platform where the path
+        // has backslashes to double.
+        let command = CommandSpec {
+            program: r"C:\Program Files\node.exe".to_owned(),
+            args: vec!["--version".to_owned()],
+        };
+        assert_eq!(
+            command.command_line(),
+            r#""C:\Program Files\node.exe" --version"#
+        );
+    }
+
+    #[test]
+    fn a_quote_in_an_argument_is_escaped_rather_than_dropped() {
+        // Two different commands must not render identically: an argument with a
+        // quote in it is the case a naive wrap cannot tell apart.
+        let command = CommandSpec {
+            program: "sh".to_owned(),
+            args: vec![r#"-c"#.to_owned(), r#"echo "hi""#.to_owned()],
+        };
+        assert_eq!(command.command_line(), r#"sh -c "echo \"hi\"""#);
+    }
 
     #[test]
     fn a_new_manifest_points_at_the_published_schema_and_still_parses() {

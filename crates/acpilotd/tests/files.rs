@@ -128,10 +128,14 @@ async fn a_path_that_climbs_out_is_a_400_before_it_is_resolved() {
 #[tokio::test]
 async fn an_absolute_path_is_refused() {
     let directory = workspace();
+    // Absolute on every platform, and outside the workspace: `/etc/passwd` is not
+    // an absolute path on Windows, where the route refuses a rooted-but-relative
+    // path for a different reason and the assertion below would be about that.
+    let absolute = std::env::temp_dir().join("acpilot-absolute-path-probe.txt");
     let (status, body) = send(
         app(serving(directory.path())),
         "GET",
-        "/v1/files?path=/etc/passwd",
+        &format!("/v1/files?path={}", absolute.display()),
         None,
     )
     .await;
@@ -140,7 +144,7 @@ async fn an_absolute_path_is_refused() {
         body["message"]
             .as_str()
             .is_some_and(|message| message.contains("absolute")),
-        "{body}"
+        "{absolute:?} is refused for being absolute: {body}"
     );
 }
 

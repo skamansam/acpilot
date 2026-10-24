@@ -84,13 +84,20 @@ fn a_conpty_is_a_console_and_a_pipe_is_not() {
         .expect("spawn on a conpty");
     let reader = pty.take_reader().expect("a pty has one reader");
     let output = read_until(reader, "False", Duration::from_secs(30));
-    let exit = pty.wait().expect("wait");
 
     assert!(
         output.contains("False"),
         "a conpty must look like a console, got {output:?}"
     );
-    assert!(exit.success, "{exit:?}");
+
+    // Do not wait for the shell to leave on its own: a console is closed, not
+    // hung up, so a child that keeps its console open never gets an EOF (see the
+    // Windows note in `src/platform/windows.rs`). Waiting for that exit is what
+    // hung this job for the better part of an hour instead of failing it. `kill`
+    // is the documented stop for ConPTY, and the assertion above already proved
+    // the program ran.
+    pty.kill().expect("kill");
+    pty.wait().expect("wait");
 
     // The same command through pipes, so the assertion above cannot pass
     // because PowerShell reports false everywhere.

@@ -92,6 +92,14 @@ subject and one audit row per call (D26, the studio phase's task P14-5). That is
 import a spec, call the endpoint it describes, and assert the row it wrote — three
 different extensions, one approval trail.
 
+## On the shelf
+
+The component-system packs and the blog extension are not in the table above because
+they need something the product does not have yet: a sandboxed panel that renders a
+component. [Planned extensions](planned/) lists each one, what it contributes, and
+which phase it waits on — including why one core panel unblocks seven packs and the
+blog only partly.
+
 ## What is built today
 
 The contract (this page and its neighbours), the OpenAPI types, the ADR, and the

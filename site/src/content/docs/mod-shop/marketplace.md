@@ -10,6 +10,10 @@ It lists extension repositories that a human has reviewed. There is no account
 system, no upload endpoint, no crawl, and nothing that runs on your machine just
 because you opened the list.
 
+Wanting an extension that does not exist yet is a different page:
+[planned extensions](../planned/) tracks what we intend to build and what each one
+waits on. This page stays what is installable today.
+
 ## Adding your extension
 
 1. Publish the extension somewhere public, with a licence.

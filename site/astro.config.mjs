@@ -82,6 +82,7 @@ export default defineConfig({
             { label: 'Installing and approving', link: '/mod-shop/registry/' },
             { label: 'The marketplace', link: '/mod-shop/marketplace/' },
             { label: 'Themes', link: '/mod-shop/themes/' },
+            { label: 'Planned extensions', link: '/mod-shop/planned/' },
           ],
         },
         {

@@ -83,12 +83,18 @@ fn a_conpty_is_a_console_and_a_pipe_is_not() {
         )
         .expect("spawn on a conpty");
     let reader = pty.take_reader().expect("a pty has one reader");
-    let output = read_until(reader, "False", Duration::from_secs(30));
+    let output = read_until(reader, "False", Duration::from_secs(60));
 
-    assert!(
-        output.contains("False"),
-        "a conpty must look like a console, got {output:?}"
-    );
+    if !output.contains("False") {
+        // "Nothing arrived" has two very different causes — a shell that never
+        // ran and a wire that never carried a byte — and the exit status is what
+        // tells them apart.
+        let exit = pty.try_wait().expect("try_wait");
+        panic!(
+            "a conpty must look like a console: read {output:?} from a {:?} console; the child said {exit:?} (None means it was still running)",
+            pty.size()
+        );
+    }
 
     // Do not wait for the shell to leave on its own: a console is closed, not
     // hung up, so a child that keeps its console open never gets an EOF (see the

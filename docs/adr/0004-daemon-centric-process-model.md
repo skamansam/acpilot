@@ -83,7 +83,7 @@ client implementation for no gain.
 | Linux/BSD | `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (directory `0700`, socket `0600`) |
 | macOS | the same, under `$TMPDIR` when `XDG_RUNTIME_DIR` is unset |
 | Windows | `\\.\pipe\acpilot-<user>` (named pipe, ACL to the owning user) — not built yet, so loopback HTTP until P10-5 |
-| Opt-in | `--addr 127.0.0.1:7777`, which **requires** `Authorization: Bearer` from a `0600` token file (P3-2; until then it warns and accepts unauthenticated requests) |
+| Opt-in | `--addr 127.0.0.1:7777`, which **requires** `Authorization: Bearer` from a `0600` token file beside the socket |
 
 The filesystem is the access control. That is the only reason "loopback needs no
 token" is safe to promise: on the socket, local users other than the owner cannot
@@ -194,11 +194,12 @@ Recorded here so the pieces land in an order where each is usable:
    `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`0700` directory, `0600` socket),
    removes it on Ctrl-C or `SIGTERM`, and refuses a path another daemon still
    answers on; `--socket <path>` moves it and `--addr <host:port>` is the opt-in
-   TCP listener. Still open from this step: **the token on `--addr`**. Until it
-   lands the daemon logs a warning that the port is unauthenticated, and
-   `docs/api.md` says the same, rather than implying a guarantee the code does not
-   keep. The Windows named pipe is P10-5's, so that platform's default endpoint is
-   loopback HTTP for now.)
+   TCP listener. The token on `--addr` landed with it rather than after it
+   (2026-10-24): 32 random bytes in a `0600` file beside the socket, required on
+   every request including streams, so the port never existed unauthenticated and
+   no client had to be written twice. The Windows named pipe is P10-5's, so that
+   platform's default endpoint is loopback HTTP for now — with the token, because
+   a port there is the only listener it has.)
 3. **Workspaces**: `GET/POST /v1/workspaces`, sessions in a workspace, TUI picker.
 4. **Idle exit** with the turn/pending/stream conditions above, plus
    `--idle-timeout`.

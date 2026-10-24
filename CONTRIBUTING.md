@@ -31,8 +31,10 @@ is why the health check passes `--unix-socket`; on Windows the daemon listens on
 `127.0.0.1:7777` until the named pipe exists, so pass `--addr` there.
 
 `--addr 127.0.0.1:7777` is also what a browser needs, for `/docs` under
-`--features docs`. It is an opt-in listener without a token yet, so it logs a
-warning and is for development.
+`--features docs`. It is an opt-in listener, and every request on it needs
+`Authorization: Bearer <token>` with the token the daemon writes to
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup — a browser cannot send that
+header to a typed address, so fetch `/v1/openapi.json` with `curl` instead.
 
 Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
 with `RUST_LOG` set: the spawn path captures its output in

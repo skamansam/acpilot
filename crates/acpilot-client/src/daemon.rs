@@ -128,6 +128,15 @@ pub enum ConnectError {
         endpoint: String,
     },
 
+    /// The daemon answered and refused the token.
+    #[error("the daemon at {endpoint} refused the token; it is in {token}, or set ACPILOT_TOKEN")]
+    Unauthorized {
+        /// The endpoint that answered.
+        endpoint: String,
+        /// The file the daemon writes its token to.
+        token: String,
+    },
+
     /// The daemon is running with a different version than this client.
     #[error(
         "the daemon at {endpoint} is version {daemon}, this client is {client}; restart the daemon"
@@ -202,15 +211,21 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
     );
     let client = Client::new(&endpoint);
 
-    if let Some(health) = probe(&client).await {
-        check_version(&endpoint, &health.version)?;
-        return Ok(Running {
-            client,
-            endpoint,
-            version: health.version,
-            workspace: health.workspace,
-            origin: Origin::Existing,
-        });
+    match probe(&client).await {
+        Probe::Up(health) => {
+            check_version(&endpoint, &health.version)?;
+            return Ok(Running {
+                client,
+                endpoint,
+                version: health.version,
+                workspace: health.workspace,
+                origin: Origin::Existing,
+            });
+        }
+        // Refused is not "not running": starting a second daemon would leave the
+        // first one holding the socket and this one failing at bind.
+        Probe::Refused => return Err(refused(&endpoint)),
+        Probe::Down => {}
     }
 
     if options.no_spawn {
@@ -234,15 +249,19 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
     let mut child = None;
     let _guard = match claim {
         Claim::Owned(guard) => {
-            if let Some(health) = probe(&client).await {
-                check_version(&endpoint, &health.version)?;
-                return Ok(Running {
-                    client,
-                    endpoint,
-                    version: health.version,
-                    workspace: health.workspace,
-                    origin: Origin::Existing,
-                });
+            match probe(&client).await {
+                Probe::Up(health) => {
+                    check_version(&endpoint, &health.version)?;
+                    return Ok(Running {
+                        client,
+                        endpoint,
+                        version: health.version,
+                        workspace: health.workspace,
+                        origin: Origin::Existing,
+                    });
+                }
+                Probe::Refused => return Err(refused(&endpoint)),
+                Probe::Down => {}
             }
             child = Some(spawn(&binary, &bind, &log, &options.daemon_args)?);
             Some(guard)
@@ -319,12 +338,37 @@ fn bind_args(endpoint: &str) -> Result<Vec<String>, ConnectError> {
     Ok(vec!["--socket".to_owned(), endpoint.to_owned()])
 }
 
+/// What a probe found.
+///
+/// Three answers, because two of them lead a person to different places: silence
+/// means "start it", and a `401` means "the daemon is right there and your token
+/// is wrong". Reporting both as "no daemon" sends someone to start a second one.
+enum Probe {
+    Up(crate::Health),
+    /// A daemon answered `401`.
+    Refused,
+    /// Nothing answered, or it answered something that is not this API.
+    Down,
+}
+
 /// Ask the daemon who it is, giving up quickly.
-async fn probe(client: &Client) -> Option<crate::Health> {
-    tokio::time::timeout(PROBE, client.health())
-        .await
-        .ok()
-        .and_then(Result::ok)
+async fn probe(client: &Client) -> Probe {
+    match tokio::time::timeout(PROBE, client.health()).await {
+        Ok(Ok(health)) => Probe::Up(health),
+        Ok(Err(crate::ClientError::Api { status: 401, .. })) => Probe::Refused,
+        _ => Probe::Down,
+    }
+}
+
+/// The failure a refused token deserves, naming where the token is.
+fn refused(endpoint: &str) -> ConnectError {
+    ConnectError::Unauthorized {
+        endpoint: endpoint.to_owned(),
+        token: acpilot_host::runtime_dir()
+            .join("token")
+            .display()
+            .to_string(),
+    }
 }
 
 fn check_version(endpoint: &str, daemon: &str) -> Result<(), ConnectError> {
@@ -349,8 +393,12 @@ async fn wait_ready(
 ) -> Result<crate::Health, ConnectError> {
     let deadline = tokio::time::Instant::now() + READY;
     loop {
-        if let Some(health) = probe(client).await {
-            return Ok(health);
+        match probe(client).await {
+            Probe::Up(health) => return Ok(health),
+            // It came up and refused us: waiting the rest of two seconds for it to
+            // change its mind would only delay the sentence that explains it.
+            Probe::Refused => return Err(refused(endpoint)),
+            Probe::Down => {}
         }
         if let Some(child) = child.as_mut()
             && let Some(status) = child.try_wait()?

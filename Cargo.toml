@@ -115,6 +115,9 @@ keyring = { version = "4.2", features = ["v1"] }
 directories = "6"
 
 # misc
+# The daemon's TCP token: 256 bits from the system source, because a port has no
+# rate limit of its own and the only defence is that guessing is hopeless.
+getrandom = "0.3"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

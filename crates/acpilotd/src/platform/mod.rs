@@ -31,8 +31,8 @@ pub use windows::{serve, shutdown};
 pub enum Target {
     /// A unix socket, made private to the user who started the daemon.
     Socket(PathBuf),
-    /// A TCP address. Explicit, and unauthenticated until the token lands —
-    /// which is why it is never the default.
+    /// A TCP address, and the token that guards it (see `crate::auth`). Explicit,
+    /// because a port inherits none of the socket's filesystem access control.
     Tcp(String),
 }
 

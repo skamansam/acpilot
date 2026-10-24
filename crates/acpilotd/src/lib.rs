@@ -30,11 +30,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
+mod auth;
 mod files;
 mod platform;
 mod sessions;
 mod terminals;
 
+pub use auth::{protect, token_path};
 pub use files::MAX_FILE_BYTES;
 pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};

@@ -195,6 +195,48 @@ async fn a_permission_frame_carries_its_request() {
     }
 }
 
+/// A daemon that refuses every request, the way a TCP listener with a different
+/// token does.
+fn refusing() -> Router {
+    Router::new().route(
+        "/v1/health",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                axum::Json(serde_json::json!({
+                    "code": "unauthorized",
+                    "message": "this listener requires `Authorization: Bearer <token>`"
+                })),
+            )
+        }),
+    )
+}
+
+#[tokio::test]
+async fn a_refused_token_is_not_reported_as_no_daemon() {
+    // The distinction matters: silence means "start one", and a 401 means a daemon
+    // is right there holding the endpoint. Reported as absence, the advice would be
+    // to start a second daemon that cannot bind.
+    let endpoint = serve(refusing()).await;
+    let error = acpilot_client::daemon::ensure(&acpilot_client::daemon::Options {
+        endpoint: Some(endpoint.clone()),
+        no_spawn: true,
+        daemon_args: Vec::new(),
+    })
+    .await
+    .expect_err("a refusal");
+    match error {
+        acpilot_client::daemon::ConnectError::Unauthorized {
+            endpoint: named,
+            token,
+        } => {
+            assert_eq!(named, endpoint);
+            assert!(token.ends_with("token"), "the token file is named: {token}");
+        }
+        other => panic!("unexpected {other}"),
+    }
+}
+
 #[tokio::test]
 async fn an_unreachable_daemon_says_where_it_tried() {
     // Port 1 on loopback is never a daemon; the point is the message, not the port.

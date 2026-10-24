@@ -90,7 +90,11 @@ The default endpoint is the daemon's unix socket in `$XDG_RUNTIME_DIR/acpilot`
 `--api-url` takes either a URL or a socket path, and `ACPILOT_API_URL` takes the
 same — one string, because to a user "where the daemon is" is one place, not two
 transports. The socket's directory is `0700` and the socket `0600`, which is the
-whole access-control story for a local daemon.
+whole access-control story for a local daemon. A URL has no such story, so a daemon
+on a port requires a token: the client sends the one in
+`$XDG_RUNTIME_DIR/acpilot/token` (or `ACPILOT_TOKEN`), and a `401` is reported as a
+refused token naming that file — not as "no daemon", which would send you to start
+a second one on the same port.
 
 The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
 it is, and only silence starts one. The spawned daemon is detached from the

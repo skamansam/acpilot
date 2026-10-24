@@ -56,14 +56,23 @@ the whole difference from a URL:
 curl -s --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" http://localhost/v1/health
 # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1","workspace":"acpilot"}
 
-# A port instead, when a browser needs to reach it:
+# A port instead, for a client that is not on this machine's filesystem:
 cargo run -p acpilotd --features docs -- --addr 127.0.0.1:7777
-# then open http://127.0.0.1:7777/docs
+# every request needs the token the daemon wrote beside the socket:
+curl -s http://127.0.0.1:7777/v1/health \
+  -H "Authorization: Bearer $(cat "$XDG_RUNTIME_DIR/acpilot/token")"
 ```
 
 The socket's directory is `0700` and the socket `0600`, which is what lets a local
-request go without a token. A TCP bind does not inherit that, and the daemon says
-so in its log: it is for development until `--addr` takes a token (P3-2).
+request go without a token. A TCP bind inherits neither, so it requires
+`Authorization: Bearer <token>` on every request: a `0600` file beside the socket,
+generated on first use and logged by path at startup. A client reads that file, and
+`ACPILOT_TOKEN` overrides it for one that has no runtime directory — a CI job, or a
+container talking to a daemon outside it.
+
+The docs page at `/docs` sits behind the same token, and a browser cannot attach a
+header to a typed address, so read the contract with `curl` and a document viewer
+until that page grows a token field.
 
 A daemon started by the client is detached from the terminal, and `--no-spawn`
 turns the behaviour off when something else should own the process.

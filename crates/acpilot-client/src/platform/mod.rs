@@ -25,3 +25,37 @@ pub(crate) use windows::http;
 pub(crate) fn is_url(endpoint: &str) -> bool {
     endpoint.starts_with("http://") || endpoint.starts_with("https://")
 }
+
+/// An HTTP client that carries the daemon's token, when there is one.
+///
+/// Only used for TCP: a socket's access control is the filesystem, and sending a
+/// token down it would be a secret in a channel that never needed one. The token
+/// comes from `ACPILOT_TOKEN` first, so a test or a CI job can point at a daemon
+/// without sharing a runtime directory, and from the file the daemon writes
+/// otherwise.
+pub(crate) fn tcp_client() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = token()
+        && let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        headers.insert(reqwest::header::AUTHORIZATION, value);
+    }
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("the HTTP client is always buildable")
+}
+
+fn token() -> Option<String> {
+    if let Some(token) = std::env::var("ACPILOT_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
+    {
+        return Some(token);
+    }
+    std::fs::read_to_string(acpilot_host::runtime_dir().join("token"))
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
+}

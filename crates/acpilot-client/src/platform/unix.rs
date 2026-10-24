@@ -10,7 +10,7 @@ use std::path::Path;
 /// from a proxy or a trace cannot pretend the request went somewhere else.
 pub(crate) fn http(endpoint: &str) -> (String, reqwest::Client) {
     if super::is_url(endpoint) {
-        return (endpoint.to_owned(), reqwest::Client::new());
+        return (endpoint.to_owned(), super::tcp_client());
     }
     let socket = Path::new(endpoint);
     let client = reqwest::Client::builder()

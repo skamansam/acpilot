@@ -55,13 +55,17 @@ where
             ));
         }
     };
+    // Every listener this platform has is TCP, so the token is not optional here:
+    // without the named pipe there is no filesystem boundary to inherit.
+    let path = crate::auth::token_path();
+    let token = crate::auth::load_or_create(&path)?;
     let listener = TcpListener::bind(&addr).await?;
     tracing::warn!(
         addr = %listener.local_addr()?,
-        "listening on TCP; this listener has no token yet, so anything that can reach the port \
-         can use it (ADR 0004 §3)"
+        token = %path.display(),
+        "listening on TCP; every request needs `Authorization: Bearer <token>`"
     );
-    axum::serve(listener, router)
+    axum::serve(listener, crate::auth::protect(router, token))
         .with_graceful_shutdown(shutdown)
         .await
 }

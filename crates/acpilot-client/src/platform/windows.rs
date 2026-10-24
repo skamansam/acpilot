@@ -8,5 +8,10 @@
 /// path, and the request fails at connect naming the endpoint — which is the
 /// honest failure for a transport this platform does not have.
 pub(crate) fn http(endpoint: &str) -> (String, reqwest::Client) {
+    if super::is_url(endpoint) {
+        return (endpoint.to_owned(), super::tcp_client());
+    }
+    // A path with no socket transport: left as the endpoint so the request fails
+    // naming it, rather than being silently redirected to a port.
     (endpoint.to_owned(), reqwest::Client::new())
 }

@@ -26,13 +26,19 @@ where
 {
     match target {
         Target::Tcp(addr) => {
+            // A port has no filesystem boundary, so it gets the other one. The
+            // token is read (or created) before the bind: a listener that is up
+            // for even a moment without an answer to "who are you" is the hole
+            // this whole branch exists to close.
+            let path = crate::auth::token_path();
+            let token = crate::auth::load_or_create(&path)?;
             let listener = TcpListener::bind(&addr).await?;
             tracing::warn!(
                 addr = %listener.local_addr()?,
-                "listening on TCP; this listener has no token yet, so anything that can reach \
-                 the port can use it (ADR 0004 §3)"
+                token = %path.display(),
+                "listening on TCP; every request needs `Authorization: Bearer <token>`"
             );
-            axum::serve(listener, router)
+            axum::serve(listener, crate::auth::protect(router, token))
                 .with_graceful_shutdown(shutdown)
                 .await
         }

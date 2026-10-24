@@ -25,11 +25,13 @@ right and this file is a bug.
   a reconnect, never a frame on the existing stream.
 - **Auth**: the default endpoint is the daemon's unix socket, and the filesystem
   is the access control — the runtime directory is `0700` and the socket `0600`, so
-  another local user cannot open it at all. A TCP bind (`--addr`) does not inherit
-  that property, so it does not inherit the exemption either: once P3-2 lands it
-  requires `Authorization: Bearer <token>` on every request, including streams.
-  Until that token exists the daemon logs a warning when it binds a port, and this
-  paragraph says so rather than implying a guarantee the code does not keep.
+  another local user cannot open it at all, and a request over it needs no token. A
+  TCP bind (`--addr`) inherits neither property, so it requires
+  `Authorization: Bearer <token>` on every request, including streams. The token is
+  a `0600` file in the runtime directory beside the socket (`.../acpilot/token`),
+  generated on first use and reused afterwards; `ACPILOT_TOKEN` overrides it for a
+  client. A missing or wrong token is `401 unauthorized`, in the usual envelope,
+  and the scheme is case-insensitive while the token is not.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 
@@ -296,6 +298,7 @@ that stopped answering:
 | `code` | HTTP | Meaning |
 | --- | --- | --- |
 | `invalid_request` | 400 | Malformed body, bad enum value, missing profile header |
+| `unauthorized` | 401 | A TCP listener without `Authorization: Bearer <token>` |
 | `not_found` | 404 | The thing is not there |
 | `conflict` | 409 | Stale ETag, duplicate turn, closed session, already answered |
 | `permission_denied` | 403 | Policy or a human said no |

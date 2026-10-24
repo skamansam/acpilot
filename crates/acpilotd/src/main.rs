@@ -29,8 +29,10 @@ struct Cli {
     /// TCP address to bind instead of the unix socket.
     ///
     /// Opt-in, and not the default: a socket's directory is `0700`, so another
-    /// local user cannot reach it, and a port cannot inherit that. This listener
-    /// has no token yet (P3-2), which is why asking for it is deliberate.
+    /// local user cannot reach it, and a port cannot inherit that. Every request
+    /// on this listener therefore needs `Authorization: Bearer <token>`, with the
+    /// token in a `0600` file beside the socket — which is also why asking for a
+    /// port is deliberate.
     #[arg(long, env = "ACPILOT_ADDR", value_name = "ADDR")]
     addr: Option<String>,
 

@@ -25,7 +25,12 @@ use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::PermissionOption;
 use agent_client_protocol::schema::v1::StopReason;
 use tokio::sync::broadcast::Receiver;
-use tokio::time::{sleep, timeout};
+// `sleep` is only used by the Linux-only test that watches a pid disappear, so
+// importing it everywhere is an unused import on macOS and Windows — which is
+// `-D warnings`, and was failing both legs of CI while the code was fine.
+#[cfg(target_os = "linux")]
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 /// The fixture agent, as Cargo built it for this test run.
 const MOCK: &str = env!("CARGO_BIN_EXE_acpilot-mock-agent");

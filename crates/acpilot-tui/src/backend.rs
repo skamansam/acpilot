@@ -103,8 +103,8 @@ impl Worker {
     }
 }
 
-/// Start the worker for the daemon at `daemon`.
-pub fn spawn(daemon: String, updates: UnboundedSender<Update>) -> Worker {
+/// Start the worker for the daemon at `daemon`, with `token` when it has one.
+pub fn spawn(daemon: String, token: Option<String>, updates: UnboundedSender<Update>) -> Worker {
     let (requests, receiver) = tokio::sync::mpsc::unbounded_channel();
     std::thread::Builder::new()
         .name("acpilot-tui-client".to_owned())
@@ -113,7 +113,13 @@ pub fn spawn(daemon: String, updates: UnboundedSender<Update>) -> Worker {
                 .enable_all()
                 .build();
             match runtime {
-                Ok(runtime) => runtime.block_on(run(Client::new(daemon), receiver, updates)),
+                Ok(runtime) => {
+                    let client = match token {
+                        Some(token) => Client::with_token(daemon, token),
+                        None => Client::new(daemon),
+                    };
+                    runtime.block_on(run(client, receiver, updates))
+                }
                 Err(error) => {
                     let _ = updates.send(Update::Status(format!(
                         "no runtime for the daemon client: {error}"

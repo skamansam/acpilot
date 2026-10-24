@@ -36,7 +36,7 @@ use axum::response::{IntoResponse, Response};
 /// Where the token lives: beside the socket, in the runtime directory.
 #[must_use]
 pub fn token_path() -> PathBuf {
-    acpilot_host::runtime_dir().join("token")
+    acpilot_host::token_path()
 }
 
 /// The token, creating it when this is the first TCP daemon on this machine.

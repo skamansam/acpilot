@@ -66,9 +66,10 @@ curl -s http://127.0.0.1:7777/v1/health \
 The socket's directory is `0700` and the socket `0600`, which is what lets a local
 request go without a token. A TCP bind inherits neither, so it requires
 `Authorization: Bearer <token>` on every request: a `0600` file beside the socket,
-generated on first use and logged by path at startup. A client reads that file, and
-`ACPILOT_TOKEN` overrides it for one that has no runtime directory — a CI job, or a
-container talking to a daemon outside it.
+generated on first use and logged by path at startup. `acpilot tui --token <token>`
+names one explicitly (or `ACPILOT_TOKEN`); without either it reads that file, which
+is what makes a local port work with no typing. A CI job or a container talking to
+a daemon it has no runtime directory for is the case the flag exists for.
 
 The docs page at `/docs` is the one route that answers without a token — a browser
 cannot attach a header to a typed address, and that page is where the token gets

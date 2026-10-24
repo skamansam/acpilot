@@ -85,6 +85,13 @@ pub struct Options {
     pub endpoint: Option<String>,
     /// `--no-spawn`: fail instead of starting a daemon.
     pub no_spawn: bool,
+    /// `--token`, when the caller has one.
+    ///
+    /// Passed to the client rather than looked up by it: a TCP daemon requires it
+    /// and a socket daemon ignores it, and which file or variable it came from is
+    /// the caller's business. The caller is also the only one that can tell a
+    /// person where to find it, which is what the refusal message is for.
+    pub token: Option<String>,
     /// Extra arguments passed to `acpilotd` when this client spawns it.
     ///
     /// `--workspace`, and `--profile` when the caller named one. They are only
@@ -209,7 +216,10 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
         options.endpoint.as_deref(),
         std::env::var(ENV_ENDPOINT).ok().as_deref(),
     );
-    let client = Client::new(&endpoint);
+    let client = match &options.token {
+        Some(token) => Client::with_token(&endpoint, token),
+        None => Client::new(&endpoint),
+    };
 
     match probe(&client).await {
         Probe::Up(health) => {
@@ -364,10 +374,7 @@ async fn probe(client: &Client) -> Probe {
 fn refused(endpoint: &str) -> ConnectError {
     ConnectError::Unauthorized {
         endpoint: endpoint.to_owned(),
-        token: acpilot_host::runtime_dir()
-            .join("token")
-            .display()
-            .to_string(),
+        token: acpilot_host::token_path().display().to_string(),
     }
 }
 
@@ -644,6 +651,7 @@ mod tests {
         let options = Options {
             endpoint: Some(format!("http://127.0.0.1:{port}")),
             no_spawn: true,
+            token: None,
             daemon_args: Vec::new(),
         };
         let error = ensure(&options).await.expect_err("nothing is listening");

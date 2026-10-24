@@ -30,19 +30,27 @@ const FRAME: Duration = Duration::from_millis(120);
 
 /// Run the TUI against the daemon at `daemon` until the user leaves.
 ///
+/// `token` is passed through to the client and is what a TCP daemon requires; the
+/// caller resolves it, because the caller is the one with arguments and a home
+/// directory. A socket endpoint ignores it.
+///
 /// The terminal is restored on the way out, including when a draw fails: a TUI
 /// that leaves the cursor hidden and the screen in raw mode is worse than the
 /// crash that caused it.
-pub fn run(daemon: &str) -> io::Result<()> {
+pub fn run(daemon: &str, token: Option<&str>) -> io::Result<()> {
     let mut terminal = ratatui::try_init()?;
-    let result = event_loop(&mut terminal, daemon);
+    let result = event_loop(&mut terminal, daemon, token.map(str::to_owned));
     ratatui::restore();
     result
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, daemon: &str) -> io::Result<()> {
+fn event_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    daemon: &str,
+    token: Option<String>,
+) -> io::Result<()> {
     let (updates, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-    let worker = backend::spawn(daemon.to_owned(), updates);
+    let worker = backend::spawn(daemon.to_owned(), token, updates);
     let mut app = App::new(daemon);
 
     loop {

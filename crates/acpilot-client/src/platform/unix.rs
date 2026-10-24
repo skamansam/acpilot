@@ -8,9 +8,9 @@ use std::path::Path;
 /// URL is then only what the `Host` header says — nothing in the daemon routes on
 /// it. `http://localhost` is used rather than an invented host name so a log line
 /// from a proxy or a trace cannot pretend the request went somewhere else.
-pub(crate) fn http(endpoint: &str) -> (String, reqwest::Client) {
+pub(crate) fn http(endpoint: &str, token: Option<&str>) -> (String, reqwest::Client) {
     if super::is_url(endpoint) {
-        return (endpoint.to_owned(), super::tcp_client());
+        return (endpoint.to_owned(), super::tcp_client(token));
     }
     let socket = Path::new(endpoint);
     let client = reqwest::Client::builder()

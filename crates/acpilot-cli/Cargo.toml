@@ -15,6 +15,10 @@ acpilot-agent = { workspace = true }
 acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
+# Where the daemon put the token a TCP endpoint needs, and the runtime directory
+# its socket lives in: platform paths belong in the crate that owns them, not in a
+# third spelling here.
+acpilot-host = { workspace = true }
 acpilot-proto = { workspace = true }
 # `acpilot tui` starts in this binary rather than as a second executable: one
 # process per surface, and the TUI inherits the same argument surface.

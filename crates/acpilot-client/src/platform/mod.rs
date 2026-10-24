@@ -26,16 +26,17 @@ pub(crate) fn is_url(endpoint: &str) -> bool {
     endpoint.starts_with("http://") || endpoint.starts_with("https://")
 }
 
-/// An HTTP client that carries the daemon's token, when there is one.
+/// An HTTP client that carries the token it was given, if any.
 ///
 /// Only used for TCP: a socket's access control is the filesystem, and sending a
 /// token down it would be a secret in a channel that never needed one. The token
-/// comes from `ACPILOT_TOKEN` first, so a test or a CI job can point at a daemon
-/// without sharing a runtime directory, and from the file the daemon writes
-/// otherwise.
-pub(crate) fn tcp_client() -> reqwest::Client {
+/// is a parameter rather than something this module looks up — an environment
+/// variable read here would make the same `Client::new` mean two things depending
+/// on the process it runs in, and a library is the wrong place to decide where a
+/// secret comes from. `acpilot` resolves one and passes it.
+pub(crate) fn tcp_client(token: Option<&str>) -> reqwest::Client {
     let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(token) = token()
+    if let Some(token) = token
         && let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
     {
         headers.insert(reqwest::header::AUTHORIZATION, value);
@@ -44,18 +45,4 @@ pub(crate) fn tcp_client() -> reqwest::Client {
         .default_headers(headers)
         .build()
         .expect("the HTTP client is always buildable")
-}
-
-fn token() -> Option<String> {
-    if let Some(token) = std::env::var("ACPILOT_TOKEN")
-        .ok()
-        .map(|token| token.trim().to_owned())
-        .filter(|token| !token.is_empty())
-    {
-        return Some(token);
-    }
-    std::fs::read_to_string(acpilot_host::runtime_dir().join("token"))
-        .ok()
-        .map(|token| token.trim().to_owned())
-        .filter(|token| !token.is_empty())
 }

@@ -212,6 +212,43 @@ fn refusing() -> Router {
     )
 }
 
+/// A daemon that wants one particular token, the way a TCP listener does.
+fn guarded() -> Router {
+    use axum::http::HeaderMap;
+    use axum::response::IntoResponse;
+
+    Router::new().route(
+        "/v1/health",
+        axum::routing::get(|headers: HeaderMap| async move {
+            let health = axum::Json(serde_json::json!({
+                "ok": true,
+                "service": "acpilotd",
+                "version": "0.1.0",
+                "api": "/v1"
+            }));
+            let presented = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok());
+            match presented {
+                Some("Bearer sekrit") => health.into_response(),
+                _ => (axum::http::StatusCode::UNAUTHORIZED, health).into_response(),
+            }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn a_client_sends_the_token_it_was_given() {
+    let endpoint = serve(guarded()).await;
+    let client = Client::with_token(&endpoint, "sekrit");
+    assert_eq!(client.health().await.expect("health").service, "acpilotd");
+
+    // And a client built without one sends none: the token is the caller's to
+    // find, not something this library looks up on its own.
+    let error = Client::new(&endpoint).health().await.expect_err("no token");
+    assert!(matches!(error, ClientError::Api { status: 401, .. }));
+}
+
 #[tokio::test]
 async fn a_refused_token_is_not_reported_as_no_daemon() {
     // The distinction matters: silence means "start one", and a 401 means a daemon
@@ -221,6 +258,7 @@ async fn a_refused_token_is_not_reported_as_no_daemon() {
     let error = acpilot_client::daemon::ensure(&acpilot_client::daemon::Options {
         endpoint: Some(endpoint.clone()),
         no_spawn: true,
+        token: None,
         daemon_args: Vec::new(),
     })
     .await

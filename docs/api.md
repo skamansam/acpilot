@@ -29,9 +29,12 @@ right and this file is a bug.
   TCP bind (`--addr`) inherits neither property, so it requires
   `Authorization: Bearer <token>` on every request, including streams. The token is
   a `0600` file in the runtime directory beside the socket (`.../acpilot/token`),
-  generated on first use and reused afterwards; `ACPILOT_TOKEN` overrides it for a
-  client. A missing or wrong token is `401 unauthorized`, in the usual envelope,
-  and the scheme is case-insensitive while the token is not.
+  generated on first use and reused afterwards; `acpilot tui --token` or
+  `ACPILOT_TOKEN` names one instead. The one route that answers without it is the
+  Swagger page at `/docs`, which is where a browser pastes one — it then sends it on
+  the contract fetch and on every call the page makes. A missing or wrong token is
+  `401 unauthorized`, in the usual envelope, and the scheme is case-insensitive
+  while the token is not.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 

@@ -72,6 +72,14 @@ pub enum Command {
         /// Workspace root the spawned daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Bearer token for a daemon on a TCP endpoint.
+        ///
+        /// A socket needs none: its access control is the filesystem. Without this
+        /// flag the file the daemon writes beside its socket is read, so a local
+        /// port works with no typing; name a token here when the daemon is
+        /// somewhere this machine's runtime directory cannot describe.
+        #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -220,7 +228,8 @@ pub fn run(cli: Cli) -> u8 {
             no_spawn,
             profile,
             workspace,
-        }) => run_tui(api_url, no_spawn, profile, workspace),
+            token,
+        }) => run_tui(api_url, no_spawn, profile, workspace, token),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -245,6 +254,7 @@ fn run_tui(
     no_spawn: bool,
     profile: Option<PathBuf>,
     workspace: Option<PathBuf>,
+    token: Option<String>,
 ) -> u8 {
     let workspace = match workspace {
         Some(directory) => directory,
@@ -262,9 +272,11 @@ fn run_tui(
         daemon_args.push(profile.display().to_string());
     }
 
+    let token = token.or_else(local_token);
     let options = acpilot_client::daemon::Options {
         endpoint: api_url,
         no_spawn,
+        token: token.clone(),
         daemon_args,
     };
     let running = match acpilot_client::daemon::ensure_blocking(&options) {
@@ -297,13 +309,27 @@ fn run_tui(
         }
     }
 
-    match acpilot_tui::run(&running.endpoint) {
+    match acpilot_tui::run(&running.endpoint, token.as_deref()) {
         Ok(()) => exit::SUCCESS,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
         }
     }
+}
+
+/// The token a local daemon wrote, when there is one.
+///
+/// The client is given a token, never told to look for one — but `acpilot tui`
+/// against a port on this machine should not require pasting a secret the daemon
+/// already put in a `0600` file. Reading it here keeps that convenience in the
+/// binary that has a user, rather than in a library that would then behave
+/// differently depending on whose environment it runs in.
+fn local_token() -> Option<String> {
+    std::fs::read_to_string(acpilot_host::token_path())
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
 }
 
 /// The workspace id the daemon derives from a root: its directory name.

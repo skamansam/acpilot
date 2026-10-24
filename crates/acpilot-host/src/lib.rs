@@ -98,6 +98,17 @@ pub fn runtime_dir() -> PathBuf {
         .join("acpilot")
 }
 
+/// Where the daemon writes the token a TCP listener requires.
+///
+/// Beside the socket, in the runtime directory, because it is runtime state: the
+/// daemon creates it on first use and a reboot is allowed to take it. Written here
+/// so the daemon that writes the file and the CLI that offers to read it cannot
+/// disagree about where it is.
+#[must_use]
+pub fn token_path() -> PathBuf {
+    runtime_dir().join("token")
+}
+
 /// What a client should talk to when nobody said.
 ///
 /// The unix socket on a platform that has one, and loopback HTTP where it does

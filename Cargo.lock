@@ -35,6 +35,7 @@ dependencies = [
  "acpilot-client",
  "acpilot-core",
  "acpilot-extensions",
+ "acpilot-host",
  "acpilot-proto",
  "acpilot-tui",
  "clap",

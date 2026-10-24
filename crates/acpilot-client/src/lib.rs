@@ -159,16 +159,31 @@ pub struct Client {
 }
 
 impl Client {
-    /// A client for the daemon at `base`.
+    /// A client for the daemon at `base`, with no token.
     ///
     /// `base` is `http://host:port`, or — on a platform with unix sockets — the
     /// path of the daemon's socket. A trailing slash is dropped so every path is
-    /// built the same way.
+    /// built the same way. Right for a socket, which asks for no token; use
+    /// [`Client::with_token`] for a TCP endpoint.
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
-        let base = base.into();
+        Self::build(base.into(), None)
+    }
+
+    /// A client for a daemon on a TCP endpoint, carrying its token.
+    ///
+    /// The token is the caller's to find — a flag, an environment variable, a file
+    /// it read — and never looked up here, so the same call cannot mean two things
+    /// in two processes. Ignored for a socket endpoint: that transport's access
+    /// control is the filesystem, and a secret in it would be one that buys nothing.
+    #[must_use]
+    pub fn with_token(base: impl Into<String>, token: impl AsRef<str>) -> Self {
+        Self::build(base.into(), Some(token.as_ref()))
+    }
+
+    fn build(base: String, token: Option<&str>) -> Self {
         let base = base.trim_end_matches('/').to_owned();
-        let (target, http) = platform::http(&base);
+        let (target, http) = platform::http(&base, token);
         Self { http, base, target }
     }
 

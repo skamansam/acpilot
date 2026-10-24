@@ -75,6 +75,10 @@ fn main() -> ExitCode {
     };
 
     Application::new().run(move |cx: &mut App| {
+        // Native menus, where the platform draws them (macOS). The palette is
+        // the path that works everywhere, which is why the same actions are
+        // bound to keys as well as listed here.
+        cx.set_menus(app::menus());
         let options = app::window_options();
         let profiles = profiles.clone();
         let theme = theme.clone();

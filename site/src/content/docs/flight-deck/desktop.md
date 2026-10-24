@@ -68,3 +68,10 @@ The crate drives a real window: the shared theme tokens, a menu bar, the profile
 list it was launched with, and the command palette on `secondary-shift-p`. Panes,
 the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
 off by default, so `cargo test` still compiles no graphics stack.
+
+A launch names a path rather than a profile: `acpilot-gui` opens the project you
+are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile
+comes from those project settings. `--profile <dir>` remains for the case a path
+cannot express — two profiles of the same tree — and it wins when it is given. A
+directory that is not a project names no profile, and says so rather than opening a
+window with an empty sidebar.

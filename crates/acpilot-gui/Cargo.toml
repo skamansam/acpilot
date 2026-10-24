@@ -40,6 +40,9 @@ clap = { workspace = true }
 # instance logic is tested by a plain `cargo test -p acpilot-gui`.
 futures = { workspace = true }
 gpui = { workspace = true, optional = true }
+# A launch that cannot decide which profile to open fails with a message naming
+# the file that asked and the profile that was missing.
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

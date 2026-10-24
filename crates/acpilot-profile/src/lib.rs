@@ -14,6 +14,9 @@
 //! that *does* exist but has no `[policy]` table is a different thing: the
 //! profile has said nothing about permissions, so the shipped policy applies.
 
+pub mod project;
+pub mod settings;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,6 +26,40 @@ use thiserror::Error;
 
 /// The file a profile keeps its settings in.
 pub const CONFIG_FILE: &str = "config.toml";
+
+/// The platform's config root for Acpilot: `~/.config/acpilot` on Linux,
+/// Application Support on macOS, `%APPDATA%\acpilot` on Windows.
+///
+/// `ACPILOT_HOME` overrides it, which is what tests, portable installs and CI use:
+/// every one of them wants the same code path on a directory it owns. A machine
+/// with no home directory at all falls back to a directory under the temporary
+/// one — a config root that does not exist is still one a caller can name without
+/// a second error path.
+///
+/// This crate is the only one allowed to call `directories`, so "where does this
+/// file go" has one answer for the daemon, the CLI and the GUI alike.
+#[must_use]
+pub fn config_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("ACPILOT_HOME") {
+        return PathBuf::from(home);
+    }
+    directories::ProjectDirs::from("", "", "acpilot").map_or_else(
+        || std::env::temp_dir().join("acpilot"),
+        |directories| directories.config_dir().to_path_buf(),
+    )
+}
+
+/// Where profiles live: one directory per name under `<config>/profiles`.
+#[must_use]
+pub fn profiles_dir() -> PathBuf {
+    config_dir().join("profiles")
+}
+
+/// The user's settings file: `<config>/config.toml`.
+#[must_use]
+pub fn user_config_path() -> PathBuf {
+    config_dir().join(CONFIG_FILE)
+}
 
 /// One profile's directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +81,20 @@ impl Profile {
             return Err(ProfileError::NoConfig { path: config });
         }
         Ok(profile)
+    }
+
+    /// The profile a name resolves to: `<config>/profiles/<name>`.
+    ///
+    /// One resolver, so a marker, a CLI flag and a stored `active_profile` cannot
+    /// disagree about which directory a name means. A name that is not there is an
+    /// error rather than a directory made on demand: silently creating `work` when
+    /// someone typed `wrk` is how a work prompt goes out under a default profile.
+    ///
+    /// # Errors
+    ///
+    /// The directory does not exist or does not hold a `config.toml`.
+    pub fn named(name: &str) -> Result<Self, ProfileError> {
+        Self::open(profiles_dir().join(name))
     }
 
     /// The profile's directory.

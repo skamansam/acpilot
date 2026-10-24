@@ -53,6 +53,33 @@ wrap = false
 theme = "acpilot.night-flight"
 ```
 
+## Project config
+
+A project is a directory holding `.acpilot/config.toml`. That file is the only
+marker, and it exists only because someone saved settings there — opening a
+directory or a file never creates one.
+
+```toml
+# <project>/.acpilot/config.toml
+schema_version = 1
+profile = "work"                    # which profile this project runs under
+
+[preferences]
+tab_width = 2
+```
+
+Settings are merged per key, in this order: the built-in defaults
+(`acpilot-profile/defaults.toml`), then `~/.config/acpilot/config.toml`, then the
+project's `.acpilot/config.toml`. A key nobody sets keeps the default; a project
+file that sets one key changes one key.
+
+A path names the project: `acpilot tui src/main.rs` and `acpilot-gui src/main.rs`
+climb from the file to the nearest `.acpilot/config.toml`, while a directory is
+used as given. A file with no project above it is a **temporary project** — the
+file's own directory, with the user's settings and the defaults and nothing written
+to disk. That is what makes `acpilot notes.md` a text editor rather than a
+setup wizard.
+
 ## Profile config
 
 ```toml

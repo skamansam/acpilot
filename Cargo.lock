@@ -36,6 +36,7 @@ dependencies = [
  "acpilot-core",
  "acpilot-extensions",
  "acpilot-host",
+ "acpilot-profile",
  "acpilot-proto",
  "acpilot-tui",
  "clap",
@@ -101,6 +102,7 @@ dependencies = [
  "futures",
  "gpui",
  "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -145,6 +147,10 @@ name = "acpilot-profile"
 version = "0.1.0"
 dependencies = [
  "acpilot-agent",
+ "acpilot-proto",
+ "directories",
+ "figment",
+ "serde",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -2904,6 +2910,19 @@ name = "fiat-crypto"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
+
+[[package]]
+name = "figment"
+version = "0.10.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cb01cd46b0cf372153850f4c6c272d9cbea2da513e07538405148f95bd789f3"
+dependencies = [
+ "atomic 0.6.1",
+ "serde",
+ "toml 0.8.23",
+ "uncased",
+ "version_check",
+]
 
 [[package]]
 name = "filedescriptor"
@@ -8997,6 +9016,15 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
+name = "uncased"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1b88fcfe09e89d3866a5c11019378088af2d24c3fbd4f0543f96b479ec90697"
+dependencies = [
+ "version_check",
+]
 
 [[package]]
 name = "unicase"

@@ -1,0 +1,18 @@
+# The settings every launch starts from, before the user's file and the project's.
+#
+# Data rather than code, so adding a preference is a line here plus a field on
+# `Preferences` in `acpilot-proto`, and every UI picks it up. Nothing in this file
+# is a secret and nothing in it is a platform default: where files live is a
+# question for `acpilot-host`, not for preferences.
+
+[preferences]
+schema_version = 1
+# Four columns per tab stop, the width most editors default to and the one a diff
+# rendered in a terminal lines up with.
+tab_width = 4
+insert_spaces = true
+format_on_save = false
+trim_trailing_whitespace = true
+wrap = false
+theme = "acpilot.night-flight"
+diagnostics_min_severity = "warning"

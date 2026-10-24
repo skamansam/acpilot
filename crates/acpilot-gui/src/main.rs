@@ -1,13 +1,15 @@
-//! `acpilot-gui` — the window, opened on the profiles it is given.
+//! `acpilot-gui` — the window, opened on the profile a path implies.
 //!
 //! ```bash
+//! cargo run -p acpilot-gui --features gui                    # this directory
+//! cargo run -p acpilot-gui --features gui -- src/main.rs     # its project
 //! cargo run -p acpilot-gui --features gui -- --profile ~/.config/acpilot/profiles/work
 //! ```
 //!
-//! Nothing is discovered: a profile is a directory, and which directory is the
-//! caller's decision. The daemon takes `--profile` for the same reason, and a
-//! second resolution rule here is how the GUI would end up showing a profile the
-//! daemon is not serving.
+//! The path is the whole argument surface for the usual launch: a directory is the
+//! project, a file climbs to the one it is in, and the profile follows from that
+//! project's settings. `--profile` remains for the case a directory cannot express —
+//! two profiles of the same tree — and it wins when it is given.
 //!
 //! A launch that finds another instance running hands it the request and exits
 //! instead of starting a second process. That is what first paint costs: gpui
@@ -20,7 +22,7 @@ use std::process::ExitCode;
 
 use acpilot_gui::app;
 use acpilot_gui::platform::{self, Claim};
-use acpilot_gui::profiles::ShellProfile;
+use acpilot_gui::profiles;
 use acpilot_gui::theme::GuiTheme;
 use clap::Parser;
 use futures::StreamExt as _;
@@ -30,7 +32,16 @@ use gpui::{App, Application};
 #[derive(Debug, Parser)]
 #[command(name = "acpilot-gui", version, about)]
 struct Cli {
+    /// A directory, or a file inside one. Defaults to this directory.
+    ///
+    /// A directory is the workspace. A file climbs its parents until it finds
+    /// `.acpilot/config.toml`, and the profile comes from that project's settings.
+    #[arg(value_name = "PATH")]
+    path: Option<std::path::PathBuf>,
+
     /// A profile directory to open. Repeat for more than one.
+    ///
+    /// Wins over the profile a project implies, for the case a path cannot express.
     #[arg(long, value_name = "DIR")]
     profile: Vec<std::path::PathBuf>,
 
@@ -42,24 +53,13 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    if cli.profile.is_empty() {
-        eprintln!(
-            "acpilot-gui: pass at least one --profile <dir>. Nothing is discovered yet, so a \
-             window with no profile would be a window with no cockpit."
-        );
-        return ExitCode::from(2);
-    }
-
-    let mut profiles = Vec::with_capacity(cli.profile.len());
-    for directory in &cli.profile {
-        match ShellProfile::open(directory) {
-            Ok(profile) => profiles.push(profile),
-            Err(error) => {
-                eprintln!("acpilot-gui: {error}");
-                return ExitCode::FAILURE;
-            }
+    let profiles = match profiles::open_for(cli.path.as_deref(), &cli.profile) {
+        Ok(profiles) => profiles,
+        Err(error) => {
+            eprintln!("acpilot-gui: {error}");
+            return ExitCode::FAILURE;
         }
-    }
+    };
 
     let extensions = match acpilot_extensions::builtin::load_all() {
         Ok(extensions) => extensions,

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use acpilot_agent::keyring::KeyringResolver;
 use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
+use acpilot_profile::Profile;
+use acpilot_profile::project::Root;
 use acpilot_proto::API_PREFIX;
 use clap::{Args, Parser, Subcommand};
 
@@ -56,6 +58,16 @@ pub enum Command {
     /// prompts and answers permissions over the same API the CLI and the GUI
     /// use, so nothing it does can drift from what the daemon records.
     Tui {
+        /// A directory, or a file inside one. Defaults to this directory.
+        ///
+        /// A directory is the workspace, as named. A file climbs its parents until
+        /// it finds `.acpilot/config.toml`, because naming a file is naming
+        /// something *in* a project rather than a directory that happens to sit
+        /// inside one. With no project above it the file's own directory is a
+        /// temporary root, and nothing is written: a project exists on disk when
+        /// settings are saved, not when a file is opened.
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
         /// Endpoint of the daemon: a URL, or a unix socket path.
         ///
         /// Defaults to the socket in the runtime directory (or loopback HTTP on
@@ -72,7 +84,9 @@ pub enum Command {
         ///
         /// Only used when this command has to start the daemon; a daemon that is
         /// already running keeps the profile it was started with, and naming a
-        /// different one here is an error rather than a silent mismatch.
+        /// different one here is an error rather than a silent mismatch. Without
+        /// it, the profile named by the project's settings is used, so the usual
+        /// launch names no profile at all.
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
         /// Workspace root the spawned daemon serves. Defaults to this directory.
@@ -242,12 +256,13 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Secret { command }) => run_secret(command),
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Tui {
+            path,
             api_url,
             no_spawn,
             profile,
             workspace,
             token,
-        }) => run_tui(api_url, no_spawn, profile, workspace, token),
+        }) => run_tui(path, api_url, no_spawn, profile, workspace, token),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -268,22 +283,34 @@ pub fn run(cli: Cli) -> u8 {
 /// pretending otherwise would show one project's sessions under another's name —
 /// so a mismatch is refused rather than ignored.
 fn run_tui(
+    path: Option<PathBuf>,
     api_url: Option<String>,
     no_spawn: bool,
     profile: Option<PathBuf>,
     workspace: Option<PathBuf>,
     token: Option<String>,
 ) -> u8 {
-    let workspace = match workspace {
-        Some(directory) => directory,
-        None => match std::env::current_dir() {
-            Ok(directory) => directory,
-            Err(error) => {
-                eprintln!("acpilot tui: cannot read the working directory: {error}");
-                return exit::FAILURE;
-            }
+    // What the person named, or where they are: the workspace and the project are
+    // implied by the argument rather than by two flags that have to agree with it.
+    let root = match Root::resolve(path.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let workspace = workspace.unwrap_or_else(|| root.root().to_path_buf());
+    // The profile is the project's, unless the caller named one. A project that
+    // names none means the daemon's default, which is a profile nobody has to
+    // spell out on the command line.
+    let profile = match profile {
+        Some(directory) => Some(directory),
+        None => match implied_profile(&root) {
+            Ok(profile) => profile,
+            Err(code) => return code,
         },
     };
+    let implied = profile.is_some();
     let mut daemon_args = vec!["--workspace".to_owned(), workspace.display().to_string()];
     if let Some(profile) = &profile {
         daemon_args.push("--profile".to_owned());
@@ -306,7 +333,7 @@ fn run_tui(
     };
 
     if !running.spawned() {
-        if profile.is_some() {
+        if implied {
             eprintln!(
                 "acpilot tui: a daemon is already running at {}; it serves the profile it was \
                  started with. Stop it, or pass a different --api-url for a second instance.",
@@ -332,6 +359,37 @@ fn run_tui(
         Err(error) => {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
+        }
+    }
+}
+
+/// The profile directory a root's settings name, when they name one.
+///
+/// A project that says `profile = "work"` means `<config>/profiles/work`. A name
+/// that is not there is refused rather than ignored: starting a daemon on the
+/// default profile because a name had a typo is how a work prompt goes out under a
+/// personal key.
+fn implied_profile(root: &Root) -> Result<Option<PathBuf>, u8> {
+    let settings = match root.settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return Err(exit::FAILURE);
+        }
+    };
+    let Some(name) = settings.profile else {
+        return Ok(None);
+    };
+    match Profile::named(&name) {
+        Ok(profile) => Ok(Some(profile.root().to_path_buf())),
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            eprintln!(
+                "acpilot tui: the project's settings name profile `{name}`; create {} or pass \
+                 --profile <dir>",
+                acpilot_profile::profiles_dir().join(&name).display()
+            );
+            Err(exit::CONFLICT)
         }
     }
 }

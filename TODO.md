@@ -492,6 +492,7 @@ Three rules:
     table per profile. No secrets in it, ever.
 
 - [ ] **P4-2 · Config cascade** (1.5d)
+  - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. Still open here: profile files, `ACPILOT_*` env, CLI flags, `extends`, the union rules for `disabled`/`deny`, the unknown-key warning, and `acpilot config explain`.
   - Per-profile files: `profile.toml` (preferences), `agents.toml`, `lsp.toml`, `policy.toml`,
     `keymap.toml`, `theme.toml`.
   - `agents.toml` has **one reader**: `acpilot_agent::manifest::parse_definitions`, which
@@ -508,6 +509,7 @@ Three rules:
     `agents`/`policy`/`lsp`, copy for preferences (easier to reason about, harder to surprise).
 
 - [ ] **P4-3 · Resolution order + workspace marker** (0.5d)
+  - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected. Still open here: `--profile`/`ACPILOT_PROFILE` precedence over the marker (today `--profile` simply wins), `active_profile` in the global file, auto-creating `default`, the `acpilot profile new` hint, and the precedence matrix as a test table.
   - `--profile` > `ACPILOT_PROFILE` > `.acpilot/profile` (committed, one line, no secrets) >
     `config.toml:active_profile` > `default` (auto-created on first run).
   - A marker naming a missing profile exits `3` with the exact `acpilot profile new <name>`

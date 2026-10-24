@@ -56,7 +56,7 @@ acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
-acpilot tui [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
+acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -110,10 +110,18 @@ restarted, because it may be mid-turn for someone else. `acpilotd` is looked for
 next to the `acpilot` binary, never on `PATH`; `ACPILOT_DAEMON` names it when an
 installer put the two apart.
 
-`--profile` and `--workspace` are the daemon's flags, so they only apply when
-this command starts it. A daemon that is already running keeps the ones it was
-started with, and naming a different profile or workspace is exit `4`: showing
-one project's sessions under another project's name is worse than an error.
+`PATH` is the usual way to say which project this is. A directory is the workspace
+as named; a file climbs its parents to the nearest `.acpilot/config.toml`, and a
+file with no project above it becomes a temporary project in its own directory —
+nothing is written until project settings are saved. The profile comes from that
+project's `profile` key, so the common launch is `acpilot tui` in the tree you are
+working in, with no flags at all.
+
+`--profile` and `--workspace` still exist and still win when given: they are the
+daemon's flags, so they only apply when this command starts it. A daemon that is
+already running keeps the ones it was started with, and naming a different profile
+or workspace is exit `4`: showing one project's sessions under another project's
+name is worse than an error.
 
 Scripting the lab is a first-class case, not a workaround: a corpus experiment
 that cannot be run in CI is a corpus experiment nobody repeats.

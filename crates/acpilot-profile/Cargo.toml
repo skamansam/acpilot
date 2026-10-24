@@ -11,6 +11,20 @@ license.workspace = true
 # loader: a profile that read it into a second shape would be a second opinion
 # about what `allow`, `ask` and `deny` mean.
 acpilot-agent = { workspace = true }
+# The preference type is the wire type: a TUI, a GUI and `GET /v1/profiles` must
+# agree about what `tab_width` is, so the settings cascade reads the same struct
+# the API serves rather than a second shape with its own defaults.
+acpilot-proto = { workspace = true }
+# The platform's config root. This is the one crate allowed to ask `directories`
+# where `~/.config` is; every other caller asks this crate.
+directories = { workspace = true }
+# Layering is a merge of maps, not a chain of `Option`s: P4-2 puts four more
+# providers on top of these three (profile files, env, flags), and figment is what
+# makes that one line each instead of a fourth bespoke precedence function.
+figment = { workspace = true, features = ["toml"] }
+# `Settings` is a deserialisation target, and the derive is what lets figment fill
+# it field by field.
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -14,7 +14,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Capability | State | Notes |
 | --- | --- | --- |
 | Workspace builds | <span class="pill pill--flying">flying</span> | `cargo xtask check` — fmt, clippy, tests, on Linux/macOS/Windows |
-| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `/v1/sessions`, `/v1/terminals` + the attach WebSocket, `GET /v1/openapi.json`; `acpilot tui` starts it when nothing answers (`--no-spawn` to opt out) |
+| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `/v1/sessions`, `/v1/terminals` + the attach WebSocket, `/v1/files` with `if_match`, `GET /v1/openapi.json`. Listens on a unix socket (`0700` directory, `0600` socket; TCP only with `--addr`), and `acpilot tui` starts it when nothing answers (`--no-spawn` to opt out) |
 | API document | <span class="pill pill--flying">flying</span> | Snapshot-tested, so a wire change is a reviewable diff |
 | Error contract | <span class="pill pill--flying">flying</span> | One error type → fixed HTTP statuses and exit codes |
 | Swagger UI | <span class="pill pill--flying">flying</span> | `--features docs`, at `/docs` |

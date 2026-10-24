@@ -50,14 +50,12 @@ pub enum Command {
     /// prompts and answers permissions over the same API the CLI and the GUI
     /// use, so nothing it does can drift from what the daemon records.
     Tui {
-        /// Base URL of the daemon.
-        #[arg(
-            long,
-            env = "ACPILOT_API_URL",
-            default_value = acpilot_client::daemon::DEFAULT_ENDPOINT,
-            value_name = "URL"
-        )]
-        api_url: String,
+        /// Endpoint of the daemon: a URL, or a unix socket path.
+        ///
+        /// Defaults to the socket in the runtime directory (or loopback HTTP on
+        /// Windows), which is where `acpilotd` listens when given no flags.
+        #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+        api_url: Option<String>,
         /// Fail if no daemon is running instead of starting one.
         ///
         /// For tests, CI and anyone debugging a startup problem: the error is
@@ -223,6 +221,7 @@ pub fn run(cli: Cli) -> u8 {
             profile,
             workspace,
         }) => run_tui(api_url, no_spawn, profile, workspace),
+
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
             // rather than pretending to do work.
@@ -242,7 +241,7 @@ pub fn run(cli: Cli) -> u8 {
 /// pretending otherwise would show one project's sessions under another's name —
 /// so a mismatch is refused rather than ignored.
 fn run_tui(
-    api_url: String,
+    api_url: Option<String>,
     no_spawn: bool,
     profile: Option<PathBuf>,
     workspace: Option<PathBuf>,
@@ -264,7 +263,7 @@ fn run_tui(
     }
 
     let options = acpilot_client::daemon::Options {
-        endpoint: Some(api_url),
+        endpoint: api_url,
         no_spawn,
         daemon_args,
     };

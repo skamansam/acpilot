@@ -20,6 +20,7 @@
 //! a client that reconnected silently would hide a daemon that is flapping.
 
 pub mod daemon;
+mod platform;
 
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
@@ -150,30 +151,41 @@ pub enum ProfileStream {
 #[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
+    /// What the caller named: a URL, or a unix socket path.
     base: String,
+    /// What requests are addressed to. The same as `base` on TCP, and
+    /// `http://localhost` over a socket, where the URL is only a `Host` header.
+    target: String,
 }
 
 impl Client {
-    /// A client for the daemon at `base`, for example `http://127.0.0.1:7777`.
+    /// A client for the daemon at `base`.
     ///
-    /// A trailing slash is dropped so every path is built the same way.
+    /// `base` is `http://host:port`, or — on a platform with unix sockets — the
+    /// path of the daemon's socket. A trailing slash is dropped so every path is
+    /// built the same way.
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
         let base = base.into();
-        Self {
-            http: reqwest::Client::new(),
-            base: base.trim_end_matches('/').to_owned(),
-        }
+        let base = base.trim_end_matches('/').to_owned();
+        let (target, http) = platform::http(&base);
+        Self { http, base, target }
     }
 
-    /// The base URL this client was built with.
+    /// The endpoint this client was built with, as the caller wrote it.
     #[must_use]
     pub fn base(&self) -> &str {
         &self.base
     }
 
+    /// The endpoint as a message should name it.
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
+    }
+
+    /// The URL a request is actually sent to.
+    fn request_url(&self, path: &str) -> String {
+        format!("{}{path}", self.target)
     }
 
     /// `GET /v1/health`.
@@ -201,14 +213,17 @@ impl Client {
         &self,
         request: &CreateSessionRequest,
     ) -> Result<SessionSummary, ClientError> {
-        let request = self.http.post(self.url("/v1/sessions")).json(request);
+        let request = self
+            .http
+            .post(self.request_url("/v1/sessions"))
+            .json(request);
         self.send(request, "/v1/sessions").await
     }
 
     /// `DELETE /v1/sessions/{id}`.
     pub async fn delete_session(&self, id: &str) -> Result<SessionSummary, ClientError> {
         let path = format!("/v1/sessions/{id}");
-        let request = self.http.delete(self.url(&path));
+        let request = self.http.delete(self.request_url(&path));
         self.send(request, &path).await
     }
 
@@ -226,14 +241,14 @@ impl Client {
             text: text.into(),
             idempotency_key: None,
         };
-        let request = self.http.post(self.url(&path)).json(&body);
+        let request = self.http.post(self.request_url(&path)).json(&body);
         self.send(request, &path).await
     }
 
     /// `POST /v1/sessions/{id}/cancel`.
     pub async fn cancel(&self, id: &str) -> Result<CancelAccepted, ClientError> {
         let path = format!("/v1/sessions/{id}/cancel");
-        let request = self.http.post(self.url(&path));
+        let request = self.http.post(self.request_url(&path));
         self.send(request, &path).await
     }
 
@@ -251,7 +266,7 @@ impl Client {
         let path = format!("/v1/permissions/{id}/resolve");
         let request = self
             .http
-            .post(self.url(&path))
+            .post(self.request_url(&path))
             .json(&serde_json::json!({ "option": option }));
         self.send(request, &path).await
     }
@@ -302,7 +317,7 @@ impl Client {
         let path = format!("/v1/sessions/{id}/events");
         let response = self
             .http
-            .get(self.url(&path))
+            .get(self.request_url(&path))
             .header("Last-Event-ID", after.to_string())
             .send()
             .await
@@ -324,7 +339,7 @@ impl Client {
         let path = "/v1/events";
         let response = self
             .http
-            .get(self.url(path))
+            .get(self.request_url(path))
             .send()
             .await
             .map_err(|source| self.transport(path, source))?;
@@ -340,7 +355,7 @@ impl Client {
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
-        let request = self.http.get(self.url(path));
+        let request = self.http.get(self.request_url(path));
         self.send(request, path).await
     }
 

@@ -21,9 +21,14 @@ flowchart TD
 
 | Platform | Config | Data | Runtime |
 | --- | --- | --- | --- |
-| Linux | `~/.config/acpilot` | `~/.local/share/acpilot` | `$XDG_RUNTIME_DIR/acpilot` |
-| macOS | `~/Library/Application Support/acpilot` | same | Unix socket in the config dir |
-| Windows | `%APPDATA%\acpilot` | `%LOCALAPPDATA%\acpilot` | `\\.\pipe\acpilot-$USER` |
+| Linux | `~/.config/acpilot` | `~/.local/share/acpilot` | `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` |
+| macOS | `~/Library/Application Support/acpilot` | same | `$TMPDIR/acpilot/acpilot.sock` when `XDG_RUNTIME_DIR` is unset |
+| Windows | `%APPDATA%\acpilot` | `%LOCALAPPDATA%\acpilot` | loopback `127.0.0.1:7777` today; `\\.\pipe\acpilot-$USER` is P10-5 |
+
+The runtime directory holds the socket, the spawn lock and the daemon's log, and
+it is `0700` because the socket is `0600`: the filesystem, not a token, is what
+keeps another local user off the API. `acpilotd --addr <host:port>` binds TCP
+instead, which is opt-in precisely because a port has no such boundary.
 
 Only `acpilot-profile` is allowed to call `directories`. Every other crate
 resolves mutable paths through it, so "where does this file go" has exactly one

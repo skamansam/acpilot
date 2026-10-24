@@ -1,7 +1,10 @@
 //! `acpilotd` — the daemon process.
 //!
-//! The foundation phase (P1): bind, serve health and OpenAPI, and exit cleanly on Ctrl-C. Sockets,
-//! single-instance locking and the session routes arrive in the service phase (P3).
+//! It listens on a unix socket in the runtime directory by default, made private
+//! to the user who started it (ADR 0004 §3), and on TCP only when `--addr` asks —
+//! because the filesystem is the socket's access control and a port has no such
+//! thing. Single-instance locking and the remaining service routes arrive in the
+//! service phase (P3).
 //!
 //! Two flags are how a profile reaches the daemon today. `--profile` names the
 //! directory holding a profile's `config.toml` and `agents.toml`: the `[policy]`
@@ -23,9 +26,20 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "acpilotd", version, about = "Acpilot daemon")]
 struct Cli {
-    /// Address to bind. Loopback by default; exposing this needs a token (P3).
-    #[arg(long, env = "ACPILOT_ADDR", default_value = "127.0.0.1:7777")]
-    addr: String,
+    /// TCP address to bind instead of the unix socket.
+    ///
+    /// Opt-in, and not the default: a socket's directory is `0700`, so another
+    /// local user cannot reach it, and a port cannot inherit that. This listener
+    /// has no token yet (P3-2), which is why asking for it is deliberate.
+    #[arg(long, env = "ACPILOT_ADDR", value_name = "ADDR")]
+    addr: Option<String>,
+
+    /// Unix socket to bind instead of the default one in the runtime directory.
+    ///
+    /// Two daemons cannot share a path: a socket that still answers is refused
+    /// rather than replaced, and one left by a dead daemon is removed.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<PathBuf>,
 
     /// Profile directory to load (the one holding `config.toml`).
     ///
@@ -66,21 +80,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = acpilotd::state_for(cli.profile.as_deref(), &cli.workspace)?;
 
-    let listener = tokio::net::TcpListener::bind(&cli.addr).await?;
-    let bound = listener.local_addr()?;
-    tracing::info!(%bound, service = acpilotd::SERVICE, "listening");
+    let target = acpilotd::resolve_target(cli.addr, cli.socket)
+        .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidInput, why))?;
+    tracing::info!(endpoint = %target, service = acpilotd::SERVICE, "starting");
 
-    axum::serve(listener, acpilotd::router_with(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    acpilotd::serve(acpilotd::router_with(state), target, acpilotd::shutdown()).await?;
 
     Ok(())
-}
-
-/// Resolve on Ctrl-C so the port is released promptly.
-async fn shutdown_signal() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        tracing::error!(%error, "failed to listen for shutdown signal");
-    }
-    tracing::info!("shutting down");
 }

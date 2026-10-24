@@ -82,8 +82,8 @@ client implementation for no gain.
 | --- | --- |
 | Linux/BSD | `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (directory `0700`, socket `0600`) |
 | macOS | the same, under `$TMPDIR` when `XDG_RUNTIME_DIR` is unset |
-| Windows | `\\.\pipe\acpilot-<user>` (named pipe, ACL to the owning user) |
-| Opt-in | `--addr 127.0.0.1:7777`, which **requires** `Authorization: Bearer` from a `0600` token file |
+| Windows | `\\.\pipe\acpilot-<user>` (named pipe, ACL to the owning user) — not built yet, so loopback HTTP until P10-5 |
+| Opt-in | `--addr 127.0.0.1:7777`, which **requires** `Authorization: Bearer` from a `0600` token file (P3-2; until then it warns and accepts unauthenticated requests) |
 
 The filesystem is the access control. That is the only reason "loopback needs no
 token" is safe to promise: on the socket, local users other than the owner cannot
@@ -187,7 +187,18 @@ Recorded here so the pieces land in an order where each is usable:
 2. **Unix socket transport** in the daemon and an HTTP-over-unix client, making
    the socket the default and TCP the authenticated opt-in. Requires a client
    transport that speaks HTTP over a unix socket; `reqwest` does not, so this is
-   where that dependency decision is made.
+   where that dependency decision is made. (Done 2026-10-24, with one correction
+   to the sentence above: `reqwest` 0.13 does speak it — `ClientBuilder::unix_socket`
+   — so the decision was to stay on the client the workspace already had rather
+   than add a second HTTP stack for one transport. The daemon binds
+   `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`0700` directory, `0600` socket),
+   removes it on Ctrl-C or `SIGTERM`, and refuses a path another daemon still
+   answers on; `--socket <path>` moves it and `--addr <host:port>` is the opt-in
+   TCP listener. Still open from this step: **the token on `--addr`**. Until it
+   lands the daemon logs a warning that the port is unauthenticated, and
+   `docs/api.md` says the same, rather than implying a guarantee the code does not
+   keep. The Windows named pipe is P10-5's, so that platform's default endpoint is
+   loopback HTTP for now.)
 3. **Workspaces**: `GET/POST /v1/workspaces`, sessions in a workspace, TUI picker.
 4. **Idle exit** with the turn/pending/stream conditions above, plus
    `--idle-timeout`.

@@ -45,6 +45,18 @@ pub(crate) fn private_file(path: &std::path::Path) -> std::io::Result<()> {
     set_mode(path, 0o600)
 }
 
+/// The unix socket a daemon binds and a client probes when nobody said.
+///
+/// In the runtime directory, so it lives as long as the login session does. A
+/// filesystem path rather than a URL because on this platform the filesystem is
+/// the access control: another user cannot open the socket at all (ADR 0004 §3).
+pub(crate) fn default_endpoint() -> String {
+    crate::runtime_dir()
+        .join("acpilot.sock")
+        .display()
+        .to_string()
+}
+
 /// The user's shell, or `sh` when `$SHELL` says nothing useful.
 ///
 /// `$SHELL` is what a login session would have given; falling back to `sh`

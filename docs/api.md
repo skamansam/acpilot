@@ -23,8 +23,13 @@ right and this file is a bug.
   profile.
 - **SSE and WS connections bind their profile at connect.** Switching profile is
   a reconnect, never a frame on the existing stream.
-- **Auth**: a loopback bind needs no token. Any other bind requires
-  `Authorization: Bearer <token>` on every request, including streams.
+- **Auth**: the default endpoint is the daemon's unix socket, and the filesystem
+  is the access control — the runtime directory is `0700` and the socket `0600`, so
+  another local user cannot open it at all. A TCP bind (`--addr`) does not inherit
+  that property, so it does not inherit the exemption either: once P3-2 lands it
+  requires `Authorization: Bearer <token>` on every request, including streams.
+  Until that token exists the daemon logs a warning when it binds a port, and this
+  paragraph says so rather than implying a guarantee the code does not keep.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 
@@ -225,6 +230,17 @@ file; a directory is `409 conflict` with the message pointing at `/v1/files/list
 the `etag` last read; a mismatch is `409 conflict`, never a silent overwrite.
 Omitting it creates a file and is `409` if the file already exists. Binary content
 is refused (`invalid_request`), not mangled.
+
+The `etag` is the modification time, the size and a hash of the bytes. The first
+two make a change visible without reading the file; the hash catches an edit that
+preserved both, which is what a fast tool does.
+
+A path is relative to the workspace root and `..` is refused rather than
+resolved, so the answer does not depend on whether the directory it climbs out of
+happens to exist. The resolved path is then checked against the resolved root,
+because a symlink inside the workspace can point outside it — that is `403`, and
+a string prefix check would have called it contained. A parent directory that is
+not there is `404`: this route saves files, it does not build trees.
 
 None of this is on the keystroke path: the editor owns its buffer and saves
 through this route.

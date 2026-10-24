@@ -21,6 +21,7 @@ POST /v1/permissions/{id}/resolve
 GET /v1/events                  # text/event-stream: permission.requested, heartbeat
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
+GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs
 ```
@@ -58,7 +59,7 @@ Closing the socket leaves the process running: a pane is a view, not an owner.
 | Hosts | `GET/POST /v1/hosts`, `POST /v1/hosts/{id}/test` |
 | Workspaces | `GET/POST /v1/workspaces` |
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
-| Files | `GET/PUT /v1/files` with ETag and `If-Match`, `GET /v1/files/list` for directories |
+
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
 | Profiles | `GET/POST /v1/profiles`, `PATCH /v1/profiles/{id}/preferences` |
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |

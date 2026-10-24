@@ -28,7 +28,14 @@ use std::time::{Duration, SystemTime};
 use crate::Client;
 
 /// Where a daemon is expected when nobody says otherwise.
-pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:7777";
+///
+/// The unix socket in the runtime directory on a platform that has one, and
+/// loopback HTTP where it does not. The answer lives beside the platform rules in
+/// `acpilot-host`, so the daemon binds exactly what a client probes.
+#[must_use]
+pub fn default_endpoint() -> String {
+    acpilot_host::default_endpoint()
+}
 
 /// Environment variable that names the endpoint, matching `acpilot --api-url`.
 pub const ENV_ENDPOINT: &str = "ACPILOT_API_URL";
@@ -217,7 +224,7 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
             .collect::<Vec<_>>()
             .join(" or "),
     })?;
-    let addr = addr_of(&endpoint)?;
+    let bind = bind_args(&endpoint)?;
     let log = log_path(&endpoint);
     prepare_runtime_dir(&log)?;
 
@@ -237,7 +244,7 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
                     origin: Origin::Existing,
                 });
             }
-            child = Some(spawn(&binary, &addr, &log, &options.daemon_args)?);
+            child = Some(spawn(&binary, &bind, &log, &options.daemon_args)?);
             Some(guard)
         }
         Claim::Elsewhere => None,
@@ -279,27 +286,37 @@ pub fn ensure_blocking(options: &Options) -> Result<Running, ConnectError> {
 pub fn resolve_endpoint(explicit: Option<&str>, environment: Option<&str>) -> String {
     explicit
         .or(environment)
-        .unwrap_or(DEFAULT_ENDPOINT)
+        .map_or_else(default_endpoint, ToOwned::to_owned)
         .trim_end_matches('/')
         .to_owned()
 }
 
-/// `http://127.0.0.1:7777` -> `127.0.0.1:7777`, the form `acpilotd --addr` takes.
-fn addr_of(endpoint: &str) -> Result<String, ConnectError> {
+/// The flags that make `acpilotd` bind the endpoint this client probed.
+///
+/// Named rather than inferred: a client that spawned a daemon on a default could
+/// drift from the daemon's default and probe a socket nobody is serving. A URL
+/// becomes `--addr host:port`; a path becomes `--socket <path>`.
+fn bind_args(endpoint: &str) -> Result<Vec<String>, ConnectError> {
     let unsupported = |why: &str| ConnectError::Unsupported {
         endpoint: endpoint.to_owned(),
         why: why.to_owned(),
     };
-    let Some(rest) = endpoint.strip_prefix("http://") else {
+    if let Some(rest) = endpoint.strip_prefix("http://") {
+        let addr = rest.trim_end_matches('/');
+        if addr.is_empty() || !addr.contains(':') {
+            return Err(unsupported("the endpoint needs a host and a port"));
+        }
+        return Ok(vec!["--addr".to_owned(), addr.to_owned()]);
+    }
+    if endpoint.starts_with("https://") {
         return Err(unsupported(
             "a daemon this client starts speaks plain HTTP; pass --api-url http://host:port",
         ));
-    };
-    let addr = rest.trim_end_matches('/');
-    if addr.is_empty() || !addr.contains(':') {
-        return Err(unsupported("the endpoint needs a host and a port"));
     }
-    Ok(addr.to_owned())
+    if endpoint.is_empty() {
+        return Err(unsupported("the endpoint is empty"));
+    }
+    Ok(vec!["--socket".to_owned(), endpoint.to_owned()])
 }
 
 /// Ask the daemon who it is, giving up quickly.
@@ -355,7 +372,12 @@ async fn wait_ready(
     }
 }
 
-fn spawn(binary: &Path, addr: &str, log: &Path, extra: &[String]) -> Result<Child, ConnectError> {
+fn spawn(
+    binary: &Path,
+    bind: &[String],
+    log: &Path,
+    extra: &[String],
+) -> Result<Child, ConnectError> {
     let output = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -365,8 +387,7 @@ fn spawn(binary: &Path, addr: &str, log: &Path, extra: &[String]) -> Result<Chil
     acpilot_host::private_file(log)?;
     let mut command = Command::new(binary);
     command
-        .arg("--addr")
-        .arg(addr)
+        .args(bind)
         .args(extra)
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
@@ -524,18 +545,24 @@ mod tests {
             resolve_endpoint(None, Some("http://127.0.0.1:9001")),
             "http://127.0.0.1:9001"
         );
-        assert_eq!(resolve_endpoint(None, None), DEFAULT_ENDPOINT);
+        assert_eq!(resolve_endpoint(None, None), default_endpoint());
     }
 
     #[test]
-    fn the_address_is_what_the_daemon_flag_takes() {
+    fn the_endpoint_becomes_the_flag_that_binds_it() {
         assert_eq!(
-            addr_of("http://127.0.0.1:7777").expect("an address"),
-            "127.0.0.1:7777"
+            bind_args("http://127.0.0.1:7777").expect("an address"),
+            ["--addr", "127.0.0.1:7777"]
         );
-        assert!(addr_of("https://127.0.0.1:7777").is_err(), "no TLS");
-        assert!(addr_of("http://localhost").is_err(), "no port");
-        assert!(addr_of("127.0.0.1:7777").is_err(), "no scheme");
+        // A path is a unix socket, and the daemon is told which one rather than
+        // being left to its own default.
+        assert_eq!(
+            bind_args("/run/user/1000/acpilot/acpilot.sock").expect("a socket"),
+            ["--socket", "/run/user/1000/acpilot/acpilot.sock"]
+        );
+        assert!(bind_args("https://127.0.0.1:7777").is_err(), "no TLS");
+        assert!(bind_args("http://localhost").is_err(), "no port");
+        assert!(bind_args("").is_err(), "nothing to bind");
     }
 
     #[test]

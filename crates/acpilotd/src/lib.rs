@@ -30,9 +30,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
+mod files;
+mod platform;
 mod sessions;
 mod terminals;
 
+pub use files::MAX_FILE_BYTES;
+pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
 pub use terminals::{Terminal, Terminals};
 
@@ -683,16 +687,18 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_events_doc as utoipa::Path>::operation(),
         ),
     );
-    // Sessions and terminals add several methods per path, so they append rather
-    // than overwrite.
-    for (path, method, operation) in sessions::operations()
+    // Sessions, terminals and files add several methods per path, so they append
+    // rather than overwrite.
+    let module_operations = sessions::operations()
         .into_iter()
         .chain(terminals::operations())
-    {
+        .chain(files::operations());
+    for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
             utoipa::openapi::path::HttpMethod::Get => item.get = Some(operation),
             utoipa::openapi::path::HttpMethod::Post => item.post = Some(operation),
+            utoipa::openapi::path::HttpMethod::Put => item.put = Some(operation),
             utoipa::openapi::path::HttpMethod::Delete => item.delete = Some(operation),
             _ => {}
         }
@@ -794,6 +800,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
+        .merge(files::routes())
         .merge(sessions::routes())
         .merge(terminals::routes())
         .with_state(state);

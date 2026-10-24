@@ -34,6 +34,9 @@ clap = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }
+# The `etag` is a hash of the bytes as well as a timestamp, so an edit that kept
+# the mtime and the size is still visible as a change.
+sha2 = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -47,6 +50,9 @@ utoipa = { workspace = true }
 vt100 = { workspace = true }
 
 [dev-dependencies]
+# The socket test talks to the daemon the way a client does, over the transport a
+# client uses, rather than through `oneshot` on the router.
+acpilot-client = { workspace = true }
 http-body-util = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

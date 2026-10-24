@@ -84,6 +84,29 @@ pub fn private_file(path: &Path) -> io::Result<()> {
     platform::private_file(path)
 }
 
+/// The per-user directory for runtime state: sockets, pid files, logs.
+///
+/// `XDG_RUNTIME_DIR` where the platform has one and the temporary directory where
+/// it does not (macOS). A subdirectory of it, not the directory itself, because
+/// the daemon sets `0700` on what it creates here and the session directory is
+/// not ours to tighten. Nothing durable lives here: this is the directory a
+/// logout or a reboot is allowed to empty.
+pub fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("acpilot")
+}
+
+/// What a client should talk to when nobody said.
+///
+/// The unix socket on a platform that has one, and loopback HTTP where it does
+/// not. Written here rather than in each client because two answers to "where is
+/// the daemon" is how a CLI and a TUI end up on different daemons.
+pub fn default_endpoint() -> String {
+    platform::default_endpoint()
+}
+
 /// The shell a terminal starts when the client did not name a program.
 ///
 /// `$SHELL` is a unix convention and `/bin/sh` is a unix path, so the answer

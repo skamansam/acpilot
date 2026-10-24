@@ -21,11 +21,13 @@ cargo run -p acpilot-cli -- tui
 ```
 
 The same daemon answers `curl`, so the contract is readable without opening a
-window — the TUI stays attached until you quit it, and the daemon outlives it.
+window — the TUI stays attached until you quit it, and the daemon outlives it. It
+listens on a socket, so the socket is what `curl` is pointed at:
 
 ```bash
-curl -s localhost:7777/v1/health | jq
-curl -s localhost:7777/v1/openapi.json | jq '.info'
+SOCK="$XDG_RUNTIME_DIR/acpilot/acpilot.sock"     # $TMPDIR on macOS
+curl -s --unix-socket "$SOCK" http://localhost/v1/health | jq
+curl -s --unix-socket "$SOCK" http://localhost/v1/openapi.json | jq '.info'
 ```
 
 That is the whole cockpit at the moment: a healthy daemon and a contract with

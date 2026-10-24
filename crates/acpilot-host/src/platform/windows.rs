@@ -50,6 +50,17 @@ pub(crate) fn detach(command: &mut std::process::Command) {
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
+/// Loopback HTTP, because the named pipe ADR 0004 names is not built yet.
+///
+/// The ADR's Windows endpoint is `\\.\pipe\acpilot-<user>`, whose ACL is the
+/// per-user boundary. Until that transport exists (P10-5's named pipe), the daemon
+/// listens on loopback and the API says so: a token is what makes a TCP listener
+/// safe, and the token is a separate task. Reporting a pipe nobody is serving
+/// would be worse than reporting a socket that needs one.
+pub(crate) fn default_endpoint() -> String {
+    "http://127.0.0.1:7777".to_owned()
+}
+
 /// `%COMSPEC%`, or `cmd.exe` when the variable is missing or empty.
 ///
 /// Windows has no `$SHELL`: the command interpreter is what `COMSPEC` names, and

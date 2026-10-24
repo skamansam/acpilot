@@ -11,7 +11,7 @@ to make it unmaintainable is to let one of them grow its own copy of the logic.
 cargo install --locked cargo-nextest prek   # once; CI installs nextest
 prek install                                # writes .git/hooks/pre-commit
 cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
-curl -s localhost:7777/v1/health            # after `cargo run -p acpilotd`
+curl -s --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" http://localhost/v1/health
 ```
 
 ```powershell
@@ -20,12 +20,20 @@ curl -s localhost:7777/v1/health            # after `cargo run -p acpilotd`
 cargo install --locked cargo-nextest prek   # once; CI installs nextest
 prek install                                # writes .git/hooks/pre-commit
 cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
-curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd`
+curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd -- --addr 127.0.0.1:7777`
 ```
 
-The daemon answers `GET /v1/health` on port 7777 once `cargo run -p acpilotd` is
-up — or once any client has started it, since `cargo run -p acpilot-cli -- tui`
+The daemon answers `GET /v1/health` on a unix socket once `cargo run -p acpilotd`
+is up — or once any client has started it, since `cargo run -p acpilot-cli -- tui`
 spawns `target/debug/acpilotd` (the sibling of the binary, not a `PATH` entry).
+The socket is `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS), which
+is why the health check passes `--unix-socket`; on Windows the daemon listens on
+`127.0.0.1:7777` until the named pipe exists, so pass `--addr` there.
+
+`--addr 127.0.0.1:7777` is also what a browser needs, for `/docs` under
+`--features docs`. It is an opt-in listener without a token yet, so it logs a
+warning and is for development.
+
 Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
 with `RUST_LOG` set: the spawn path captures its output in
 `$XDG_RUNTIME_DIR/acpilot/daemon-*.log` instead of your terminal.

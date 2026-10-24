@@ -48,15 +48,22 @@ is where the client looks for it.
 cargo run -p acpilot-cli -- tui
 ```
 
-The daemon answers on `127.0.0.1:7777` whether or not the TUI is open, so its
-contract is also readable with `curl`:
+The daemon listens on a unix socket in `$XDG_RUNTIME_DIR/acpilot` (`$TMPDIR` on
+macOS), so its contract is also readable with `curl` — the `--unix-socket` flag is
+the whole difference from a URL:
 
 ```bash
-curl -s localhost:7777/v1/health
+curl -s --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" http://localhost/v1/health
 # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1","workspace":"acpilot"}
 
-cargo run -p acpilotd --features docs   # by hand, then open http://127.0.0.1:7777/docs
+# A port instead, when a browser needs to reach it:
+cargo run -p acpilotd --features docs -- --addr 127.0.0.1:7777
+# then open http://127.0.0.1:7777/docs
 ```
+
+The socket's directory is `0700` and the socket `0600`, which is what lets a local
+request go without a token. A TCP bind does not inherit that, and the daemon says
+so in its log: it is for development until `--addr` takes a token (P3-2).
 
 A daemon started by the client is detached from the terminal, and `--no-spawn`
 turns the behaviour off when something else should own the process.

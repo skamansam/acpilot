@@ -55,7 +55,7 @@ acpilot ext verify --all | prune [--dry-run]
 acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
-acpilot tui [--api-url <url>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
+acpilot tui [--api-url <url|path>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -84,6 +84,13 @@ $ acpilot tui                       # the first client starts the daemon
 $ acpilot tui --no-spawn            # fail instead: tests, CI, a service manager
 $ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
 ```
+
+The default endpoint is the daemon's unix socket in `$XDG_RUNTIME_DIR/acpilot`
+(`$TMPDIR` on macOS), or loopback HTTP on Windows until the named pipe exists.
+`--api-url` takes either a URL or a socket path, and `ACPILOT_API_URL` takes the
+same — one string, because to a user "where the daemon is" is one place, not two
+transports. The socket's directory is `0700` and the socket `0600`, which is the
+whole access-control story for a local daemon.
 
 The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
 it is, and only silence starts one. The spawned daemon is detached from the

@@ -394,6 +394,7 @@ and deterministic.
 ## Service phase (P3) — Daemon + API (≈10 days)
 
 - [ ] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per the profiles phase's task P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
+  - **Started 2026-10-24:** the socket transport is ADR 0004 §3's step 2, and it landed with the client so the product was never half-moved. `acpilotd` binds `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS) by default, creating the directory `0700` and the socket `0600` — the filesystem is the access control, which is the only reason "a local request needs no token" is true. A path another daemon still answers on is refused (`AddrInUse`, naming the flag to move it); one left by a killed daemon is removed and the log says `replaced_stale_socket=true`, which is what makes a crash recoverable without instructions. `--socket <path>` moves it, `--addr <host:port>` is the opt-in TCP listener, both at once is an error rather than a precedence rule, and `SIGTERM` as well as Ctrl-C removes the socket on the way out — a service manager that leaves a socket file behind makes the next start look like a crash. The client needed no new HTTP stack: `reqwest` 0.13 has `ClientBuilder::unix_socket`, so `Client::new` takes either a URL or a path and `--api-url`/`ACPILOT_API_URL` accept both. Defaults live in one place (`acpilot_host::default_endpoint`), so a client's probe and a daemon's bind are the same string by construction. Still open from this item: `figment` configuration, `--foreground`, the pidfile, the discovery metadata under `daemons/<name>.json`, and **the bearer token on `--addr`** — until it lands the TCP listener logs a warning and `docs/api.md` says it is unauthenticated, rather than implying otherwise. The Windows named pipe is P10-5's, so that platform defaults to loopback HTTP for now.
 - [ ] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
   - **Started 2026-10-22:** `GET /v1/agents` serves an injected `acpilot_agent::Registry` with
     `AgentStatus` from `acpilot_agent::supervisor::availability` (a `PATH` lookup on the daemon's host,
@@ -450,6 +451,7 @@ and deterministic.
   - **Started 2026-10-23:** the state half is served (see the service phase's task P3-2): the pending list and the resolve route are the two calls a reconnecting client needs, so the part of this item that does not depend on SSE exists. `GET /v1/events` now announces `permission.requested` with a heartbeat and `resync` (also the service phase's task P3-2), so the polling loop `docs/api.md` rules out is gone for permissions. Still open: the *session* stream (`GET /v1/sessions/{id}/events`), replay from the transcript with `Last-Event-ID`, the per-session monotonic `seq`, and `permission.resolved` — the broker does not broadcast decisions, so a client that watches another client resolve still refetches the list.
 - [ ] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
 - [ ] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
+  - **Started 2026-10-24:** `GET /v1/files?path=`, `GET /v1/files/list?path=` and `PUT /v1/files` are served. The etag is `mtime-size-hash16`: the first two make a change visible without reading the file, the hash catches an edit that preserved both. `if_match` absent means create (and an existing file is `409`), present means replace only if it is still that version; neither is retried or resolved by the daemon. Traversal is refused in two independent ways rather than one: components are checked before joining (`..` is a `400`, not something to resolve, so the answer does not depend on whether the directory it climbs out of exists), and the resolved path is compared against the canonical root, which is the only check that catches a symlink inside the workspace pointing outside it (`403`). A directory is `409` naming the list route, and a file is `409` naming the read route, because "you asked the wrong question" is more useful than an empty answer. Binary is `400` on invalid UTF-8 *or* a NUL byte (a UTF-16 file is valid in the bytes it shares), the 10 MiB cap is checked before and after the read, and a missing parent directory is `404` — the route saves files, it does not build trees. Fifteen tests: the read/etag round trip, a directory, three spellings of `..`, an absolute path, a symlink escape, binary content, the cap, listing shape and sort order, listing a file, create/replace/conflict/stale-token/missing-file writes, a write into a missing directory, a write that escapes, unknown and absent workspaces, and the OpenAPI paths. Still open: no delete, no create-directory, no watch (the editor phase, P6, will say what a save needs), and no `acpilot` verb until the command-line phase (P5).
 - [ ] **P3-6** Terminals API: create/attach (`WS /v1/terminals/{id}/attach`), resize (cols/rows), detach-without-kill, replay last screen on attach (from `vt100` state).
   - **Started 2026-10-24:** `POST /v1/terminals` starts a PTY and returns the summary once the process is running, so the id it hands back is attachable immediately; `GET /v1/terminals?session=` lists them. The terminal is a [`vt100::Parser`] fed by the thread that pumps the PTY, and a pane's replay and its subscription are taken under one lock — screen first, then subscription would drop whatever arrived in between, subscription first would repeat it. Replay is `contents_formatted()`, i.e. the escape sequences that reproduce the current screen, sent as the binary frame `attached.replay_bytes` announces, so a pane opening on a command that finished two minutes ago shows what it printed. Binary frames are bytes in both directions and text frames are control (`resize`, `detach` from a client; `attached`, `exit` from the daemon) because a shell can print `{"type":…}` and the two must not be confused. A `cwd` is resolved against the workspace and refused outside it (`403`); a zero dimension is `400` before anything is spawned; a command that will not start is `500 io`, naming the command. Closing the socket never ends the process — that is what "detach without kill" means — and a pane that stops reading is closed with an error code rather than queued without bound, which costs it one screen to reattach. The default shell lives in `acpilot-host`'s platform files (`$SHELL`, else `sh`; `%COMSPEC%`, else `cmd.exe`), so the daemon has no branch of its own. Nine tests: six route tests (empty list, no workspace, zero size, args without a command, unknown session, missing size) and, against real PTYs, a late pane's replay, typed bytes, a resize that `stty size` reports, a pane leaving without ending the process, a refused zero dimension, and the list's shape. Still open: no HTTP resize route (the WS control frame is it, per this item's "create/attach"), no kill route, no closing of a session's terminals when the session is deleted, and no client method or TUI pane yet (editor phase P6).
 - [ ] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
@@ -1414,6 +1416,111 @@ the product makes.
   first-party panels behind a feature flag instead — a named fallback, not a shrug — and the two
   capability names above are still what the runtime has to answer for when it does arrive. The studio phase's task P14-5 is
   blocked on nothing: it is what turns the panels into something a prompt can drive.
+
+---
+
+## Forge phase (P15) — GitHub, GitLab and Bitbucket (post-v1, ≈18 days)
+
+Pull requests, review comments, checks and project boards live where the code is hosted, and an
+editor that cannot show them makes people leave it four times an hour — which is the one thing a
+session-oriented workbench is supposed to stop. This phase puts them beside the session that is
+changing the branch.
+
+**It is a built-in crate, not an extension pack.** ADR 0003 made extensions data: a manifest, a
+theme, a preset, nothing executed at install. A forge integration is network code holding a
+token, so it cannot be a pack without repealing that rule for the most privileged thing in the
+product. The seam is a `Forge` trait in a new `acpilot-forge` crate, compiled in; a third-party
+forge is a crate that implements it, and a downloadable integration is the studio phase's (P14)
+sandboxed tier once that runtime exists. Naming that now keeps "plugin" from quietly meaning two
+security models.
+
+**One surface, three clients.** Each forge normalises into the same small types — `PullRequest`,
+`Review`, `Check`, `Issue`, `Pipeline` — because that is what a pane draws. What normalisation
+cannot express (GitHub's merge queue, GitLab's merge trains, Bitbucket's task lists) is not
+dropped: a raw view shows the forge's own JSON, and the parity below says which column a feature
+is in rather than pretending all three are the same API.
+
+| Surface | GitHub | GitLab | Bitbucket Cloud |
+| --- | --- | --- | --- |
+| Pull/merge requests, diff, comments | yes | yes | yes |
+| Checks / pipelines and job logs | Checks API | Pipelines | Pipelines |
+| Issues | yes | yes | yes |
+| Project boards | Projects v2 (GraphQL only) | Boards | no |
+| Submit a review | yes | yes | yes |
+| Merge queue / merge trains | yes | yes | no (raw only) |
+| Code search | yes | yes | limited |
+
+**Hosts, not just `api.github.com`.** A host is `{ kind, base_url, profile }`, so GitHub
+Enterprise, self-managed GitLab and Bitbucket Data Center are the same three clients pointed
+somewhere else. The first enterprise user would otherwise find the feature hard-coded to a URL.
+
+**Auth is the profile's.** The token lives in the keyring under the profile's namespace, the same
+store the models phase's P4-5 uses for provider keys — never in `config.toml`, never in the
+workspace, never in a log line. Read scopes by default, write scopes opt-in per host, because a
+pane that can comment is a pane that can comment on the wrong repository. OAuth device flow is a
+later addition (D5's pattern for LAN tokens): a personal access token is what a self-hosted
+instance can actually issue today, and it is the same storage either way.
+
+**Rate limits shape the polling, not a fixed timer.** GitHub allows 5,000 requests an hour and
+charges GraphQL by points, GitLab 2,000 a minute, Bitbucket 1,000 an hour. So: a per-host token
+bucket, conditional requests (`If-None-Match` against the `etag` the forge returns — the same
+culture as the service phase's P3-5), a poll interval computed from the remaining budget instead
+of a guessed 30 s, and GraphQL on GitHub for pull lists because one query costs a point where
+thirty PRs cost thirty requests. When the budget is spent the pane says so; a feature that fails
+silently when throttled teaches people it is broken.
+
+**No webhooks.** A local daemon has no address to receive one, and hosting a relay is a service —
+which is exactly what P12-5's "no telemetry by default" and this repository's "no accounts" line
+exist to avoid. Refresh is on window focus, on `git fetch` of the session's branch, and on a timer
+that backs off when the pane is hidden.
+
+**Cached, never authoritative.** Pull requests, checks and comments land in the SQLite database
+(P3-7) keyed by host, repository and number with the forge's `etag` and `fetched_at`, so a pane
+opens instantly, works on a train, and is replaced wholesale by the next successful fetch.
+
+**Untrusted input, explicitly.** A forge's markdown is sanitised and remote images are not loaded
+by default; links open in the browser rather than being fetched by the daemon; a diff is text and
+never a hook to run. The token is attached only to the configured `base_url`, and every redirect
+or `next` link is re-checked against it — a bearer token sent to the wrong host is the entire
+failure mode of this phase. Write actions (comment, approve, request changes, merge, close) are
+`kind = forge` permission requests with the target in the detail, so they go through the broker
+and the audit table like every other irreversible thing, and the confirmation names the forge and
+the repository, not just "merge".
+
+- [ ] **P15-1** `acpilot-forge`: the `Forge` trait, the normalised types, one pagination loop, and
+  the mapping from 401/403/404/429 to the API's error envelope (a throttled forge is `502`
+  `host_unavailable`, not a `500`).
+- [ ] **P15-2** Hosts and secrets: `[[forge]]` in `config.toml` (`kind`, `base_url`, `profile`),
+  token in the keyring, and `acpilot forge test <host>` reporting the scopes the token actually has
+  — asked, not assumed.
+- [ ] **P15-3** GitHub: pull requests, checks, reviews, issues, Projects v2 over GraphQL, code
+  search, releases.
+- [ ] **P15-4** GitLab: merge requests, pipelines with job logs, approvals, issues, boards.
+- [ ] **P15-5** Bitbucket: pull requests, pipelines, issues, workspace projects.
+- [ ] **P15-6** Cache, rate limiter and conditional requests, with the throttled and offline states
+  as first-class UI states rather than an error toast.
+- [ ] **P15-7** Daemon routes: `GET /v1/forges`, `GET /v1/forges/{host}/repos/{repo}/pulls`,
+  `.../pulls/{number}`, `.../pulls/{number}/checks`, `.../issues`; writes as `POST` behind the
+  broker. The API is the only path, so the CLI gets `acpilot pr ls` for free and no UI grows its
+  own HTTP client.
+- [ ] **P15-8** UI: a pull-request pane for the session (branch → open PR), checks, diff and
+  comments; an issue/board view; a pipeline log view capped and streamed, not downloaded.
+- [ ] **P15-9** Write actions with confirmation and an audit row: comment, approve, request
+  changes, merge, close, create issue.
+- [ ] **P15-10** Fixtures: recorded JSON per forge under `tests/fixtures/forge/`, a mock server for
+  the routes we call, no network in CI, and a live tier behind `ACPILOT_FORGE_LIVE=1` like the
+  design phase's probes — the same shape, because the risk is the same.
+- [ ] **P15-11** Docs: one page per forge naming the token scopes it needs and what is not
+  supported, plus the parity table above kept honest as the APIs move.
+  - **DoD:** from a session on a branch with an open pull request, the pane shows the PR, its
+    checks and the review comments without a browser; approving from the pane appears on the
+    forge; the failing pipeline's log is readable in place; with the token deleted the pane says
+    "no token for this host" instead of showing an empty list; and with the network down the
+    cached PR still opens.
+
+- **Blocked on:** the service phase's SQLite (P3-7) for the cache, the profiles phase's secrets
+  (P4-5) for the token, and the version-control phase (P6.5) for turning a session's branch into a
+  pull request without asking the user which repository they meant.
 
 ---
 

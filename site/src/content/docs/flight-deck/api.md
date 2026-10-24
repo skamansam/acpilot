@@ -24,6 +24,7 @@ GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach 
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs; asks for the token
+GET /app                        # the web shell: build version, About, quit; no token
 ```
 
 `GET /v1/health` also reports the workspace the daemon was started with

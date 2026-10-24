@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    The web shell. One file, no build step, no network: the daemon embeds it, so
+    "install the web UI" is "run the daemon". The SPA (editor, diff, terminal) is
+    the web phase (P11); what is here is the page that proves a browser can reach
+    this daemon, says which version it is, and can get out of the way.
+
+    {{version}} is replaced by the daemon from `acpilot_core::VERSION`, so this
+    page and `acpilot --version` cannot drift.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acpilot</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1220;
+        --panel: #131c2e;
+        --border: #223049;
+        --text: #e6ecf7;
+        --muted: #93a4c0;
+        --accent: #5aa9ff;
+        --on-accent: #08101d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+        padding: 4rem 1.5rem;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.6 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+      main,
+      header {
+        width: min(42rem, 100%);
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(2.5rem, 8vw, 4rem);
+        letter-spacing: -0.02em;
+      }
+      .tagline {
+        margin: 0.5rem 0 0;
+        color: var(--muted);
+      }
+      .version {
+        margin: 0 0 1rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .version strong {
+        color: var(--text);
+      }
+      .note {
+        margin: 0 0 1.5rem;
+        color: var(--muted);
+      }
+      .actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+      button {
+        font: inherit;
+        padding: 0.6rem 1.1rem;
+        border-radius: 0.5rem;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+        font-weight: 600;
+      }
+      dialog {
+        max-width: 32rem;
+        padding: 1.5rem;
+        border: 1px solid var(--accent);
+        border-radius: 0.75rem;
+        background: var(--panel);
+        color: var(--text);
+      }
+      dialog::backdrop {
+        background: rgb(0 0 0 / 0.55);
+      }
+      dialog h2 {
+        margin: 0 0 0.5rem;
+        font-size: 1.4rem;
+      }
+      dialog h2 .version {
+        margin: 0;
+        font-size: 1rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.4rem 1.25rem;
+        margin: 1rem 0 1.5rem;
+        font-size: 0.95rem;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Acpilot</h1>
+      <p class="tagline">
+        A code editor that flies your agents. You keep the controls — which is why
+        the permission prompts exist.
+      </p>
+    </header>
+
+    <main>
+      <p class="version">Version <strong>{{version}}</strong></p>
+      <p class="note">
+        This is the web shell of the daemon at this address: it proves a browser can
+        reach it and says which build is answering. The editor, the transcript and
+        the terminal arrive with the web phase (P11) — until then the TUI and the
+        desktop app are the cockpits.
+      </p>
+      <div class="actions">
+        <button id="about-button" type="button" class="primary">About</button>
+        <button id="quit-button" type="button">Quit</button>
+      </div>
+      <p id="quit-note" class="note" hidden>
+        This tab was not opened by a script, so the browser will not close it. Close
+        the tab to leave; the daemon keeps running, which is the point of it.
+      </p>
+    </main>
+
+    <dialog id="about" aria-labelledby="about-title">
+      <h2 id="about-title">Acpilot <span class="version">{{version}}</span></h2>
+      <p class="tagline">A code editor that flies your agents.</p>
+      <dl>
+        <dt>Licence</dt>
+        <dd>MIT OR Apache-2.0</dd>
+        <dt>Field manual</dt>
+        <dd><a href="https://rudeboy.dev/acpilot/">rudeboy.dev/acpilot</a></dd>
+        <dt>Built with</dt>
+        <dd>Freebuff — <a href="https://freebuff.com">freebuff.com</a></dd>
+      </dl>
+      <form method="dialog"><button type="submit">Close</button></form>
+    </dialog>
+
+    <script>
+      (function () {
+        var about = document.getElementById('about');
+        document.getElementById('about-button').addEventListener('click', function () {
+          // `showModal` gives Escape, focus trapping and the backdrop for free;
+          // a hand-rolled overlay would be three misses of the same thing.
+          about.showModal();
+        });
+        document.getElementById('quit-button').addEventListener('click', function () {
+          window.close();
+          // A tab nobody scripted open cannot be closed by script, and a button
+          // that silently does nothing reads as broken. Say what to do instead.
+          window.setTimeout(function () {
+            document.getElementById('quit-note').hidden = false;
+          }, 250);
+        });
+      })();
+    </script>
+  </body>
+</html>

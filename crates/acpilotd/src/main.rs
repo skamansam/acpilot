@@ -24,7 +24,13 @@ use std::path::PathBuf;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[command(name = "acpilotd", version, about = "Acpilot daemon")]
+#[command(
+    name = "acpilotd",
+    // The tag a release was published as, not the manifest's number — the same
+    // constant `acpilot` reports, so a client and its daemon cannot disagree.
+    version = acpilot_core::VERSION,
+    about = "Acpilot daemon"
+)]
 struct Cli {
     /// TCP address to bind instead of the unix socket.
     ///

@@ -99,6 +99,10 @@ jobs:
       # feature needs a graphics stack at link time, which is a runner dependency
       # to solve rather than a version to publish.
       - name: Build
+        env:
+          # Compiled in by `acpilot_core::VERSION`, so the binaries report the tag
+          # they are published as rather than the number in `Cargo.toml`.
+          ACPILOT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --release --locked -p acpilot-cli -p acpilotd
 
       - name: Package (unix)

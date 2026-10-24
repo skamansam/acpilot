@@ -32,8 +32,10 @@ use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 
-/// The one path that answers without a token. Static, and about 4 KB of HTML.
-const OPEN: &str = "/docs";
+/// The paths that answer without a token: static HTML, and the two pages a person
+/// needs before they have a token — the Swagger UI, where one gets pasted, and the
+/// web shell, which is where a browser is pointed to find out what is listening.
+const OPEN: [&str; 2] = ["/docs", "/app"];
 
 /// Wrap `router` so every request needs the token in `path`.
 ///
@@ -56,7 +58,7 @@ async fn require(
     request: Request,
     next: Next,
 ) -> Result<Response, Response> {
-    if request.uri().path() == OPEN {
+    if OPEN.contains(&request.uri().path()) {
         return Ok(next.run(request).await);
     }
     // The scheme is case-insensitive (RFC 7235), so `bearer` and `Bearer` are the

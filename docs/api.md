@@ -51,6 +51,8 @@ Frozen for v1. `WS` routes are upgraded, not JSON responses.
 ```
 GET    /v1/health
 GET    /v1/openapi.json
+GET    /app                              (HTML, no token: the web shell)
+GET    /docs                             (HTML, no token: Swagger UI, --features docs)
 
 GET    /v1/hosts                          POST   /v1/hosts
                                           POST   /v1/hosts/{id}/test

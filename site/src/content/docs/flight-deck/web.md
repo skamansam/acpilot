@@ -43,5 +43,20 @@ daemon does not pretend to be a web server fleet.
 
 ## Status
 
-Not started. The `web/` directory and the `acpilot-web` crate arrive with the web phase (P11);
-the page is here so the API decisions can be read against the frontend they serve.
+A shell, and honest about it. `acpilotd` embeds one page (`acpilot-web/assets/index.html`)
+and serves it at `/app`: the name, the build answering, an **About** dialog and a
+**Quit** that closes the tab. It is served without a token like `/docs`, because a
+browser cannot attach a header to a typed address and the page holds no data.
+
+```bash
+cargo run -p acpilotd -- --addr 127.0.0.1:7777
+# then open http://127.0.0.1:7777/app
+```
+
+Between the `cargo run` and the page there is one step people miss: this daemon is
+the same one the CLI and the TUI talk to, so `/app` shows the build that is running
+right now rather than a version baked into a bundle weeks ago.
+
+The editor, transcript and terminal are the web phase (P11): the `web/` Svelte app,
+the generated API client, and the routes above arrive then. What exists now is the
+shape they hang on — embedded, self-serving, no asset directory to lose.

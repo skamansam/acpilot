@@ -29,6 +29,7 @@ required-features = ["gui"]
 #   its own package on Debian/Ubuntu (`libxkbcommon-x11-dev`).
 
 [dependencies]
+acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-profile = { workspace = true }
 # `open_window` hands gpui's error back rather than panicking: a window that

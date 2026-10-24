@@ -78,9 +78,9 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
 
 /// The version this window reports in About.
 ///
-/// `CARGO_PKG_VERSION` rather than a string written here: a release is a tag, and
-/// a window that says 0.1.0 while the tarball says 0.4.2 is a bug report.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The same constant the CLI and the daemon report, rather than a string written
+/// here: a window that says 0.1.0 while the tarball says 0.4.2 is a bug report.
+pub const VERSION: &str = acpilot_core::VERSION;
 
 /// Everything the About view says, in one place a test can read.
 #[must_use]

@@ -24,6 +24,10 @@ acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
 acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
+# The page a browser lands on when it is pointed at the daemon. Embedded, so the
+# daemon serves its own frontend and a release tarball has no asset directory to
+# lose.
+acpilot-web = { version = "0.1.0", path = "crates/acpilot-web" }
 # The Host seam: where files and processes actually live. Default features are
 # off at this entry point so a consumer that only needs the trait — the agent
 # engine's filesystem guard — links no crypto stack. A consumer that offers

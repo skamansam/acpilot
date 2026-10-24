@@ -42,7 +42,6 @@ pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
 pub use terminals::{Terminal, Terminals};
 
-#[cfg(feature = "docs")]
 use axum::response::Html;
 
 /// Service name reported by the health endpoint.
@@ -758,6 +757,17 @@ fn events_doc() {}
 )]
 fn resolve_doc() {}
 
+/// The web shell: a page that says which build is answering, and can leave.
+///
+/// Served without a token, like `/docs`, because a browser cannot attach a header
+/// to a typed address — and this page holds no data at all: one HTML file, the
+/// version, and two buttons. What it proves is that the daemon can be reached from
+/// a browser at all, which is the first question when the web UI is the one that
+/// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
+async fn web_app() -> Html<String> {
+    Html(acpilot_web::page(acpilot_core::VERSION))
+}
+
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.
 ///
 /// The page is served only with the `docs` feature so a production build has no
@@ -882,6 +892,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
+        .route("/app", get(web_app))
         .merge(files::routes())
         .merge(sessions::routes())
         .merge(terminals::routes())

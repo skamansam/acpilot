@@ -104,6 +104,32 @@ async fn the_docs_page_answers_without_a_token_so_it_can_ask_for_one() {
 }
 
 #[tokio::test]
+async fn the_web_shell_answers_without_a_token_and_names_the_build() {
+    let (_directory, router) = guarded();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/app")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router is infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let html = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    assert!(
+        html.contains(acpilot_core::VERSION),
+        "a page that does not say which build is answering is a page that answers nothing"
+    );
+}
+
+#[tokio::test]
 async fn the_contract_is_not_open_along_with_the_page() {
     let (status, _) = status_of("/v1/openapi.json", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);

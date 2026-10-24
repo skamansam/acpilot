@@ -95,6 +95,7 @@ dependencies = [
 name = "acpilot-gui"
 version = "0.1.0"
 dependencies = [
+ "acpilot-core",
  "acpilot-extensions",
  "acpilot-profile",
  "anyhow",
@@ -206,6 +207,7 @@ dependencies = [
  "acpilot-host",
  "acpilot-profile",
  "acpilot-proto",
+ "acpilot-web",
  "axum",
  "clap",
  "futures",

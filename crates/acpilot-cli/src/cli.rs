@@ -20,7 +20,9 @@ use crate::secret;
 #[derive(Debug, Parser)]
 #[command(
     name = "acpilot",
-    version,
+    // `acpilot_core::VERSION`, not the manifest's number: a published build reports
+    // the tag it was released as (see that constant).
+    version = acpilot_core::VERSION,
     about = "Edit and run ACP agents over one daemon"
 )]
 pub struct Cli {
@@ -248,7 +250,7 @@ pub struct ProfileArgs {
 pub fn run(cli: Cli) -> u8 {
     match cli.command {
         Some(Command::Version) => {
-            println!("acpilot {}", env!("CARGO_PKG_VERSION"));
+            println!("acpilot {}", acpilot_core::VERSION);
             println!("api      {API_PREFIX}");
             exit::SUCCESS
         }

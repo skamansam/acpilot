@@ -27,6 +27,9 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The page served at `/app`. It is a separate crate so the SPA the web phase
+# builds is embedded by the daemon rather than compiled into it.
+acpilot-web = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and

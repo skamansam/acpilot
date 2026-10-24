@@ -13,6 +13,10 @@ publish = false
 # choice a Windows or macOS build should inherit.
 [dependencies]
 gpui = "0.2.2"
+# `ACPILOT_PROBE_TRACE=1` prints gpui's own log records on the same timeline as
+# the phase marks, which is how the window/device block gets attributed rather
+# than merely measured. `log` is already in the graph through gpui.
+log = "0.4"
 
 # See docs/notes/gui-bench.md: gpui 0.2.2 -> zed-async-tar -> xattr 0.2.3 uses
 # `libc::ENOATTR`, which Linux libc dropped in 0.2.190. Irrelevant on Windows and

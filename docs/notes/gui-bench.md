@@ -135,6 +135,45 @@ Beyond the table:
   272–313 ms. Total first paint is ~3× worse, at the same steady-state pacing and
   at ~2× the build time. Nothing in these numbers argues for switching.
 
+## Where the first-paint time actually goes (2026-10-24)
+
+The 277–326 ms above is one number for three phases, and a number that cannot be
+attributed cannot be fixed. `ACPILOT_PROBE_TRACE=1` now prints phase marks taken
+from outside gpui, together with gpui's own `log` records on the same µs clock,
+and the report gains a `trace` object. Same release binary, same machine, four
+runs through the WSL interop:
+
+| phase (cumulative, ms since process start) | run 1 | run 4 |
+| --- | --- | --- |
+| process start → DXGI has chosen the GPU | 94.0 | 191.8 |
+| → `Created device with Direct3D 11.1 feature level` | 505.1 (**+411.1**) | 511.8 (**+320.0**) |
+| → GUI font system ready (`Use Segoe UI`) | 573.6 (+68.5) | 569.5 (+57.6) |
+| → `Application::new()` returns | 590.1 (+16.5) | 576.3 (+6.8) |
+| → the view is built (window creation + `render` wiring) | 636.1 (+46.0) | 610.1 (+33.8) |
+| → first frame presented | 652.4 (+16.2) | 616.6 (+6.5) |
+
+What it says:
+
+1. **Device creation is the whole story.** 320–411 ms of a 616–652 ms start is
+   `CreateDevice`, and it happens inside `Application::new()` — before a window
+   exists. Window creation is 34–46 ms, the view costs ~0, the first frame 7–16 ms.
+2. **gpui 0.2.2's Windows backend creates a Direct3D 11.1 device.** That is
+   gpui's own log line, not an inference. Nothing at this version exposes an
+   async or pre-warmed device, so the lever is where in the process lifetime the
+   device is created — not how fast the window or the view is.
+3. **The 277–326 ms warm figure did not reproduce.** These runs are 2.0–2.4× it,
+   with the same binary shape and the same GPU, and frame pacing is unchanged
+   (interval p95 4.6–4.7 ms, 1 dropped interval). The difference is entirely in
+   the pre-window phase — which is the machine-state caveat below, observed
+   rather than argued.
+4. Adapter enumeration alone varied 94→192 ms between runs, so the phase split
+   is stable in shape and not in magnitude. A first-paint claim needs the run
+   protocol, not just the total.
+
+Limits of this instrument: it attributes between gpui's log lines, so anything
+inside `CreateDevice` is one opaque number; the marks are taken on the main
+thread and cost a mutex lock each; four runs, one machine, one driver.
+
 ## Does the first-paint miss veto gpui?
 
 `TODO.md` §P0-3 says to fall back to `iced` if gpui "misses by >2×". The answer
@@ -207,6 +246,8 @@ platforms, in a third of the time.
 - Two gpui harness bugs were found and fixed earlier in this work (eager 100k-row
   construction inflating first paint; the view-build timer measuring a `Vec` clone
   instead of `render()`). The numbers here are from after both fixes.
+- First paint was only attributed down to `CreateDevice` on Windows; the split
+  inside it (pipeline compilation, adapter features, WDDM) is not measured.
 - No macOS paint numbers for either framework. iced *does* paint on this WSL2 box
   (275 ms to first frame, on a 60 Hz software path) where gpui's Vulkan-only
   renderer has no ICD for the physical GPU; that is a portability data point, not

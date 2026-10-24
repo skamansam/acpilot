@@ -29,7 +29,7 @@
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 /// Process start, so "first paint" includes startup and not only the window's
@@ -37,6 +37,72 @@ use std::time::Instant;
 static STARTED: OnceLock<Instant> = OnceLock::new();
 /// When the app loop began, set by `main` and read by the view.
 static APP_STARTED: OnceLock<Option<u64>> = OnceLock::new();
+
+/// Phase marks, printed only when `ACPILOT_PROBE_TRACE` is set.
+///
+/// First paint is one number and three phases — process start, window and device
+/// creation, first frame — and a total cannot say which one to attack. These
+/// marks are the coarsest thing that does, taken from outside gpui so they cost
+/// nothing to keep: `open_window_enter` to `view_built` is the window/device
+/// block, and the log lines printed around them are gpui's own account of what
+/// happened inside it.
+static TRACE: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+fn tracing() -> bool {
+    std::env::var_os("ACPILOT_PROBE_TRACE").is_some()
+}
+
+fn mark(name: &'static str) {
+    if !tracing() {
+        return;
+    }
+    let started = STARTED.get().copied().unwrap_or_else(Instant::now);
+    let at = micros(started.elapsed());
+    if let Ok(mut marks) = TRACE.lock() {
+        marks.push((name, at));
+    }
+}
+
+/// The marks as one JSON object, milliseconds since process start.
+fn trace_json() -> String {
+    let Ok(marks) = TRACE.lock() else {
+        return "{}".to_owned();
+    };
+    let body = marks
+        .iter()
+        .map(|(name, at)| format!("\"{name}\": {:.3}", *at as f64 / 1000.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{{body}}}")
+}
+
+/// `log` records with a timestamp, so gpui's own messages sit in the same
+/// timeline as the marks. Without this, "the window took 250 ms" is the end of
+/// the story rather than the start of it.
+struct MicrosLogger;
+
+impl log::Log for MicrosLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Trace
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let started = STARTED.get().copied().unwrap_or_else(Instant::now);
+        eprintln!(
+            "[trace {:>10.3} ms] {}: {}",
+            micros(started.elapsed()) as f64 / 1000.0,
+            record.target(),
+            record.args()
+        );
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: MicrosLogger = MicrosLogger;
 
 use gpui::{
     App, AppContext, Application, Bounds, Context, IntoElement, ParentElement, Render,
@@ -132,6 +198,7 @@ impl Run {
     fn begin_frame(&mut self) -> Instant {
         if self.frames.is_empty() {
             self.first_render_us = Some(micros(self.t0.elapsed()));
+            mark("first_render");
         }
         self.frames.push(Frame::default());
         Instant::now()
@@ -173,6 +240,7 @@ impl Run {
 
         if self.first_frame_us.is_none() {
             self.first_frame_us = Some(micros(now.saturating_duration_since(self.t0)));
+            mark("first_frame");
         }
         if let Some(edit_at) = self.edit_at.take() {
             self.edit_us
@@ -231,6 +299,7 @@ impl Bench {
             typed: "fn main() {".to_string(),
         };
         let built = micros(run.borrow().t0.elapsed());
+        mark("view_built");
         {
             let mut run = run.borrow_mut();
             run.app_us = Some(app);
@@ -387,6 +456,7 @@ fn ms(values: &[u64]) -> String {
 }
 
 fn report(run: &Run, started: Instant) {
+    mark("report");
     let frames = &run.frames[WARMUP_FRAMES..];
     let steady_end = STEADY_FRAMES;
     let scroll_end = steady_end + SCROLL_FRAMES;
@@ -428,7 +498,7 @@ fn report(run: &Run, started: Instant) {
             "\"scroll\": {{\"n\": {}, \"build\": {}, \"paint\": {}, \"interval\": {}}}, ",
             "\"edit_to_frame\": {{\"n\": {}, \"ms\": {}}}, ",
             "\"duration_ms\": {:.0}, \"median_interval_ms\": {:.2}, \"dropped_intervals\": {}, ",
-            "\"shape_{}_ms\": {:.2}, \"font\": \"{}\"}}"
+            "\"shape_{}_ms\": {:.2}, \"font\": \"{}\", \"trace\": {}}}"
         ),
         TOTAL_LINES,
         SHAPE_LINES,
@@ -454,11 +524,17 @@ fn report(run: &Run, started: Instant) {
         SHAPE_LINES,
         run.shape_us.unwrap_or(0) as f64 / 1000.0,
         run.shaping_font.clone().unwrap_or_default(),
+        trace_json(),
     );
 }
 
 fn main() {
     let started = *STARTED.get_or_init(Instant::now);
+    if tracing() {
+        let _ = log::set_logger(&LOGGER);
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+    mark("main");
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: point(px(40.0), px(40.0)),
@@ -472,8 +548,12 @@ fn main() {
         ..Default::default()
     };
     let _ = started;
+    mark("options");
 
-    Application::new().run(move |cx: &mut App| {
+    let application = Application::new();
+    mark("application");
+    application.run(move |cx: &mut App| {
+        mark("run_enter");
         let app_us = micros(
             STARTED
                 .get()
@@ -482,8 +562,10 @@ fn main() {
                 .elapsed(),
         );
         APP_STARTED.set(Some(app_us)).ok();
+        mark("open_window_enter");
         cx.open_window(options, |_window, cx| cx.new(Bench::new))
             .expect("open the benchmark window");
+        mark("open_window_return");
         // The first frame is drawn by opening the window; `render` schedules the
         // ones after it, where a view is current.
     });

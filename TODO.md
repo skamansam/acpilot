@@ -1241,16 +1241,17 @@ What is scoped out on purpose:
 
 ---
 
-## P14 — Studio extensions: the API workbench, the regex lab, and frontend delivery (post-v1, ≈16 days)
+## P14 — Studio extensions: API, regex, database, and frontend delivery (post-v1, ≈26 days)
 
 P14-1 and P14-2 are extensions in the P4.6 sense, and both are the first real customers of Tier 2
 (D18): a panel that speaks HTTP and a panel that runs a regex engine are *code*, not tokens.
 Writing them down now is how D18's capability set stops being hypothetical — what they need is
 `net.http` (outbound requests, host allowlist, audited with the extension's id) and `compute` (a
-pure wasm module with no capability at all). P14-3 needs no runtime at all: it hands out the
-frontends the daemon already builds, so it depends on P11-6 and P12-1 instead.
+pure wasm module with no capability at all). P14-3 needs `net.socket` (a database connection, host
+allowlist, statement timeout) and the same audit trail. P14-4 needs no runtime at all: it hands out
+the frontends the daemon already builds, so it depends on P11-6 and P12-1 instead.
 
-Rules the two panels share:
+Rules the studio shares:
 
 - **The extension holds the logic; the daemon holds the power.** A send or a grep goes through the
 daemon, so it is policy-checked, audited, cancellable, and visible in the session transcript like
@@ -1261,6 +1262,10 @@ the product makes.
   user cannot read.
 - **One data path, three surfaces.** The TUI gets list + result; the GUI and web get the rich view;
   both read the same route, so the second implementation is a renderer and not a second product.
+- **Every action is a tool an agent can call.** A panel a person can drive and an agent cannot is a
+  feature that only works when someone is watching. Each action is exposed on the broker as
+  `<extension>.<action>` with its target in the permission subject (P14-5), which is what lets one
+  prompt cross all four: import the spec, call the endpoint, assert the row.
 
 - [ ] **P14-1 · API workbench** (~9d)
   - Import OpenAPI 3.0/3.1 and Swagger 2.0 from a file or a URL (fetched through the daemon), with
@@ -1309,7 +1314,32 @@ the product makes.
   - **DoD:** a pattern with named groups, three cases and a replacement round-trips through a file,
     renders in the TUI and the GUI from the same data, and names the failing case by line.
 
-- [ ] **P14-3 · Frontend delivery over the daemon** (~2d)
+- [ ] **P14-3 · Database workbench** (~8d)
+  - Drivers: SQLite (already `rusqlite`, bundled) and PostgreSQL first, behind one narrow trait
+    (`connect`, `describe`, `query`, `execute`, `explain`), so MySQL and MSSQL arrive as a driver
+    rather than as a fork of the panel.
+  - Read: a schema browser — tables, columns with types and nullability, indexes, foreign keys, row
+    counts marked as estimates — a query editor completed from that schema, `EXPLAIN` output, and a
+    result grid that pages server-side instead of materialising two million rows into the window.
+  - Write: an edit is a generated `UPDATE … WHERE <primary key>` shown **before** it runs and applied
+    in a transaction the user commits. A table with no primary key is read-only and says why.
+    `UPDATE`/`DELETE` without a `WHERE`, `DROP` and `TRUNCATE` are denied by default and need an
+    explicit approval, because "the agent tidied the database" is not a recoverable sentence.
+  - Secrets: a connection is `dsn = "keyring:acpilot/work/staging-db"` in `db.toml`, never a password
+    in a file the window reads. Read-only is a per-connection flag, not a promise.
+  - AI support that keeps the rule above: the agent sees the *schema* — tables, columns, keys, a row
+    count estimate — and never the DSN. It proposes SQL, the panel shows the statement and the rows
+    it would touch, and running it is `db.execute` through the broker with the same audit row a
+    terminal command gets.
+  - Agent tools: `db.schema` (a bounded description), `db.query` (read, row- and time-capped),
+    `db.execute` (permissioned), and `db.assert` (a query plus the rows expected) — the "is it
+    responding properly" check a script or a turn can gate on.
+  - Migrations: show what the repository's migration directory would apply, in order, and what it
+    would skip; applying is the same approval an agent gets, never a button that runs on open.
+  - **DoD:** an agent creates a table, inserts a row, reads it back and asserts it through the four
+    tools; a `DELETE` with no `WHERE` is refused by name, and the refusal names the rule that did it.
+
+- [ ] **P14-4 · Frontend delivery over the daemon** (~2d)
   - The daemon already serves the SPA it embeds (P11-6). This turns that into a *distribution
     channel*: a versioned index of the frontends this daemon can hand out — the web bundle it
     carries, plus the CLI/TUI/GUI artifacts `cargo-dist` produced (P12-1) from the directory the
@@ -1335,10 +1365,31 @@ the product makes.
     verifies the same bundle; a tampered artifact is refused by name, and an unauthenticated
     request to either route is a 401 that names no frontend.
 
+- [ ] **P14-5 · The studio tool contract** (~2d) — the agent-facing half of P14-1…P14-4
+  - Naming: `<extension>.<action>` (`api.import`, `api.request`, `db.query`, `db.assert`,
+    `regex.test`), one description format, and one JSON schema per tool generated from the
+    extension's own types rather than hand-written a second time.
+  - One permission subject: the broker sees `kind = extension`, the tool name, and the **target** —
+    host for `api.request`, DSN name for `db.execute`, workspace path for `regex.grep` — so a rule
+    can allow reads on staging and deny them on production by name.
+  - One audit row per call carrying the extension id, the tool, the target and the deciding rule,
+    in the same table P3-7 builds for everything else.
+  - Tools appear in `GET /v1/tools` and in the session's capabilities, so an agent discovers them
+    the way it discovers files and terminals; a tool whose extension the profile has not activated
+    does not exist, which is what keeps activation meaningful.
+  - The sentence the whole phase exists for: *"add a `POST /widgets` endpoint per the spec,
+    implement it, and check the widgets table round-trips"* — the agent imports the spec with
+    `api.import`, edits the code, calls the endpoint with `api.request`, and asserts the row with
+    `db.assert`. Without this item that sentence is four features that do not know about each other.
+  - **DoD:** that prompt, on a fixture workspace, with five tool calls in the audit log, the code
+    edit and the row write both approved by a human, and the assertion passing because the row is
+    really there.
+
 - **Blocked on:** D18 (Tier 2 capabilities and the resource budget) and the `wasmtime` runtime ADR
-  0003 defers, for P14-1 and P14-2. If D18 lands as "no runtime in v0.1", both ship as first-party
-  panels behind a feature flag instead — a named fallback, not a shrug — and the two capability
-  names above are still what the runtime has to answer for when it does arrive.
+  0003 defers, for P14-1, P14-2 and P14-4. If D18 lands as "no runtime in v0.1", those ship as
+  first-party panels behind a feature flag instead — a named fallback, not a shrug — and the two
+  capability names above are still what the runtime has to answer for when it does arrive. P14-5 is
+  blocked on nothing: it is what turns the panels into something a prompt can drive.
 
 ---
 
@@ -1583,6 +1634,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [x] D23 · Config format: **TOML for the files a person maintains, JSON only on the wire** (decided 2026-10-22). `[[agents]]` renders one agent as one block, so adding one is a clean hunk in review; the same data in JSON is an array element that puts a comma on the previous agent's last line in every diff of the file whose whole purpose is "add a line, never a rebuild". TOML has no `null`, so "absent means the default" has one spelling — the idiom `idle_timeout_ms` depends on, and the reason `config.toml` and the API are deliberately not interchangeable: compaction patches need absent-vs-cleared. Comments stay in the file the user owns, so the reason `submit_delay_ms` exists is a comment rather than a `description` field the parser has to carry; and a tool that edits these files must use `toml_edit` so the human's comments and ordering survive a rewrite, which a JSON writer would discard. `toml` also reports spans, so "unknown key" can name a line, which the config page already promises. JSONC was the real contender — it is what IDE settings use, and it has comments — but it has no readable array-of-tables, the `toml`/`serde_json` path we already have does not parse it, and its comments are a patch for a format that cannot express them rather than a structure we need. Depth is the one cost: `[a.b.c]` is about as deep as a file should go before the shape is asking for its own file. Publishing a JSON Schema for the TOML does not move the format — TOML self-identifies with a quoted `"$schema"` key or a `#:schema` line, both of which Taplo and Even Better TOML read — so D6 is the decision that governs how that artifact is licensed.
 - [x] D24 · `extension.toml` format: **stays TOML** (decided 2026-10-22), by D23's rule but on its own facts. It is a human-maintained file in the extension author's repository, reviewed by a human in a pull request against `marketplace/index.toml`, and written once. Its one JSON-shaped corner is `[[contributes]]`, which TOML renders as repeated inline tables where JSON would have an array of objects — the readability argument that decided D23 inverted — but a pack contributes one to five things, edited rarely, so the per-diff cost is small. Against flipping: a second syntax in the loader, a second error style in `ext add`, a second published schema, and a manifest page that has to agree with both. The rule to keep: if the manifest starts carrying *generated* fields — the signed index's per-version checksums (P4.6-4) are the likely ones — do not convert it and do not let a tool reformat it. Split the artifact instead: `extension.toml` hand-written, the generated store record (versions, checksums, signature) JSON. That is D23's "JSON for the wire and for generated state" applied to the store rather than to the manifest.
 - [x] D25 · The extension manifest's published schema: **`https://rudeboy.dev/acpilot/schema/extension-v1.json`, Apache-2.0, frozen once shipped, generated by the same command as the agent schema** (decided 2026-10-22). D6's argument applies unchanged — the artifact exists to be vendored into an extension author's editor and CI, the docs site already serves that directory, and `$id` is the address people paste — so this records only what differs. It is generated from `Manifest` by `schemars` and rewritten by `cargo xtask schema` alongside `agents-v1.json`: one command, one commit, no way to publish one document and forget the other, with a drift test in each crate regenerating its own file. `ExtensionKind` is published from `acpilot-proto`, where the loader's enum lives, rather than restated as a list beside the generator. What JSON Schema cannot say stays the loader's alone and is named in the document: two contributions with the same kind and path, and the `.`/`..` half of the path rule. This does not reopen D24 — the file stays TOML, and the schema describes it to an editor rather than replacing it.
+- [ ] D26 · Extension capabilities as agent tools: **every studio extension action is a brokered tool named `<extension>.<action>`, with its target in the permission subject and one audit row per call** (recommended, P14-5) vs each panel owning a private surface and an agent asking a human to click. The second is cheaper this week and makes the studio unusable from a prompt; the first is why the extensions exist at all. Open only because the tool description format and the subject shape are P14-5's to settle.
 
 ## Definition of done for v0.1.0
 

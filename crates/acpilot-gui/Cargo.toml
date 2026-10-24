@@ -12,6 +12,12 @@ default = []
 # a graphics stack (or need `libxkbcommon-x11` to link) before there is anything
 # worth drawing. P10-2 builds and runs it with `--features gui`.
 gui = ["dep:gpui"]
+# gpui's own headless test harness, for the tests that need a real `Context`: the
+# About panel and the state a keystroke changes are inside the view, so testing
+# them without one would only test a copy. Separate from `gui` because it compiles
+# gpui with its `test-support` machinery, and the plain workspace gate should pay
+# for neither.
+gui-tests = ["gui", "gpui/test-support"]
 
 [[bin]]
 name = "acpilot-gui"

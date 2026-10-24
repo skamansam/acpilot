@@ -230,6 +230,12 @@ impl Shell {
         self.about
     }
 
+    /// Whether the palette is open, for the same reason.
+    #[must_use]
+    pub fn showing_palette(&self) -> bool {
+        self.palette.is_some()
+    }
+
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Self {
             palette, commands, ..
@@ -653,6 +659,28 @@ mod tests {
     }
 
     #[test]
+    fn about_says_which_build_this_is() {
+        // The panel draws these rows in this order, so the four facts a bug report
+        // asks for are pinned here rather than in a screenshot: which build, under
+        // what licence, where the manual is, what built it.
+        let lines = about_lines();
+        assert_eq!(lines.len(), 4, "four rows, no more and no fewer");
+        let value = |label: &str| {
+            lines
+                .iter()
+                .find(|(name, _)| *name == label)
+                .map(|(_, value)| *value)
+        };
+        // The same constant `acpilot --version` and the daemon report: a window
+        // that says 0.1.0 while its tarball says 0.4.2 is a bug report about a
+        // build nobody has.
+        assert_eq!(value("Version"), Some(acpilot_core::VERSION));
+        assert_eq!(value("License"), Some("MIT OR Apache-2.0"));
+        assert_eq!(value("Field manual"), Some("rudeboy.dev/acpilot"));
+        assert_eq!(value("Built with"), Some("Freebuff — freebuff.com"));
+    }
+
+    #[test]
     fn the_menu_carries_the_palette_and_a_way_out() {
         let menus = menus();
         assert_eq!(menus.len(), 2);
@@ -663,5 +691,86 @@ mod tests {
             "about, palette and quit, each separated: the three things a window with one pane needs"
         );
         assert_eq!(menus[1].name.to_string(), "Profile");
+    }
+}
+
+/// The shell in a window, driven the way a person drives it.
+///
+/// `gui-tests` is gpui's own headless harness — a platform with no display and a
+/// real `Context` — because the things worth testing here are inside the view:
+/// which overlay is on top, and what a command does to it. A copy of that logic in
+/// a test would test the copy. It is a feature of its own so that the plain
+/// workspace gate still compiles neither gpui nor a graphics stack.
+#[cfg(all(test, feature = "gui-tests"))]
+mod drawn {
+    use super::*;
+
+    fn theme() -> GuiTheme {
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
+        GuiTheme::from_extensions(&extensions, "acpilot.night-flight")
+            .expect("night-flight resolves")
+    }
+
+    /// The path that works on Linux and Windows, where gpui 0.2.2 draws no menu
+    /// bar: the palette row is the only way in.
+    #[gpui::test]
+    async fn the_palette_row_opens_about_and_escape_closes_it(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+
+        assert!(
+            !visual.update(|_window, cx| shell.read(cx).showing_about()),
+            "a window does not start with About on top of it"
+        );
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.run(CommandId::About, cx);
+            });
+        });
+        assert!(
+            visual.update(|_window, cx| shell.read(cx).showing_about()),
+            "the palette row shows About where there is no menu bar"
+        );
+
+        // Escape, as the keymap binds it: the same action the binding names.
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.dismiss_about(&DismissAbout, window, cx);
+            });
+        });
+        assert!(
+            !visual.update(|_window, cx| shell.read(cx).showing_about()),
+            "escape closes it again"
+        );
+    }
+
+    /// About and the palette share one escape key, so opening About has to close
+    /// the palette — otherwise one key would have to dismiss two overlays.
+    #[gpui::test]
+    async fn opening_about_closes_the_palette(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+
+        let opened = visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.toggle_palette(&TogglePalette, window, cx);
+                shell.showing_palette()
+            })
+        });
+        assert!(opened, "the palette opens to begin with");
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.show_about(&ShowAbout, window, cx);
+            });
+        });
+
+        let state = visual.update(|_window, cx| {
+            shell.update(cx, |shell, _cx| {
+                (shell.showing_about(), shell.showing_palette())
+            })
+        });
+        assert_eq!(state, (true, false), "About on top, palette closed");
     }
 }

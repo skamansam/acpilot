@@ -56,8 +56,12 @@ One thing `cargo xtask check` deliberately does not do is build the desktop shel
 default, so the workspace gate stays fast and does not need a graphics stack.
 CI's `gui` job is what keeps the shell from rotting, and locally it is two
 commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
-acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
-against:
+acpilot-gui --features gui,gui-tests`. The second feature is gpui's headless test
+harness: without it the About panel and the palette that opens it have no
+`Context` to live in, so the tests that draw the window would only be testing a
+copy of it. It is separate from `gui` because it compiles gpui's `test-support`
+machinery, which the default workspace gate should not pay for. On Linux both
+need the dev packages gpui links against:
 
 ```bash
 sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \

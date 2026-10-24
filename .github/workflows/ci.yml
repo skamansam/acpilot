@@ -143,7 +143,7 @@ jobs:
           done
 
       - name: Clippy (gui feature)
-        run: cargo clippy -p acpilot-gui --features gui --all-targets -- -D warnings
+        run: cargo clippy -p acpilot-gui --features gui,gui-tests --all-targets -- -D warnings
 
       # `check` and a test build do not link the binary, and the Linux link is
       # exactly where the missing xkbcommon-x11 symlink shows up.
@@ -153,8 +153,13 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Test (gui feature)
-        run: cargo nextest run -p acpilot-gui --features gui --no-fail-fast
+      # `gui-tests` adds gpui's headless harness, so the About panel and the
+      # palette that opens it are tested in a real `Context` without a display.
+      # It is not in the default feature set because it compiles gpui's
+      # `test-support` machinery, which the plain workspace gate should not pay
+      # for.
+      - name: Test (gui feature, with the window harness)
+        run: cargo nextest run -p acpilot-gui --features gui,gui-tests --no-fail-fast
 
   # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
   # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into

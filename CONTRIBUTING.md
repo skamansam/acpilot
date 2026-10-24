@@ -76,6 +76,7 @@ The web UI is built, not hand-written, and the build output is committed so
 cd web
 npm ci
 npm run check   # svelte-check: types and accessibility lint
+npm test        # vitest in happy-dom: the token flow, storage and headers
 npm run build   # one HTML file, written into crates/acpilot-web/assets/
 ```
 

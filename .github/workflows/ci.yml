@@ -79,6 +79,13 @@ jobs:
         working-directory: web
         run: npm run check
 
+      # The token flow is a browser fact, so it is tested in a DOM rather than
+      # checked by hand: the token is kept in the tab, sent only in an
+      # `Authorization` header, and forgotten when the daemon refuses it.
+      - name: Token-flow tests
+        working-directory: web
+        run: npm test
+
       - name: Build into the crate that embeds it
         working-directory: web
         run: npm run build

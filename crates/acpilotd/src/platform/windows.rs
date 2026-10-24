@@ -57,15 +57,19 @@ where
     };
     // Every listener this platform has is TCP, so the token is not optional here:
     // without the named pipe there is no filesystem boundary to inherit.
-    let path = crate::auth::token_path();
-    let token = crate::auth::load_or_create(&path)?;
+    let path = acpilot_host::token::path();
+    // Created before the bind: without the named pipe there is no filesystem
+    // boundary to inherit, so the token is the only thing between the port and
+    // whoever can reach it. The layer re-reads the file per request, so a rotation
+    // needs no restart.
+    acpilot_host::token::load_or_create(&path)?;
     let listener = TcpListener::bind(&addr).await?;
     tracing::warn!(
         addr = %listener.local_addr()?,
         token = %path.display(),
         "listening on TCP; every request needs `Authorization: Bearer <token>`"
     );
-    axum::serve(listener, crate::auth::protect(router, token))
+    axum::serve(listener, crate::auth::protect(router, path))
         .with_graceful_shutdown(shutdown)
         .await
 }

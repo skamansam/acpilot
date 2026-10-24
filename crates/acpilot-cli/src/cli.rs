@@ -44,6 +44,12 @@ pub enum Command {
         #[command(subcommand)]
         command: SecretCommand,
     },
+    /// Show and rotate the token a TCP daemon requires.
+    Token {
+        /// Which token verb.
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
     /// Open the terminal UI against a running daemon.
     ///
     /// The TUI is a client, not a second engine: it opens sessions, sends
@@ -81,6 +87,17 @@ pub enum Command {
         #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
         token: Option<String>,
     },
+}
+
+/// Everything under `acpilot token`.
+#[derive(Debug, Subcommand)]
+pub enum TokenCommand {
+    /// Replace the token, refusing every client that holds the old one.
+    ///
+    /// Writes the file the daemon reads. Nothing restarts: the daemon reads it per
+    /// request, so the new token applies from the next call — which is the point,
+    /// since a rotation is something you do about a token you think leaked.
+    Rotate,
 }
 
 /// Everything under `acpilot secret`.
@@ -223,6 +240,7 @@ pub fn run(cli: Cli) -> u8 {
         }
         Some(Command::Ext { command }) => run_ext(command),
         Some(Command::Secret { command }) => run_secret(command),
+        Some(Command::Token { command }) => run_token(command),
         Some(Command::Tui {
             api_url,
             no_spawn,
@@ -326,10 +344,9 @@ fn run_tui(
 /// binary that has a user, rather than in a library that would then behave
 /// differently depending on whose environment it runs in.
 fn local_token() -> Option<String> {
-    std::fs::read_to_string(acpilot_host::token_path())
+    acpilot_host::token::read(&acpilot_host::token::path())
         .ok()
-        .map(|token| token.trim().to_owned())
-        .filter(|token| !token.is_empty())
+        .flatten()
 }
 
 /// The workspace id the daemon derives from a root: its directory name.
@@ -469,6 +486,36 @@ fn run_ext(command: ExtCommand) -> u8 {
 }
 
 /// Run one `acpilot secret` verb against the OS keyring.
+/// `acpilot token`: the one secret this product writes itself.
+///
+/// Printing the path rather than the token keeps it off a screen that is being
+/// shared, and the file is `0600`: the person who needs it can `cat` it, and the
+/// person who does not learn nothing from the command's output.
+fn run_token(command: TokenCommand) -> u8 {
+    match command {
+        TokenCommand::Rotate => {
+            let path = acpilot_host::token::path();
+            match acpilot_host::token::rotate(&path) {
+                Ok(_) => {
+                    println!("wrote a new token to {}", path.display());
+                    println!(
+                        "the running daemon reads it on the next request, so nothing restarts and \
+                         every client holding the old token is refused"
+                    );
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!(
+                        "acpilot token rotate: cannot write {}: {error}",
+                        path.display()
+                    );
+                    exit::FAILURE
+                }
+            }
+        }
+    }
+}
+
 fn run_secret(command: SecretCommand) -> u8 {
     match command {
         SecretCommand::Set { name, profile } => {

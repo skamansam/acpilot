@@ -36,9 +36,11 @@ right and this file is a bug.
   scheme (`components.securitySchemes.bearer`) and requires it document-wide, so a
   client generated from it sends the header and Swagger's Authorize button exists;
   the socket exemption is in the scheme's description rather than in no scheme at
-  all, because a document that says nothing produces a client that cannot work.
-  A missing or wrong token is `401 unauthorized`, in the usual envelope, and the
-  scheme is case-insensitive while the token is not.
+  all, because a document that says nothing produces a client that cannot work.`acpilot token rotate` rewrites the file; the listener
+  reads it per request, so the new token applies on the next call and the old one
+  is refused from then on, with nothing restarting. A missing or wrong token is
+  `401 unauthorized`, in the usual envelope, and the scheme is case-insensitive
+  while the token is not.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 

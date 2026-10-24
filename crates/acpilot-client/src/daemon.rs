@@ -374,7 +374,7 @@ async fn probe(client: &Client) -> Probe {
 fn refused(endpoint: &str) -> ConnectError {
     ConnectError::Unauthorized {
         endpoint: endpoint.to_owned(),
-        token: acpilot_host::token_path().display().to_string(),
+        token: acpilot_host::token::path().display().to_string(),
     }
 }
 

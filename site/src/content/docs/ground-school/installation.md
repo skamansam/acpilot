@@ -71,6 +71,10 @@ names one explicitly (or `ACPILOT_TOKEN`); without either it reads that file, wh
 is what makes a local port work with no typing. A CI job or a container talking to
 a daemon it has no runtime directory for is the case the flag exists for.
 
+If that token may have been seen, `acpilot token rotate` replaces it: the daemon
+reads the file per request, so the new one applies on the next call, nothing
+restarts, and every client holding the old one is refused.
+
 The docs page at `/docs` is the one route that answers without a token — a browser
 cannot attach a header to a typed address, and that page is where the token gets
 pasted. It asks for one in a field, fetches the contract with it, and sends it on

@@ -10,6 +10,7 @@ Commands:
   version  Print version and protocol information
   ext      Install, verify, and approve extensions
   secret   Store, list, and remove credentials in the OS keyring
+  token    Show and rotate the token a TCP daemon requires
   tui      Open the terminal UI against a running daemon
   help     Print this message or the help of the given subcommand(s)
 

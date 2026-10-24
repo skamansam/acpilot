@@ -55,7 +55,8 @@ acpilot ext verify --all | prune [--dry-run]
 acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
-acpilot tui [--api-url <url|path>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
+acpilot token rotate
+acpilot tui [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -95,7 +96,9 @@ on a port requires a token: `--token` (or `ACPILOT_TOKEN`) names one, and withou
 either the file the daemon wrote beside its socket is used, so a local port needs no
 typing. The token is handed to the client rather than looked up by it, which is why
 a `401` is reported as a refused token naming that file — not as "no daemon",
-which would send you to start a second one on the same port.
+which would send you to start a second one on the same port. `acpilot token rotate`
+rewrites that file; the daemon reads it per request, so the new token applies on the
+next call and every client holding the old one is refused, with nothing restarting.
 
 The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
 it is, and only silence starts one. The spawned daemon is detached from the

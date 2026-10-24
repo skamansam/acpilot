@@ -30,15 +30,19 @@ where
             // token is read (or created) before the bind: a listener that is up
             // for even a moment without an answer to "who are you" is the hole
             // this whole branch exists to close.
-            let path = crate::auth::token_path();
-            let token = crate::auth::load_or_create(&path)?;
+            let path = acpilot_host::token::path();
+            // Created before the bind, not after: a listener that is up for even a
+            // moment without an answer to "who are you" is the hole this exists to
+            // close. After this, the layer reads the file per request, so a
+            // rotation needs no restart.
+            acpilot_host::token::load_or_create(&path)?;
             let listener = TcpListener::bind(&addr).await?;
             tracing::warn!(
                 addr = %listener.local_addr()?,
                 token = %path.display(),
                 "listening on TCP; every request needs `Authorization: Bearer <token>`"
             );
-            axum::serve(listener, crate::auth::protect(router, token))
+            axum::serve(listener, crate::auth::protect(router, path))
                 .with_graceful_shutdown(shutdown)
                 .await
         }

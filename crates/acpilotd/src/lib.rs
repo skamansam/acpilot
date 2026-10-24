@@ -36,7 +36,7 @@ mod platform;
 mod sessions;
 mod terminals;
 
-pub use auth::{protect, token_path};
+pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
 pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};

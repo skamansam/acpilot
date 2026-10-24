@@ -39,6 +39,8 @@ mod platform;
 mod pty;
 #[cfg(feature = "ssh")]
 pub mod ssh;
+/// The token a TCP listener requires, and how to rotate it.
+pub mod token;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -96,17 +98,6 @@ pub fn runtime_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("acpilot")
-}
-
-/// Where the daemon writes the token a TCP listener requires.
-///
-/// Beside the socket, in the runtime directory, because it is runtime state: the
-/// daemon creates it on first use and a reboot is allowed to take it. Written here
-/// so the daemon that writes the file and the CLI that offers to read it cannot
-/// disagree about where it is.
-#[must_use]
-pub fn token_path() -> PathBuf {
-    runtime_dir().join("token")
 }
 
 /// What a client should talk to when nobody said.

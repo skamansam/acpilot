@@ -32,7 +32,6 @@ clap = { workspace = true }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }
-getrandom = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }
 # The `etag` is a hash of the bytes as well as a timestamp, so an edit that kept

@@ -37,7 +37,7 @@ flowchart LR
    empty again — with a generous idle timeout as the backstop, never as the
    primary signal.
 5. Capture the screen **at the sentinel**, strip the chrome, and emit events.
-   Both programs measured during the design phase's task P0-2 run on the alternate screen: after the
+   Both programs measured by the design phase's P0-2 probe run on the alternate screen: after the
    child exits, the terminal holds nothing at all.
 
 <Aside type="note" title="Alternate-screen programs are the hard case">
@@ -81,8 +81,8 @@ itself an agent is the honest way to test a "run anything" claim.
 
 ## Status
 
-Designed, prototyped, not built. The design phase's task P0-2 drove `freebuff` and Claude Code through a
+Designed, prototyped, not built. The design phase's P0-2 probe drove `freebuff` and Claude Code through a
 real turn each under one driver; the transport turned out to be generic and the
 semantics per-program, which is why the adapter is a profile rather than a
 parser heuristic. The numbers and the failure modes are in
-`docs/notes/pty-agents.md`. The adapter itself is the engine phase (P2).
+`docs/notes/pty-agents.md`. The adapter itself arrives in the engine phase (P2).

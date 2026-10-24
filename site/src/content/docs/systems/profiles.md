@@ -72,5 +72,5 @@ practical answer to "why is it doing that?".
 
 ## Status
 
-Not started. The profiles phase (P4) lands the resolution function, the cascade, and the isolation
+Not started. The profiles phase (P4) will land the resolution function, the cascade, and the isolation
 tests before any UI exposes a profile switcher.

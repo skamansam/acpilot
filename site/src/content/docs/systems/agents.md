@@ -145,7 +145,7 @@ request that arrives anyway. The capability and the handler are one decision:
 advertising something this client cannot serve is the same bug as refusing
 something it advertised.
 
-Terminals (P2-5) are not built yet, and the shipped policy is deliberately plain:
+Terminals (engine phase, task P2-5) are not built yet, and the shipped policy is deliberately plain:
 files inside the workspace are read and written, a shell or an unrecognised tool
 is asked about, and anything outside is asked about too. A rule — `allow`, `ask`
 or `deny`, optionally scoped by agent, tool and path glob — is how a workspace

@@ -48,5 +48,5 @@ gets you the first hour and costs you the second year.
 
 ## Status
 
-The crate exists and does nothing. The editor phase (P6) is where the editor becomes real; until
+The crate exists and does nothing. The editor phase (P6) is where it becomes real; until
 then there is no reason to pretend otherwise.

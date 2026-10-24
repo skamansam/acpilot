@@ -125,7 +125,7 @@ removed acpilot.rust-pack@1.1.0
 
 ## What is still missing
 
-The signed static index (P4.6-4) with per-version download URLs and a signature
+The signed static index (mod shop phase, task P4.6-4) with per-version download URLs and a signature
 over the list. Until then the marketplace is the
 [curated list](../marketplace/) in this repository, and installing means checking
 a repository out and pointing `ext add --from` at it — same verification, one

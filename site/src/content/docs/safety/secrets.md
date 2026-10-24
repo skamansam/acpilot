@@ -68,6 +68,6 @@ visible in shell history and in `ps` — and never prints it back. `list` parses
 the profile's `agents.toml` and reports `present` or `missing` per account, so it
 shows what the manifest expects without reading any value out of the keyring.
 
-Still to come in the profiles phase's task P4-5: profile resolution supplies the profile name, legacy
+Still to come in the profiles phase (task P4-5): profile resolution supplies the profile name, legacy
 unscoped entries are adopted into `default`, each cross-profile resolution logs a
 warning, and `profile export` redacts a secret back to its reference.

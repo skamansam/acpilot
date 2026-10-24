@@ -64,7 +64,7 @@ yesterday?":
 ## What is built today
 
 The contract is: this page and the five beside it, the OpenAPI types behind them,
-and an ADR that says why. No server has been probed yet. The models phase (P4.5) builds the crate,
+and an ADR that says why. No server has been probed yet. The models phase (P4.5) will build the crate,
 the shim agent, and the lab in that order — with the API first, because a
 workbench that invents its own state would be the sixth thing to disagree about
 what happened.

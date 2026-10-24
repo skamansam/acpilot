@@ -62,5 +62,5 @@ stale tree that looks live is worse than a tree that admits it is a poll.
 
 ## Status
 
-Not started. The design phase's task P0-4 proves ACP over an SSH exec channel; task P0-5 proves the helper
-round-trip and path translation, before the remote-hosts phase (P8) and the Windows phase (P9) build on them.
+Not started. The design phase's P0-4 proves ACP over an SSH exec channel and P0-5 proves the helper
+round-trip and path translation; the remote hosts phase (P8) and the Windows phase (P9) build on both.

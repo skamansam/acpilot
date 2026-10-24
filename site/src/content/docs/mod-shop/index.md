@@ -83,7 +83,7 @@ settles it: `net.http` for the API workbench, `compute` for the regex lab,
 `net.socket` for the database. If that tier slips past v0.1 they ship as
 first-party panels instead, because the value does not depend on a third party
 being able to install them. Frontend delivery needs no runtime at all: it needs
-the web build (P11-6) and the release artifacts (P12-1), which is why it is the
+the web build (web phase, task P11-6) and the release artifacts (release phase, task P12-1), which is why it is the
 one we could ship first.
 
 What makes them a studio rather than four windows is the last piece: every action
@@ -115,4 +115,4 @@ Installing is a checksummed, atomic store; a version whose bytes change is
 three layers of precedence and `acpilot ext why` naming the winner and everything
 it overrode. The [marketplace](marketplace/) is a curated list of repositories
 in this repository, changed by pull request. The signed index and download URLs
-are the mod-shop phase's task P4.6-4.
+are task P4.6-4.

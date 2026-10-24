@@ -27,8 +27,8 @@ numbers, and the five triggers that would supersede it — the escape hatch is a
 written rule, not a sentiment.
 
 <Aside type="caution" title="The escape hatch is real">
-the design phase's P0-3 benchmarks gpui against the 16 ms keystroke→paint and 150 ms first-paint
-budgets. If a measured alternative is more than 2× better on a budget gpui
+The design phase's P0-3 benchmark tests gpui against the 16 ms keystroke→paint and
+150 ms first-paint budgets. If a measured alternative is more than 2× better on a budget gpui
 misses, or gpui needs a nightly toolchain or cannot build from a vendored tree,
 the fallback is iced, then Tauri — and nothing outside `acpilot-gui` has to
 change, because the text model is UI-agnostic.
@@ -52,7 +52,7 @@ opens there. On Linux and macOS the hand-over goes through a per-user socket in
 
 That is a first-paint decision, not a single-instance rule for its own sake.
 Creating the graphics device happens before the first frame and dominates a cold
-start — 320–411 ms of a 616–652 ms launch on the machine the design phase's task P0-3 measured, all of it
+start — 320–411 ms of a 616–652 ms launch on the machine where that benchmark ran, all of it
 inside device creation. A repeat launch never reaches that phase. Where the
 repeat-launch numbers were taken (Linux, X11, debug build) a cold launch put its
 window on screen in 69–70 ms and a repeat launch in 7–8 ms; method, per-phase
@@ -66,5 +66,5 @@ pin, so the repeat launch saves the boot rather than the device.
 
 The crate drives a real window: the shared theme tokens, a menu bar, the profile
 list it was launched with, and the command palette on `secondary-shift-p`. Panes,
-the editor and the daemon connection are the desktop phase's tasks P10-3 and P10-4. The `gui` feature is
+the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
 off by default, so `cargo test` still compiles no graphics stack.

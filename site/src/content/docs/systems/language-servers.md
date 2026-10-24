@@ -53,10 +53,10 @@ lookup.
 
 ## Status
 
-The engine is the language-intelligence phase (P7); the design phase's P0-7 probe is done. Framing, negotiation, and the
+The engine arrives in the language intelligence phase (P7); the design phase's P0-7 probe is done. Framing, negotiation, and the
 UTF-8/UTF-16 conversion are already in `acpilot-lsp`, tested over emoji, CJK,
 combining marks, and CRLF, and were proven end-to-end against `rust-analyzer`,
 `typescript-language-server`, and `pyright`. The numbers and the capability
-table live in the repository's the design phase's task P0-7 notes; the short version is that two of the
+table live in the design phase's P0-7 notes; the short version is that two of the
 three servers say nothing about encoding and mean UTF-16, so the daemon
 negotiates and honours whatever the server answers.

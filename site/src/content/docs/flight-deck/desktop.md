@@ -65,7 +65,10 @@ pin, so the repeat launch saves the boot rather than the device.
 ## Status
 
 The crate drives a real window: the shared theme tokens, a menu bar, the profile
-list it was launched with, and the command palette on `secondary-shift-p`. Panes,
+list it was launched with, the command palette on `secondary-shift-p`, and
+**About** (the Acpilot menu, or `escape` to close it) naming the version, the
+licence, the field manual and the tools this was built with. Quit is
+`secondary-q` or the menu item. Panes,
 the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
 off by default, so `cargo test` still compiles no graphics stack.
 

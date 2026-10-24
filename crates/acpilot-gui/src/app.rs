@@ -33,6 +33,8 @@ actions!(
         PaletteDismiss,
         NextProfile,
         PreviousProfile,
+        ShowAbout,
+        DismissAbout,
         Quit,
     ]
 );
@@ -50,6 +52,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
             bindings.push(to_binding(binding.keys, binding.action, context.name()));
         }
     }
+    // Escape closes About in the shell context. It is not in the keymap table
+    // because it is not a command: the table is the list a user can read, and
+    // "close the thing that is open" belongs with the thing, not with the Verbs.
+    bindings.push(KeyBinding::new(
+        "escape",
+        DismissAbout,
+        Some(KeyContext::Shell.name()),
+    ));
     bindings
 }
 
@@ -66,6 +76,23 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
     }
 }
 
+/// The version this window reports in About.
+///
+/// `CARGO_PKG_VERSION` rather than a string written here: a release is a tag, and
+/// a window that says 0.1.0 while the tarball says 0.4.2 is a bug report.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Everything the About view says, in one place a test can read.
+#[must_use]
+pub fn about_lines() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Version", VERSION),
+        ("License", "MIT OR Apache-2.0"),
+        ("Field manual", "rudeboy.dev/acpilot"),
+        ("Built with", "Freebuff — freebuff.com"),
+    ]
+}
+
 /// The application menu.
 ///
 /// Native menus are labels the OS draws, so they are not a second keymap: the
@@ -79,6 +106,8 @@ pub fn menus() -> Vec<Menu> {
         Menu {
             name: "Acpilot".into(),
             items: vec![
+                MenuItem::action("About Acpilot", ShowAbout),
+                MenuItem::separator(),
                 MenuItem::action("Command Palette…", TogglePalette),
                 MenuItem::separator(),
                 MenuItem::action("Quit Acpilot", Quit),
@@ -108,6 +137,8 @@ pub struct Shell {
     theme: GuiTheme,
     commands: Vec<Command>,
     palette: Option<PaletteState>,
+    /// Whether the About view is showing.
+    about: bool,
     focus: FocusHandle,
     focused: bool,
 }
@@ -121,6 +152,7 @@ impl Shell {
             selected: 0,
             theme,
             palette: None,
+            about: false,
             focus: cx.focus_handle(),
             focused: false,
         }
@@ -168,6 +200,27 @@ impl Shell {
         if self.palette.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// Open About, and close the palette: two overlays competing for the same
+    /// escape key is how a window ends up needing a second escape.
+    fn show_about(&mut self, _: &ShowAbout, _window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        self.about = true;
+        cx.notify();
+    }
+
+    fn dismiss_about(&mut self, _: &DismissAbout, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.about {
+            self.about = false;
+            cx.notify();
+        }
+    }
+
+    /// Whether About is showing, for a caller that needs to know before drawing.
+    #[must_use]
+    pub fn showing_about(&self) -> bool {
+        self.about
     }
 
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -371,6 +424,7 @@ impl Render for Shell {
             |profile| format!("{} — {}", profile.root().display(), profile.summary()),
         );
         let empty_palette = palette_open && palette_rows.is_empty();
+        let about_open = self.about;
 
         let header = div()
             .h(px(40.0))
@@ -473,6 +527,60 @@ impl Render for Shell {
                 }),
         );
 
+        let about_panel = about_open.then(|| {
+            let lines: Vec<(usize, String, String)> = about_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(row, (label, value))| (row, label.to_owned(), value.to_owned()))
+                .collect();
+            div()
+                .id("about")
+                .p(px(20.0))
+                .bg(rgb(theme.ui(UiToken::BgPanel)))
+                .border(px(1.0))
+                .border_color(rgb(theme.ui(UiToken::Accent)))
+                .text_color(rgb(theme.ui(UiToken::Text)))
+                .child(
+                    div()
+                        .text_size(px(20.0))
+                        .child(SharedString::from("Acpilot")),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme.ui(UiToken::TextMuted)))
+                        .child(SharedString::from(
+                            "A code editor that flies your agents. You keep the controls.",
+                        )),
+                )
+                .children(lines.into_iter().map(|(row, label, value)| {
+                    div()
+                        .id(("about-row", row))
+                        .pt(px(6.0))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(theme.ui(UiToken::TextMuted)))
+                                .child(SharedString::from(label)),
+                        )
+                        .child(div().text_size(px(13.0)).child(SharedString::from(value)))
+                }))
+                .child(
+                    div()
+                        .id("about-close")
+                        .mt(px(16.0))
+                        .p(px(8.0))
+                        .bg(rgb(theme.ui(UiToken::Accent)))
+                        .text_color(rgb(theme.ui(UiToken::Bg)))
+                        .child(SharedString::from("Close (escape)"))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.about = false;
+                            cx.notify();
+                        })),
+                )
+                .into_any_element()
+        });
+
         div()
             .id("shell")
             .size_full()
@@ -488,11 +596,15 @@ impl Render for Shell {
             .on_action(cx.listener(Self::dismiss_palette))
             .on_action(cx.listener(Self::next_profile))
             .on_action(cx.listener(Self::previous_profile))
+            .on_action(cx.listener(Self::show_about))
+            .on_action(cx.listener(Self::dismiss_about))
             .on_action(cx.listener(Self::quit))
             .on_key_down(cx.listener(Self::key_down))
             .child(header)
             .children(palette_panel)
-            .child(if empty_palette {
+            .child(if let Some(about) = about_panel {
+                about
+            } else if empty_palette {
                 div()
                     .p(px(12.0))
                     .text_color(rgb(theme.ui(UiToken::TextMuted)))
@@ -508,7 +620,7 @@ impl Render for Shell {
                     .text_size(px(11.0))
                     .child(SharedString::from(footer))
                     .child(SharedString::from(
-                        "secondary-shift-p — command palette · down/up — profile · secondary-q — quit",
+                        "secondary-shift-p — command palette · down/up — profile · escape — about · secondary-q — quit",
                     )),
             )
     }

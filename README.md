@@ -1,5 +1,11 @@
 # Acpilot
 
+> **Vibecoded, on purpose.** While I am a software developer, I lack the time to
+> hand-code all my ideas, and as a result this project is vibecoded with
+> [Freebuff](https://freebuff.com). The phases, the ADRs and the tests in here are
+> how I keep that honest: every claim in the docs is meant to be checked against the
+> code, and where it is not true yet, the page says so.
+
 **[Read the field manual](https://rudeboy.dev/acpilot/)** — the docs site under [`site/`](site/),
 written in the tone of a flight crew that has seen too much and honest about which phase each
 page belongs to. Preview locally with `cd site && npm run dev`.

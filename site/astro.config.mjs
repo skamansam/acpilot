@@ -26,6 +26,12 @@ export default defineConfig({
       logo: { src: './src/assets/logo.svg', alt: 'Acpilot: an aircraft inside an instrument gauge' },
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
+      // The footer is overridden for one reason: it is where the vibecoded
+      // disclosure belongs, on every page, and Starlight renders that component
+      // last.
+      components: {
+        Footer: './src/components/Footer.astro',
+      },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/skamansam/acpilot' },
       ],

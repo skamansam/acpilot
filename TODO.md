@@ -1241,6 +1241,107 @@ What is scoped out on purpose:
 
 ---
 
+## P14 — Studio extensions: the API workbench, the regex lab, and frontend delivery (post-v1, ≈16 days)
+
+P14-1 and P14-2 are extensions in the P4.6 sense, and both are the first real customers of Tier 2
+(D18): a panel that speaks HTTP and a panel that runs a regex engine are *code*, not tokens.
+Writing them down now is how D18's capability set stops being hypothetical — what they need is
+`net.http` (outbound requests, host allowlist, audited with the extension's id) and `compute` (a
+pure wasm module with no capability at all). P14-3 needs no runtime at all: it hands out the
+frontends the daemon already builds, so it depends on P11-6 and P12-1 instead.
+
+Rules the two panels share:
+
+- **The extension holds the logic; the daemon holds the power.** A send or a grep goes through the
+daemon, so it is policy-checked, audited, cancellable, and visible in the session transcript like
+any other tool call. An extension that opened its own socket would be a hole in the one promise
+the product makes.
+- **What the user owns is a file.** Requests and patterns are TOML in the profile (`api/`,
+  `regex/`), shareable, diffable, and shippable as an extension pack — not rows in a database the
+  user cannot read.
+- **One data path, three surfaces.** The TUI gets list + result; the GUI and web get the rich view;
+  both read the same route, so the second implementation is a renderer and not a second product.
+
+- [ ] **P14-1 · API workbench** (~9d)
+  - Import OpenAPI 3.0/3.1 and Swagger 2.0 from a file or a URL (fetched through the daemon), with
+    `$ref` resolution, several specs per profile, and a stable operation id so a saved request
+    survives a spec that renames its path.
+  - **DoD accepts no substitute: the first spec it must import is the daemon's own
+    `/v1/openapi.json`.** That makes Acpilot a client of its own API — two calls from the panel
+    (`/v1/agents`, `/v1/permissions`) with a profile token, both in the audit log with the
+    extension's id — and every wire change becomes a regression test for the panel as a side effect.
+  - Request builder from an operation: path/query/header/cookie parameters, JSON/form/multipart
+    bodies generated from the schema, examples, and required-field validation *before* the send
+    rather than a 400 explaining it afterwards.
+  - Environments as TOML with `keyring:` refs for secrets and per-environment overrides; the value
+    never round-trips to the UI (only `credential_ref`), which is the same rule the model providers
+    already follow. `.env` import, but never `.env` auto-read.
+  - Auth: none / bearer / basic / API-key / OAuth2 client-credentials with a token cache the daemon
+    holds. A refresh token in a panel's memory is a secret in a screenshot.
+  - Sending: policy per host — the spec's servers are the allowlist, everything else is denied
+    until a rule says so — with time and size caps, redirects off unless configured, and the
+    response streamed so a 40 MB body does not arrive as one allocation.
+  - Response: status, timing, size, JSON tree with copy-json-path, headers, raw; save as example;
+    diff two responses on the same surface as agent edits, because "what changed between these
+    two deploys" is the question people actually have.
+  - Collections: request chaining (a value from response *n* into request *n+1*), and an
+    agent-visible tool so an agent can *ask* for a request to be run instead of being handed the
+    token — the same broker decision as a write, with the same audit row.
+  - Authoring aids: validate and lint a spec (dangling `$ref`, undocumented 4xx, unused schemas),
+    and a breaking-change diff between two versions of the same document.
+
+- [ ] **P14-2 · Regex lab** (~5d)
+  - Live pattern editing over a test corpus: match highlighting, capture groups (named and indexed)
+    with their spans, and a replacement preview with `$1`/`${name}` expansion.
+  - Flavors behind one `Engine` trait, each a wasm build: Rust `regex` (linear time, no
+    backreferences or lookaround — the panel says so instead of failing mysteriously), PCRE2,
+    JavaScript, Go RE2. The flavor is chosen per pattern, not per profile, because comparing them
+    is the point.
+  - Explanation: the parsed AST as an indented tree with the sub-pattern that produced each node.
+    The payoff is teaching, and it is what regex101 is actually used for.
+  - Test corpus with per-match expectations, saved beside the pattern so a pattern is a small
+    regression suite; run over workspace files through the daemon's grep path (the one P6/P7 use),
+    capped and cancellable.
+  - Benchmark: matches/µs over the corpus, and a catastrophic-backtracking warning **only** for the
+    flavors where it exists — warning on Rust's linear-time engine would be a lie.
+  - Share: a pattern is a TOML file; a pack of curated patterns is an extension, which is also how
+    the agent prompt library and the snippet set get reusable, tested regexes.
+  - **DoD:** a pattern with named groups, three cases and a replacement round-trips through a file,
+    renders in the TUI and the GUI from the same data, and names the failing case by line.
+
+- [ ] **P14-3 · Frontend delivery over the daemon** (~2d)
+  - The daemon already serves the SPA it embeds (P11-6). This turns that into a *distribution
+    channel*: a versioned index of the frontends this daemon can hand out — the web bundle it
+    carries, plus the CLI/TUI/GUI artifacts `cargo-dist` produced (P12-1) from the directory the
+    operator points at — each with its `sha256` and the release it came from.
+  - Why it is the daemon and not a CDN: it is the one thing a remote, WSL or SSH box already
+    trusts and already holds a token for, so "open a browser at `http://host:7654/app`" beats
+    "install Node, clone, build". It also removes API/client skew by construction — a client served
+    by this daemon matches this daemon's document, which is the failure mode a pinned release page
+    cannot fix.
+  - `GET /v1/frontends` → `[{id: "web", version, sha256, size, url}, …]`, and
+    `GET /v1/frontends/{id}/{version}` streams the artifact with `ETag` and range support. Both
+    behind the same token as every other route: an unauthenticated scan should learn nothing, not
+    even what exists.
+  - **Off by default**, because serving executables over HTTP is a supply-chain surface:
+    `serve.frontends = ["web"]` (or `["web", "binaries"]`), never auto-installed by a client, and
+    the client verifies against the checksum it has — refusing a mismatch by name — rather than
+    trusting the response.
+  - The web bundle is served from the binary (P11-6's `rust-embed`), so the air-gapped case needs
+    no release disk at all; binaries come from the release directory, because embedding five
+    installers in the daemon is bytes nobody asked for.
+  - **DoD:** on a host with no outbound network, a browser pointed at `http://<host>:<port>/app`
+    loads the SPA that talks to that daemon, and `acpilot web install --from <url>` fetches and
+    verifies the same bundle; a tampered artifact is refused by name, and an unauthenticated
+    request to either route is a 401 that names no frontend.
+
+- **Blocked on:** D18 (Tier 2 capabilities and the resource budget) and the `wasmtime` runtime ADR
+  0003 defers, for P14-1 and P14-2. If D18 lands as "no runtime in v0.1", both ship as first-party
+  panels behind a feature flag instead — a named fallback, not a shrug — and the two capability
+  names above are still what the runtime has to answer for when it does arrive.
+
+---
+
 ## Cross-cutting work (runs alongside phases)
 
 ### Testing
@@ -1474,7 +1575,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [x] D15 · Remote driver trust: **ACP bridge with scopes, `answer_permissions` off by default, permission prompts route to a human** (decided 2026-10-20, ADR 0002). TLS termination is the operator's tunnel in v0.1.
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
 - [x] D17 · Extension registry trust: **signed static index, mandatory SHA-256, reviewed pull requests, no auto-update** (decided 2026-10-20, ADR 0003). A private registry is `--index` plus a trusted key.
-- [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one.
+- [ ] D18 · Extension code execution: **Tier 2 (wasmtime, ABI 1, declared capabilities) proposed, not v0.1** (ADR 0003). The open question is the capability set and the resource budget, not whether to have one. P14 supplies the first two customers and so the first two answers it owes: `net.http` (host allowlist from the spec being imported, audited with the extension id, time/size caps) for the API workbench, and `compute` (no capability, a CPU and memory budget) for the regex lab.
 - [x] D19 · Platform order: **unix and macOS first, Windows last, and every OS branch under `src/platform/`** (decided 2026-10-21, ConPTY landed 2026-10-22). The Windows half is the one that cannot be developed on the machines the project is written on, so writing it first means writing it blind. `acpilot-host` has the seam: `Host::spawn` is portable (`std::process`) with one implementation; the local PTY is one implementation too, because `portable-pty` already branches (`platform/unix.rs` forkpty, `platform/windows.rs` ConPTY) and the platform files hold what differs *above* that — echo, `\r\n`, the terminal queries a ConPTY program blocks on, and the fact that killing a ConPTY child does not hang up its tree. `crates/acpilot-host/tests/local_host_windows.rs` asserts the property that matters (a ConPTY child sees a console where a piped child sees a redirection) and runs on `windows-latest` in CI. The rule is enforced, not remembered: a boundary test fails if `cfg(windows)`/`cfg(unix)`/`cfg(target_os…)` appears outside `src/platform/` in any crate, and `cargo xtask check` type-checks the crate for the windows-msvc and both apple targets from any host.
 - [x] D20 · Naming: **`probes/` and "probe", not `spikes/` and "spike"** (decided 2026-10-22). "Spike" is Extreme Programming jargon for a time-boxed investigation; it says nothing about measuring, which is what every one of these does, and it implies throwaway code, which `probes/wsl-helper` is not. A probe is one question, answered with numbers in `docs/notes/`, in a standalone crate with its own lockfile; it outlives its question only while something still runs it. The rule for what belongs there is in `CONTRIBUTING.md` §Probes.
 - [ ] D21 · Chat storage: a separate `chat.sqlite` per profile (recommended) vs. chat tables in the profile database. Message retention and write volume differ from session history, and a corrupt session store must not take the chat with it.

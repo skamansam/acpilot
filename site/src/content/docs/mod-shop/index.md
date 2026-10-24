@@ -65,6 +65,25 @@ registries** — the same `lsp.toml`, `agents.toml`, and theme tokens the produc
 already reads. When a new kind of contribution is needed, the registry gets a new
 type; the extension format does not grow an API.
 
+## Three we intend to build
+
+The tier above is not a paper question: two of these need it, and they are what the
+runtime has to answer for.
+
+| Extension | What it does |
+| --- | --- |
+| `acpilot.api-workbench` | Imports an OpenAPI document — starting with Acpilot's own — and turns an operation into a request: parameters, schema-shaped bodies, environments with keyring secrets, auth, response diffing, and a tool an agent can call instead of being handed your token. Every send goes through the daemon, so it is audited and policy-checked like any other tool call. |
+| `acpilot.regex-lab` | Writes a pattern against a test corpus: named groups and spans, replacement preview, four engine flavors (Rust, PCRE2, JavaScript, RE2), the parse tree explained, and the pattern saved as a small regression suite. The engine is wasm; nothing else in the editor changes. |
+
+| `acpilot.frontends` | Hands out the frontends the daemon already has: its embedded web bundle at `http://host:port/app`, and the released CLI/TUI/GUI artifacts from a directory the operator names — versioned, checksummed, token-gated, and off by default, because a daemon that serves executables is a supply-chain surface. The point is a remote or air-gapped host with no build toolchain, and a client that matches the daemon's API by construction. |
+
+The first two wait on D18 — the capability set for code extensions — and they are
+what settles it: `net.http` for the API workbench, `compute` for the regex lab. If
+that tier slips past v0.1 they ship as first-party panels instead, because the
+value does not depend on a third party being able to install them. The third needs
+no runtime at all: it needs the web build (P11-6) and the release artifacts
+(P12-1), which is why it is the one we could ship first.
+
 ## What is built today
 
 The contract (this page and its neighbours), the OpenAPI types, the ADR, and the

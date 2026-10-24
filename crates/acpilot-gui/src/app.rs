@@ -10,10 +10,10 @@
 //! here.
 
 use gpui::{
-    Bounds, Context, FocusHandle, InteractiveElement, IntoElement, KeyBinding, KeyDownEvent,
-    Menu, MenuItem, ParentElement, Render, SharedString, Size as GpuiSize,
-    StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, actions, div, point,
-    px, rgb,
+    App, AppContext as _, Bounds, Context, FocusHandle, InteractiveElement, IntoElement,
+    KeyBinding, KeyDownEvent, Menu, MenuItem, ParentElement, Render, SharedString,
+    Size as GpuiSize, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions,
+    actions, div, point, px, rgb,
 };
 
 use acpilot_extensions::UiToken;
@@ -115,7 +115,6 @@ pub struct Shell {
 impl Shell {
     /// Build the view from what `main` resolved.
     pub fn new(profiles: Vec<ShellProfile>, theme: GuiTheme, cx: &mut Context<Self>) -> Self {
-        cx.bind_keys(key_bindings());
         Self {
             commands: palette::commands(&profiles),
             profiles,
@@ -149,12 +148,7 @@ impl Shell {
         }
     }
 
-    fn toggle_palette(
-        &mut self,
-        _: &TogglePalette,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_palette(&mut self, _: &TogglePalette, _window: &mut Window, cx: &mut Context<Self>) {
         self.palette = match self.palette {
             Some(_) => None,
             None => Some(PaletteState {
@@ -177,7 +171,9 @@ impl Shell {
     }
 
     fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Self { palette, commands, .. } = self;
+        let Self {
+            palette, commands, ..
+        } = self;
         let Some(palette) = palette.as_mut() else {
             return;
         };
@@ -186,21 +182,11 @@ impl Shell {
         cx.notify();
     }
 
-    fn palette_down(
-        &mut self,
-        _: &PaletteDown,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn palette_down(&mut self, _: &PaletteDown, _window: &mut Window, cx: &mut Context<Self>) {
         self.move_palette(1, cx);
     }
 
-    fn palette_up(
-        &mut self,
-        _: &PaletteUp,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn palette_up(&mut self, _: &PaletteUp, _window: &mut Window, cx: &mut Context<Self>) {
         self.move_palette(-1, cx);
     }
 
@@ -214,7 +200,9 @@ impl Shell {
             return;
         };
         let matched = palette::filter(&self.commands, &palette.query);
-        let Some(command) = matched.get(palette.selected).map(|index| self.commands[*index].id)
+        let Some(command) = matched
+            .get(palette.selected)
+            .map(|index| self.commands[*index].id)
         else {
             return;
         };
@@ -226,12 +214,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn next_profile(
-        &mut self,
-        _: &NextProfile,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn next_profile(&mut self, _: &NextProfile, _window: &mut Window, cx: &mut Context<Self>) {
         self.move_profile(1, cx);
     }
 
@@ -288,6 +271,22 @@ impl Shell {
             cx.notify();
         }
     }
+}
+
+/// Open a shell window on these profiles and this theme.
+///
+/// Every window is its own view with its own command palette; the keymap and the
+/// theme are already on the app, so a second window costs a view and nothing
+/// else. That is what makes the activation path cheap — see [`crate::platform`].
+pub fn open_window(
+    cx: &mut App,
+    profiles: Vec<ShellProfile>,
+    theme: GuiTheme,
+) -> anyhow::Result<()> {
+    cx.open_window(window_options(), move |_window, cx| {
+        cx.new(|cx| Shell::new(profiles, theme, cx))
+    })?;
+    Ok(())
 }
 
 /// The window the app opens with.
@@ -401,72 +400,78 @@ impl Render for Shell {
                 .border_color(rgb(theme.ui(UiToken::Accent)))
                 .text_color(rgb(query_color))
                 .child(div().text_size(px(15.0)).child(query))
-                .children(palette_rows.iter().map(
-                    |(row, command, label, detail, selected)| {
-                        let (background, label_color) = if *selected {
-                            (theme.ui(UiToken::Accent), theme.ui(UiToken::Bg))
-                        } else {
-                            (theme.ui(UiToken::Bg), theme.ui(UiToken::Text))
-                        };
-                        let detail_color = if *selected {
-                            theme.ui(UiToken::Bg)
-                        } else {
-                            theme.ui(UiToken::TextMuted)
-                        };
-                        let command = *command;
-                        let row = *row;
-                        div()
-                            .id(("palette-row", row))
-                            .p(px(8.0))
-                            .bg(rgb(background))
-                            .text_color(rgb(label_color))
-                            .child(SharedString::from(label.clone()))
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(detail_color))
-                                    .child(SharedString::from(detail.clone())),
-                            )
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.run(command, cx);
-                            }))
-                    },
-                ))
+                .children(
+                    palette_rows
+                        .iter()
+                        .map(|(row, command, label, detail, selected)| {
+                            let (background, label_color) = if *selected {
+                                (theme.ui(UiToken::Accent), theme.ui(UiToken::Bg))
+                            } else {
+                                (theme.ui(UiToken::Bg), theme.ui(UiToken::Text))
+                            };
+                            let detail_color = if *selected {
+                                theme.ui(UiToken::Bg)
+                            } else {
+                                theme.ui(UiToken::TextMuted)
+                            };
+                            let command = *command;
+                            let row = *row;
+                            div()
+                                .id(("palette-row", row))
+                                .p(px(8.0))
+                                .bg(rgb(background))
+                                .text_color(rgb(label_color))
+                                .child(SharedString::from(label.clone()))
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(detail_color))
+                                        .child(SharedString::from(detail.clone())),
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.run(command, cx);
+                                }))
+                        }),
+                )
         });
 
-        let list = div().children(profiles.into_iter().map(|(index, name, summary, selected)| {
-            let background = if selected {
-                theme.ui(UiToken::Accent)
-            } else {
-                theme.ui(UiToken::BgPanel)
-            };
-            let (name_color, summary_color) = if selected {
-                (theme.ui(UiToken::Bg), theme.ui(UiToken::Bg))
-            } else {
-                (theme.ui(UiToken::Text), theme.ui(UiToken::TextMuted))
-            };
+        let list = div().children(
+            profiles
+                .into_iter()
+                .map(|(index, name, summary, selected)| {
+                    let background = if selected {
+                        theme.ui(UiToken::Accent)
+                    } else {
+                        theme.ui(UiToken::BgPanel)
+                    };
+                    let (name_color, summary_color) = if selected {
+                        (theme.ui(UiToken::Bg), theme.ui(UiToken::Bg))
+                    } else {
+                        (theme.ui(UiToken::Text), theme.ui(UiToken::TextMuted))
+                    };
 
-            div()
-                .id(("profile", index))
-                .h(px(48.0))
-                .p(px(12.0))
-                .bg(rgb(background))
-                .border_b(px(1.0))
-                .border_color(rgb(theme.ui(UiToken::Border)))
-                .text_color(rgb(name_color))
-                .child(SharedString::from(name))
-                .child(
                     div()
-                        .text_color(rgb(summary_color))
-                        .text_size(px(11.0))
-                        .child(SharedString::from(summary)),
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.selected = index;
-                    this.palette = None;
-                    cx.notify();
-                }))
-        }));
+                        .id(("profile", index))
+                        .h(px(48.0))
+                        .p(px(12.0))
+                        .bg(rgb(background))
+                        .border_b(px(1.0))
+                        .border_color(rgb(theme.ui(UiToken::Border)))
+                        .text_color(rgb(name_color))
+                        .child(SharedString::from(name))
+                        .child(
+                            div()
+                                .text_color(rgb(summary_color))
+                                .text_size(px(11.0))
+                                .child(SharedString::from(summary)),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.selected = index;
+                            this.palette = None;
+                            cx.notify();
+                        }))
+                }),
+        );
 
         div()
             .id("shell")

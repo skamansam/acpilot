@@ -31,7 +31,14 @@ required-features = ["gui"]
 [dependencies]
 acpilot-extensions = { workspace = true }
 acpilot-profile = { workspace = true }
+# `open_window` hands gpui's error back rather than panicking: a window that
+# cannot be created is a launch to report, not a process to abort.
+anyhow = { workspace = true }
 clap = { workspace = true }
+# The single-instance channel: the platform's listener thread sends, the gpui
+# executor awaits. Not GPU-related, so it is outside the `gui` feature and the
+# instance logic is tested by a plain `cargo test -p acpilot-gui`.
+futures = { workspace = true }
 gpui = { workspace = true, optional = true }
 
 [dev-dependencies]

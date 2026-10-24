@@ -76,7 +76,9 @@ version = "0.1.0"
 dependencies = [
  "acpilot-extensions",
  "acpilot-profile",
+ "anyhow",
  "clap",
+ "futures",
  "gpui",
  "tempfile",
 ]

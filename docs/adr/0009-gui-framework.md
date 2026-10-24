@@ -185,6 +185,14 @@ accessibility goes badly" is only true if the switch is cheaper than the work.
   warm machine against a 150 ms product target means P10-6 and P10-8 have to
   answer it with process/window strategy. The measured lever is device and window
   creation, and profiling that phase is the next useful measurement.
+- **The first answer is process reuse, not a pre-warmed device.** The pin exposes
+  no async or shared device, so `acpilot-gui` claims a per-user socket before it
+  starts gpui and a second launch hands its request to the running process. On
+  the box where it was measured a cold launch mapped its window in 69–70 ms and a
+  repeat launch in 7–8 ms; on Windows the saved phase is the 320–411 ms
+  `CreateDevice`. It also fixes a product question the ADR did not ask — two
+  app icons and two windows over one profile — so it is not only a performance
+  trade. Windows waits for a named pipe (P10-5).
 - **Shaped-line caching is structural.** Any surface that re-shapes a visible
   window per frame would blow the frame budget by 12×; the text design cannot be
   simplified later without re-measuring.

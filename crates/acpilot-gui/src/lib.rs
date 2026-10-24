@@ -13,11 +13,16 @@
 //! * [`app`] is the gpui view, behind the `gui` feature. It is off by default so
 //!   `cargo test --workspace` does not compile a renderer (or need
 //!   `libxkbcommon-x11` to link) before there is something worth drawing.
+//! * [`platform`] is the operating-system seam: today the single-instance
+//!   socket that lets a second launch reuse the running process instead of
+//!   paying for a device before the first frame. It is not GPU code, so it is
+//!   compiled and tested without the feature.
 //!
 //! Framework decision and the pin: `docs/adr/0009-gui-framework.md`.
 
 pub mod keymap;
 pub mod palette;
+pub mod platform;
 pub mod profiles;
 pub mod theme;
 

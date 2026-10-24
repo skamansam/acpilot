@@ -54,10 +54,7 @@ pub fn commands(profiles: &[ShellProfile]) -> Vec<Command> {
 /// that either shows an entry or does not.
 #[must_use]
 pub fn filter(commands: &[Command], query: &str) -> Vec<usize> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect();
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if terms.is_empty() {
         return (0..commands.len()).collect();
     }
@@ -123,7 +120,11 @@ mod tests {
         assert_eq!(commands.len(), 3);
         assert_eq!(commands[0].label, "Switch to work");
         assert_eq!(commands[0].id, CommandId::SelectProfile(0));
-        assert!(commands[0].detail.contains("2 rules"), "{}", commands[0].detail);
+        assert!(
+            commands[0].detail.contains("2 rules"),
+            "{}",
+            commands[0].detail
+        );
         assert!(commands[0].detail.contains("own agents"));
         assert_eq!(commands[1].id, CommandId::SelectProfile(1));
         assert!(commands[1].detail.contains("shipped policy"));

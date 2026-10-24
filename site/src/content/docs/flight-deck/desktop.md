@@ -43,7 +43,28 @@ change, because the text model is UI-agnostic.
 - Real IME and screen-reader support. **Not inherited:** gpui at our pin ships no
   accessibility bridge, so that is implementation work, timeboxed early in P10.
 
+## Starting up
+
+Launching `acpilot-gui` when it is already running does not start a second app:
+the new process hands the request to the one that is running, and its window
+opens there. On Linux and macOS the hand-over goes through a per-user socket in
+`$XDG_RUNTIME_DIR` (`$TMPDIR` on macOS), so it costs nothing to look for.
+
+That is a first-paint decision, not a single-instance rule for its own sake.
+Creating the graphics device happens before the first frame and dominates a cold
+start — 320–411 ms of a 616–652 ms launch on the machine P0-3 measured, all of it
+inside device creation. A repeat launch never reaches that phase. Where the
+repeat-launch numbers were taken (Linux, X11, debug build) a cold launch put its
+window on screen in 69–70 ms and a repeat launch in 7–8 ms; method, per-phase
+numbers and their limits are in `docs/notes/gui-bench.md`.
+
+Two honest limits: on Windows there is no channel yet, so every launch is its own
+process until packaging; and on Linux the device is created per window at our
+pin, so the repeat launch saves the boot rather than the device.
+
 ## Status
 
-The crate is a placeholder with the dependency deliberately unwired, so `cargo
-test` does not compile a graphics stack before there is anything to draw.
+The crate drives a real window: the shared theme tokens, a menu bar, the profile
+list it was launched with, and the command palette on `secondary-shift-p`. Panes,
+the editor and the daemon connection are P10-3 and P10-4. The `gui` feature is
+off by default, so `cargo test` still compiles no graphics stack.

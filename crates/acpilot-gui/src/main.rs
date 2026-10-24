@@ -8,15 +8,23 @@
 //! caller's decision. The daemon takes `--profile` for the same reason, and a
 //! second resolution rule here is how the GUI would end up showing a profile the
 //! daemon is not serving.
+//!
+//! A launch that finds another instance running hands it the request and exits
+//! instead of starting a second process. That is what first paint costs: gpui
+//! creates its device before the first frame, 320–411 ms of Direct3D on the
+//! machines we measured, and nothing at the pin lets a caller defer or overlap it
+//! (`docs/notes/gui-bench.md`). A reused process opens the next window in 30–55
+//! ms, because the device is already there.
 
 use std::process::ExitCode;
 
-use acpilot_gui::Shell;
 use acpilot_gui::app;
+use acpilot_gui::platform::{self, Claim};
 use acpilot_gui::profiles::ShellProfile;
 use acpilot_gui::theme::GuiTheme;
 use clap::Parser;
-use gpui::{App, AppContext as _, Application};
+use futures::StreamExt as _;
+use gpui::{App, Application};
 
 /// The Acpilot desktop app.
 #[derive(Debug, Parser)]
@@ -74,18 +82,68 @@ fn main() -> ExitCode {
         }
     };
 
+    // The claim is taken before the runtime starts, so a launch that is only
+    // handing over never pays for a renderer. It is also taken after the profiles
+    // and theme are validated: a second instance with a typo in `--profile`
+    // should fail loudly here rather than be silently forwarded to a window the
+    // user cannot see.
+    let requests = match platform::claim() {
+        Claim::Secondary => {
+            println!("acpilot-gui: asked the running instance to open a window");
+            return ExitCode::SUCCESS;
+        }
+        Claim::Primary(instance) => Some(instance.requests()),
+        Claim::Unavailable => None,
+    };
+
     Application::new().run(move |cx: &mut App| {
         // Native menus, where the platform draws them (macOS). The palette is
         // the path that works everywhere, which is why the same actions are
         // bound to keys as well as listed here.
         cx.set_menus(app::menus());
-        let options = app::window_options();
-        let profiles = profiles.clone();
-        let theme = theme.clone();
-        cx.open_window(options, |_window, cx| {
-            cx.new(|cx| Shell::new(profiles, theme, cx))
+        // Once, on the app: a second window shares this keymap, and binding it
+        // again per window would append a duplicate for every launch.
+        cx.bind_keys(app::key_bindings());
+        app::open_window(cx, profiles.clone(), theme.clone())
+            .expect("the platform accepted a window");
+
+        let Some(mut requests) = requests else {
+            return;
+        };
+        let trace = std::env::var_os("ACPILOT_GUI_TRACE").is_some();
+        cx.spawn(async move |cx| {
+            while requests.next().await.is_some() {
+                let profiles = profiles.clone();
+                let theme = theme.clone();
+                // `activate` matters: a forwarded launch is a person asking for
+                // the window *now*, and opening it behind a terminal would look
+                // like the second launch did nothing.
+                let opened = cx.update(|cx| {
+                    let started = std::time::Instant::now();
+                    let opened = app::open_window(cx, profiles, theme);
+                    cx.activate(true);
+                    opened.map(|()| (cx.windows().len(), started.elapsed()))
+                });
+                match opened {
+                    // The app is shutting down; the channel's sender is dropped
+                    // with the listener when this task ends.
+                    Err(_) => break,
+                    Ok(Err(error)) => {
+                        eprintln!(
+                            "acpilot-gui: the running instance could not open a window: {error:#}"
+                        );
+                    }
+                    Ok(Ok((windows, took))) if trace => {
+                        eprintln!(
+                            "acpilot-gui: opened a window in {} ms, {windows} now open",
+                            took.as_millis()
+                        );
+                    }
+                    Ok(Ok(_)) => (),
+                }
+            }
         })
-        .expect("the platform accepted a window");
+        .detach();
     });
 
     ExitCode::SUCCESS

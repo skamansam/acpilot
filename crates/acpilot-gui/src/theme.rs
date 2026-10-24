@@ -235,7 +235,10 @@ mod tests {
         assert_eq!(theme.ui(UiToken::Bg), 0x0007_0d18);
         assert_eq!(theme.ui(UiToken::Text), 0x00e8_edf6);
         assert_eq!(theme.ui(UiToken::BgPanel), 0x000c_1424);
-        assert!(theme.is_dark(), "the theme says so and the window trusts it");
+        assert!(
+            theme.is_dark(),
+            "the theme says so and the window trusts it"
+        );
         assert_eq!(theme.name(), "Night flight");
     }
 
@@ -280,9 +283,7 @@ mod tests {
 
         // Build the full palette, then remove the two tokens a buggy theme is
         // most likely to forget.
-        let mut palette = theme
-            .resolve(None, "acpilot.night-flight", true)
-            .palette;
+        let mut palette = theme.resolve(None, "acpilot.night-flight", true).palette;
         palette.ui.remove(&UiToken::Danger);
         palette.ui.remove(&UiToken::AccentHigh);
 

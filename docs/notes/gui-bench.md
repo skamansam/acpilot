@@ -213,6 +213,44 @@ shaped lines are cached across frames rather than re-shaped. A 3k-line window
 re-shaped every frame would be 50 ms of work per frame against a 4.2 ms budget,
 so the cache is not an optimisation, it is the design.
 
+## What the app does about it (2026-10-24)
+
+`acpilot-gui` now claims a per-user socket before it starts gpui and forwards a
+second launch to the process that owns it (`crates/acpilot-gui/src/platform/`),
+so a repeat launch never reaches the phase above: no process boot, no font
+system, no `Application::new`. The forwarded process prints one line, exits 0 in
+4 ms, and the running instance opens the window.
+
+Measured on this box — Linux, X11 through Xwayland on Weston, **debug build**
+(`cargo build`, not `--release`), 1100 × 720 window, `xdotool`/`xwininfo` polling
+the X tree every 20 ms:
+
+| what | 4 runs |
+| --- | --- |
+| cold: `exec` → X window mapped | 69–70 ms |
+| repeat: `exec` of the forwarding launch → its exit | 4 ms |
+| repeat: `exec` of the forwarding launch → the new window mapped | 7–8 ms |
+| repeat: the window call inside the running instance, first frame included | 88–90 ms |
+
+What those numbers do and do not say:
+
+- **They are map times, not paint times.** A mapped window is what a person sees
+  appear; the frame that fills it is inside the 88–90 ms figure above. The
+  first-paint instrument from the rest of this note needs the probe crate, and no
+  Linux first-paint number exists yet — the 616–652 ms and the 320–411 ms inside
+  `CreateDevice` are Windows, and are not reproduced here.
+- **On Linux the device is not saved, only the boot.** gpui 0.2.2 creates the
+  blade renderer per window, so the 88–90 ms stays inside the running process
+  even when the process is warm. The win is the 60 ms of process start, font
+  system and `Application::new` that a second launch does not pay, which is why
+  the map time drops from ~70 ms to ~7 ms.
+- **On Windows the device is saved.** The trace above puts `CreateDevice` inside
+  `Application::new`, so a forwarded launch skips it entirely. *Inferred, not
+  measured on Windows:* the remaining cost should be the window path alone —
+  34–46 ms window creation plus 7–16 ms to the first frame. That inference is the
+  reason single-instance is worth doing on Windows at all, and it is the number
+  to confirm the first time the shell is run on the Windows box.
+
 ## What the build still costs (from the same gpui pin)
 
 Unchanged, and both still true on Windows:

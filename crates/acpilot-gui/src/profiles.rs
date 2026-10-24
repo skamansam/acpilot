@@ -159,7 +159,8 @@ tool = "execute"
     #[test]
     fn a_directory_that_is_not_a_profile_fails_by_name() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let error = ShellProfile::open(dir.path()).expect_err("an empty directory is not a profile");
+        let error =
+            ShellProfile::open(dir.path()).expect_err("an empty directory is not a profile");
         assert!(
             error.to_string().contains("config.toml"),
             "the error says what is missing: {error}"

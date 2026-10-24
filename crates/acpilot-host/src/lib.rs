@@ -84,6 +84,15 @@ pub fn private_file(path: &Path) -> io::Result<()> {
     platform::private_file(path)
 }
 
+/// The shell a terminal starts when the client did not name a program.
+///
+/// `$SHELL` is a unix convention and `/bin/sh` is a unix path, so the answer
+/// belongs to the platform file rather than to whoever is opening a pane. A
+/// client that names its own command never sees this.
+pub fn default_shell() -> ExecCommand {
+    ExecCommand::new(platform::default_shell())
+}
+
 /// One command to run on a host, wherever that host is.
 ///
 /// Arguments and environment are `OsString` because a path is not guaranteed to

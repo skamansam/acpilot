@@ -14,14 +14,14 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Capability | State | Notes |
 | --- | --- | --- |
 | Workspace builds | <span class="pill pill--flying">flying</span> | `cargo xtask check` — fmt, clippy, tests, on Linux/macOS/Windows |
-| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `GET /v1/openapi.json`; `acpilot tui` starts it when nothing answers (`--no-spawn` to opt out) |
+| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `/v1/sessions`, `/v1/terminals` + the attach WebSocket, `GET /v1/openapi.json`; `acpilot tui` starts it when nothing answers (`--no-spawn` to opt out) |
 | API document | <span class="pill pill--flying">flying</span> | Snapshot-tested, so a wire change is a reviewable diff |
 | Error contract | <span class="pill pill--flying">flying</span> | One error type → fixed HTTP statuses and exit codes |
 | Swagger UI | <span class="pill pill--flying">flying</span> | `--features docs`, at `/docs` |
 | CLI | <span class="pill pill--boarding">boarding</span> | `version`, `tui`, the filesystem `ext` verbs and `secret`; the rest is the command-line phase (P5) |
 | TUI | <span class="pill pill--boarding">boarding</span> | A client of the daemon: session list, streaming transcript, permission card answered with `y`/`a`/`n`, and it starts the daemon when nothing answers. Editor panes are the editor phase (P6) |
 | Desktop, web | <span class="pill pill--hangar">hangar</span> | Crates exist so the layout is real; the desktop and web phases (P10, P11) are where they fly |
-| Agents, sessions, permissions | <span class="pill pill--boarding">boarding</span> | Engine phase (P2) — manifest registry, supervisor (stderr ring, restart, tree kill), sessions (initialize/new/load/prompt/cancel, numbered events), the agent-facing file callbacks (workspace-scoped reads, writes outside it held for approval), the permission broker (ordered rules, path globs, `allow always`, audit rows), and the API half: `GET /v1/agents` with `available`/`missing` from `PATH`, the pending list, the resolve route, and a stream that announces a new request; terminals next |
+| Agents, sessions, permissions | <span class="pill pill--boarding">boarding</span> | Engine phase (P2) — manifest registry, supervisor (stderr ring, restart, tree kill), sessions (initialize/new/load/prompt/cancel, numbered events), the agent-facing file callbacks (workspace-scoped reads, writes outside it held for approval), the permission broker (ordered rules, path globs, `allow always`, audit rows), and the API half: `GET /v1/agents` with `available`/`missing` from `PATH`, the pending list, the resolve route, and a stream that announces a new request. Terminals: create, list, and a WebSocket pane that replays the screen (P3-6) |
 | Language servers | <span class="pill pill--hangar">hangar</span> | Language intelligence phase (P7) |
 | Profiles | <span class="pill pill--hangar">hangar</span> | Profiles phase (P4) |
 | Local models (LM Studio) | <span class="pill pill--boarding">boarding</span> | Models phase (P4.5) — `acpilot-model` discovers models and probes capabilities against a mock server; no daemon route or CLI verb yet, so you cannot reach it from the app |
@@ -41,7 +41,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Design phase (P0) | Probes: ACP handshake, PTY agent, gpui text benchmark, SSH, WSL, LSP | in progress — ACP handshake, PTY agent, LSP round-trips and the gpui benchmark done |
 | Foundation phase (P1) | Workspace skeleton, error model, CI, OpenAPI snapshot | **done** |
 | Engine phase (P2) | ACP engine, sessions, permission broker (headless, mock agent) | in progress — registry, supervisor, sessions, the filesystem callbacks and the permission broker done |
-| Service phase (P3) | Daemon API: SSE, files, terminals, SQLite | in progress — `GET /v1/agents`, the pending-permission list and its resolve route, `GET /v1/events` announcing new requests, and `acpilotd --profile <dir>` putting a profile's `[policy]` and `agents.toml` behind the daemon |
+| Service phase (P3) | Daemon API: SSE, files, terminals, SQLite | in progress — `GET /v1/agents`, the pending-permission list and its resolve route, `GET /v1/events` announcing new requests, `acpilotd --profile <dir>` putting a profile's `[policy]` and `agents.toml` behind the daemon, sessions with their SSE transcript, and terminals with the attach socket. Files, hosts and SQLite remain |
 | Profiles phase (P4) | Profiles and preferences | |
 | Models phase (P4.5) | Local models: LM Studio, the model lab, promotion, ACP bridge for remote drivers | contract only |
 | Mod shop phase (P4.6) | Extensions: declarative packs (themes, presets, grammars), signed index, per-profile activation | store + activation done |

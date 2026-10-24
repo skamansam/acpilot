@@ -47,7 +47,9 @@ blocking = "1"
 rustix = { version = "1", features = ["process"] }
 
 # api
-axum = "0.8"
+# `ws` is the terminal attach transport: a terminal is bytes in both directions,
+# and a WebSocket is the only route in the API that upgrades rather than answers.
+axum = { version = "0.8", features = ["ws"] }
 axum-extra = "0.12"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "compression-full", "cors"] }

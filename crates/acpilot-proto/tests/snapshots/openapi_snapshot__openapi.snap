@@ -381,6 +381,45 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreateTerminalRequest": {
+        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing;\na shell with no session would be a second, sessionless way to run commands on\nthe daemon's host.",
+        "properties": {
+          "args": {
+            "description": "Arguments for `command`, verbatim.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "Program to run. Defaults to the daemon host's own shell.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cwd": {
+            "description": "Directory to start in, relative to the workspace root. Defaults to the root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session that owns the terminal."
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize",
+            "description": "Initial dimensions. Both must be non-zero: a terminal with no columns\ncannot display anything, and `vt100` takes `NonZeroU16` for the same reason."
+          }
+        },
+        "required": [
+          "session_id",
+          "size"
+        ],
+        "type": "object"
+      },
       "CreditStats": {
         "description": "Credit balance for one integration.\n\nAmounts are in the provider's own unit — credits, not necessarily currency —\nand `currency` carries the label to show. Any field may be absent: some\nproviders report only a balance, some only usage, and local servers report\nneither. [`limit`](Self::limit) is separate because a remaining balance is not\nthe same as a plan ceiling.",
         "properties": {

@@ -19,6 +19,8 @@ GET /v1/agents                  # configured agents, with availability (availabl
 GET /v1/permissions?status=pending
 POST /v1/permissions/{id}/resolve
 GET /v1/events                  # text/event-stream: permission.requested, heartbeat
+GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
+GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs
 ```
@@ -41,6 +43,14 @@ same object the pending list returns, so the client can answer it without asking
 again. It is profile-wide, and it does not replay — a request that arrived while
 the client was away is recovered from the pending list, which is state.
 
+`WS /v1/terminals/{id}/attach` is the one route that upgrades instead of
+answering. Binary frames are the terminal in both directions — keystrokes one
+way, output the other — and text frames are control: `resize` from the client,
+`attached` and `exit` from the daemon. `attached` announces how many bytes of
+screen follow, and those bytes are the escape sequences that redraw what the
+terminal already shows, so attaching late is the normal case rather than a race.
+Closing the socket leaves the process running: a pane is a view, not an owner.
+
 ## Planned
 
 | Area | Endpoints |
@@ -48,10 +58,7 @@ the client was away is recovered from the pending list, which is state.
 | Hosts | `GET/POST /v1/hosts`, `POST /v1/hosts/{id}/test` |
 | Workspaces | `GET/POST /v1/workspaces` |
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
-| Sessions | `POST /v1/sessions`, `POST /v1/sessions/{id}/prompt`, `POST /v1/sessions/{id}/cancel` |
-| Events | `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` replay); `GET /v1/events` is live for permissions |
 | Files | `GET/PUT /v1/files` with ETag and `If-Match`, `GET /v1/files/list` for directories |
-| Terminals | `WS /v1/terminals/{id}/attach`, resize, replay-on-attach |
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
 | Profiles | `GET/POST /v1/profiles`, `PATCH /v1/profiles/{id}/preferences` |
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |

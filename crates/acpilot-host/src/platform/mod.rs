@@ -39,7 +39,7 @@ compile_error!(
 );
 
 #[cfg(unix)]
-pub(crate) use unix::{detach, private_dir, private_file, spawn_pty};
+pub(crate) use unix::{default_shell, detach, private_dir, private_file, spawn_pty};
 
 #[cfg(windows)]
-pub(crate) use windows::{detach, private_dir, private_file, spawn_pty};
+pub(crate) use windows::{default_shell, detach, private_dir, private_file, spawn_pty};

@@ -45,6 +45,18 @@ pub(crate) fn private_file(path: &std::path::Path) -> std::io::Result<()> {
     set_mode(path, 0o600)
 }
 
+/// The user's shell, or `sh` when `$SHELL` says nothing useful.
+///
+/// `$SHELL` is what a login session would have given; falling back to `sh`
+/// rather than to a hard-coded `/bin/bash` keeps working on systems whose shell
+/// lives somewhere else. An empty value counts as unset — `env` can export one.
+pub(crate) fn default_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.trim().is_empty())
+        .unwrap_or_else(|| "sh".to_owned())
+}
+
 fn set_mode(path: &std::path::Path, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 

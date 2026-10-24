@@ -41,6 +41,10 @@ tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 utoipa = { workspace = true }
+# The screen an attaching pane replays. A terminal's output is not a transcript:
+# a client that arrives late needs the current screen, which means parsing escape
+# sequences into cells rather than keeping bytes.
+vt100 = { workspace = true }
 
 [dev-dependencies]
 http-body-util = { workspace = true }

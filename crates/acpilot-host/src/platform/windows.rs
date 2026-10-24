@@ -50,6 +50,19 @@ pub(crate) fn detach(command: &mut std::process::Command) {
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
+/// `%COMSPEC%`, or `cmd.exe` when the variable is missing or empty.
+///
+/// Windows has no `$SHELL`: the command interpreter is what `COMSPEC` names, and
+/// `cmd.exe` is the documented fallback. `powershell.exe` is not the default
+/// here even though it is the more useful shell to write against — a terminal is
+/// expected to behave like the one the operating system would open.
+pub(crate) fn default_shell() -> String {
+    std::env::var("COMSPEC")
+        .ok()
+        .filter(|shell| !shell.trim().is_empty())
+        .unwrap_or_else(|| "cmd.exe".to_owned())
+}
+
 /// Nothing to do: the per-user profile directory already excludes other users.
 ///
 /// The named pipe that replaces the socket gets its own ACL from

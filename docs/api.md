@@ -229,6 +229,41 @@ is refused (`invalid_request`), not mangled.
 None of this is on the keystroke path: the editor owns its buffer and saves
 through this route.
 
+## Terminals
+
+`POST /v1/terminals` takes `CreateTerminalRequest { session_id, command?, args?,
+cwd?, size }` and returns a `TerminalSummary` with the process already running.
+A terminal belongs to a session because that is what owns the work it does; a
+shell with no session would be a second, sessionless way to run commands on the
+daemon's host. `command` defaults to the host's own shell, and `cwd` is relative
+to the workspace root (an absolute path is accepted and checked) — a directory
+outside it is `403`, not a silent start somewhere else.
+
+`GET /v1/terminals?session=` lists them, same shape, filterable.
+
+`WS /v1/terminals/{id}/attach` is the pane. The stream is deliberately split by
+frame type, because terminal output can contain anything a shell can print:
+
+| Direction | Frame | Meaning |
+| --- | --- | --- |
+| client → daemon | binary | Keystrokes, byte for byte. No newline is added. |
+| client → daemon | text | `{"type":"resize","cols":100,"rows":30}` or `{"type":"detach"}` |
+| daemon → client | text | `{"type":"attached","terminal":{…},"replay_bytes":n}` first |
+| daemon → client | binary | Exactly `replay_bytes` of screen, then live output |
+| daemon → client | text | `{"type":"exit","code":0}` last, then the socket closes |
+
+`attached` is always the first frame, and the binary frame after it is exactly
+`replay_bytes` long: the terminal's current screen drawn with the escape
+sequences that reproduce it. That is why attaching late is the normal case rather
+than a race — a pane that opens on a command that finished two minutes ago shows
+what it printed. Live output follows as binary frames, and anything the program
+writes after the attach arrives once, in order.
+
+Closing the socket — or sending `detach` — leaves the process running. A pane is
+a view of a terminal, not its owner; the process ends when it ends. A pane that
+stops reading is closed with an error code rather than queued forever, and
+reattaching costs it one screen.
+
 ## Errors
 
 Every failure is this shape, whether it came from a route, an agent, or a host

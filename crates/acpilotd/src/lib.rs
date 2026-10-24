@@ -31,8 +31,10 @@ use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
 mod sessions;
+mod terminals;
 
 pub use sessions::{REPLAY_CAPACITY, Sessions};
+pub use terminals::{Terminal, Terminals};
 
 #[cfg(feature = "docs")]
 use axum::response::Html;
@@ -184,6 +186,8 @@ pub struct AppState {
     workspace: Option<Workspace>,
     /// Every session this daemon owns.
     sessions: Sessions,
+    /// Every terminal this daemon owns.
+    terminals: Terminals,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -243,6 +247,11 @@ impl AppState {
     /// The session store the session routes drive.
     pub fn sessions(&self) -> &Sessions {
         &self.sessions
+    }
+
+    /// The terminal store the terminal routes drive.
+    pub fn terminals(&self) -> &Terminals {
+        &self.terminals
     }
 
     fn decision(&self, id: &str) -> Option<PermissionDecision> {
@@ -674,8 +683,12 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_events_doc as utoipa::Path>::operation(),
         ),
     );
-    // Sessions add several methods per path, so they append rather than overwrite.
-    for (path, method, operation) in sessions::operations() {
+    // Sessions and terminals add several methods per path, so they append rather
+    // than overwrite.
+    for (path, method, operation) in sessions::operations()
+        .into_iter()
+        .chain(terminals::operations())
+    {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
             utoipa::openapi::path::HttpMethod::Get => item.get = Some(operation),
@@ -782,6 +795,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
         .merge(sessions::routes())
+        .merge(terminals::routes())
         .with_state(state);
 
     #[cfg(feature = "docs")]

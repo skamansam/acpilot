@@ -76,6 +76,7 @@ pub const API_PREFIX: &str = "/v1";
         file::FileWriteRequest,
         terminal::TerminalSize,
         terminal::TerminalSummary,
+        terminal::CreateTerminalRequest,
         profile::ProfileSummary,
         profile::Preferences,
         lsp::LspServerSummary,

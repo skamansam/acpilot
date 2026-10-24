@@ -34,6 +34,15 @@ same command as CI. `cargo test --workspace` still works for a single crate or a
 processes and skips doctests, and the local check should fail for the same
 reasons CI does.
 
+One thing `cargo xtask check` deliberately does not do is build the desktop shell:
+`acpilot-gui`'s gpui dependency sits behind a `gui` feature that is off by
+default, so the workspace gate stays fast and does not need a graphics stack.
+CI's `gui` job is what keeps the shell from rotting, and locally it is two
+commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
+acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
+against and `libc` held at exactly 0.2.189; the crate manifest names both, and
+`README.md` §5.4 explains why the pin exists.
+
 `cargo xtask check` also runs the P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
 covers the repository. `cargo xtask probe` is the same steps without the

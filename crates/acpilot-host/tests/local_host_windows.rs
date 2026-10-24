@@ -70,6 +70,29 @@ fn exec_keeps_streams_apart_and_reports_the_exit_code() {
     assert!(!exit.success, "a non-zero exit is not success");
 }
 
+/// The floor under every other pty test: a pseudo-console carries what the child
+/// prints. Without this, "the program could not tell it was on a console" and
+/// "nothing reached the reader" are the same failure and neither names a cause.
+#[test]
+fn a_conpty_carries_what_the_child_prints() {
+    let mut pty = LocalHost
+        .spawn_pty(
+            &ExecCommand::new("cmd").args(["/c", "echo", "hello from a conpty"]),
+            Size::DEFAULT,
+        )
+        .expect("spawn on a conpty");
+    let reader = pty.take_reader().expect("a pty has one reader");
+    let output = read_until(reader, "hello from a conpty", Duration::from_secs(30));
+    let exit = pty.try_wait().expect("try_wait");
+    pty.kill().ok();
+    pty.wait().expect("wait");
+
+    assert!(
+        output.contains("hello from a conpty"),
+        "a conpty carries the child's output: read {output:?}, child said {exit:?}"
+    );
+}
+
 #[test]
 fn a_conpty_is_a_console_and_a_pipe_is_not() {
     // `[Console]::IsOutputRedirected` is the closest Windows equivalent of

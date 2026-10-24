@@ -76,9 +76,18 @@ fn a_conpty_is_a_console_and_a_pipe_is_not() {
     // `[ -t 1 ]`: false means a console handle, true means a pipe or a file.
     let script = "[Console]::IsOutputRedirected";
 
+    // `-NonInteractive` is not decoration: an interactive PowerShell on a console
+    // loads its line editor first and waits for a prompt cycle, which is a shell
+    // that is alive and silent rather than a console that does not work.
     let mut pty = LocalHost
         .spawn_pty(
-            &ExecCommand::new("powershell").args(["-NoProfile", "-Command", script]),
+            &ExecCommand::new("powershell").args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ]),
             Size::new(100, 40),
         )
         .expect("spawn on a conpty");
@@ -108,7 +117,13 @@ fn a_conpty_is_a_console_and_a_pipe_is_not() {
     // The same command through pipes, so the assertion above cannot pass
     // because PowerShell reports false everywhere.
     let mut child = LocalHost
-        .spawn(&ExecCommand::new("powershell").args(["-NoProfile", "-Command", script]))
+        .spawn(&ExecCommand::new("powershell").args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ]))
         .expect("spawn on pipes");
     let mut stdout = String::new();
     child

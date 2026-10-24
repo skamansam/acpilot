@@ -6,7 +6,7 @@
 //!
 //! Today the seam answers one question — is another Acpilot already running, and
 //! if so, can this launch hand it the request? — because that is what makes first
-//! paint cheap. The design phase's task P0-3's phase trace put 320–411 ms of a ~620 ms start inside
+//! paint cheap. The design phase's P0-3 phase trace put 320–411 ms of a ~620 ms start inside
 //! gpui's Direct3D device creation, before a window exists, and nothing at the pin
 //! can defer or overlap it. A launch that reuses a live process never reaches
 //! that phase: on the machine where it was measured, a cold launch mapped its

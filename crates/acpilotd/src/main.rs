@@ -12,7 +12,7 @@
 //! question the defaults are written in — the daemon serves one workspace until
 //! workspaces are first-class in the service phase (P3).
 //!
-//! Profile *names* and the platform config directory are the profiles phase's task P4-2's: a name has to
+//! Profile *names* and the platform config directory are the profiles phase's P4-2: a name has to
 //! resolve the same way for every Acpilot binary, and guessing here would be the
 //! second resolver.
 

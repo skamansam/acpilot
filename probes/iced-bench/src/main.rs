@@ -1,4 +1,4 @@
-//! The design phase's task P0-3's other half: the same screen, in `iced`, so the first-paint number has
+//! The design phase's P0-3 other half: the same screen, in `iced`, so the first-paint number has
 //! something to be compared against instead of being a verdict.
 //!
 //! ```bash

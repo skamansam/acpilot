@@ -2,7 +2,7 @@
 //!
 //! The engine phase's task P2-1 made a manifest into an [`AgentSpec`]; this is the first code that acts
 //! on one. It deliberately stops at the process boundary — no JSON-RPC, no
-//! sessions — because those are the engine phase's task P2-3's, and a supervisor that also spoke the
+//! sessions — because those are the engine phase's P2-3, and a supervisor that also spoke the
 //! protocol would be impossible to test without an agent.
 //!
 //! Three decisions are worth stating because each is a refusal:

@@ -31,7 +31,7 @@ use tokio::time::{sleep, timeout};
 const MOCK: &str = env!("CARGO_BIN_EXE_acpilot-mock-agent");
 
 /// The longest a local pipe round trip may take before it is a finding rather
-/// than a slow machine. The engine phase's task P2-9's exit criterion: a turn against the fixture costs
+/// than a slow machine. The engine phase's P2-9 exit criterion: a turn against the fixture costs
 /// milliseconds, because nothing in it is a model.
 const TURN_BUDGET: Duration = Duration::from_millis(200);
 

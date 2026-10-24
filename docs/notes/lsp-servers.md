@@ -194,7 +194,7 @@ error as a readable diagnostic instead of a failed start.
 - One file per server, one definition, one diagnostic. This proves framing,
   negotiation, and column conversion; it does not measure a real project index.
 - Linux only. Windows drive letters, UNC paths, and `file://` with a host are
-  untested — that is the design phase's task P0-5's territory, and the URI parser here (`url`) is the one
+  untested — that is the design phase's P0-5 territory, and the URI parser here (`url`) is the one
   the language-intelligence phase (P7) should keep using rather than string-building paths.
 - Timings are single runs on a warm machine, not a benchmark harness.
 - `didChange` was not exercised; the probe only opens a document. Incremental sync

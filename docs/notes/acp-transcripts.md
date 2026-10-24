@@ -45,7 +45,7 @@ forces at least one tool call without asking the model to change anything.
 4. **`session/load` works on both, and is not a transcript.** Both advertise
    `loadSession: true`; both answer successfully. But the replay is *condensed*:
    Claude replayed 5 updates for a turn that had streamed 29, OpenCode 7 for 16.
-   Chunks are merged into one message each. The engine phase's task P2-8's append-only `session.jsonl`
+   Chunks are merged into one message each. The engine phase's P2-8 append-only `session.jsonl`
    is therefore still the source of truth; `load` is for resuming a session the
    daemon no longer remembers, not for rebuilding a UI.
 5. **The agent's version is a dependency with silent failure modes.** The installed

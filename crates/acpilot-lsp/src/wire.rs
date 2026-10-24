@@ -8,7 +8,7 @@
 //!
 //! Framing is generic over `AsyncRead`/`AsyncWrite` rather than tied to
 //! `ChildStdin`/`ChildStdout` so the same code runs over a socket, an SSH
-//! channel, or an in-memory duplex in a test. The design phase's task P0-7's other question — what a
+//! channel, or an in-memory duplex in a test. The design phase's P0-7 other question — what a
 //! client loop over a non-stdio transport costs — starts here.
 
 use std::io;

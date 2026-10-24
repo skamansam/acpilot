@@ -41,7 +41,7 @@ window appears on the Windows desktop for ~2 s and the process prints one JSON
 object and exits.
 
 That is a Windows number for a Windows GPU, which is what the budget wants. It
-says nothing about macOS or Linux; the desktop phase's task P10-3's macOS work has no paint numbers yet.
+says nothing about macOS or Linux; the desktop phase's P10-3 macOS work has no paint numbers yet.
 
 ## The two instruments
 

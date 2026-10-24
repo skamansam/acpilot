@@ -58,9 +58,10 @@
 //!
 //! [`AuditEntry`] is the row: what was asked, what was decided, who decided it
 //! (`user`, `policy:<rule-id>`, `default`, `session`, `timeout` or `unattended`)
-//! and when. The log lives in memory here because the engine phase (P2) has no database; the service phase's task P3-3's
-//! store appends these entries to the `audit` table with the same columns, and
-//! the transcript (P2-8) is what survives a restart until then.
+//! and when. The log lives in memory here because the engine phase (P2) has no
+//! database; the service phase's task P3-3 appends these entries to the `audit`
+//! table with the same columns, and the transcript (P2-8) is what survives a
+//! restart until then.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -707,7 +708,7 @@ impl Answer {
 
 /// One row of the audit table.
 ///
-/// The fields are the columns the service phase's task P3-3's `audit` table will have: a caller that
+/// The fields are the columns the service phase's P3-3 `audit` table will have: a caller that
 /// wants to know why an agent could write a file reads this, not a log line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEntry {

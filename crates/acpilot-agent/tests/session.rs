@@ -2,7 +2,7 @@
 //!
 //! The mock is an ACP agent built from the same SDK the client uses, so this
 //! exercises the real handshake, the real framing, and the real notification
-//! path without a model, a network, or a child process. The engine phase's task P2-9's fixture does the
+//! path without a model, a network, or a child process. The engine phase's P2-9 fixture does the
 //! same thing as a real process (`tests/process.rs`), which is how the pipes and
 //! the child's lifetime are tested; this one stays because a channel can be
 //! observed from both ends — the cancel test reads what the *agent* saw — and

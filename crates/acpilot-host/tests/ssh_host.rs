@@ -4,7 +4,7 @@
 //! cross-check runs `--no-default-features` and must not need this file's
 //! symbols.
 //!
-//! Opt-in, because it needs a server: start the design phase's task P0-4's fixture and point the test at
+//! Opt-in, because it needs a server: start the design phase's P0-4 fixture and point the test at
 //! it. The same `sshd` the note measured, on loopback, with a throwaway host key.
 //!
 //! ```bash

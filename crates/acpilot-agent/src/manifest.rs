@@ -221,7 +221,7 @@ impl Transport {
 
 /// What a PTY agent needs beyond its command.
 ///
-/// Every field is one of the design phase's task P0-2's findings: a sentinel is the primary
+/// Every field is one of the design phase's P0-2 findings: a sentinel is the primary
 /// turn-complete signal and an idle timeout is only the backstop, so neither can
 /// be left to a default that guesses per program.
 #[derive(Debug, Clone, PartialEq, Eq)]

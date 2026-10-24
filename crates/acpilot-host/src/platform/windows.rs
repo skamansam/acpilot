@@ -20,7 +20,7 @@
 //!   session leader's death hangs up the rest. Closing the pseudo-console is the
 //!   documented way to end what is attached to it, which is what dropping the
 //!   `Pty` does. `Pty::kill` is therefore a reliable stop for the process the
-//!   caller started, and the tree is the engine phase's task P2-5's to bound.
+//!   caller started, and the tree is the engine phase's P2-5 to bound.
 //!
 //! The construction is shared with unix rather than copied here: a second copy
 //! of the same fifteen lines with a Windows comment on it is how the two sides

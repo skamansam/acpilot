@@ -42,7 +42,7 @@ nothing privileged and no key is committed.
    **18–33 SSH `DATA` events**, with **up to 37 frames in a single event**
    (largest event 6,007 B). An ACP client that treats each `DATA` as one message
    would process a fraction of the transcript; the client must buffer and split
-   on `\n`, which is exactly what the design phase's task P0-1's SDK transport does.
+   on `\n`, which is exactly what the design phase's P0-1 SDK transport does.
 2. **No partial lines were seen on loopback — and that proves nothing.** Zero of
    the 103 frames straddled an event boundary on any run. TCP on one kernel hands
    over in large pieces; a real link with a smaller MSS or a slow reader will split
@@ -85,15 +85,15 @@ nothing privileged and no key is committed.
   `Lines` transport already does this; the point is that the channel cannot.
 - **Drain stdout and stderr concurrently.** SSH's channel window is consumed by
   both streams; an agent that logs to stderr will block on a full window if the
-  daemon only reads stdout. The probe reads both in one loop, and the engine phase's task P2-2's ring
+  daemon only reads stdout. The probe reads both in one loop, and the engine phase's P2-2 ring
   buffer is where stderr belongs.
 - **Connect once per host and multiplex.** ~50 ms per exchange is fine; ~78 ms per
   prompt is not. The same conclusion as the design phase's task P0-5, from a different transport.
 - **Resize is a channel message, not a reconnect** (`window_change`), so the
   terminal API's resize maps straight onto it.
 - **The host key needs a policy.** The probe accepts any key (`Ok(true)`) because
-  a TOFU prompt would block a measurement; `known_hosts` verification is the remote-hosts phase's task P8-1's
-  job and is not answered here.
+  a TOFU prompt would block a measurement; `known_hosts` verification is the
+  remote-hosts phase's task P8-1 and is not answered here.
 
 ## What landed in `acpilot-host::ssh` (2026-10-22)
 
@@ -151,6 +151,6 @@ byte stream, and that a strict `known_hosts` policy refuses the unknown host.
   it is not a third-party agent. The design phase's task P0-1 already ran two real agents over stdio; what
   the design phase's task P0-4 needed to know is whether the SSH channel preserves their framing, and that
   is what was measured.
-- No multiplexed channels: one session at a time. The remote-hosts phase's task P8-1's keepalive, reconnect and
+- No multiplexed channels: one session at a time. The remote-hosts phase's P8-1 keepalive, reconnect and
   backoff are unmeasured.
 - The sshd fixture is not a hardened server; it exists for one user on loopback.

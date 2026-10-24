@@ -1,7 +1,7 @@
 //! The keys the shell answers to, as data.
 //!
 //! The desktop phase's task P10-2 asks for the GUI to read the same keymap data as the TUI rather than a
-//! second hand-written table. `keymap.toml` is the mod-shop phase's task P4.6-9's to define — a file format
+//! second hand-written table. `keymap.toml` is the mod-shop phase's P4.6-9 to define — a file format
 //! and its precedence rules are a decision, not a heading — so until then the
 //! table lives here as a constant: plain data, no gpui in sight, and one place to
 //! add a binding instead of two.

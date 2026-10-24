@@ -212,8 +212,8 @@ status bar, and the thought. That is a profile, not a heuristic.
   `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same query
   problem this note found in the TUIs. It is not the same terminal. No resize,
   cancellation, tool-permission prompt, or multi-turn context was exercised.
-- The probe returns screen text; it does **not** extract messages. That is the engine phase's task P2-7's
-  job, and it is deliberately left undone here.
+- The probe returns screen text; it does **not** extract messages. That is the
+  engine phase's task P2-7, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so
   Freebuff's three `CSI 6 n` probes in one chunk get one answer. Harmless here,
   wrong in principle.

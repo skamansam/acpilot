@@ -115,7 +115,7 @@ pub enum HostKeyPolicy {
         /// this; a script that cannot ask maps to `false` and fails instead.
         trust_on_first_use: bool,
     },
-    /// Accept any key. Only for loopback fixtures: the design phase's task P0-4's `sshd.sh` uses a
+    /// Accept any key. Only for loopback fixtures: the design phase's P0-4 `sshd.sh` uses a
     /// throwaway host key that no `known_hosts` could contain.
     AcceptAny,
 }

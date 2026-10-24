@@ -71,8 +71,9 @@ impl Profile {
 
     /// The profile's name: the last segment of its directory.
     ///
-    /// The keyring namespaces every secret by the profile name, and the profiles phase's task P4-2's
-    /// resolution turns a name into exactly `<config>/profiles/<name>`, so the
+    /// The keyring namespaces every secret by the profile name, and resolution in
+    /// the profiles phase's task P4-2 turns a name into exactly
+    /// `<config>/profiles/<name>`, so the
     /// segment the directory was opened by is the name those secrets were written
     /// under. `None` for a path with no last segment (`..`, a filesystem root).
     #[must_use]

@@ -1,4 +1,4 @@
-//! The design phase's task P0-3's latency half: what a 100k-line document costs to draw, on a real GPU.
+//! The design phase's P0-3 latency half: what a 100k-line document costs to draw, on a real GPU.
 //!
 //! ```bash
 //! cargo run --release
@@ -552,6 +552,21 @@ fn main() {
 
     let application = Application::new();
     mark("application");
+
+    // The warm-device experiment: `Application::new()` is where the platform and
+    // its renderer are created, so sleeping here puts the device off the critical
+    // path and measures what a window costs when one already exists. That is the
+    // number behind "keep the process alive" — if a warm window is ~40 ms, a
+    // reused process turns a ~600 ms launch into one, and if it is not, the
+    // hypothesis is dead and no IPC should be written for it.
+    if let Some(millis) = std::env::var("ACPILOT_PROBE_WARM_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        mark("warm_wait_start");
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+        mark("warm_wait_end");
+    }
     application.run(move |cx: &mut App| {
         mark("run_enter");
         let app_us = micros(

@@ -6,11 +6,36 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# gpui is declared in [workspace.dependencies] (one place to bump it, XT-1) but is
-# not wired in yet: P10 adds it, after P0-3 clears the text-performance benchmark.
-# Keeping it out until then keeps `cargo test` from compiling a graphics stack.
+[features]
+default = []
+# The window, on gpui. Off by default: `cargo test --workspace` should not compile
+# a graphics stack (or need `libxkbcommon-x11` to link) before there is anything
+# worth drawing. P10-2 builds and runs it with `--features gui`.
+gui = ["dep:gpui"]
+
+[[bin]]
+name = "acpilot-gui"
+path = "src/main.rs"
+required-features = ["gui"]
+
+# Building the `gui` feature on Linux needs two things the platform does not
+# give you by default, both recorded in ADR 0009 §5 and both a wasted afternoon
+# if they are discovered one error at a time:
+#
+# * the lockfile must hold `libc` at 0.2.189 — gpui 0.2.2 pulls `xattr`, which
+#   uses `libc::ENOATTR`, removed in 0.2.190. `cargo update -p libc --precise
+#   0.2.189` is the fix, and running plain `cargo update` undoes it.
+# * the link needs `libxkbcommon-x11`'s dev symlink even with X11 off, which is
+#   its own package on Debian/Ubuntu (`libxkbcommon-x11-dev`).
 
 [dependencies]
+acpilot-extensions = { workspace = true }
+acpilot-profile = { workspace = true }
+clap = { workspace = true }
+gpui = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -118,9 +118,10 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
 Two streams, one shape.
 
 `GET /v1/sessions/{id}/events` is the session's stream. `GET /v1/events` is the
-profile-wide stream and carries only `profile.*` and `daemon.*`; no session
-events, because a browser watching ten sessions would otherwise pay for all of
-them.
+profile-wide stream: `profile.*`, `daemon.*`, and `permission.requested` — the
+last because the pending list it pairs with is profile-wide, so one connection
+covers every session a UI is watching. It carries no `session` events: a browser
+watching ten sessions would otherwise pay for all of them.
 
 Every frame that carries data has an `id`, and the ids of a session stream are
 the session's monotonic `seq` (starting at 1). The stream is the source of truth
@@ -143,7 +144,7 @@ data: {"seq":42}
 | `event` | `data` | Replayed? |
 | --- | --- | --- |
 | `session` | `SessionEvent` (`kind` is one of the eight below) | yes, from the transcript |
-| `permission` | `{"type":"requested","request":PermissionRequest}` or `{"type":"resolved","id":…,"decision":PermissionDecision}` | `resolved` yes; `requested` live-only |
+| `permission` | `{"type":"requested","request":PermissionRequest}` or `{"type":"resolved","id":…,"decision":PermissionDecision}` | `resolved` yes; `requested` live-only, on both streams |
 | `heartbeat` | `{"seq": n}` every 15 s | no |
 | `resync` | `{"latest_seq": n}` | no |
 
@@ -162,11 +163,19 @@ of pretending it can catch up. The first frame is always `retry: 2000`.
 that has seen no frame for 45 s (three heartbeats) reconnects.
 
 **Pending permissions are state, not history.** On connect, a client fetches
-`GET /v1/permissions?status=pending`; the stream tells it when a *new* request
-appears while connected. `permission.requested` is therefore not replayed — a
-request that arrived while the client was away is recovered by the state fetch,
-and replaying old prompts would ask the user to answer something already resolved.
+`GET /v1/permissions?status=pending`; `GET /v1/events` tells it when a *new*
+request appears while connected, so a client never has to poll. A
+`permission.requested` frame is therefore not replayed — a request that arrived
+while the client was away is recovered by the state fetch, and replaying old
+prompts would ask the user to answer something already resolved.
 `permission.resolved` is an event because it must be applied in order.
+
+`/v1/events` has no `Last-Event-ID` replay for the same reason. Its frames are
+numbered with an `id` that counts what that connection has been told, and a
+client that falls far enough behind to lose frames receives `event: resync` with
+the latest number: the recovery is to refetch the pending list, exactly as a
+reconnecting client does, rather than to expect the stream to reconstruct what it
+missed. Heartbeats run on the same 15 s clock as the session stream.
 
 `WS /v1/sessions/{id}/stream` is the same session stream for a client that needs
 to send while receiving. It carries the same event names and payloads, no

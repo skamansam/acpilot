@@ -14,16 +14,26 @@ short version.
 ## Today
 
 ```bash
-GET /v1/health          # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1"}
-GET /v1/agents          # configured agents, with availability (available | missing)
-GET /v1/openapi.json    # the contract, generated from the types
-GET /docs               # Swagger UI, only with --features docs
+GET /v1/health                  # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1"}
+GET /v1/agents                  # configured agents, with availability (available | missing)
+GET /v1/permissions?status=pending
+POST /v1/permissions/{id}/resolve
+GET /v1/events                  # text/event-stream: permission.requested, heartbeat
+GET /v1/openapi.json            # the contract, generated from the types
+GET /docs                       # Swagger UI, only with --features docs
 ```
 
-`GET /v1/agents` answers from the active profile's `agents.toml` and reports
-availability from a `PATH` lookup on the daemon's host — no process is started,
-so listing agents cannot launch one. With no profile loaded the list is empty;
+`GET /v1/agents` answers from the profile the daemon was started with —
+`acpilotd --profile <dir>` reads that directory's `agents.toml` — and reports
+availability from a `PATH` lookup on the daemon's host. No process is started, so
+listing agents cannot launch one. With no profile loaded the list is empty;
 handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
+
+`GET /v1/events` is what makes a prompt immediate instead of polled: a request
+raised after the client connects arrives as a `permission` frame carrying the
+same object the pending list returns, so the client can answer it without asking
+again. It is profile-wide, and it does not replay — a request that arrived while
+the client was away is recovered from the pending list, which is state.
 
 ## Planned
 
@@ -33,7 +43,7 @@ handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
 | Workspaces | `GET/POST /v1/workspaces` |
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
 | Sessions | `POST /v1/sessions`, `POST /v1/sessions/{id}/prompt`, `POST /v1/sessions/{id}/cancel` |
-| Events | `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` replay) |
+| Events | `GET /v1/sessions/{id}/events` (SSE, `Last-Event-ID` replay); `GET /v1/events` is live for permissions |
 | Files | `GET/PUT /v1/files` with ETag and `If-Match`, `GET /v1/files/list` for directories |
 | Terminals | `WS /v1/terminals/{id}/attach`, resize, replay-on-attach |
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |

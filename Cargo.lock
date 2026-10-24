@@ -160,6 +160,7 @@ dependencies = [
  "acpilot-proto",
  "axum",
  "clap",
+ "futures",
  "http-body-util",
  "jiff",
  "reqwest",

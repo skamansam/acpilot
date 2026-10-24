@@ -110,8 +110,9 @@ watching.
 
 The broker is P2-6 and is built: rules and globs, `allow always` scoped to one
 session, an audit row per decision. P3-2 serves the pending list and the answer
-route, and reads a profile's `[policy]` table at startup (`acpilotd --profile`),
-so a rule in a file is a rule a running daemon obeys. What is not built: a UI
-that shows the dialog (P5/P6), the SSE announcement of a new request, and
-persistence — the audit log lives in memory until P3-7's table, and the
-transcript (P2-8) is what survives a restart.
+route, announces each new request on `GET /v1/events` so a client is told rather
+than polling, and reads a profile's `[policy]` table at startup (`acpilotd
+--profile`), so a rule in a file is a rule a running daemon obeys. What is not
+built: a UI that shows the dialog (P5/P6) and persistence — the audit log lives
+in memory until P3-7's table, and the transcript (P2-8) is what survives a
+restart.

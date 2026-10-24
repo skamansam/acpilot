@@ -8,10 +8,12 @@
 //! logic, no UI. The daemon is a control plane.
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use acpilot_agent::supervisor::availability;
-use acpilot_agent::{AgentSpec, Broker, PermissionOption, Registry};
+use acpilot_agent::{AgentSpec, Broker, KeyringResolver, PermissionOption, Registry};
 use acpilot_core::AcpilotError;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
@@ -21,9 +23,11 @@ use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
 #[cfg(feature = "docs")]
@@ -31,6 +35,15 @@ use axum::response::Html;
 
 /// Service name reported by the health endpoint.
 pub const SERVICE: &str = "acpilotd";
+
+/// How often a quiet stream says it is still there (`docs/api.md`: every 15 s,
+/// so a client that sees nothing for three intervals reconnects).
+const HEARTBEAT: Duration = Duration::from_secs(15);
+
+/// Frames buffered for a client slower than the broker. Past this the stream
+/// says `resync` rather than growing without bound, which is the same trade the
+/// broker's own announcement channel makes.
+const EVENT_BUFFER: usize = 32;
 
 /// Health payload. Deliberately minimal: a health check should not be able to fail
 /// because a subsystem is slow.
@@ -206,6 +219,10 @@ pub enum StateError {
     #[error(transparent)]
     Profile(#[from] acpilot_profile::ProfileError),
 
+    /// The profile's `agents.toml` exists and does not load.
+    #[error("the profile's agents.toml is not usable: {0}")]
+    Agents(#[from] acpilot_agent::AgentError),
+
     /// The workspace root could not be resolved, so "inside" has no meaning.
     #[error("cannot resolve workspace {}: {source}", path.display())]
     Workspace {
@@ -244,7 +261,37 @@ pub fn state_for_profile(
         "policy loaded"
     );
     let broker = Arc::new(Broker::with_timeout(policy, workspace, None));
-    Ok(AppState::new().with_broker(broker))
+    let state = AppState::new().with_broker(broker);
+    Ok(match load_agents(&profile)? {
+        Some(registry) => state.with_registry(registry),
+        None => state,
+    })
+}
+
+/// The profile's agents, when it has an `agents.toml`.
+///
+/// No file means no agent list, not an empty one: the file is the source, and
+/// writing one on the daemon's behalf would be configuration nobody asked for.
+/// A file that exists and does not load fails the startup, exactly as a broken
+/// `config.toml` does — including a secret reference this host cannot resolve,
+/// because a daemon serving half a profile is the failure profiles exist to
+/// prevent.
+fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry>>, StateError> {
+    let path = profile.agents_path();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    // Secrets are namespaced by profile name, and the directory is the name: P4-2
+    // resolves `<name>` to exactly this path. A path with no last segment names
+    // no profile, and then nothing has been stored under that name either.
+    let resolver = KeyringResolver::new(profile.name().unwrap_or_default());
+    let registry = Registry::load(path, Arc::new(resolver))?;
+    tracing::info!(
+        path = %registry.path().display(),
+        agents = registry.agents().len(),
+        "agents loaded"
+    );
+    Ok(Some(Arc::new(registry)))
 }
 
 /// One agent as the API reports it.
@@ -333,6 +380,97 @@ async fn permissions(
 struct PendingQuery {
     status: Option<String>,
     session: Option<String>,
+}
+
+/// `GET /v1/events` — the profile-wide stream.
+///
+/// The stream announces a request the moment one appears, so a UI can offer a
+/// prompt without polling `GET /v1/permissions`. It is announced here rather
+/// than on a session stream because the pending list is profile-wide: a client
+/// watching every session is exactly the client that must not miss one.
+///
+/// Nothing is replayed. A request that arrived while the client was away is
+/// recovered by fetching the pending list, which is state; replaying old prompts
+/// would ask a person to answer something already answered (`docs/api.md`).
+async fn events(State(state): State<AppState>) -> Response {
+    let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+    let requests = state.broker.as_ref().map(|broker| broker.subscribe());
+    tokio::spawn(pump(requests, sender));
+    Sse::new(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (Ok::<_, Infallible>(frame), receiver))
+        },
+    ))
+    .into_response()
+}
+
+/// What the pump has to say next.
+enum Step {
+    /// Time to prove the connection is still there.
+    Beat,
+    /// The broker announced something, or the subscription ended.
+    Announced(Result<PermissionRequest, broadcast::error::RecvError>),
+}
+
+/// Turn broker announcements and a clock into SSE frames.
+///
+/// `requests` is `None` when the daemon has no broker: no request can ever be
+/// announced, so the stream only heartbeats instead of closing. A closing stream
+/// would make every client reconnect on the same two seconds the reconnect
+/// advice names, forever, for a state the daemon could simply describe as quiet.
+async fn pump(
+    mut requests: Option<broadcast::Receiver<PermissionRequest>>,
+    sender: mpsc::Sender<Event>,
+) {
+    let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Announced requests only: the stream has no replay, so this number is the
+    // id of the last frame it sent, which is what a `resync` names.
+    let mut seq = 0_u64;
+
+    loop {
+        let step = match requests.as_mut() {
+            Some(requests) => tokio::select! {
+                _ = beat.tick() => Step::Beat,
+                announced = requests.recv() => Step::Announced(announced),
+            },
+            None => {
+                beat.tick().await;
+                Step::Beat
+            }
+        };
+
+        let frame = match step {
+            Step::Beat => Event::default()
+                .event("heartbeat")
+                .data(serde_json::json!({ "seq": seq }).to_string()),
+            Step::Announced(Ok(request)) => {
+                seq += 1;
+                Event::default()
+                    .event("permission")
+                    .id(seq.to_string())
+                    .data(
+                        serde_json::json!({ "type": "requested", "request": request }).to_string(),
+                    )
+            }
+            // The client fell behind the announcement channel. It cannot catch
+            // up from the stream, so it is told where it now is and refetches
+            // the pending list — the same recovery as a reconnecting client.
+            Step::Announced(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+            Step::Announced(Err(broadcast::error::RecvError::Closed)) => break,
+        };
+
+        // A closed channel means the client hung up; there is nobody to tell.
+        if sender.send(frame).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// `POST /v1/permissions/{id}/resolve`.
@@ -447,6 +585,13 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_resolve_doc as utoipa::Path>::operation(),
         ),
     );
+    paths.insert(
+        "/v1/events".to_owned(),
+        utoipa::openapi::path::PathItem::new(
+            utoipa::openapi::path::HttpMethod::Get,
+            <__path_events_doc as utoipa::Path>::operation(),
+        ),
+    );
     Json(document)
 }
 
@@ -467,6 +612,20 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     )
 )]
 fn permissions_doc() {}
+
+/// OpenAPI registration for the profile-wide stream.
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/events",
+    tag = "events",
+    summary = "Follow new permission requests",
+    responses((
+        status = 200,
+        description = "text/event-stream: `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
+    ))
+)]
+fn events_doc() {}
 
 /// OpenAPI registration for the answer.
 #[allow(dead_code)]
@@ -528,6 +687,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/agents", get(agents))
         .route("/v1/permissions", get(permissions))
         .route("/v1/permissions/{id}/resolve", post(resolve))
+        .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
         .with_state(state);
 

@@ -58,6 +58,28 @@ impl Profile {
         self.root.join(CONFIG_FILE)
     }
 
+    /// Where this profile declares its agents.
+    ///
+    /// The file name belongs to `acpilot-agent`: the reader that parses it is the
+    /// thing that decides what it is called, so a daemon that needs the agents
+    /// asks the profile for the path rather than spelling `agents.toml` a second
+    /// time.
+    #[must_use]
+    pub fn agents_path(&self) -> PathBuf {
+        self.root.join(acpilot_agent::MANIFEST_FILE)
+    }
+
+    /// The profile's name: the last segment of its directory.
+    ///
+    /// The keyring namespaces every secret by the profile name, and P4-2's
+    /// resolution turns a name into exactly `<config>/profiles/<name>`, so the
+    /// segment the directory was opened by is the name those secrets were written
+    /// under. `None` for a path with no last segment (`..`, a filesystem root).
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.root.file_name().and_then(std::ffi::OsStr::to_str)
+    }
+
     /// The `[policy]` table, or the shipped policy when the file has none.
     ///
     /// The whole file is handed to the parser, which is what makes a real
@@ -192,5 +214,33 @@ command = "rust-analyzer"
         let (dir, profile) = profile("schema_version = 1\n");
         assert_eq!(profile.config_path(), dir.path().join(CONFIG_FILE));
         assert_eq!(profile.root(), dir.path());
+    }
+
+    #[test]
+    fn the_agents_are_next_to_the_config_and_named_by_the_agent_crate() {
+        let (dir, profile) = profile("schema_version = 1\n");
+        assert_eq!(
+            profile.agents_path(),
+            dir.path().join(acpilot_agent::MANIFEST_FILE)
+        );
+        assert!(
+            profile.agents_path().ends_with("agents.toml"),
+            "the path a person would edit: {}",
+            profile.agents_path().display()
+        );
+    }
+
+    #[test]
+    fn the_name_is_the_directory_the_profile_was_opened_by() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("work");
+        fs::create_dir(&root).expect("profile directory");
+        fs::write(root.join(CONFIG_FILE), "schema_version = 1\n").expect("write config");
+        let profile = Profile::open(&root).expect("the profile opens");
+        assert_eq!(
+            profile.name(),
+            Some("work"),
+            "the keyring namespace is the directory name"
+        );
     }
 }

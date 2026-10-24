@@ -3,13 +3,14 @@
 //! P1: bind, serve health and OpenAPI, and exit cleanly on Ctrl-C. Sockets,
 //! single-instance locking and the session routes arrive in P3.
 //!
-//! Two flags are how a policy reaches the broker today. `--profile` names the
-//! directory holding a profile's `config.toml`; its `[policy]` table, when it has
-//! one, is the rule set every permission request is answered from, and a file
-//! without that table means the shipped policy rather than none. `--workspace`
-//! is the root the broker compares paths with, because "inside the workspace" is
-//! the question the defaults are written in — the daemon serves one workspace
-//! until workspaces are first-class in P3.
+//! Two flags are how a profile reaches the daemon today. `--profile` names the
+//! directory holding a profile's `config.toml` and `agents.toml`: the `[policy]`
+//! table (when it has one — a file without it means the shipped policy rather
+//! than none) is the rule set every permission request is answered from, and the
+//! agents file, when it exists, is what `GET /v1/agents` lists. `--workspace` is
+//! the root the broker compares paths with, because "inside the workspace" is the
+//! question the defaults are written in — the daemon serves one workspace until
+//! workspaces are first-class in P3.
 //!
 //! Profile *names* and the platform config directory are P4-2's: a name has to
 //! resolve the same way for every Acpilot binary, and guessing here would be the
@@ -28,7 +29,8 @@ struct Cli {
 
     /// Profile directory to load (the one holding `config.toml`).
     ///
-    /// Its `[policy]` table becomes the rule set a running broker answers from.
+    /// Its `[policy]` table becomes the rule set a running broker answers from,
+    /// and its `agents.toml`, if present, is the agent list `/v1/agents` serves.
     /// Without this flag the daemon runs the shipped policy and has no profile.
     #[arg(long, value_name = "DIR")]
     profile: Option<PathBuf>,

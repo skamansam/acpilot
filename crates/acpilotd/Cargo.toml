@@ -26,6 +26,9 @@ acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+# The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
+# `futures` is where the workspace already gets it.
+futures = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

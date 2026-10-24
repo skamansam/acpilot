@@ -350,6 +350,85 @@ tool = "execute"
 }
 
 #[tokio::test]
+async fn a_profiles_agents_are_served_beside_its_policy() {
+    let profile = tempfile::tempdir().expect("temp dir");
+    let workspace = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        profile.path().join("config.toml"),
+        "schema_version = 1\n\n[policy]\ndefault = \"deny\"\n",
+    )
+    .expect("write the profile");
+    // An executable that certainly exists: the test binary, so availability is a
+    // real `PATH` answer rather than a platform guess.
+    let present = std::env::current_exe().expect("current test binary");
+    std::fs::write(
+        profile.path().join("agents.toml"),
+        format!(
+            "schema_version = 1\n\
+             [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+             command = {present:?}\n"
+        ),
+    )
+    .expect("write the agents");
+
+    let state = state_for_profile(profile.path(), workspace.path()).expect("the profile loads");
+    assert!(
+        state.registry().is_some(),
+        "an agents.toml in the profile is an agent list"
+    );
+
+    let (status, body) = get(acpilotd::router_with(state), "/v1/agents").await;
+    assert_eq!(status, StatusCode::OK);
+    let agents = body.as_array().expect("a list");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["id"], "present");
+    assert_eq!(agents[0]["name"], "Present");
+    assert_eq!(agents[0]["status"], "available");
+}
+
+#[test]
+fn a_profile_without_an_agents_file_has_no_registry_rather_than_an_empty_one() {
+    let profile = tempfile::tempdir().expect("temp dir");
+    let workspace = tempfile::tempdir().expect("temp dir");
+    std::fs::write(profile.path().join("config.toml"), "schema_version = 1\n")
+        .expect("write the profile");
+
+    let state = state_for_profile(profile.path(), workspace.path()).expect("the profile loads");
+    assert!(
+        state.registry().is_none(),
+        "the daemon does not invent an agents.toml"
+    );
+    assert!(
+        !profile.path().join("agents.toml").exists(),
+        "opening a profile for serving does not write into it"
+    );
+}
+
+#[test]
+fn a_broken_agents_file_fails_the_startup_instead_of_hiding_the_profile() {
+    let profile = tempfile::tempdir().expect("temp dir");
+    let workspace = tempfile::tempdir().expect("temp dir");
+    std::fs::write(profile.path().join("config.toml"), "schema_version = 1\n")
+        .expect("write the profile");
+    std::fs::write(
+        profile.path().join("agents.toml"),
+        "schema_version = 1\n[[agents]]\nid = \"ghost\"\ntransport = \"carrier-pigeon\"\n",
+    )
+    .expect("write the agents");
+
+    let error = state_for_profile(profile.path(), workspace.path())
+        .expect_err("an agent with no transport is not a profile the daemon can serve");
+    assert!(
+        matches!(error, acpilotd::StateError::Agents(_)),
+        "the failure names the manifest, not the policy: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("agents.toml"),
+        "the message says which file: {error}"
+    );
+}
+
+#[tokio::test]
 async fn a_profile_that_does_not_exist_fails_the_startup() {
     let dir = tempfile::tempdir().expect("temp dir");
     let error =

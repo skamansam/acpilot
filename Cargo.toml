@@ -65,7 +65,9 @@ vt100 = "0.18"
 # gpui is declared here so there is one place to bump it (XT-1), but it is not a
 # dependency of acpilot-gui yet: P10 adds it. Keeping it undeclared as a compile
 # input keeps `cargo test` fast until the GUI phase starts.
-gpui = "0.2.2"
+# Pinned exactly on purpose (ADR 0009): a bare "0.2.2" is a caret requirement and
+# would float to every later 0.2.x, which is the drift the pin exists to prevent.
+gpui = "=0.2.2"
 # gui fallback (P0-3 veto): iced = "0.14"
 
 # editor

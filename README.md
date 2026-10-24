@@ -358,7 +358,7 @@ criteria (TODO `P0-3`) and a decision ADR (TODO `P10-1`) rather than a fait acco
 
 | Candidate | Case for | Case against |
 | --- | --- | --- |
-| **`gpui` 0.2.2** (chosen) | Built for exactly this: shaped line layout and line wrapping in `gpui::text_system`, `uniform_list` for virtualised rows, drag-and-drop and IME in the framework itself, and in Zed's `crates/editor` the display-map design (folds, blocks, inlays) we can copy into `acpilot-text` — plus the *reference ACP client* (agent panel, diff review, terminal view) as readable source. Apache-2.0, stable Rust (Zed pins 1.91.1), Linux/macOS/Windows backends. The decisive reason is not technical: a sibling project here will be a **GUI builder written in gpui**, so Acpilot becomes the second real user — framework knowledge, upgrade work, and any upstream fixes are paid once across both instead of sunk into a one-off. The `zed/` checkout on disk is reference reading for those patterns, not a dependency. | No semver contract: `0.2.2` was published **2025-10-22** and main has moved on since, so we adopt a year-old surface deliberately and wait for features rather than tracking main. Pulls `zed-font-kit` as a **git dependency pinned by rev**, so a crates.io-only build is not self-contained. No `accesskit` at this version, so screen-reader support is work we do, not a checkbox we inherit. Upstream's release cadence becomes ours, and the gaps we hit are the same ones the GUI builder waits on. |
+| **`gpui` 0.2.2** (chosen) | Built for exactly this: shaped line layout and line wrapping in `gpui::text_system`, `uniform_list` for virtualised rows, drag-and-drop and IME in the framework itself, and in Zed's `crates/editor` the display-map design (folds, blocks, inlays) we can copy into `acpilot-text` — plus the *reference ACP client* (agent panel, diff review, terminal view) as readable source. Apache-2.0, stable Rust (Zed pins 1.91.1), Linux/macOS/Windows backends. The decisive reason is not technical: a sibling project here will be a **GUI builder written in gpui**, so Acpilot becomes the second real user — framework knowledge, upgrade work, and any upstream fixes are paid once across both instead of sunk into a one-off. The `zed/` checkout on disk is reference reading for those patterns, not a dependency. | No semver contract: `0.2.2` was published **2025-10-22** and main has moved on since, so we adopt a year-old surface deliberately and wait for features rather than tracking main. Resolves entirely from crates.io at this pin — `zed-font-kit` 0.14.1-zed is published, not a git rev — so a vendored build is self-contained. No `accesskit` at this version, so screen-reader support is work we do, not a checkbox we inherit. Upstream's release cadence becomes ours, and the gaps we hit are the same ones the GUI builder waits on. |
 | `iced` 0.14 (fallback, held in reserve) | Stable public API since 0.10, real semver, MIT, MSRV 1.88, Elm-style update loop, `wgpu` + tiny-skia fallback, `accesskit` already wired, used by System76's COSMIC | Wrong shape for an editor: `text_editor` is a textarea-grade widget, so the shaped, virtualised, fold-aware surface is entirely ours to build — the thing gpui gives away |
 | `egui` 0.37 / `eframe` | Fastest to a working panel; instant dev loop; `accesskit` support | Immediate mode rebuilds text layout every frame; weak native selection/IME story; feels like a debug tool, not an editor |
 | Tauri 2 + the web UI | Reuses the CodeMirror frontend wholesale; small binaries; great text editing for free | WebView variance, an IPC hop for every edit, and the "native" app is a browser — contradicts the Rust-native premise |
@@ -368,26 +368,34 @@ accept a dependency without a stability contract, and in exchange we stop writin
 surface from scratch and start from the same primitives Zed's editor uses. It is only a good
 trade if the pin is disciplined, so it is a task, not a footnote:
 
-- **Pin, don't float.** `gpui = "0.2.2"` in the manifest. When we need a fix that only exists
-  on main, bump to an exact git `rev` and record why in the ADR — never `branch = "main"`.
-- **Vendor for reproducible builds.** `cargo vendor` (or a registry mirror) in CI, because one
-  of gpui's own dependencies is already a git rev. A build that needs GitHub at compile time
-  is a build that breaks on an air-gapped release day.
+- **Pin, don't float.** `gpui = "=0.2.2"` in the manifest — the `=` is load-bearing, because a
+  bare `"0.2.2"` is a caret requirement that quietly matches every later `0.2.x`. When we need
+  a fix that only exists on main, bump to an exact git `rev` and record why in the ADR — never
+  `branch = "main"`.
+- **Vendor for reproducible builds.** `cargo vendor` (or a registry mirror) in CI. There is no
+  git rev in the graph at this pin, but a build that needs the network to fetch is still a
+  build that breaks on an air-gapped release day.
 - **Upgrades track releases, not a calendar.** A new gpui release is adopted within a week
   (`XT-1` in TODO), with the P0-3 harness as the gate; the pin is exact so breakage is
   attributable, not a nightly gamble.
 - **Share the pin with the GUI builder.** When that project starts, both repos pin the same
-  gpui `rev` and share one `patches/gpui/` series and one upgrade cadence. Two divergent pins
-  would double the upgrade cost and split our upstream pressure for no benefit.
+  gpui version (and, if we ever escalate to a `rev`, the same one) and share one `patches/gpui/`
+  series and one upgrade cadence. Two divergent pins would double the upgrade cost and split our
+  upstream pressure for no benefit.
 - **Patch narrowly, upstream first.** If we must carry a change, it lives as a small commit
   series in `patches/gpui/` with the upstream PR linked; a drifting fork is the failure mode
   this bullet exists to prevent.
 
-The P0-3 benchmark still has veto power: if gpui misses the 16 ms p95 keystroke→paint or
-150 ms first-paint budgets by more than 2×, or needs a nightly toolchain or an unsound patch
-to get there, the fallback order is **iced 0.14** (semver, `accesskit`) → Tauri (reuse the web
-UI). The cost of that switch stays bounded because nothing UI-specific lives outside
+The P0-3 benchmark still has veto power, but as a comparison rather than an absolute: a
+framework is vetoed when a measured alternative is more than 2× better on a budget it misses,
+or when it needs a nightly toolchain, cannot build from a vendored tree, or would need an
+unsound patch. No measurement supports switching — iced misses first paint harder — so the
+fallback order stays **iced 0.14** (semver, a documented `accesskit` path) → Tauri (reuse the
+web UI). The cost of that switch stays bounded because nothing UI-specific lives outside
 `acpilot-gui`.
+
+The decision record — the pin, the numbers, and the triggers that would reverse it — is
+`docs/adr/0009-gui-framework.md`.
 
 ### 5.5 Web UI
 

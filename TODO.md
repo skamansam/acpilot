@@ -416,13 +416,30 @@ and deterministic.
     v1 cannot list as `400`, a daemon with no broker, a profile's rule deciding and naming itself,
     a missing profile failing the startup, the OpenAPI paths, and the whole thing over a real socket.
     Checked by hand too: `acpilotd --profile <dir>` logs `rules=1` and answers both routes with the
-    documented envelopes. Still open: SSE announcement of a new request (P3-3), `X-Acpilot-Profile`,
-    and session close denying pending work — `acpilot_agent::DecidedBy` has no `close`, because there
-    is no session lifecycle in the daemon to close one. The decision ledger grows for the life of
-    the process; P3-7's audit table is where a bounded record belongs, and the ledger should read
-    from it rather than grow beside it.
+    documented envelopes. Still open: `X-Acpilot-Profile` and session close denying pending work —
+    `acpilot_agent::DecidedBy` has no `close`, because there is no session lifecycle in the daemon to
+    close one. The decision ledger grows for the life of the process; P3-7's audit table is where a
+    bounded record belongs, and the ledger should read from it rather than grow beside it.
+  - **Started 2026-10-23, later:** `GET /v1/events` is the announcement half of P3-3. The broker
+    already broadcast every new request (`Broker::subscribe`); the route turns that channel and a 15 s
+    clock into SSE frames — `permission` with `{"type":"requested","request"}` and a per-connection
+    `id`, `heartbeat` with the latest id, and `resync` when the client fell further behind than the
+    announcement channel keeps (the recovery is to refetch the pending list, which is why nothing is
+    replayed). A daemon with no broker keeps the stream open and quiet rather than closing it: a
+    closing stream sends every client into a reconnect loop against a daemon that is healthy. The
+    stream is profile-wide rather than per-session because there is no session lifecycle yet for a
+    client to name — `docs/api.md` now says so, since the pending list it pairs with is already
+    profile-wide. Four tests in `tests/events.rs`: a request raised after the client connected arrives
+    as a frame with the documented payload over a real socket (the client never polls), the no-broker
+    stream answers `200 text/event-stream`, the route is in the served OpenAPI document, and the
+    broker announces one request once. `--profile` also loads the profile's `agents.toml` now, so
+    `GET /v1/agents` answers beside the policy: no file means no registry (the daemon does not write
+    one into the profile), a file that does not load fails the startup like a broken `config.toml`,
+    and the keyring namespace is the directory's last segment (`Profile::name`). Still open: the
+    registry is loaded, not watched — an edit to `agents.toml` reaches a running daemon only after a
+    restart.
 - [ ] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s, and answer an un-replayable id with `event: resync` carrying the latest seq instead of pretending to catch up (`docs/api.md`). Pending permissions are state, not history: the client fetches `GET /v1/permissions?status=pending` on connect and the stream only announces new requests.
-  - **Started 2026-10-23:** the state half is served (see P3-2): the pending list and the resolve route are the two calls a reconnecting client needs, so the part of this item that does not depend on SSE exists. Still open: the streams, the sequence numbers on frames, `event: resync`, and `permission.requested`/`permission.resolved` as events — today a client that wants to know a request appeared has to ask again, which is the polling loop `docs/api.md` says the scripted path should not need.
+  - **Started 2026-10-23:** the state half is served (see P3-2): the pending list and the resolve route are the two calls a reconnecting client needs, so the part of this item that does not depend on SSE exists. `GET /v1/events` now announces `permission.requested` with a heartbeat and `resync` (also P3-2), so the polling loop `docs/api.md` rules out is gone for permissions. Still open: the *session* stream (`GET /v1/sessions/{id}/events`), replay from the transcript with `Last-Event-ID`, the per-session monotonic `seq`, and `permission.resolved` — the broker does not broadcast decisions, so a client that watches another client resolve still refetches the list.
 - [ ] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
 - [ ] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
 - [ ] **P3-6** Terminals API: create/attach (`WS /v1/terminals/{id}/attach`), resize (cols/rows), detach-without-kill, replay last screen on attach (from `vt100` state).
@@ -1074,7 +1091,7 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## P10 — GUI (≈25 days)
 
-- [ ] **P10-1** Probe outcome review from P0-3; write `docs/adr/0007-gui-framework.md` with the decision, the pinned `gpui` rev/version, the numbers that justify it, and the recorded trigger that would force the iced fallback.
+- [x] **P10-1 · recorded 2026-10-24** Probe outcome review from P0-3, written up as `docs/adr/0009-gui-framework.md` (ADR 0001 reserved 0009 for the GUI framework; this task said 0007, which is profiles). Records the exact pin, the numbers that justify it, the veto restated as a comparison rather than an absolute 2×, and five recorded triggers that would supersede it. Two claims were corrected on the way: the `zed-font-kit` git dependency does not exist at this pin (zero git sources in the probe lockfile), and the manifest's `"0.2.2"` was a caret that floats across 0.2.x, now `=0.2.2`. Also noted: the probe's default-feature iced build contains no `accesskit` either, so the accessibility bridge is implementation work under either framework.
 - [ ] **P10-2** `acpilot-gui` shell on gpui 0.2.2: `Application` + `Entity`/`View` tree, window and menu bar, theme tokens (shared `theme.toml` with TUI), profile switcher, command palette, panes, and keyboard-first navigation via gpui `KeyBinding` contexts (same keymap data as the TUI, not a second hand-written table).
 - [ ] **P10-3** Text surface on `acpilot-text`: shaped `LineLayout` wrapping, display map for folds, virtualised rows (`uniform_list`), cursor blink, IME, selection, soft-wrap toggle, minimap (optional/later).
 - [ ] **P10-4** Panels: file tree, tabs, editor, agent session list + transcript + composer, permission dialogs, diff review, LSP surfaces (diagnostics, hover, completion, code actions — from the daemon, same as the TUI), terminal (`vt100` grid rendered as a gpui element, reusing the TUI's grid model).
@@ -1268,7 +1285,7 @@ serialiser.
 ### Dependencies & upgrades
 
 - [ ] **XT-1** Continuous updates: automation (Dependabot or Renovate) opens a PR the day a release lands — patch/minor auto-merge on green CI, majors get a human. `cargo update` weekly even when no manifest changes, because the lockfile is what ships. Every upgrade runs the P0-3 harness, so a performance regression fails the PR instead of surfacing months later. gpui is the one exact pin (D1) and still moves within a week of a release; when the GUI-builder project starts, both repos move to one `rev` and share one patch series.
-- [ ] **XT-2** Reproducible GUI builds: `cargo vendor` (or a registry mirror) exercised in CI from a clean checkout with no `~/.cargo/git` cache — the `zed-font-kit` git dependency means a naive build silently depends on GitHub.
+- [ ] **XT-2** Reproducible GUI builds: `cargo vendor` (or a registry mirror) exercised in CI from a clean checkout with no `~/.cargo/registry` or `~/.cargo/git` cache. There is no git dependency at the pin (ADR 0009 §5), so the check is an offline `cargo build --offline` after vendoring rather than a hunt for git revs — the point is that a build never needs the network, not that it never needs GitHub.
 - [ ] **XT-3** Dependency budget: one PR per new direct dependency, with licence + maintenance check; a `cargo deny` config in CI so a surprise transitive licence is a build failure, not a discovery.
 
 ### Performance budgets (measured in CI on a reference runner)
@@ -1284,6 +1301,11 @@ serialiser.
 | 1 M-line grep in 50k files | ≤ 3 s |
 | LSP diagnostics after an edit (100k-line repo) | ≤ 200 ms p95 |
 | LSP completion round-trip | ≤ 300 ms p95 |
+| LSP hover | ≤ 200 ms p95 |
+| Profile switch on a warm daemon | ≤ 100 ms |
+| Lab overhead per run, excluding model time | ≤ 25 ms p95 |
+| Recipe edit → next run accepted (window open) | ≤ 50 ms |
+| Context assembly, 50 files / 2 MB corpus | ≤ 120 ms |
 
 The first two rows were measured by P0-3 on this machine (2026-10-22, Windows 11,
 RTX 5060, warm caches): keystroke→paint is met by both `gpui` and `iced` at
@@ -1291,12 +1313,8 @@ RTX 5060, warm caches): keystroke→paint is met by both `gpui` and `iced` at
 iced 851–896 ms — and the cost is window/device creation, not the view, which is
 ~0 ms per frame. Until that phase has a profile, read 150 ms as a target for how
 the app *starts* (pre-warmed process, restored window), not a number a framework
-reaches from a cold process. Numbers and method: `docs/notes/gui-bench.md`.
-| LSP hover | ≤ 200 ms p95 |
-| Profile switch on a warm daemon | ≤ 100 ms |
-| Lab overhead per run, excluding model time | ≤ 25 ms p95 |
-| Recipe edit → next run accepted (window open) | ≤ 50 ms |
-| Context assembly, 50 files / 2 MB corpus | ≤ 120 ms |
+reaches from a cold process. Numbers and method: `docs/notes/gui-bench.md`; the
+decision they settle is `docs/adr/0009-gui-framework.md`.
 
 ### Security
 
@@ -1350,7 +1368,7 @@ crossterm                  = "0.29"
 tui-term                   = "0.3"
 vt100                      = "0.18"
 # gui
-gpui                       = "0.2.2"           # exact pin; see D1 + XT-1. Escalate to { git = "…/zed", rev = "<sha>" } only with an ADR note.
+gpui                       = "=0.2.2"          # exact pin; see D1 + ADR 0009 + XT-1. Escalate to { git = "…/zed", rev = "<sha>" } only with an ADR note.
 # gui fallback (P0-3 veto): iced = "0.14"
 # editor
 ropey                      = "1.6"
@@ -1439,7 +1457,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 
 ## Open decisions ([decide])
 
-- [x] D1 · GUI framework: **gpui 0.2.2** (decided 2026-10-20 — a sibling GUI-builder project will use gpui, so framework knowledge and pins are shared; the text stack and the reference ACP client come for free). P0-3 did not veto it: `iced` 0.14 was measured at the same frame pacing but ~3× slower to first paint (851–896 ms against 277–326 ms), so the fallback stays a fallback (`docs/notes/gui-bench.md`).
+- [x] D1 · GUI framework: **gpui 0.2.2** (decided 2026-10-20 — a sibling GUI-builder project will use gpui, so framework knowledge and pins are shared; the text stack and the reference ACP client come for free). P0-3 did not veto it: `iced` 0.14 was measured at the same frame pacing but ~3× slower to first paint (851–896 ms against 277–326 ms), so the fallback stays a fallback (`docs/notes/gui-bench.md`). Recorded 2026-10-24 in `docs/adr/0009-gui-framework.md`, where the pin was made exact and the veto restated as a comparison.
 - [ ] D2 · Multi-client concurrency model: last-write-wins + ETag conflict UI (v0.1) vs CRDT (`loro`/`automerge`) later.
 - [ ] D3 · Web frontend: Svelte 5 + CodeMirror (recommended) vs Leptos/WASM.
 - [ ] D4 · Local IPC: HTTP over unix socket (recommended, one protocol everywhere) vs a second JSON-RPC transport.

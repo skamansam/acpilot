@@ -60,6 +60,6 @@ These are tracked as `D1`–`D13` in `TODO.md`; each gets an ADR when it is sett
 | 0006 | `Host` trait for local/SSH/WSL, with an uploaded helper (P8, P9) |
 | 0007 | Profiles: isolation model and storage layout (D10, D11, D13) |
 | 0008 | LSP in the daemon, negotiated position encodings (D8, D9, D12) |
-| 0009 | GUI framework: gpui, pinned, with an iced fallback (D1) |
+| 0009 | GUI framework: gpui, pinned, with an iced fallback (D1) — **recorded** |
 | 0010 | Daemon auth for non-loopback exposure (D5) |
 | 0011 | Agent manifest licensing so other editors can adopt it (D6) |

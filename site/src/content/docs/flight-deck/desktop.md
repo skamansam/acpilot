@@ -22,11 +22,16 @@ display-map design that would otherwise be months of work.
 | Tauri | Reuses the web UI, but then the "native" app is a browser with an IPC hop per edit |
 | **gpui** | Chosen: built for exactly this surface, Apache-2.0, and a sibling project uses it |
 
+The decision is recorded as **ADR 0009**, with the exact pin, the benchmark
+numbers, and the five triggers that would supersede it — the escape hatch is a
+written rule, not a sentiment.
+
 <Aside type="caution" title="The escape hatch is real">
 P0-3 benchmarks gpui against the 16 ms keystroke→paint and 150 ms first-paint
-budgets. If it misses by more than 2×, needs a nightly toolchain, or cannot build
-from a vendored tree, the fallback is iced, then Tauri — and nothing outside
-`acpilot-gui` has to change, because the text model is UI-agnostic.
+budgets. If a measured alternative is more than 2× better on a budget gpui
+misses, or gpui needs a nightly toolchain or cannot build from a vendored tree,
+the fallback is iced, then Tauri — and nothing outside `acpilot-gui` has to
+change, because the text model is UI-agnostic.
 </Aside>
 
 ## What it will do that the TUI cannot

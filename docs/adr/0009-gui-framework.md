@@ -153,7 +153,14 @@ graph rather than anyone's recollection:
   0.2.3 uses `libc::ENOATTR`, which 0.2.190 removed. Irrelevant on Windows;
   load-bearing on Linux, and XT-1 must not "just bump libc".
 - **The Linux link needs `libxkbcommon-x11`'s dev symlink**, even with X11 off.
-  Packaging (P10-8) inherits this.
+  Packaging (P10-8) inherits this. It cannot be pinned away from this workspace:
+  gpui 0.2.2 declares `xkbcommon` with `features = ["wayland", "x11"]`
+  unconditionally, and Cargo features are additive — the only edges that could
+  drop `x11` belong to gpui's own manifest, not to a consumer's, and `0.2.2` is
+  the newest published version (2026-10-24). The alternatives are a fork of gpui
+  or of `xkbcommon`, either of which trades a one-line `apt install` for a vendored
+  framework, so the package stays and the environments that link the shell
+  (CI's `gui` job, the release runners, a developer's machine) install it.
 - **No nightly, no `zed/` checkout.** Stable Rust; Zed pins 1.91.1, below the
   workspace's 1.95 floor, so the MSRV is unaffected.
 

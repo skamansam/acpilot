@@ -20,7 +20,7 @@ AppImage. They arrive in the release phase (P12), after there is something worth
 | Rust **1.95+** | Floor set by `rusqlite_migration`; the repo pins 1.97 in `rust-toolchain.toml` |
 | Git | Workspace crates, and one dependency is a rev-pinned fork |
 | An ACP agent (optional) | Nothing to fly yet; the engine phase (P2) brings the first real session |
-| Node 20+ (docs only) | Only if you want to build this site |
+| Node 20+ (docs and web UI) | Only if you want to build this site or `web/` |
 
 Platform support is Linux, macOS, and Windows. macOS and Linux are exercised on
 every push; Windows is too, which is how the line-ending bug got caught before a
@@ -37,6 +37,18 @@ cargo xtask check      # what CI runs: fmt, clippy, tests
 
 `rustup` reads `rust-toolchain.toml`, so the pinned compiler and components
 install themselves on the first `cargo` command.
+
+That build does **not** include the desktop app: its `gui` feature is off by
+default, because the default gate should not compile a graphics stack. Ask for it
+when you want the window:
+
+```bash
+cargo build -p acpilot-gui --features gui
+```
+
+On Linux that links gpui's X11/Wayland backends and needs their dev packages; the
+list is in `CONTRIBUTING.md`. Release tarballs include the app alongside the CLI
+and the daemon, so installing the release gives you all three.
 
 ## Run what exists today
 

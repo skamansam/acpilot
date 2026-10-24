@@ -57,8 +57,31 @@ default, so the workspace gate stays fast and does not need a graphics stack.
 CI's `gui` job is what keeps the shell from rotting, and locally it is two
 commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
 acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
-against and `libc` held at exactly 0.2.189; the crate manifest names both, and
-`README.md` §5.4 explains why the pin exists.
+against:
+
+```bash
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+  libwayland-dev libfreetype-dev libfontconfig1-dev pkg-config clang
+```
+
+and `libc` held at exactly 0.2.189; the crate manifest names both, and `README.md`
+§5.4 explains why the pin exists. The `xkbcommon-x11` half of that list is not
+avoidable from this workspace — gpui 0.2.2 asks its `xkbcommon` dependency for
+`x11` in its own manifest, and Cargo features only ever add (ADR 0009 §5).
+
+The web UI is built, not hand-written, and the build output is committed so
+`cargo build` never needs Node:
+
+```bash
+cd web
+npm ci
+npm run check   # svelte-check: types and accessibility lint
+npm run build   # one HTML file, written into crates/acpilot-web/assets/
+```
+
+Run `npm run build` whenever you change anything under `web/`, and commit the
+regenerated `crates/acpilot-web/assets/index.html` in the same commit. CI's `web`
+job rebuilds it and fails with a diff if you forget.
 
 `cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
@@ -194,6 +217,33 @@ ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
 
 - `cargo xtask check` green locally; CI runs the same commands on Linux, macOS
   and Windows, so a platform-specific shortcut will be caught.
+- One check is required to merge: **`required checks`**, the job at the bottom of
+  `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`, `deny` and
+  `docs`, and passes only when all of them pass, so branch protection points at
+  one name instead of a list that has to be edited whenever a job is added or
+  renamed.
+
+The rule itself is repository settings, not a file — an administrator sets it
+once with:
+
+```bash
+gh api -X PUT "repos/:owner/:repo/branches/main/protection" --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["required checks"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+JSON
+```
+
+`strict` is the "require branches to be up to date before merging" half: a green
+run from before the base branch moved is not evidence about the tree that will
+merge. `enforce_admins` is there because a rule the people who wrote it can skip
+is a suggestion.
 - New dependency → a sentence on why the existing ones do not do the job, plus a
   `cargo deny` clean run. The version policy is "latest stable" (README §5.9).
 - Wire change → the OpenAPI snapshot diff is part of the review, by design.
@@ -220,8 +270,9 @@ A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and
 Windows x86_64, publishes a GitHub release with checksums, and rebuilds the docs
 site: the download page reads the releases API at build time, so nothing is
 committed back and `main` stays a tree only pull requests change. The `gui` feature
-is not in the release matrix yet — it needs a graphics stack at link time, which is
-a runner dependency to solve rather than a version to publish.
+ships in the same tarball as the CLI and the daemon, built with `--features
+acpilot-gui/gui`; the Linux runner installs the graphics stack it links against,
+and the Windows and macOS runners use their own system frameworks.
 
 ## Decisions
 

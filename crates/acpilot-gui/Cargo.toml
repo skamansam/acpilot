@@ -26,7 +26,10 @@ required-features = ["gui"]
 #   uses `libc::ENOATTR`, removed in 0.2.190. `cargo update -p libc --precise
 #   0.2.189` is the fix, and running plain `cargo update` undoes it.
 # * the link needs `libxkbcommon-x11`'s dev symlink even with X11 off, which is
-#   its own package on Debian/Ubuntu (`libxkbcommon-x11-dev`).
+#   its own package on Debian/Ubuntu (`libxkbcommon-x11-dev`). It cannot be
+#   pinned away here: gpui 0.2.2 enables `xkbcommon`'s `x11` feature in its own
+#   manifest unconditionally, and features are additive, so only a fork of gpui
+#   could drop it — and 0.2.2 is the newest published version (ADR 0009 §5).
 
 [dependencies]
 acpilot-core = { workspace = true }

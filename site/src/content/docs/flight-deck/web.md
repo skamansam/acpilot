@@ -43,20 +43,32 @@ daemon does not pretend to be a web server fleet.
 
 ## Status
 
-A shell, and honest about it. `acpilotd` embeds one page (`acpilot-web/assets/index.html`)
-and serves it at `/app`: the name, the build answering, an **About** dialog and a
-**Quit** that closes the tab. It is served without a token like `/docs`, because a
-browser cannot attach a header to a typed address and the page holds no data.
+The Svelte app exists and is what ships, with the editor still to come.
+`web/` is Svelte 5 + Vite + TypeScript; `npm run build` emits **one HTML file**
+into `crates/acpilot-web/assets/`, with its script and stylesheet inlined, and
+`acpilotd` serves that at `/app`. The built file is committed, so building the
+daemon needs no Node; CI rebuilds it and fails if the committed page drifted from
+its source.
+
+The page asks for the daemon's token, then shows what that token can see: the
+health answer (service, API version, workspace), and the session list with each
+row's agent, status and last event. **About** names the running build and the
+licence; **Quit** tries to close the tab and says so when the browser refuses.
+The shell is served without a token like `/docs`, because a browser cannot attach
+a header to a typed address and the page holds no data; every API call behind it
+is still guarded.
 
 ```bash
 cargo run -p acpilotd -- --addr 127.0.0.1:7777
 # then open http://127.0.0.1:7777/app
+# the token is in $XDG_RUNTIME_DIR/acpilot/token and in the daemon's log
 ```
 
 Between the `cargo run` and the page there is one step people miss: this daemon is
 the same one the CLI and the TUI talk to, so `/app` shows the build that is running
 right now rather than a version baked into a bundle weeks ago.
 
-The editor, transcript and terminal are the web phase (P11): the `web/` Svelte app,
-the generated API client, and the routes above arrive then. What exists now is the
-shape they hang on — embedded, self-serving, no asset directory to lose.
+Still open from the web phase: the routes above, the generated API client, the
+CodeMirror editor, the SSE transcript, the xterm terminal, and the daemon-side
+CSP. What exists now is the shape they hang on — embedded, self-serving, one file,
+no asset directory to lose.

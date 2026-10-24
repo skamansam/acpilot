@@ -176,6 +176,13 @@ impl Shell {
             // Impossible while the list is fixed for the window's life, and not
             // worth a panic when the list becomes live.
             CommandId::SelectProfile(_) => {}
+            // The same pair of facts `show_about` sets: About showing, palette
+            // closed, so one Escape does not have to dismiss both.
+            CommandId::About => {
+                self.palette = None;
+                self.about = true;
+                cx.notify();
+            }
             CommandId::Quit => cx.quit(),
         }
     }
@@ -620,7 +627,7 @@ impl Render for Shell {
                     .text_size(px(11.0))
                     .child(SharedString::from(footer))
                     .child(SharedString::from(
-                        "secondary-shift-p — command palette · down/up — profile · escape — about · secondary-q — quit",
+                        "secondary-shift-p — command palette · down/up — profile · escape — close about · secondary-q — quit",
                     )),
             )
     }
@@ -639,7 +646,10 @@ mod tests {
             .iter()
             .map(|binding| binding.contexts.len())
             .sum();
-        assert_eq!(key_bindings().len(), expected);
+        // Plus the one binding that is deliberately not in the table: Escape
+        // closes About. `key_bindings` appends it, so counting only the table
+        // is off by one.
+        assert_eq!(key_bindings().len(), expected + 1);
     }
 
     #[test]
@@ -649,8 +659,8 @@ mod tests {
         assert_eq!(menus[0].name.to_string(), "Acpilot");
         assert_eq!(
             menus[0].items.len(),
-            3,
-            "palette, separator, quit — the three things a window with one pane needs"
+            5,
+            "about, palette and quit, each separated: the three things a window with one pane needs"
         );
         assert_eq!(menus[1].name.to_string(), "Profile");
     }

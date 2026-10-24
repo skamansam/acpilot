@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The `[policy]` table is the permission engine's own type, parsed by its own
+# loader: a profile that read it into a second shape would be a second opinion
+# about what `allow`, `ask` and `deny` mean.
+acpilot-agent = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

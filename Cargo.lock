@@ -112,6 +112,11 @@ dependencies = [
 [[package]]
 name = "acpilot-profile"
 version = "0.1.0"
+dependencies = [
+ "acpilot-agent",
+ "tempfile",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "acpilot-proto"
@@ -151,14 +156,17 @@ version = "0.1.0"
 dependencies = [
  "acpilot-agent",
  "acpilot-core",
+ "acpilot-profile",
  "acpilot-proto",
  "axum",
  "clap",
  "http-body-util",
+ "jiff",
  "reqwest",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tower",
  "tower-http 0.7.1",

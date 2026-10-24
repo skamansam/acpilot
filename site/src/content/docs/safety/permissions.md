@@ -95,10 +95,23 @@ which means "anything"; a glob is anchored and path-shaped, so `*` stops at a
 separator and `**` does not. The audit line names the rule that fired, which is
 the answer to every later argument about why something was allowed.
 
+## Answering a request
+
+A client that did not raise the request answers it over the API: the list is
+`GET /v1/permissions?status=pending`, and the answer is
+`POST /v1/permissions/{id}/resolve` with one of the options that same object
+listed. Repeating the same answer returns the same decision; choosing a different
+one is a conflict, because the agent has already acted on the first. The daemon
+waits for as long as a request is pending — the five-minute deadline is the
+broker's default for a session with no client at all, not a promise to anyone
+watching.
+
 ## Status
 
-The broker is P2-6 and is built: rules, globs, `allow always` scoped to one
-session, a five-minute deadline for an unanswered request, and an audit row per
-decision. What is not built: a client that can answer — the pending list is
-served by the API in P3-3 and shown in P5/P6 — and persistence, so the audit log
-lives in memory and the transcript (P2-8) is what survives a restart.
+The broker is P2-6 and is built: rules and globs, `allow always` scoped to one
+session, an audit row per decision. P3-2 serves the pending list and the answer
+route, and reads a profile's `[policy]` table at startup (`acpilotd --profile`),
+so a rule in a file is a rule a running daemon obeys. What is not built: a UI
+that shows the dialog (P5/P6), the SSE announcement of a new request, and
+persistence — the audit log lives in memory until P3-7's table, and the
+transcript (P2-8) is what survives a restart.

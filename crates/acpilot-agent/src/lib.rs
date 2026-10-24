@@ -40,6 +40,10 @@ pub use permission::{
     ASK_TIMEOUT, Answer, AuditEntry, Broker, Case, DecidedBy, Decision, Pattern, Policy,
     PolicyError, Rule, Ruling, Subject,
 };
+// The two wire enums the permission API is written in. They live in
+// `acpilot-proto` because a client has to spell them, and are re-exported here
+// because a caller of `Subject` or `Broker::answer` needs them to call it.
+pub use acpilot_proto::permission::{PermissionKind, PermissionOption};
 pub use registry::{AgentWatcher, Registry};
 pub use secret::{MapResolver, SCHEME, Secret, SecretError, SecretRef, SecretResolver};
 pub use session::{EVENT_CAPACITY, Session, SessionError, SessionOptions};

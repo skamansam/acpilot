@@ -494,6 +494,10 @@ impl Policy {
 
     /// Read the `[policy]` table of a profile config.
     ///
+    /// The whole file is parsed, not one section of it: a real `config.toml`
+    /// carries `schema_version` and its `[lsp.*]` tables next to this one, and
+    /// the keys this engine does not know are ignored rather than refused.
+    ///
     /// The shape is the one `reference/config.md` documents:
     ///
     /// ```toml
@@ -513,7 +517,9 @@ impl Policy {
     /// mean "deny", which reads exactly like a policy that works.
     pub fn from_toml(text: &str) -> Result<Self, PolicyError> {
         let file: PolicyFile = toml::from_str(text)?;
-        let section = file.policy;
+        let Some(section) = file.policy else {
+            return Ok(Self::shipped());
+        };
         let default = parse_decision("policy.default", section.default.as_deref(), Decision::Ask)?;
         let outside = parse_decision(
             "policy.outside_workspace",
@@ -604,9 +610,17 @@ pub enum PolicyError {
     },
 }
 
+/// The part of a profile `config.toml` this engine reads.
+///
+/// Unknown top-level keys are ignored on purpose: the whole profile config is
+/// handed to this parser, so `schema_version` and the `[lsp.*]` tables beside
+/// `[policy]` must not make it fail. A file with no `[policy]` table at all is
+/// the shipped policy rather than an error — a profile that says nothing about
+/// permissions has not asked for none.
 #[derive(Debug, Deserialize)]
 struct PolicyFile {
-    policy: PolicySection,
+    #[serde(default)]
+    policy: Option<PolicySection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1239,6 +1253,24 @@ path = "**/.env"
             Decision::Ask,
             "`outside_workspace` overrides the default for paths outside"
         );
+    }
+
+    #[test]
+    fn a_config_without_a_policy_table_keeps_the_shipped_policy() {
+        let policy = Policy::from_toml(
+            "schema_version = 1\n\n[lsp.rust]\ncommand = \"rust-analyzer\"\nargs = []\n",
+        )
+        .expect("a profile that says nothing about permissions still parses");
+
+        let inside = inside();
+        assert_eq!(
+            policy
+                .decide(&subject(PermissionKind::FileWrite, Some(&inside)), true)
+                .decision,
+            Decision::Allow,
+            "the file said nothing, so the shipped default applies"
+        );
+        assert!(policy.rules().is_empty());
     }
 
     #[test]

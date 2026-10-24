@@ -121,7 +121,7 @@ async fn unknown_route_is_a_404_with_no_surprises() {
 
 #[tokio::test]
 async fn errors_use_the_shared_envelope() {
-    let response = ApiError(AcpilotError::denied("write outside workspace")).into_response();
+    let response = ApiError::new(AcpilotError::denied("write outside workspace")).into_response();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let bytes = response
@@ -148,7 +148,7 @@ fn agents_state(manifest: &str) -> AppState {
     let path = directory.path().join("agents.toml");
     std::fs::write(&path, manifest).expect("write manifest");
     let registry = Registry::load(path, Arc::new(MapResolver::new())).expect("registry loads");
-    AppState::with_registry(Arc::new(registry))
+    AppState::new().with_registry(Arc::new(registry))
 }
 
 #[tokio::test]

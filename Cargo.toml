@@ -17,6 +17,7 @@ acpilot-proto = { version = "0.1.0", path = "crates/acpilot-proto" }
 acpilot-core = { version = "0.1.0", path = "crates/acpilot-core" }
 acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
 acpilot-agent = { version = "0.1.0", path = "crates/acpilot-agent" }
+acpilot-profile = { version = "0.1.0", path = "crates/acpilot-profile" }
 acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 # The Host seam: where files and processes actually live. Default features are
 # off at this entry point so a consumer that only needs the trait — the agent

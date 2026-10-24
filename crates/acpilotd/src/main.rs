@@ -1,7 +1,21 @@
 //! `acpilotd` — the daemon process.
 //!
 //! P1: bind, serve health and OpenAPI, and exit cleanly on Ctrl-C. Sockets,
-//! single-instance locking, profiles and the real routes arrive in P3.
+//! single-instance locking and the session routes arrive in P3.
+//!
+//! Two flags are how a policy reaches the broker today. `--profile` names the
+//! directory holding a profile's `config.toml`; its `[policy]` table, when it has
+//! one, is the rule set every permission request is answered from, and a file
+//! without that table means the shipped policy rather than none. `--workspace`
+//! is the root the broker compares paths with, because "inside the workspace" is
+//! the question the defaults are written in — the daemon serves one workspace
+//! until workspaces are first-class in P3.
+//!
+//! Profile *names* and the platform config directory are P4-2's: a name has to
+//! resolve the same way for every Acpilot binary, and guessing here would be the
+//! second resolver.
+
+use std::path::PathBuf;
 
 use clap::Parser;
 
@@ -11,6 +25,21 @@ struct Cli {
     /// Address to bind. Loopback by default; exposing this needs a token (P3).
     #[arg(long, env = "ACPILOT_ADDR", default_value = "127.0.0.1:7777")]
     addr: String,
+
+    /// Profile directory to load (the one holding `config.toml`).
+    ///
+    /// Its `[policy]` table becomes the rule set a running broker answers from.
+    /// Without this flag the daemon runs the shipped policy and has no profile.
+    #[arg(long, value_name = "DIR")]
+    profile: Option<PathBuf>,
+
+    /// Workspace root the policy treats as "inside".
+    ///
+    /// Resolved once at startup, because the broker's inside/outside answer is a
+    /// prefix comparison and a root that is itself a symlink would answer it
+    /// wrongly for everything under it.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    workspace: PathBuf,
 
     /// Print the OpenAPI document and exit, without binding a socket.
     #[arg(long)]
@@ -33,11 +62,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    let state = match cli.profile {
+        Some(directory) => acpilotd::state_for_profile(&directory, &cli.workspace)?,
+        None => acpilotd::AppState::new(),
+    };
+
     let listener = tokio::net::TcpListener::bind(&cli.addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, service = acpilotd::SERVICE, "listening");
 
-    axum::serve(listener, acpilotd::router())
+    axum::serve(listener, acpilotd::router_with(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 

@@ -19,11 +19,17 @@ docs = []
 [dependencies]
 acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
+# A decision carries the time it was made, and the broker's audit rows use the
+# same clock; two spellings of a timestamp in one product is a bug waiting for a
+# consumer to parse the wrong one.
+acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+jiff = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }

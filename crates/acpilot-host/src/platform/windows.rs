@@ -33,3 +33,34 @@ use crate::{ExecCommand, HostError, Size};
 pub(crate) fn spawn_pty(command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
     crate::pty::spawn(command, size)
 }
+
+/// `CREATE_NEW_PROCESS_GROUP`: the daemon is not in the console's Ctrl-C group.
+///
+/// Windows has no session leader to hand the child to, so this is the whole of
+/// what "detached" means here: a Ctrl-C in the terminal that spawned the daemon
+/// is not delivered to it. Closing the console still ends what is attached to
+/// it, which is why the daemon is spawned with its own (absent) console stream
+/// rather than inheriting the TUI's.
+pub(crate) fn detach(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    /// `CREATE_NEW_PROCESS_GROUP`.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+/// Nothing to do: the per-user profile directory already excludes other users.
+///
+/// The named pipe that replaces the socket gets its own ACL from
+/// `-<user>` plus SDDL when the socket transport lands (ADR 0004 §3); a mode on a
+/// file is not how Windows expresses that, and setting one would be a no-op that
+/// reads like a guarantee.
+pub(crate) fn private_dir(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// See [`private_dir`].
+pub(crate) fn private_file(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}

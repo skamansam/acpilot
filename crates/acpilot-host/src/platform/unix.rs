@@ -16,3 +16,39 @@ use crate::{ExecCommand, HostError, Size};
 pub(crate) fn spawn_pty(command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
     crate::pty::spawn(command, size)
 }
+
+/// Start `command` in a process group of its own.
+///
+/// A daemon spawned by a TUI has to outlive the terminal that started it. The
+/// terminal's hang-up signal and its Ctrl-C both go to the foreground process
+/// group, and a child in the caller's group receives them: the daemon would die
+/// with the window that had just closed. `process_group(0)` puts it in a new
+/// group whose leader is the child, which is what `setsid` buys without `unsafe`
+/// and without re-executing through a shell.
+pub(crate) fn detach(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+/// Make `path` readable only by its owner (`0700`).
+///
+/// The daemon's runtime directory holds a socket, a token and a log. On POSIX the
+/// filesystem is the access control for all three, so the directory's mode is
+/// part of the security story rather than tidiness (ADR 0004 §3).
+pub(crate) fn private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    set_mode(path, 0o700)
+}
+
+/// Make `path` readable and writable only by its owner (`0600`).
+pub(crate) fn private_file(path: &std::path::Path) -> std::io::Result<()> {
+    set_mode(path, 0o600)
+}
+
+fn set_mode(path: &std::path::Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(path, permissions)
+}

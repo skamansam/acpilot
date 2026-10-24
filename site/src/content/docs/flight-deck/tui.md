@@ -48,5 +48,7 @@ gets you the first hour and costs you the second year.
 
 ## Status
 
-The crate exists and does nothing. The editor phase (P6) is where it becomes real; until
-then there is no reason to pretend otherwise.
+The crate is a working client: it lists the daemon's sessions, streams the open
+session's transcript, answers a permission request with `y`, `a` or `n`, and starts
+the daemon if nothing is listening (ADR 0004). Editor panes, inline diffs and the
+workspace picker are the editor phase (P6).

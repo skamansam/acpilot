@@ -32,6 +32,7 @@ name = "acpilot-cli"
 version = "0.1.0"
 dependencies = [
  "acpilot-agent",
+ "acpilot-client",
  "acpilot-core",
  "acpilot-extensions",
  "acpilot-proto",
@@ -45,6 +46,7 @@ dependencies = [
 name = "acpilot-client"
 version = "0.1.0"
 dependencies = [
+ "acpilot-host",
  "acpilot-proto",
  "axum",
  "eventsource-stream",
@@ -52,6 +54,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]

@@ -14,12 +14,13 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Capability | State | Notes |
 | --- | --- | --- |
 | Workspace builds | <span class="pill pill--flying">flying</span> | `cargo xtask check` — fmt, clippy, tests, on Linux/macOS/Windows |
-| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `GET /v1/openapi.json` |
+| Daemon binds and serves | <span class="pill pill--flying">flying</span> | `GET /v1/health`, `GET /v1/agents`, `/v1/permissions`, `GET /v1/events` (SSE), `GET /v1/openapi.json`; `acpilot tui` starts it when nothing answers (`--no-spawn` to opt out) |
 | API document | <span class="pill pill--flying">flying</span> | Snapshot-tested, so a wire change is a reviewable diff |
 | Error contract | <span class="pill pill--flying">flying</span> | One error type → fixed HTTP statuses and exit codes |
 | Swagger UI | <span class="pill pill--flying">flying</span> | `--features docs`, at `/docs` |
-| CLI | <span class="pill pill--boarding">boarding</span> | `acpilot version` only; the rest is the command-line phase (P5) |
-| TUI, desktop, web | <span class="pill pill--hangar">hangar</span> | Crates exist so the layout is real; the UIs land in the editor, desktop and web phases (P6, P10, P11) |
+| CLI | <span class="pill pill--boarding">boarding</span> | `version`, `tui`, the filesystem `ext` verbs and `secret`; the rest is the command-line phase (P5) |
+| TUI | <span class="pill pill--boarding">boarding</span> | A client of the daemon: session list, streaming transcript, permission card answered with `y`/`a`/`n`, and it starts the daemon when nothing answers. Editor panes are the editor phase (P6) |
+| Desktop, web | <span class="pill pill--hangar">hangar</span> | Crates exist so the layout is real; the desktop and web phases (P10, P11) are where they fly |
 | Agents, sessions, permissions | <span class="pill pill--boarding">boarding</span> | Engine phase (P2) — manifest registry, supervisor (stderr ring, restart, tree kill), sessions (initialize/new/load/prompt/cancel, numbered events), the agent-facing file callbacks (workspace-scoped reads, writes outside it held for approval), the permission broker (ordered rules, path globs, `allow always`, audit rows), and the API half: `GET /v1/agents` with `available`/`missing` from `PATH`, the pending list, the resolve route, and a stream that announces a new request; terminals next |
 | Language servers | <span class="pill pill--hangar">hangar</span> | Language intelligence phase (P7) |
 | Profiles | <span class="pill pill--hangar">hangar</span> | Profiles phase (P4) |
@@ -45,7 +46,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Models phase (P4.5) | Local models: LM Studio, the model lab, promotion, ACP bridge for remote drivers | contract only |
 | Mod shop phase (P4.6) | Extensions: declarative packs (themes, presets, grammars), signed index, per-profile activation | store + activation done |
 | Command line phase (P5) | CLI: full API coverage | |
-| Editor phase (P6) | TUI: an editor you could use daily | |
+| Editor phase (P6) | TUI: an editor you could use daily | in progress — the client half works; panes and diffs are what remains |
 | Language intelligence phase (P7) | Language servers | |
 | Remote hosts phase (P8) | SSH hosts | |
 | Windows phase (P9) | Windows + WSL | |

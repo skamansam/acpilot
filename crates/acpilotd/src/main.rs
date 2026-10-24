@@ -64,10 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let state = match cli.profile {
-        Some(directory) => acpilotd::state_for_profile(&directory, &cli.workspace)?,
-        None => acpilotd::AppState::new(),
-    };
+    let state = acpilotd::state_for(cli.profile.as_deref(), &cli.workspace)?;
 
     let listener = tokio::net::TcpListener::bind(&cli.addr).await?;
     let bound = listener.local_addr()?;

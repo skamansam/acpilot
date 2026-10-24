@@ -40,18 +40,26 @@ install themselves on the first `cargo` command.
 
 ## Run what exists today
 
+The terminal UI starts the daemon itself, so this is one command rather than a
+terminal and a flag. `cargo build` above built `acpilotd` next to `acpilot`, which
+is where the client looks for it.
+
 ```bash
-cargo run -p acpilotd -- --addr 127.0.0.1:7777
+cargo run -p acpilot-cli -- tui
 ```
 
-In another shell:
+The daemon answers on `127.0.0.1:7777` whether or not the TUI is open, so its
+contract is also readable with `curl`:
 
 ```bash
 curl -s localhost:7777/v1/health
-# {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1"}
+# {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1","workspace":"acpilot"}
 
-cargo run -p acpilotd --features docs   # then open http://127.0.0.1:7777/docs
+cargo run -p acpilotd --features docs   # by hand, then open http://127.0.0.1:7777/docs
 ```
+
+A daemon started by the client is detached from the terminal, and `--no-spawn`
+turns the behaviour off when something else should own the process.
 
 <Aside type="note" title="Why the docs page is behind a feature">
 Swagger UI pulls its assets from a CDN. That is fine on a developer machine and

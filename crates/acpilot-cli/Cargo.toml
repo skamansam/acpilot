@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 acpilot-agent = { workspace = true }
+acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-proto = { workspace = true }

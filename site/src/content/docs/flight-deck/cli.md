@@ -55,7 +55,7 @@ acpilot ext verify --all | prune [--dry-run]
 acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
-acpilot tui [--api-url <url>]
+acpilot tui [--api-url <url>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -66,21 +66,39 @@ each key, and every agent whose command is missing. It is the first thing to run
 when something is wrong, and the first command worth building well.
 </Aside>
 
-There is no `acpilot setup`. A fresh install launches with the shipped presets; the
-first use of a profile writes that profile's `agents.toml` — starting with its
-`$schema` line — and never replaces one that already exists. `doctor` is how you
-ask what a machine is missing, not a toll gate in front of the first prompt.
+A fresh install launches with the shipped presets. The first use of a profile
+writes that profile's `agents.toml` — starting with its `$schema` line — once,
+and never over a file that already exists; `doctor` then answers what a machine is
+missing.
 
 ## What it looks like today
 
-`acpilot tui` opens the terminal UI against a running daemon: the session list,
-the open session's transcript as it streams, and a permission card that answers
-with `y`, `a` or `n`. It is a client of the same API as everything else, so the
-editor phase (P6) grows this window rather than a second engine.
+`acpilot tui` opens the terminal UI against the daemon, **starting it first if
+nothing is listening** (ADR 0004): the session list, the open session's transcript
+as it streams, and a permission card that answers with `y`, `a` or `n`. It is a
+client of the same API as everything else, so the editor phase (P6) grows this
+window rather than a second engine.
 
 ```bash
-$ acpilot tui --api-url http://127.0.0.1:7777
+$ acpilot tui                       # the first client starts the daemon
+$ acpilot tui --no-spawn            # fail instead: tests, CI, a service manager
+$ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
 ```
+
+The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
+it is, and only silence starts one. The spawned daemon is detached from the
+terminal's process group — closing the window that happened to start it must not
+end every session — with its output in `$XDG_RUNTIME_DIR/acpilot/daemon-*.log`.
+Two windows opening at once take a lock rather than racing, and a daemon whose
+version differs from the client is reported with both versions instead of being
+restarted, because it may be mid-turn for someone else. `acpilotd` is looked for
+next to the `acpilot` binary, never on `PATH`; `ACPILOT_DAEMON` names it when an
+installer put the two apart.
+
+`--profile` and `--workspace` are the daemon's flags, so they only apply when
+this command starts it. A daemon that is already running keeps the ones it was
+started with, and naming a different profile or workspace is exit `4`: showing
+one project's sessions under another project's name is worse than an error.
 
 Scripting the lab is a first-class case, not a workaround: a corpus experiment
 that cannot be run in CI is a corpus experiment nobody repeats.

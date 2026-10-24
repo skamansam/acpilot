@@ -15,7 +15,8 @@ you prefer: terminal, TUI, native GUI, or browser.
 "autopilot", which is roughly how it feels when a dozen agents are working and you are
 only stepping in to approve the dangerous bits.
 
-- Status: **pre-alpha / design**. No code yet — see [TODO.md](TODO.md).
+- Status: **pre-alpha**. The workspace, the daemon API and the agent engine build and are
+tested; what is left is tracked in [TODO.md](TODO.md).
 - License: dual MIT OR Apache-2.0.
 - Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon).
 - Directory: `acpilot/`, planned Rust workspace (edition 2024), layout in §6.
@@ -82,6 +83,12 @@ Acpilot is the neutral workbench: an editor that treats *agents* the way VS Code
 Acpilot is a **daemon plus thin clients**. The daemon (`acpilotd`) owns the control
 plane: workspaces, hosts, sessions, agent processes, permissions, terminals, language
 servers, profiles, and history. Clients never talk to an agent directly.
+
+Any client starts the daemon on demand (ADR 0004): it probes `GET /v1/health`, and if
+nothing answers it spawns `acpilotd` detached, behind a lock so two windows cannot start
+two daemons. One process per user serves every project — workspaces live inside it, not
+in separate instances — and `--no-spawn` turns the behaviour off for tests and service
+managers.
 
 ```
    acpilot (CLI)  ─┐

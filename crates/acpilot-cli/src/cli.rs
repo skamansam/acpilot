@@ -54,10 +54,26 @@ pub enum Command {
         #[arg(
             long,
             env = "ACPILOT_API_URL",
-            default_value = "http://127.0.0.1:7777",
+            default_value = acpilot_client::daemon::DEFAULT_ENDPOINT,
             value_name = "URL"
         )]
         api_url: String,
+        /// Fail if no daemon is running instead of starting one.
+        ///
+        /// For tests, CI and anyone debugging a startup problem: the error is
+        /// more useful than a daemon this client started out of sight.
+        #[arg(long)]
+        no_spawn: bool,
+        /// Profile directory the spawned daemon serves.
+        ///
+        /// Only used when this command has to start the daemon; a daemon that is
+        /// already running keeps the profile it was started with, and naming a
+        /// different one here is an error rather than a silent mismatch.
+        #[arg(long, value_name = "DIR")]
+        profile: Option<PathBuf>,
+        /// Workspace root the spawned daemon serves. Defaults to this directory.
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
     },
 }
 
@@ -201,13 +217,12 @@ pub fn run(cli: Cli) -> u8 {
         }
         Some(Command::Ext { command }) => run_ext(command),
         Some(Command::Secret { command }) => run_secret(command),
-        Some(Command::Tui { api_url }) => match acpilot_tui::run(&api_url) {
-            Ok(()) => exit::SUCCESS,
-            Err(error) => {
-                eprintln!("acpilot tui: {error}");
-                exit::FAILURE
-            }
-        },
+        Some(Command::Tui {
+            api_url,
+            no_spawn,
+            profile,
+            workspace,
+        }) => run_tui(api_url, no_spawn, profile, workspace),
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
             // rather than pretending to do work.
@@ -218,6 +233,90 @@ pub fn run(cli: Cli) -> u8 {
             exit::USAGE
         }
     }
+}
+
+/// Open the TUI, starting the daemon if this is the first client (ADR 0004).
+///
+/// The flags are the daemon's, not the TUI's: they only matter on the spawn
+/// path. A daemon that is already running was started with its own, and
+/// pretending otherwise would show one project's sessions under another's name —
+/// so a mismatch is refused rather than ignored.
+fn run_tui(
+    api_url: String,
+    no_spawn: bool,
+    profile: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+) -> u8 {
+    let workspace = match workspace {
+        Some(directory) => directory,
+        None => match std::env::current_dir() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("acpilot tui: cannot read the working directory: {error}");
+                return exit::FAILURE;
+            }
+        },
+    };
+    let mut daemon_args = vec!["--workspace".to_owned(), workspace.display().to_string()];
+    if let Some(profile) = &profile {
+        daemon_args.push("--profile".to_owned());
+        daemon_args.push(profile.display().to_string());
+    }
+
+    let options = acpilot_client::daemon::Options {
+        endpoint: Some(api_url),
+        no_spawn,
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return exit::FAILURE;
+        }
+    };
+
+    if !running.spawned() {
+        if profile.is_some() {
+            eprintln!(
+                "acpilot tui: a daemon is already running at {}; it serves the profile it was \
+                 started with. Stop it, or pass a different --api-url for a second instance.",
+                running.endpoint
+            );
+            return exit::CONFLICT;
+        }
+        if let Some(served) = &running.workspace
+            && let Some(wanted) = expected_workspace_id(&workspace)
+            && &wanted != served
+        {
+            eprintln!(
+                "acpilot tui: the daemon at {} serves workspace `{served}`, not `{wanted}`. Stop \
+                 it, or pass a different --api-url for a second instance.",
+                running.endpoint
+            );
+            return exit::CONFLICT;
+        }
+    }
+
+    match acpilot_tui::run(&running.endpoint) {
+        Ok(()) => exit::SUCCESS,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            exit::FAILURE
+        }
+    }
+}
+
+/// The workspace id the daemon derives from a root: its directory name.
+///
+/// Duplicated knowledge, deliberately and narrowly: the alternative is a client
+/// that cannot tell whether the daemon it found is serving the directory it was
+/// asked about. If the derivation ever moves, this is the one place to follow.
+fn expected_workspace_id(root: &std::path::Path) -> Option<String> {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
 }
 
 fn run_ext(command: ExtCommand) -> u8 {

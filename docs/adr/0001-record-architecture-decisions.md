@@ -55,7 +55,7 @@ These are tracked as `D1`–`D13` in `TODO.md`; each gets an ADR when it is sett
 | --- | --- |
 | 0002 | Local models and the model lab (P4.5) — **recorded** |
 | 0003 | Extensions are data-first (D18) — **recorded** |
-| 0004 | Daemon-centric process model: one daemon, thin clients (D4, D7) |
+| 0004 | Daemon-centric process model: one daemon, spawned on demand (D4; D7 left open) — **recorded** |
 | 0005 | The API is a control plane, not a keystroke pipe (D2) |
 | 0006 | `Host` trait for local/SSH/WSL, with an uploaded helper (the remote-hosts phase, P8, and the Windows phase, P9) |
 | 0007 | Profiles: isolation model and storage layout (D10, D11, D13) |

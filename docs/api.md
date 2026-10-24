@@ -71,6 +71,12 @@ GET    /v1/lsp/servers/{id}/logs
 GET    /v1/lsp/diagnostics                POST   /v1/lsp/request
 ```
 
+`GET /v1/health` is the one route a client calls before it trusts anything else:
+`{ok, service, version, api, workspace?}`. `workspace` is the id the daemon was
+started with and is omitted when it has none; a client uses it to check that the
+daemon already listening is serving the directory it was asked about, rather than
+restarting a daemon that may be mid-turn (ADR 0004 §2).
+
 **Deliberately not v1**: providers and models, the model lab and recipes, the ACP
 bridge and remote drivers, extensions and stats. They follow the same conventions
 when they land; none of them changes a route above.

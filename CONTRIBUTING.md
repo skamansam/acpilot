@@ -24,7 +24,13 @@ curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd`
 ```
 
 The daemon answers `GET /v1/health` on port 7777 once `cargo run -p acpilotd` is
-up. Every command in both blocks is a program rather than a shell builtin, so
+up — or once any client has started it, since `cargo run -p acpilot-cli -- tui`
+spawns `target/debug/acpilotd` (the sibling of the binary, not a `PATH` entry).
+Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
+with `RUST_LOG` set: the spawn path captures its output in
+`$XDG_RUNTIME_DIR/acpilot/daemon-*.log` instead of your terminal.
+
+Every command in both blocks is a program rather than a shell builtin, so
 the only difference between them is the HTTP client's name — nothing here
 depends on the bash an editor ships.
 

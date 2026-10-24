@@ -14,7 +14,7 @@ short version.
 ## Today
 
 ```bash
-GET /v1/health                  # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1"}
+GET /v1/health                  # {"ok":true,"service":"acpilotd","version":"0.1.0","api":"/v1","workspace":"app"}
 GET /v1/agents                  # configured agents, with availability (available | missing)
 GET /v1/permissions?status=pending
 POST /v1/permissions/{id}/resolve
@@ -22,6 +22,12 @@ GET /v1/events                  # text/event-stream: permission.requested, heart
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs
 ```
+
+`GET /v1/health` also reports the workspace the daemon was started with
+(`workspace`, omitted when it serves none), which is how a client confirms that
+the daemon it found is the one for the directory it was asked about — the check
+behind `acpilot tui --workspace <dir>` refusing a mismatch instead of showing
+another project's sessions.
 
 `GET /v1/agents` answers from the profile the daemon was started with —
 `acpilotd --profile <dir>` reads that directory's `agents.toml` — and reports

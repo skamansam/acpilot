@@ -61,6 +61,15 @@ pub struct Health {
     pub version: &'static str,
     /// Control-plane API version prefix.
     pub api: &'static str,
+    /// The workspace this daemon serves, when it has one.
+    ///
+    /// A client that names a directory needs to know whether the daemon it found
+    /// is already serving that directory, and a client that asks the daemon to
+    /// start should not have to trust its own flags (ADR 0004 §5). The field is
+    /// the workspace id, not a path: the API does not hand out host paths for
+    /// something a client should have named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// An [`AcpilotError`] rendered as an HTTP response.
@@ -137,12 +146,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-async fn health() -> Json<Health> {
+async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         ok: true,
         service: SERVICE,
         version: env!("CARGO_PKG_VERSION"),
         api: acpilot_proto::API_PREFIX,
+        workspace: state.workspace().map(|workspace| workspace.id.clone()),
     })
 }
 
@@ -289,31 +299,55 @@ pub fn state_for_profile(
 ) -> Result<AppState, StateError> {
     let profile = acpilot_profile::Profile::open(directory)?;
     let policy = profile.policy()?;
-    let workspace = std::fs::canonicalize(workspace).map_err(|source| StateError::Workspace {
-        path: workspace.to_path_buf(),
-        source,
-    })?;
+    let workspace = workspace_at(workspace)?;
     tracing::info!(
         profile = %profile.root().display(),
-        workspace = %workspace.display(),
+        workspace = %workspace.root.display(),
         rules = policy.rules().len(),
         "policy loaded"
     );
-    let id = workspace
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map_or_else(|| "workspace".to_owned(), str::to_owned);
-    let broker = Arc::new(Broker::with_timeout(policy, workspace.clone(), None));
+    let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
     let state = AppState::new()
         .with_broker(broker)
-        .with_workspace(Workspace {
-            id,
-            root: workspace,
-        });
+        .with_workspace(workspace);
     Ok(match load_agents(&profile)? {
         Some(registry) => state.with_registry(registry),
         None => state,
     })
+}
+
+/// The state the daemon binary builds from its two flags.
+///
+/// One function rather than two lines in `main` because the flags are a promise:
+/// a client that spawns the daemon with `--workspace <dir>` expects
+/// `GET /v1/health` to name that directory whether or not a profile came with it
+/// (ADR 0004 §2), and that is testable here and not in a process.
+pub fn state_for(
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+) -> Result<AppState, StateError> {
+    match profile {
+        Some(directory) => state_for_profile(directory, workspace),
+        None => Ok(AppState::new().with_workspace(workspace_at(workspace)?)),
+    }
+}
+
+/// The root a daemon was started against, resolved and named once.
+///
+/// A daemon without a profile still serves a root: the client that spawned it
+/// named one, and `GET /v1/health` reports it so that client can tell whether the
+/// daemon it found is the one for this directory (ADR 0004 §2). Resolving here is
+/// what keeps "inside the workspace" a prefix comparison rather than a guess.
+pub fn workspace_at(root: &std::path::Path) -> Result<Workspace, StateError> {
+    let root = std::fs::canonicalize(root).map_err(|source| StateError::Workspace {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let id = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| "workspace".to_owned(), str::to_owned);
+    Ok(Workspace { id, root })
 }
 
 /// The profile's agents, when it has an `agents.toml`.

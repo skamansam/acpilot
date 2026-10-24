@@ -46,6 +46,28 @@ async fn health_reports_the_service_and_its_api_version() {
 }
 
 #[tokio::test]
+async fn a_daemon_without_a_profile_still_names_the_workspace_it_serves() {
+    // The client that spawns a daemon names a directory even when it has no
+    // profile, and uses `health.workspace` to check that the daemon it found is
+    // the one for that directory (ADR 0004 §2). Dropping the field unless a
+    // profile came along would make that check silently pass.
+    let directory = tempfile::tempdir().expect("temp dir");
+    let name = directory
+        .path()
+        .canonicalize()
+        .expect("resolved")
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a name")
+        .to_owned();
+
+    let state = acpilotd::state_for(None, directory.path()).expect("state");
+    let (status, body) = get_from(router_with(state), "/v1/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workspace"], name);
+}
+
+#[tokio::test]
 async fn health_is_json_and_reports_the_build_version() {
     let response = router()
         .oneshot(

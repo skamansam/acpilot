@@ -19,6 +19,8 @@
 //! caller owns the policy (a TUI wants one quiet retry, a CLI wants to fail), and
 //! a client that reconnected silently would hide a daemon that is flapping.
 
+pub mod daemon;
+
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionDecision, PermissionOption, PermissionRequest};
@@ -97,6 +99,9 @@ pub struct Health {
     pub version: String,
     /// API prefix, `/v1`.
     pub api: String,
+    /// The workspace this daemon serves, when it has one.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// One frame of a session's event stream.

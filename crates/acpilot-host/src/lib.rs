@@ -51,6 +51,39 @@ pub use pty::Pty;
 #[cfg(feature = "ssh")]
 pub use ssh::{HostKeyPolicy, SshConfig, SshHost};
 
+/// Start `command` in a process group of its own.
+///
+/// The caller is a UI that is about to hand the terminal over to a full-screen
+/// loop, so the process it starts must survive that terminal closing. What
+/// "detached" means differs per platform and is written once, in
+/// `src/platform/` — this is the seam, not the branch.
+pub fn detach(command: &mut std::process::Command) {
+    platform::detach(command);
+}
+
+/// Make a directory readable only by its owner.
+///
+/// A no-op on Windows, where the per-user location is the boundary instead of a
+/// mode bit. On POSIX this is how the daemon's runtime directory keeps other
+/// local users away from its socket and log.
+///
+/// # Errors
+///
+/// The `set_permissions` failure, unchanged: there is nothing useful to say
+/// about it that the OS has not already said.
+pub fn private_dir(path: &Path) -> io::Result<()> {
+    platform::private_dir(path)
+}
+
+/// Make a file readable and writable only by its owner.
+///
+/// # Errors
+///
+/// The `set_permissions` failure, unchanged.
+pub fn private_file(path: &Path) -> io::Result<()> {
+    platform::private_file(path)
+}
+
 /// One command to run on a host, wherever that host is.
 ///
 /// Arguments and environment are `OsString` because a path is not guaranteed to

@@ -1,36 +1,191 @@
-name: Release
+name: release
 
-# Stub, deliberately: P12 replaces this with cargo-dist driven packaging
-# (tarballs, Homebrew, PowerShell installer, MSI). Until then it only proves that
-# the workspace builds in release mode on every supported platform, so a broken
-# release build is caught on a tag rather than at the end of a phase.
-
+# A release is a version, and a version is what the merged PR's labels say it is
+# (`.github/scripts/next_version.py`):
+#
+#   breaking / major          → major
+#   feature / enhancement     → minor
+#   bug / docs / chore / …    → patch
+#   skip-release              → nothing
+#
+# `push` to main, rather than `pull_request: closed`, because a token on a pull
+# request from a fork cannot publish: the labels are looked up from the merge
+# commit instead (`commits/<sha>/pulls`), which works for merge commits and
+# squash merges alike and needs no second trigger. Once main only takes PRs the
+# two events describe the same change.
 on:
-  workflow_dispatch:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
+      publish: ${{ steps.next.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the labels of the PR this commit came from
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            --jq '.[0].labels[].name' 2>/dev/null | paste -sd, - || true)
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "labels: ${labels:-<none>}"
+
+      - name: Next version
+        id: next
+        env:
+          LABELS: ${{ steps.labels.outputs.labels }}
+        run: |
+          set -euo pipefail
+          out=$(python3 .github/scripts/next_version.py --labels "$LABELS")
+          echo "$out"
+          echo "$out" >> "$GITHUB_OUTPUT"
+          version=$(sed -n 's/^version=//p' <<<"$out")
+          tag=$(sed -n 's/^tag=//p' <<<"$out")
+          if [ -z "$version" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "the labels asked for no release"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$tag is already published"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
-    name: build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    name: build ${{ matrix.target }}
+    needs: version
+    if: needs.version.outputs.publish == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: macos-latest, target: aarch64-apple-darwin }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - os: ubuntu-latest
+            target: linux-x86_64
+            archive: tar.gz
+          - os: macos-14
+            target: macos-aarch64
+            archive: tar.gz
+          - os: windows-latest
+            target: windows-x86_64
+            archive: zip
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          target: ${{ matrix.target }}
-          cache: false
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --target ${{ matrix.target }} -p acpilotd -p acpilot-cli
+
+      # `acpilot` is the CLI, the TUI and the GUI launcher; `acpilotd` is the
+      # daemon. The GUI is left out of this first release on purpose: its `gui`
+      # feature needs a graphics stack at link time, which is a runner dependency
+      # to solve rather than a version to publish.
+      - name: Build
+        run: cargo build --release --locked -p acpilot-cli -p acpilotd
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp target/release/acpilot target/release/acpilotd "$stage/"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
+          tar -czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item target/release/acpilot.exe, target/release/acpilotd.exe $stage
+          Copy-Item README.md $stage
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $stage.zip" | Out-File "$stage.zip.sha256" -Encoding ascii
+
       - uses: actions/upload-artifact@v4
         with:
-          name: acpilot-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/acpilot*
+          name: ${{ matrix.target }}
+          path: |
+            acpilot-*.tar.gz
+            acpilot-*.tar.gz.sha256
+            acpilot-*.zip
+            acpilot-*.zip.sha256
           if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          # The tag is created after these notes, so the range starts from the last
+          # tag reachable from the parent commit rather than from HEAD^ of the tag.
+          previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -z "$previous" ]; then
+            range=""
+            heading="First tagged build."
+          else
+            range="$previous..HEAD"
+            heading="Changes since $previous."
+          fi
+          {
+            echo "$heading"
+            echo
+            git log $range --no-merges --pretty=format:'- %s (%h)' | head -200
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "Acpilot ${{ needs.version.outputs.version }}" \
+            --notes-file notes.md \
+            dist/*.tar.gz dist/*.zip dist/*.sha256
+
+      # Nothing is committed back. The download page reads the releases API at
+      # build time, so main stays a tree only pull requests change — a bot commit
+      # here would be blocked by branch protection or need an exemption that also
+      # lets it change code.
+      - name: Rebuild the docs site
+        if: vars.DOCS_DEPLOY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --ref main

@@ -40,6 +40,10 @@ jobs:
 
       - name: Build
         working-directory: site
+        env:
+          # The download page reads the releases API at build time. Anonymous
+          # requests are rate-limited per IP, and a runner's IP is everybody's.
+          GITHUB_TOKEN: ${{ github.token }}
         run: npm run build
 
       # A broken internal link is a documentation bug, so fail the build on one

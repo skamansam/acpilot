@@ -1,0 +1,336 @@
+---
+// The download page is an Astro page rather than a markdown doc because it is
+// built from data: `site/src/data/releases.json`, which the release workflow
+// rewrites when it publishes. A hand-written page would be a second place to
+// forget to update.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import pinned from '../data/releases.json';
+
+// Releases come from the GitHub API at build time, not from a file a workflow
+// commits: main only takes pull requests, so a bot commit after every release
+// would either be blocked or need an exemption that also lets it change code. A
+// build-time fetch keeps the page current with no write access to the repository
+// at all — and `site/src/data/releases.json` is the fallback for the day the API
+// is rate-limited or unreachable, so the page degrades to the last pinned record
+// instead of to nothing.
+const REPO = 'skamansam/acpilot';
+const PLATFORMS = {
+  'linux-x86_64': ['Linux', 'x86_64'],
+  'linux-aarch64': ['Linux', 'aarch64'],
+  'macos-aarch64': ['macOS', 'Apple silicon'],
+  'macos-x86_64': ['macOS', 'Intel'],
+  'windows-x86_64': ['Windows', 'x86_64'],
+};
+
+// `acpilot-0.1.0-linux-x86_64.tar.gz` → `linux-x86_64`
+//
+// Matched on the platform half rather than on the version, so a pre-release
+// version with a hyphen in it parses like any other.
+function platformOf(name) {
+  const match = name.match(/^acpilot-.*-(linux|macos|windows)-(x86_64|aarch64)\.(?:tar\.gz|zip)$/);
+  return match ? `${match[1]}-${match[2]}` : null;
+}
+
+function fromGitHub(release) {
+  const assets = (release.assets ?? []).flatMap((asset) => {
+    const platform = platformOf(asset.name);
+    if (!platform) return [];
+    const [label, arch] = PLATFORMS[platform] ?? [platform, ''];
+    return [
+      {
+        platform,
+        label,
+        arch,
+        file: asset.name,
+        url: asset.browser_download_url,
+        sha256: '',
+        bytes: asset.size,
+      },
+    ];
+  });
+  return {
+    version: String(release.tag_name ?? '').replace(/^v/, ''),
+    tag: release.tag_name,
+    date: String(release.published_at ?? '').slice(0, 10),
+    url: release.html_url,
+    notes: String(release.body ?? '')
+      .split('\n')
+      .map((line) => line.replace(/^-\s*/, '').trim())
+      .filter(Boolean),
+    assets,
+  };
+}
+
+async function loadReleases() {
+  const headers = { accept: 'application/vnd.github+json' };
+  const token = process.env.GITHUB_TOKEN;
+  if (token) headers.authorization = `Bearer ${token}`;
+  try {
+    const response = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, {
+      headers,
+    });
+    if (!response.ok) return pinned.releases ?? [];
+    const fetched = await response.json();
+    const releases = fetched
+      .filter((release) => !release.draft)
+      .map(fromGitHub)
+      .filter((release) => release.tag && release.assets.length);
+    return releases.length ? releases : (pinned.releases ?? []);
+  } catch {
+    return pinned.releases ?? [];
+  }
+}
+
+const releases = await loadReleases();
+const latest = releases[0];
+const totalAssets = releases.reduce((sum, release) => sum + (release.assets?.length ?? 0), 0);
+
+function megabytes(bytes) {
+  if (!bytes) return '';
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Download',
+    description: 'Builds of Acpilot for Linux, macOS and Windows, newest first.',
+  }}
+>
+  <section class="hero-download">
+    {latest ? (
+      <>
+        <p class="eyebrow">Latest build</p>
+        <h2 class="version">{latest.version}</h2>
+        <p class="meta">
+          <time datetime={latest.date}>{latest.date}</time>
+          &nbsp;·&nbsp;
+          <a href={latest.url}>Notes and checksums on GitHub</a>
+        </p>
+        <a
+          class="button"
+          id="download-latest"
+          href={latest.url}
+          data-fallback-label={`Download ${latest.version}`}
+        >
+          Download {latest.version}
+        </a>
+        <p class="hint" id="download-hint">
+          Pick your platform below; the button follows this browser's guess.
+        </p>
+      </>
+    ) : (
+      <>
+        <p class="eyebrow">Not published yet</p>
+        <h2 class="version">0.01a in progress</h2>
+        <p class="meta">
+          No build has been tagged yet. Merging a PR that bumps the version in
+          <code>Cargo.toml</code> publishes one, and this page is where it appears.
+        </p>
+        <a class="button" href="https://github.com/skamansam/acpilot/actions">Watch the builds</a>
+      </>
+    )}
+  </section>
+
+  {
+    latest && latest.assets?.length ? (
+      <section>
+        <h2 id="all-builds">All builds for {latest.version}</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>Architecture</th>
+              <th>Archive</th>
+              <th>Size</th>
+              <th>SHA-256</th>
+            </tr>
+          </thead>
+          <tbody>
+            {latest.assets.map((asset) => (
+              <tr data-platform={asset.platform}>
+                <td>
+                  <a href={asset.url}>{asset.label}</a>
+                </td>
+                <td>{asset.arch}</td>
+                <td>
+                  <code>{asset.file}</code>
+                </td>
+                <td>{megabytes(asset.bytes)}</td>
+                <td>
+                  {asset.sha256 ? (
+                    <code class="hash" title={asset.sha256}>
+                      {asset.sha256.slice(0, 12)}…
+                    </code>
+                  ) : (
+                    <a href={`${asset.url}.sha256`}>.sha256</a>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p class="hint">
+          Every archive holds <code>acpilot</code> (CLI, TUI and GUI launcher) and
+          <code>acpilotd</code> (the daemon).          Each archive's checksum is published beside it; verify with
+          <code>sha256sum -c &lt;file&gt;.sha256</code>, or
+          <code>shasum -a 256 -c</code> on macOS.
+        </p>
+      </section>
+    ) : null
+  }
+
+  {
+    releases.length ? (
+      <section>
+        <h2 id="releases">Releases</h2>
+        <p class="hint">
+          Newest first. {releases.length} release{releases.length === 1 ? '' : 's'},{' '}
+          {totalAssets} archive{totalAssets === 1 ? '' : 's'}.
+        </p>
+        {releases.map((release) => (
+          <article class="release">
+            <h3>
+              <a href={release.url}>{release.version}</a>{' '}
+              <time datetime={release.date}>{release.date}</time>
+            </h3>
+            <ul class="notes">
+              {(release.notes ?? []).map((note) => (
+                <li>{note}</li>
+              ))}
+            </ul>
+            {(release.assets ?? []).length ? (
+              <p class="platforms">
+                {(release.assets ?? []).map((asset) => (
+                  <a href={asset.url}>{asset.arch ? `${asset.label} · ${asset.arch}` : asset.label}</a>
+                ))}
+              </p>
+            ) : null}
+          </article>
+        ))}
+      </section>
+    ) : null
+  }
+</StarlightPage>
+
+<script is:inline>
+  // Guess the platform from what the browser will admit to, then point the button
+  // at that archive and mark the row. The page is complete without this: the
+  // button already links to the release page, which lists everything.
+  (function () {
+    const rows = document.querySelectorAll('tr[data-platform]');
+    const button = document.getElementById('download-latest');
+    const hint = document.getElementById('download-hint');
+    if (!rows.length || !button) return;
+
+    const raw =
+      (navigator.userAgentData && navigator.userAgentData.platform) ||
+      navigator.platform ||
+      navigator.userAgent ||
+      '';
+    const probe = String(raw).toLowerCase();
+    let platform = 'linux-x86_64';
+    if (probe.includes('win')) {
+      platform = 'windows-x86_64';
+    } else if (probe.includes('mac')) {
+      // `MacIntel` is what Apple silicon reports too, so the UA cannot tell the
+      // two apart; the arm64 build is the one most Macs want in 2026.
+      platform = 'macos-aarch64';
+    } else if (probe.includes('aarch64') || probe.includes('arm64')) {
+      platform = 'linux-aarch64';
+    }
+
+    const row = document.querySelector(`tr[data-platform="${platform}"]`);
+    if (!row) return; // a build for another machine: leave the release link alone
+
+    const link = row.querySelector('a');
+    if (link) {
+      button.href = link.href;
+      button.textContent = 'Download for ' + row.querySelector('td').textContent.trim();
+    }
+    row.classList.add('guessed');
+    if (hint) {
+      hint.textContent = 'Matched to this browser. Another platform is one row away.';
+    }
+  })();
+</script>
+
+<style>
+  .hero-download {
+    margin: 1rem 0 2.5rem;
+    padding: 1.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-gray-6);
+  }
+  .eyebrow {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .version {
+    margin: 0.25rem 0 0.5rem;
+    font-size: var(--sl-text-3xl);
+  }
+  .meta {
+    margin: 0 0 1.25rem;
+    color: var(--sl-color-gray-2);
+  }
+  .button {
+    display: inline-block;
+    padding: 0.7rem 1.2rem;
+    border-radius: 0.5rem;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-text-invert);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .button:hover {
+    background: var(--sl-color-accent-high);
+  }
+  .hint {
+    margin: 0.75rem 0 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+  table {
+    width: 100%;
+    font-size: var(--sl-text-sm);
+  }
+  table code.hash {
+    color: var(--sl-color-gray-3);
+  }
+  tr.guessed {
+    background: var(--sl-color-gray-6);
+    outline: 1px solid var(--sl-color-accent);
+  }
+  .release {
+    padding: 1rem 0;
+    border-top: 1px solid var(--sl-color-gray-6);
+  }
+  .release h3 {
+    margin: 0 0 0.5rem;
+  }
+  .release h3 time {
+    margin-left: 0.5rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 400;
+    color: var(--sl-color-gray-3);
+  }
+  .notes {
+    margin: 0 0 0.5rem;
+    padding-left: 1.25rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .platforms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+  }
+</style>

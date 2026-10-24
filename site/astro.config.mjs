@@ -41,6 +41,7 @@ export default defineConfig({
       lastUpdated: true,
       pagination: true,
       sidebar: [
+        { label: 'Download', link: '/download/' },
         {
           label: 'Ground school',
           items: [

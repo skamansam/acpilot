@@ -200,6 +200,29 @@ ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
 - Performance-sensitive change → numbers, not adjectives, against the budgets in
   `TODO.md` §Performance budgets.
 
+## Releases
+
+Merging into `main` publishes a release, and the labels on the pull request decide
+the version (`.github/scripts/next_version.py`):
+
+| Labels | Bump | Example |
+| --- | --- | --- |
+| `breaking`, `major` | major | `0.3.1` → `1.0.0` |
+| `feature`, `enhancement` | minor | `0.3.1` → `0.4.0` |
+| `bug`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`, `dependencies`, `performance`, `security` | patch | `0.3.1` → `0.3.2` |
+| `skip-release` | none | — |
+
+The strongest label wins (a PR that is both a fix and a feature is a feature), an
+unlabelled PR is a patch, and the first release is `0.1.0` whatever the labels say.
+The mapping lives at the top of the script as data, so a new label is a line.
+
+A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and
+Windows x86_64, publishes a GitHub release with checksums, and rebuilds the docs
+site: the download page reads the releases API at build time, so nothing is
+committed back and `main` stays a tree only pull requests change. The `gui` feature
+is not in the release matrix yet — it needs a graphics stack at link time, which is
+a runner dependency to solve rather than a version to publish.
+
 ## Decisions
 
 Architecture decisions are recorded as ADRs in `docs/adr/`, one file per decision,

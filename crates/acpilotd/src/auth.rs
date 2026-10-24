@@ -16,6 +16,11 @@
 //! or wrong token is `401 unauthorized`, in the same envelope as every other
 //! failure, because a client that has to parse a `WWW-Authenticate` header to find
 //! out what went wrong is a client with a second error path.
+//!
+//! One route answers without it: the Swagger page, because a browser cannot attach
+//! a header to a typed address and that page is where the token gets pasted. It
+//! holds no data — the document it renders and every call it makes still need the
+//! token, and the page asks for one before it fetches either.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -71,6 +76,9 @@ fn generate() -> io::Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// The one path that answers without a token. Static, and about 4 KB of HTML.
+const OPEN: &str = "/docs";
+
 /// Wrap `router` so every request needs `token`.
 ///
 /// Applied by the TCP listener only: the socket's answer to "may I" is the mode
@@ -89,6 +97,9 @@ async fn require(
     request: Request,
     next: Next,
 ) -> Result<Response, Response> {
+    if request.uri().path() == OPEN {
+        return Ok(next.run(request).await);
+    }
     // The scheme is case-insensitive (RFC 7235), so `bearer` and `Bearer` are the
     // same word. The token is not.
     let presented = request

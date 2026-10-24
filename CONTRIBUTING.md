@@ -33,8 +33,9 @@ is why the health check passes `--unix-socket`; on Windows the daemon listens on
 `--addr 127.0.0.1:7777` is also what a browser needs, for `/docs` under
 `--features docs`. It is an opt-in listener, and every request on it needs
 `Authorization: Bearer <token>` with the token the daemon writes to
-`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup — a browser cannot send that
-header to a typed address, so fetch `/v1/openapi.json` with `curl` instead.
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. The docs page is the one
+exception, so that there is somewhere to paste the token: open it, paste, and it
+fetches the contract and sends the header on every call.
 
 Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
 with `RUST_LOG` set: the spawn path captures its output in

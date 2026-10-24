@@ -762,6 +762,14 @@ fn resolve_doc() {}
 ///
 /// The page is served only with the `docs` feature so a production build has no
 /// third-party script tag in it.
+///
+/// It has a token field because on a TCP listener every route — the contract this
+/// page renders included — needs `Authorization: Bearer`, and a browser has no
+/// way to attach one to a typed address. The field is the one path to the
+/// document: the page fetches `/v1/openapi.json` itself with that header and hands
+/// the parsed document to Swagger, and every "Try it out" call carries it too.
+/// Nothing is stored, so a reload asks again rather than leaving a bearer token in
+/// a web storage area for the life of the tab.
 #[cfg(feature = "docs")]
 async fn docs() -> Html<&'static str> {
     Html(
@@ -771,12 +779,84 @@ async fn docs() -> Html<&'static str> {
     <meta charset="utf-8" />
     <title>Acpilot API</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+      #token-bar {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        font: 13px/1.4 system-ui, sans-serif;
+        background: #fafafa;
+        border-bottom: 1px solid #ddd;
+      }
+      #token-bar input {
+        flex: 1 1 28rem;
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+      }
+      #status[data-refused] {
+        color: #b00020;
+      }
+    </style>
   </head>
   <body>
+    <div id="token-bar">
+      <label for="token">Token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="the token acpilotd logged at startup" />
+      <button id="load" type="button">Load</button>
+      <span id="status"></span>
+    </div>
     <div id="swagger-ui"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script>
-      window.ui = SwaggerUIBundle({ url: "/v1/openapi.json", dom_id: "#swagger-ui" });
+      const field = document.getElementById("token");
+      const status = document.getElementById("status");
+
+      function say(message, refused) {
+        status.textContent = message;
+        if (refused) {
+          status.setAttribute("data-refused", "");
+        } else {
+          status.removeAttribute("data-refused");
+        }
+      }
+
+      async function load() {
+        const token = field.value.trim();
+        if (!token) {
+          say("paste the token to load the contract", true);
+          return;
+        }
+        const authorization = "Bearer " + token;
+        const response = await fetch("/v1/openapi.json", {
+          headers: { Authorization: authorization },
+        });
+        if (!response.ok) {
+          say(
+            response.status === 401
+              ? "the daemon refused that token"
+              : "cannot read the contract: " + response.status,
+            true,
+          );
+          return;
+        }
+        const document = await response.json();
+        say("");
+        window.ui = SwaggerUIBundle({
+          spec: document,
+          dom_id: "#swagger-ui",
+          requestInterceptor: (request) => {
+            request.headers.Authorization = authorization;
+            return request;
+          },
+        });
+      }
+
+      document.getElementById("load").addEventListener("click", load);
+      field.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") load();
+      });
     </script>
   </body>
 </html>"##,

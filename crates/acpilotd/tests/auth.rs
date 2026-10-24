@@ -14,8 +14,13 @@ use tower::ServiceExt;
 const TOKEN: &str = "8f5b9d0c2a7e41f3b6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4";
 
 async fn health_with(authorization: Option<&str>) -> (StatusCode, serde_json::Value) {
+    status_of("/v1/health", authorization).await
+}
+
+/// The status of `uri`, with the token layer applied the way a TCP listener does.
+async fn status_of(uri: &str, authorization: Option<&str>) -> (StatusCode, serde_json::Value) {
     let router = acpilotd::protect(acpilotd::router_with(AppState::new()), TOKEN);
-    let mut request = Request::builder().uri("/v1/health");
+    let mut request = Request::builder().uri(uri);
     if let Some(value) = authorization {
         request = request.header(header::AUTHORIZATION, value);
     }
@@ -61,6 +66,21 @@ async fn the_right_token_is_let_through() {
     let (status, body) = health_with(Some(&format!("Bearer {TOKEN}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["service"], "acpilotd");
+}
+
+#[tokio::test]
+async fn the_docs_page_answers_without_a_token_so_it_can_ask_for_one() {
+    // The route only exists with the `docs` feature, so a build without it answers
+    // 404 — which is still the assertion: a 401 here would mean the page that asks
+    // for the token was itself behind the token.
+    let (status, _) = status_of("/docs", None).await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_contract_is_not_open_along_with_the_page() {
+    let (status, _) = status_of("/v1/openapi.json", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

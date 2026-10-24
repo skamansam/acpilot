@@ -70,9 +70,10 @@ generated on first use and logged by path at startup. A client reads that file, 
 `ACPILOT_TOKEN` overrides it for one that has no runtime directory — a CI job, or a
 container talking to a daemon outside it.
 
-The docs page at `/docs` sits behind the same token, and a browser cannot attach a
-header to a typed address, so read the contract with `curl` and a document viewer
-until that page grows a token field.
+The docs page at `/docs` is the one route that answers without a token — a browser
+cannot attach a header to a typed address, and that page is where the token gets
+pasted. It asks for one in a field, fetches the contract with it, and sends it on
+every "Try it out" call. The daemon logs the token's path when it binds a port.
 
 A daemon started by the client is detached from the terminal, and `--no-spawn`
 turns the behaviour off when something else should own the process.

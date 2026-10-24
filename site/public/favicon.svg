@@ -1,5 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#0c1424"/>
-  <circle cx="32" cy="32" r="24" fill="none" stroke="#f7c65c" stroke-width="3"/>
-  <path d="M32 14 L35 27 L50 33 L35 36 L33 49 L32 52 L31 49 L29 36 L14 33 L29 27 Z" fill="#f7c65c"/>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 64 64"
+   version="1.1"
+   id="svg1"
+   sodipodi:docname="favicon.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#ffffff"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#505050"
+     inkscape:zoom="13.828125"
+     inkscape:cx="32.036158"
+     inkscape:cy="32"
+     inkscape:window-width="1920"
+     inkscape:window-height="1129"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg1" />
+  <rect
+     width="64"
+     height="64"
+     rx="12"
+     fill="#0c1424"
+     id="rect1" />
+  <circle
+     cx="32"
+     cy="32"
+     r="24"
+     fill="none"
+     stroke="#f7c65c"
+     stroke-width="3"
+     id="circle1" />
+  <path
+     d="M 32 14 L 36 28 L 50 32 L 36 36 L 32 50 L 28 36 L 14 32 L 28 28 Z"
+     fill="#f7c65c"
+     id="path1" />
 </svg>

@@ -87,6 +87,15 @@
        y1="106.32683"
        x2="4.4702967"
        y2="110.10175" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#g"
+       id="gauge"
+       gradientUnits="userSpaceOnUse"
+       x1="32"
+       y1="0"
+       x2="32"
+       y2="64" />
   </defs>
   <circle
      cx="32"
@@ -109,7 +118,7 @@
      stroke-start="3"
      style="stroke-dasharray:0.75, 3;stroke-dashoffset:1.65;stroke-width:0.75;stroke-linejoin:miter;stroke-linecap:round" />
   <g
-     stroke="url(#g)"
+     stroke="url(#gauge)"
      stroke-width="2"
      stroke-linecap="round"
      id="g6">

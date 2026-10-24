@@ -3,7 +3,7 @@ title: Agent manifest
 description: The file that tells Acpilot what an agent is and how to start it.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P2 &nbsp;·&nbsp; provisional until P2 ships
+<span class="pill pill--hangar">hangar</span> &nbsp; Engine phase (P2) &nbsp;·&nbsp; provisional until it ships
 
 Agents are declared in `agents.toml`, per profile. The manifest is data, not code:
 adding an agent should never require a rebuild.

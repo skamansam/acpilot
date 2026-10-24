@@ -7,7 +7,7 @@
 //!
 //! The file is unix-only because the shell it uses is. The Windows path in
 //! `supervisor/platform/windows.rs` is type-checked by the CI target build; its
-//! runtime behaviour needs a Windows runner, which is P2-2's remaining gap and is
+//! runtime behaviour needs a Windows runner, which is the engine phase's task P2-2's remaining gap and is
 //! recorded in TODO.md rather than hidden behind a test that never runs.
 
 #![cfg(unix)]

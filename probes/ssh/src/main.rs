@@ -1,4 +1,4 @@
-//! P0-4 — a remote host, driven the way the product will drive it.
+//! The design phase's task P0-4 — a remote host, driven the way the product will drive it.
 //!
 //! The question is not whether SSH works; it is whether the four things an agent
 //! needs over it behave: **line-framed JSON**, **stderr kept apart**, **exit
@@ -232,7 +232,7 @@ impl client::Handler for Client {
     type Error = russh::Error;
 
     /// The host key is the caller's problem, not this probe's: the point is the
-    /// transport, and a TOFU prompt would block a measurement. P8-1 decides the
+    /// transport, and a TOFU prompt would block a measurement. The remote-hosts phase's task P8-1 decides the
     /// real policy.
     async fn check_server_key(
         &mut self,

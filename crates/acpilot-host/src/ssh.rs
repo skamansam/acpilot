@@ -18,7 +18,7 @@
 //!   opened against the same session. Reconnecting per command would pay the
 //!   handshake for every keystroke's worth of work.
 //!
-//! What this module deliberately does not do yet, because P8-1 owns it: ssh-agent
+//! What this module deliberately does not do yet, because the remote-hosts phase's task P8-1 owns it: ssh-agent
 //! authentication, password authentication through the keyring, keepalives,
 //! reconnect with backoff, and `ProxyJump`-style configuration. A host that
 //! cannot connect returns an error rather than retrying.
@@ -49,7 +49,7 @@ use crate::{Child, ChildBackend, ExecCommand, Exit, Host, HostError, HostKind, S
 /// How long to wait for a connect attempt before giving up.
 ///
 /// A dial to an unreachable host can hang for the kernel's TCP timeout, which is
-/// minutes; a daemon cannot wait that long to answer its first request. P8-1 makes
+/// minutes; a daemon cannot wait that long to answer its first request. The remote-hosts phase's task P8-1 makes
 /// this configurable and adds the retry policy around it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -59,7 +59,7 @@ pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
-    /// The private key. Key files now; ssh-agent is P8-1.
+    /// The private key. Key files now; ssh-agent is the remote-hosts phase's task P8-1.
     pub key_path: PathBuf,
     pub key_passphrase: Option<String>,
     pub host_key: HostKeyPolicy,
@@ -115,7 +115,7 @@ pub enum HostKeyPolicy {
         /// this; a script that cannot ask maps to `false` and fails instead.
         trust_on_first_use: bool,
     },
-    /// Accept any key. Only for loopback fixtures: P0-4's `sshd.sh` uses a
+    /// Accept any key. Only for loopback fixtures: the design phase's task P0-4's `sshd.sh` uses a
     /// throwaway host key that no `known_hosts` could contain.
     AcceptAny,
 }
@@ -253,7 +253,7 @@ impl Host for SshHost {
 
     // Refused rather than served from this machine's disk: the path an agent
     // asks about belongs to the remote filesystem, so answering it with a local
-    // file would be a wrong answer that looks like a right one. P3-9 owns the
+    // file would be a wrong answer that looks like a right one. The service phase's task P3-9 owns the
     // SFTP channel that makes these three real, and canonicalize must come with
     // it — a containment check cannot be sound without it.
     fn canonicalize(&self, _path: &Path) -> Result<PathBuf, HostError> {
@@ -324,7 +324,7 @@ fn serve(
         // Channel set-up is serialised: `Handle` owns its reply receiver and is
         // not cloneable, so a per-open task would need a shareable handle. Set-up
         // is a few round trips on an already-open connection (the whole 103-frame
-        // exchange cost 43–51 ms in P0-4), while `drive` below is a task per
+        // exchange cost 43–51 ms in the design phase's task P0-4), while `drive` below is a task per
         // channel, so bytes after set-up flow concurrently.
         while let Some(command) = commands.recv().await {
             match command {
@@ -426,7 +426,7 @@ impl client::Handler for Handler {
 
         let PublicKeyOrCertificate::PublicKey { key, .. } = server_public_key else {
             // Host certificates are recorded differently in known_hosts, and
-            // guessing at that is worse than refusing: P8-1 adds it.
+            // guessing at that is worse than refusing: the remote-hosts phase's task P8-1 adds it.
             self.reject("the host presented a certificate, not a plain key");
             return Ok(false);
         };
@@ -581,7 +581,7 @@ async fn drive(
                 Some(Outgoing::Kill) => {
                     // `signal` is a request, and servers vary: OpenSSH acts on it
                     // for the signals it supports, otherwise the close below is
-                    // what ends the channel. P0-4 never measured kill, so this is
+                    // what ends the channel. The design phase's task P0-4 never measured kill, so this is
                     // the honest best effort rather than a claim.
                     let _ = write.signal(Sig::KILL).await;
                     let _ = write.close().await;

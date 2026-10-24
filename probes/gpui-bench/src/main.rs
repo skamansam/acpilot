@@ -1,4 +1,4 @@
-//! P0-3's latency half: what a 100k-line document costs to draw, on a real GPU.
+//! The design phase's task P0-3's latency half: what a 100k-line document costs to draw, on a real GPU.
 //!
 //! ```bash
 //! cargo run --release

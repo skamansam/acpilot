@@ -11,7 +11,7 @@
 //!   starts. Anything that compares output against a fixture has to allow it —
 //!   that belongs to the terminal pane's renderer, which parses bytes anyway.
 //! * **Terminal queries block.** A program that asks for the cursor position
-//!   (`CSI 6 n`) waits for an answer. P0-5 measured `wsl.exe` never starting
+//!   (`CSI 6 n`) waits for an answer. The design phase's task P0-5 measured `wsl.exe` never starting
 //!   until DSR was answered, so a query responder is not optional here the way
 //!   it is on a real unix pty. That responder lives with the pane (P2-5); this
 //!   function only has to give it a terminal to answer on.
@@ -20,7 +20,7 @@
 //!   session leader's death hangs up the rest. Closing the pseudo-console is the
 //!   documented way to end what is attached to it, which is what dropping the
 //!   `Pty` does. `Pty::kill` is therefore a reliable stop for the process the
-//!   caller started, and the tree is P2-5's to bound.
+//!   caller started, and the tree is the engine phase's task P2-5's to bound.
 //!
 //! The construction is shared with unix rather than copied here: a second copy
 //! of the same fifteen lines with a Windows comment on it is how the two sides

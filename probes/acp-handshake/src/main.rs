@@ -1,6 +1,6 @@
-//! P0-1 — one small ACP client, two real agents.
+//! The design phase's task P0-1 — one small ACP client, two real agents.
 //!
-//! The probe answers the questions in `TODO.md` §P0-1 and nothing else:
+//! The probe answers the questions in `TODO.md` §the design phase's task P0-1 and nothing else:
 //!
 //! * what capabilities each agent advertises at `initialize`,
 //! * which `session/update` kinds arrive during one prompt,

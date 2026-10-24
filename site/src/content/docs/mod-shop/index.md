@@ -3,7 +3,7 @@ title: The mod shop
 description: Extensions for themes, presets, grammars, and snippets — installed once, approved per profile.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.6
+<span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6)
 
 An **extension** is a modification approved for one airframe at a time. It is a
 directory with a manifest and some assets: a theme, a set of language-server
@@ -36,7 +36,7 @@ tree-sitter runtime the editor already embeds — narrower than a plugin API, no
 the same as inert, and [the registry page](registry/) says so out loud.
 
 Code extensions would mean a WASM runtime, an ABI, a capability model, and a
-memory budget: a project, not a checkbox. That is why P4.6 ships the tier that
+memory budget: a project, not a checkbox. That is why the mod-shop phase (P4.6) ships the tier that
 answers most requests and leaves the other one honest on the roadmap.
 
 <Aside type="note" title="Form 337, but faster">
@@ -88,7 +88,7 @@ one we could ship first.
 
 What makes them a studio rather than four windows is the last piece: every action
 is a brokered tool named `<extension>.<action>`, with its target in the permission
-subject and one audit row per call (D26, P14-5). That is what lets one prompt
+subject and one audit row per call (D26, the studio phase's task P14-5). That is what lets one prompt
 import a spec, call the endpoint it describes, and assert the row it wrote — three
 different extensions, one approval trail.
 
@@ -107,4 +107,4 @@ Installing is a checksummed, atomic store; a version whose bytes change is
 three layers of precedence and `acpilot ext why` naming the winner and everything
 it overrode. The [marketplace](marketplace/) is a curated list of repositories
 in this repository, changed by pull request. The signed index and download URLs
-are P4.6-4.
+are the mod-shop phase's task P4.6-4.

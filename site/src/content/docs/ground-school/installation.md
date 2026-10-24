@@ -10,7 +10,7 @@ honest instruction while the aircraft is still in the hangar.
 
 <Aside type="caution" title="No packages, no apologies">
 `brew install acpilot` does not exist. Neither does the MSI, the `.deb`, or the
-AppImage. They arrive in P12, after there is something worth packaging.
+AppImage. They arrive in the release phase (P12), after there is something worth packaging.
 </Aside>
 
 ## Requirements
@@ -19,7 +19,7 @@ AppImage. They arrive in P12, after there is something worth packaging.
 | --- | --- |
 | Rust **1.95+** | Floor set by `rusqlite_migration`; the repo pins 1.97 in `rust-toolchain.toml` |
 | Git | Workspace crates, and one dependency is a rev-pinned fork |
-| An ACP agent (optional) | Nothing to fly yet; P2 brings the first real session |
+| An ACP agent (optional) | Nothing to fly yet; the engine phase (P2) brings the first real session |
 | Node 20+ (docs only) | Only if you want to build this site |
 
 Platform support is Linux, macOS, and Windows. macOS and Linux are exercised on

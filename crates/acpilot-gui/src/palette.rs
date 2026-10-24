@@ -2,7 +2,7 @@
 //!
 //! This is deliberately data plus one pure function. The shell turns the result
 //! into rows; nothing here knows about gpui, so the matching is tested without a
-//! window and can be reused by the TUI's palette when P6 gets one.
+//! window and can be reused by the TUI's palette when the editor phase (P6) gets one.
 
 use crate::profiles::ShellProfile;
 

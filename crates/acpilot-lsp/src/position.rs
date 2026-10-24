@@ -14,14 +14,14 @@
 //! UTF-16), combining marks (two code points, one glyph), and CRLF.
 //!
 //! The index is rebuilt when the document changes, so its lifetime is one edit.
-//! That is the honest cost: an incremental index is a P7 optimisation, and
+//! That is the honest cost: an incremental index is a language-intelligence phase (P7) optimisation, and
 //! [`position`](LineIndex::position) only scans the current line, not the file.
 
 use std::fmt;
 
 /// A position encoding the server and client agree on.
 ///
-/// UTF-32 is in the specification but no server in the P0-7 survey advertised
+/// UTF-32 is in the specification but no server in the design phase's task P0-7 survey advertised
 /// it, and an editor whose buffer is UTF-8 would only gain a third conversion
 /// path. It can be added without changing the API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

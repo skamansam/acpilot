@@ -3,7 +3,7 @@ title: Installing and approving
 description: A checksummed store, a curated list, and an approval that belongs to a profile.
 ---
 
-<span class="pill pill--boarding">boarding</span> &nbsp; P4.6-3 and P4.6-5 landed; the signed index is P4.6-4
+<span class="pill pill--boarding">boarding</span> &nbsp; tasks P4.6-3 and P4.6-5 landed; the signed index is task P4.6-4
 
 Two verbs, deliberately separate:
 
@@ -108,7 +108,7 @@ activated theme may `extends` a built-in and inherit its unset tokens.
 
 Deactivating is a file edit, and every resolution re-reads the file: there is no
 cached registry to invalidate, so the next answer is the correct one. The daemon
-event that tells attached UIs to re-read (`extension.changed`) is P4.6-10.
+event that tells attached UIs to re-read (`extension.changed`) is the mod-shop phase's task P4.6-10.
 
 ## Pruning
 

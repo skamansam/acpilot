@@ -1,4 +1,4 @@
-//! Single instance on Windows is P10-5's job, and until then every launch is its
+//! Single instance on Windows is the desktop phase's task P10-5's job, and until then every launch is its
 //! own process.
 //!
 //! The same seam and the same [`Claim`] shape as Unix, so `main` reads the same

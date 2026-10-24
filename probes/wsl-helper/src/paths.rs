@@ -16,7 +16,7 @@
 //! `wsl.rs`. This module is written to be lifted into `acpilot-host` as is.
 //!
 //! Deliberately **not** a sanitizer: `.` and `..` segments pass through, because
-//! translation and traversal policy are different jobs (P3-5 owns the latter).
+//! translation and traversal policy are different jobs (the service phase's task P3-5 owns the latter).
 
 use std::fmt;
 

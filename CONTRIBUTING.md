@@ -43,7 +43,7 @@ acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
 against and `libc` held at exactly 0.2.189; the crate manifest names both, and
 `README.md` §5.4 explains why the pin exists.
 
-`cargo xtask check` also runs the P0-5 probe, which is not a workspace member and
+`cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
 covers the repository. `cargo xtask probe` is the same steps without the
 workspace half, and it is what CI's `p0-5 probe` job runs. All of it spawns
@@ -111,12 +111,12 @@ What a probe must be:
   cites it (an ADR for the ones that bind us).
 - **Deletable.** A probe outlives its question only while something still runs
   it: `probes/wsl-helper` is a CI fixture and a driver we ship against, and the
-  P0-3 benchmark runs again on every framework upgrade. The rest are deleted once
+  the design phase's P0-3 benchmark runs again on every framework upgrade. The rest are deleted once
   the note is written, because a directory of half-used instruments is worse than
   the note alone.
 
 If a probe has to run on another operating system, say so in its note and in CI
-rather than claiming the result transfers. P0-5 is the standing example: its
+rather than claiming the result transfers. The design phase's task P0-5 is the standing example: its
 WSL1-on-a-hosted-runner half is the version that would have been published as
 WSL2's if the note had not insisted otherwise.
 

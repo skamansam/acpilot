@@ -3,7 +3,7 @@ title: Permissions
 description: Nothing writes without a clearance, and every clearance is in the log.
 ---
 
-<span class="pill pill--boarding">boarding</span> &nbsp; P2
+<span class="pill pill--boarding">boarding</span> &nbsp; Engine phase (P2)
 
 An agent that can edit files is an agent that can delete them. The permission
 broker is the part of Acpilot that makes that sentence survivable.
@@ -37,7 +37,7 @@ not a reason to allow it.
 | Anything outside the workspace | **ask** — refused if nobody is watching |
 | Shell command, or any unknown tool | **ask**, one request at a time |
 
-A write inside the workspace is allowed because P2 has no interface to ask
+A write inside the workspace is allowed because the engine phase (P2) has no interface to ask
 with; a profile that wants to be asked raises it with `[policy] default =
 "ask"`, and the first client that can show a dialog ships with that as its
 default.
@@ -108,11 +108,11 @@ watching.
 
 ## Status
 
-The broker is P2-6 and is built: rules and globs, `allow always` scoped to one
-session, an audit row per decision. P3-2 serves the pending list and the answer
+The broker is the engine phase's task P2-6 and is built: rules and globs, `allow always` scoped to one
+session, an audit row per decision. The service phase's task P3-2 serves the pending list and the answer
 route, announces each new request on `GET /v1/events` so a client is told rather
 than polling, and reads a profile's `[policy]` table at startup (`acpilotd
 --profile`), so a rule in a file is a rule a running daemon obeys. What is not
-built: a UI that shows the dialog (P5/P6) and persistence — the audit log lives
-in memory until P3-7's table, and the transcript (P2-8) is what survives a
+built: a UI that shows the dialog (the command-line phase, P5, and the editor phase, P6) and persistence — the audit log lives
+in memory until the service phase's task P3-7's table, and the transcript (P2-8) is what survives a
 restart.

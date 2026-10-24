@@ -1,6 +1,6 @@
-//! P0-2 — one PTY driver, two real TUI programs.
+//! The design phase's task P0-2 — one PTY driver, two real TUI programs.
 //!
-//! The probe answers the questions in `TODO.md` §P0-2 and nothing else:
+//! The probe answers the questions in `TODO.md` §the design phase's task P0-2 and nothing else:
 //!
 //! * can a TUI program be driven as an agent by writing a prompt and reading the
 //!   final screen, or does every program need its own adapter profile?

@@ -31,7 +31,7 @@ use tokio::time::{sleep, timeout};
 const MOCK: &str = env!("CARGO_BIN_EXE_acpilot-mock-agent");
 
 /// The longest a local pipe round trip may take before it is a finding rather
-/// than a slow machine. P2-9's exit criterion: a turn against the fixture costs
+/// than a slow machine. The engine phase's task P2-9's exit criterion: a turn against the fixture costs
 /// milliseconds, because nothing in it is a model.
 const TURN_BUDGET: Duration = Duration::from_millis(200);
 
@@ -412,7 +412,7 @@ async fn a_denied_write_is_reported_and_the_turn_still_ends() {
     assert!(!target.exists(), "a denied write writes nothing");
 }
 
-/// P2-2 and P2-3 both recorded the same gap: their pipe wiring was type-checked
+/// Engine phase's task P2-2 and the engine phase's task P2-3 both recorded the same gap: their pipe wiring was type-checked
 /// and never run. This is the run.
 #[cfg(target_os = "linux")]
 #[tokio::test]

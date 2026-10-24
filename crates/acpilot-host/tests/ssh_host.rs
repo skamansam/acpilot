@@ -4,7 +4,7 @@
 //! cross-check runs `--no-default-features` and must not need this file's
 //! symbols.
 //!
-//! Opt-in, because it needs a server: start P0-4's fixture and point the test at
+//! Opt-in, because it needs a server: start the design phase's task P0-4's fixture and point the test at
 //! it. The same `sshd` the note measured, on loopback, with a throwaway host key.
 //!
 //! ```bash
@@ -19,7 +19,7 @@
 //! and a test that silently needs one is a test that fails on a laptop for the
 //! wrong reason.
 //!
-//! What is asserted is what P0-4 measured, from the other side of the seam: exec
+//! What is asserted is what the design phase's task P0-4 measured, from the other side of the seam: exec
 //! keeps stderr out of the frame stream and preserves the exit code; a PTY is a
 //! terminal and takes a resize mid-run; and a hundred lines written one at a time
 //! arrive as a byte stream the caller has to frame.

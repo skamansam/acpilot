@@ -1,8 +1,8 @@
 //! The daemon: one process that owns sessions, agents, permissions and terminals.
 //!
 //! Every UI is a client of this API, including the local TUI and CLI, so there is
-//! exactly one place where state lives and exactly one auth story. P1 establishes
-//! the router, the error contract, and the OpenAPI surface; P3 fills in the rest.
+//! exactly one place where state lives and exactly one auth story. The foundation phase (P1) establishes
+//! the router, the error contract, and the OpenAPI surface; the service phase (P3) fills in the rest.
 //!
 //! Note what is *not* here: no file contents on the keystroke path, no agent
 //! logic, no UI. The daemon is a control plane.
@@ -145,7 +145,7 @@ async fn health() -> Json<Health> {
 /// State the routes share.
 ///
 /// The registry is optional for now: the daemon has no profile resolution yet
-/// (P4 owns it), so `acpilot serve` starts with none and the routes that need an
+/// (the profiles phase, P4, owns it), so `acpilot serve` starts with none and the routes that need an
 /// agent list answer from whatever the daemon was handed. Tests construct a real
 /// [`Registry`], which is the same path the daemon will use once profiles land.
 #[derive(Debug, Clone, Default)]
@@ -281,7 +281,7 @@ fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry
     if !path.is_file() {
         return Ok(None);
     }
-    // Secrets are namespaced by profile name, and the directory is the name: P4-2
+    // Secrets are namespaced by profile name, and the directory is the name: the profiles phase's task P4-2
     // resolves `<name>` to exactly this path. A path with no last segment names
     // no profile, and then nothing has been stored under that name either.
     let resolver = KeyringResolver::new(profile.name().unwrap_or_default());

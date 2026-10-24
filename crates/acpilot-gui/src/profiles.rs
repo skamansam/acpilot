@@ -1,7 +1,7 @@
 //! The profiles the window was launched with, as the list shows them.
 //!
 //! The shell does not go looking for profiles yet: a profile is a directory with
-//! a `config.toml`, and *which* directories count is P4's resolution rule, not
+//! a `config.toml`, and *which* directories count is the profiles phase's (P4) resolution rule, not
 //! something the GUI should invent a second version of. So the window shows the
 //! ones it was handed, and `--profile` is where they come from — the same
 //! explicit, loud rule the daemon follows.

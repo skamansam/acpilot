@@ -1,4 +1,4 @@
-//! `acpilotd-helper` — the Linux end of P0-5, a single-file probe.
+//! `acpilotd-helper` — the Linux end of the design phase's task P0-5, a single-file probe.
 //!
 //! The contract is deliberately boring, because the probe is measuring the
 //! *transport*, not the protocol: one JSON line in, one JSON line out, stdout is

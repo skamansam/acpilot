@@ -1,8 +1,8 @@
-# P0-5 — the WSL helper round trip, from Windows
+# Design phase's task P0-5 — the WSL helper round trip, from Windows
 
 Measured 2026-10-21 on Windows 11 (10.0.26300), `wsl.exe` 2.7.10.0, WSL2
 kernel 6.18.33.2-microsoft-standard-WSL2, distro `Ubuntu-24.04`, Rust 1.97.0 on
-both sides. The Windows half had never been measured: P0-2's PTY numbers are a
+both sides. The Windows half had never been measured: the design phase's task P0-2's PTY numbers are a
 real Linux PTY, and calling `wsl.exe` from *inside* WSL is interop, not the path
 the product ships.
 
@@ -153,8 +153,8 @@ So the contract is:
   -- distros` prints the silence. `docker-desktop` and `docker-desktop-*` are
   filtered out: a real distro name, never a workspace.
 
-What is left for the product is wiring, not protocol work: P3-8's
-`POST /v1/hosts` takes `wsl://<distro>`, P3-9 ships the helper, and the UI's
+What is left for the product is wiring, not protocol work: the service phase's task P3-8's
+`POST /v1/hosts` takes `wsl://<distro>`, the service phase's task P3-9 ships the helper, and the UI's
 "open folder" passes the UNC path through this same mapping.
 
 ## Latency
@@ -366,7 +366,7 @@ cursor position before it starts the payload, and ConPTY does not answer. With a
 
 So a ConPTY channel is usable only with a terminal-query responder, and it
 doubles every request (echo) and changes the newline (`\r\n`). That is exactly
-the P0-2 problem in a different place. For the helper's JSON channel, use pipes;
+the design phase's task P0-2 problem in a different place. For the helper's JSON channel, use pipes;
 keep ConPTY for `terminal/create` (P2-5), where a responder is mandatory anyway.
 
 ## Consequences for `acpilot-host`
@@ -387,7 +387,7 @@ keep ConPTY for `terminal/create` (P2-5), where a responder is mandatory anyway.
   and `-e` behaviour is version-dependent, and a mixed-version fleet will
   otherwise produce unreproducible path bugs.
 - Keep a supervisor for the helper: exit code 1 with a relay error means the
-  distro is gone, not that the request failed. `never|on-crash` restart is P2-2's
+  distro is gone, not that the request failed. `never|on-crash` restart is the engine phase's task P2-2's
   policy, but the distinction has to reach it.
 
 ## Limitations

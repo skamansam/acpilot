@@ -5,7 +5,7 @@
 - **Deciders:** project maintainers
 - **Resolves:** D1 (GUI framework)
 - **Relates to:** ADR 0001 (the index this fills), `docs/notes/gui-bench.md`
-  (the P0-3 measurements), TODO `P0-3` (closed), `P10-1`, `XT-1`, `XT-2`
+  (the design phase's task P0-3 measurements), TODO `P0-3` (closed), `P10-1`, `XT-1`, `XT-2`
 
 ## Context
 
@@ -28,8 +28,8 @@ between the first two is a trade, not a winner:
 D1 was taken on 2026-10-20 on the strength of the first point plus a
 non-technical one: a sibling project here will be a GUI builder written in gpui,
 so framework knowledge, upgrade work and upstream fixes are paid once across two
-products instead of sunk into a one-off. That decision was provisional until P0-3
-measured it. P0-3 closed on 2026-10-22; this ADR records the number that settles
+products instead of sunk into a one-off. That decision was provisional until the design phase's task P0-3
+measured it. The design phase's task P0-3 closed on 2026-10-22; this ADR records the number that settles
 it and the trigger that reopens it.
 
 ## Decision
@@ -37,7 +37,7 @@ it and the trigger that reopens it.
 ### 1. gpui, at exactly 0.2.2
 
 `gpui = "=0.2.2"` in `[workspace.dependencies]`, consumed by `acpilot-gui` when
-P10-2 wires it in. The `=` matters: a bare `"0.2.2"` is a caret requirement that
+the desktop phase's task P10-2 wires it in. The `=` matters: a bare `"0.2.2"` is a caret requirement that
 matches `0.2.3` and every later `0.2.x`, which is precisely the float this
 decision forbids. Floating within a 0.x line is how a year-old surface becomes a
 different year-old surface with nobody able to say which.
@@ -46,7 +46,7 @@ The pin is a policy, not a preference, and it has four parts:
 
 | Rule | Why |
 | --- | --- |
-| Bump deliberately, never implicitly | A new release is adopted within a week of landing (XT-1), with the P0-3 harness as the gate, so breakage is attributable to one bump |
+| Bump deliberately, never implicitly | A new release is adopted within a week of landing (XT-1), with the design phase's P0-3 harness as the gate, so breakage is attributable to one bump |
 | Escalate to a git `rev` only with a note here | We never track `branch = "main"`; a rev bump carries the reason and the upstream issue in this file |
 | Patch narrowly, upstream first | A carried change lives as a small series in `patches/gpui/` with the PR linked; a drifting fork is the failure mode |
 | One pin across both projects | When the GUI-builder project starts, both repos pin the same version — and, if we ever escalate, the same `rev` — with one shared patch series |
@@ -56,7 +56,7 @@ is not a dependency.
 
 ### 2. What the numbers justify
 
-P0-3 (`docs/notes/gui-bench.md`) built the same screen twice — a 100 000-line
+The design phase's task P0-3 (`docs/notes/gui-bench.md`) built the same screen twice — a 100 000-line
 document in a 1400 × 900 window, 50 rows of 18 px text visible, rows generated
 rather than materialised — and ran both frameworks interleaved on one machine
 (RTX 5060, 240 Hz panel, native Windows 11, release builds, warm file caches):
@@ -91,7 +91,7 @@ Three conclusions, which are the reason this is an ADR and not a footnote:
 
 ### 3. The veto is a comparison, not an absolute number
 
-P0-3's exit criteria said to fall back to iced if gpui missed the 150 ms
+The design phase's task P0-3's exit criteria said to fall back to iced if gpui missed the 150 ms
 first-paint budget "by more than 2×". Measured honestly, that clause does not
 work, and the reason is recorded here because it changes how future performance
 gates are written:
@@ -128,9 +128,9 @@ of these is observed and reproduced:
 
 | Trigger | Threshold | Where it is caught |
 | --- | --- | --- |
-| iced becomes more than 2× better on a budget gpui misses | iced's first frame at most half gpui's — ≲140–165 ms while gpui stays at 277–326 ms, warm machine | P0-3 harness re-run (XT-1) |
+| iced becomes more than 2× better on a budget gpui misses | iced's first frame at most half gpui's — ≲140–165 ms while gpui stays at 277–326 ms, warm machine | Design phase's task P0-3 harness re-run (XT-1) |
 | gpui needs a nightly toolchain, or cannot build from a vendored tree with no network | any | `cargo xtask check`, CI |
-| The accessibility probe fails | `accesskit` bridge not viable by the end of P10's first week | P10-7 |
+| The accessibility probe fails | `accesskit` bridge not viable by the end of the first week of the desktop phase (P10) | Desktop phase's task P10-7 |
 | An upstream release breaks us and no fix lands within one release cycle | ~1 month | XT-1 bump PR stuck open |
 | gpui 0.2.2's crates.io surface is yanked, or the crate stops publishing | any | XT-1 |
 
@@ -141,7 +141,7 @@ UI-agnostic by construction).
 
 ### 5. What the pin costs to build
 
-Verified against the P0-3 probe lockfile, which is the authority for the resolved
+Verified against the design phase's P0-3 probe lockfile, which is the authority for the resolved
 graph rather than anyone's recollection:
 
 - **gpui 0.2.2 resolves entirely from crates.io.** Zero git sources in the probe
@@ -175,14 +175,14 @@ accessibility goes badly" is only true if the switch is cheaper than the work.
   2025-10-22 and main has moved on. We wait for features instead of tracking
   main, which means some friction we could patch around is simply accepted.
 - **The pin is now enforced, so upgrades are a task.** XT-1's one-week adoption
-  window, the exact pin, and the P0-3 harness as the gate are the price of the
+  window, the exact pin, and the design phase's P0-3 harness as the gate are the price of the
   stability we do not get from semver.
 - **Upstream cadence becomes ours.** If gpui's release pace stalls, we are the
   ones waiting; if it moves fast, we are the ones running the harness every week.
   The GUI-builder sibling project halves that cost and doubles our upstream
   leverage, which is the whole argument for the pin.
 - **First paint is a startup problem, not a framework problem.** 277–326 ms on a
-  warm machine against a 150 ms product target means P10-6 and P10-8 have to
+  warm machine against a 150 ms product target means the desktop phase's tasks P10-6 and P10-8 have to
   answer it with process/window strategy. The measured lever is device and window
   creation, and profiling that phase is the next useful measurement.
 - **The first answer is process reuse, not a pre-warmed device.** The pin exposes
@@ -199,7 +199,7 @@ accessibility goes badly" is only true if the switch is cheaper than the work.
 - **Folds, inlays and the minimap are still ours.** gpui gives the primitives and
   a reference design, not a finished editor. The display map (P10-3) is real work
   with a known shape, which is a different risk from unknown work.
-- **Screen readers are a v0.1 limitation if the probe fails.** P10-7 says so in
+- **Screen readers are a v0.1 limitation if the probe fails.** the desktop phase's task P10-7 says so in
   the release notes rather than claiming parity we do not have.
 
 ## Alternatives considered
@@ -217,8 +217,8 @@ accessibility goes badly" is only true if the switch is cheaper than the work.
   it would make the desktop app a second consumer of the web frontend rather than
   its own cockpit. Kept as the second fallback because it reuses CodeMirror and
   its text editing is genuinely good.
-- **No decision until P10 starts.** Rejected: the text stack, keybindings and
-  theme plumbing are P10-2/P10-3's first tasks, and starting them on a framework
+- **No decision until the desktop phase (P10) starts.** Rejected: the text stack, keybindings and
+  theme plumbing are the desktop phase's tasks P10-2 and P10-3, and starting them on a framework
   we might abandon is how a phase gets thrown away.
 - **Tracking gpui `main`.** Rejected outright: unattributable breakage, no
   bisectable history across a release, and a build that changes under a reviewer.

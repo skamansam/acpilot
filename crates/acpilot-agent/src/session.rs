@@ -20,7 +20,7 @@
 //! assigned here, starting at 1 and never reused. The number is assigned before
 //! the event is broadcast, so a slow subscriber drops events but cannot renumber
 //! them; the transcript (P2-8) is what makes a gap recoverable. The broadcast
-//! channel is the daemon's feed (P3-3 adds replay on top).
+//! channel is the daemon's feed (the service phase's task P3-3 adds replay on top).
 //!
 //! The kind is the closed [`SessionEventKind`] enum, but the *payload* is
 //! deliberately explicit rather than a passthrough of the ACP object with its
@@ -68,10 +68,10 @@
 //!
 //! # Requests this build cannot serve
 //!
-//! Terminals arrive with P2-5, but an agent may ask before then. Each request is
+//! Terminals arrive with the engine phase's task P2-5, but an agent may ask before then. Each request is
 //! answered with `MethodNotFound` and a message naming the gap. Answering is not
 //! politeness: a request with no response leaves the agent waiting forever, which
-//! is how the P2-9 fixture found this, and an error is the one thing an agent can
+//! is how the engine phase's P2-9 fixture found this, and an error is the one thing an agent can
 //! act on.
 
 use std::collections::HashMap;

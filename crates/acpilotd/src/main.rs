@@ -1,7 +1,7 @@
 //! `acpilotd` — the daemon process.
 //!
-//! P1: bind, serve health and OpenAPI, and exit cleanly on Ctrl-C. Sockets,
-//! single-instance locking and the session routes arrive in P3.
+//! The foundation phase (P1): bind, serve health and OpenAPI, and exit cleanly on Ctrl-C. Sockets,
+//! single-instance locking and the session routes arrive in the service phase (P3).
 //!
 //! Two flags are how a profile reaches the daemon today. `--profile` names the
 //! directory holding a profile's `config.toml` and `agents.toml`: the `[policy]`
@@ -10,9 +10,9 @@
 //! agents file, when it exists, is what `GET /v1/agents` lists. `--workspace` is
 //! the root the broker compares paths with, because "inside the workspace" is the
 //! question the defaults are written in — the daemon serves one workspace until
-//! workspaces are first-class in P3.
+//! workspaces are first-class in the service phase (P3).
 //!
-//! Profile *names* and the platform config directory are P4-2's: a name has to
+//! Profile *names* and the platform config directory are the profiles phase's task P4-2's: a name has to
 //! resolve the same way for every Acpilot binary, and guessing here would be the
 //! second resolver.
 

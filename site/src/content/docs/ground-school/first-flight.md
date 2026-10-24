@@ -6,7 +6,7 @@ description: The five-minute version, and the honest footnote about what is miss
 <span class="pill pill--boarding">boarding</span>
 
 A first flight usually means "start a session, ask an agent to change a file,
-approve the diff". That flight is not available yet — the engine is P2. What you
+approve the diff". That flight is not available yet — the engine is the engine phase (P2). What you
 can do today is pre-flight: start the daemon, read its contract, and confirm the
 instrument panel lights up.
 
@@ -26,7 +26,7 @@ nothing behind it yet. Short flight. Good landing.
 
 ## The flight you will actually take
 
-When P2 lands, the sequence below is the target. It is written down now because
+When the engine phase (P2) lands, the sequence below is the target. It is written down now because
 the API and the permission flow are designed backwards from it — if this feels
 like too many steps, the design is wrong, not the documentation.
 

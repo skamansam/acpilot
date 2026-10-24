@@ -1,6 +1,6 @@
 //! Probe a real language server and print a machine-readable report.
 //!
-//! This is the P0-7 instrument, not a product. It starts a server, negotiates
+//! This is the design phase's P0-7 instrument, not a product. It starts a server, negotiates
 //! position encodings, opens one file, waits for diagnostics, asks for the
 //! definition of a marker, and converts every returned range back to a byte
 //! offset. If `--expect` is given, the definition must land exactly on that

@@ -1,6 +1,6 @@
 # The v1 API, frozen
 
-P0-6 wrote this down before P3 built it, because the endpoint list is the part of
+The design phase's task P0-6 wrote this down before the service phase (P3) built it, because the endpoint list is the part of
 the design that is expensive to change later. It is the contract the CLI, the TUI,
 the desktop app and the browser all speak — there is no privileged back channel,
 so anything one of them needs has to be here.
@@ -258,7 +258,7 @@ that is asleep is not a bug in the daemon.
 
 ## What the review changed
 
-P0-6 read the list against four clients and fixed the gaps rather than noting
+The design phase's task P0-6 read the list against four clients and fixed the gaps rather than noting
 them:
 
 | Client need | Served by | Was it in README? |
@@ -268,11 +268,11 @@ them:
 | TUI: permission prompt with no poll latency | session SSE `permission` event + pending fetch on connect | the taxonomy was scattered — fixed here |
 | TUI: mode switch, terminal panes, diagnostics | `/mode`, `/v1/terminals*`, `/v1/lsp/*` | yes |
 | Script: answer a permission non-interactively | deterministic `resolve` semantics: retry-safe, `409` only for a different answer | the route existed, the semantics did not — added |
-| Web: reconnect without losing events | `Last-Event-ID`, heartbeat, `resync` | the mechanism was in P3-3, not in the README — added |
+| Web: reconnect without losing events | `Last-Event-ID`, heartbeat, `resync` | the mechanism was in the service phase's task P3-3, not in the README — added |
 | Any client: switch profile without restart | `X-Acpilot-Profile`, `POST /v1/profiles/{id}/activate` | the activate route was missing — added |
 | TUI/CLI: clear an agent whose binary changed | `POST /v1/agents/{id}/trust` | missing, and the proto already had `status: untrusted` with no way out — added |
 | Any client: know whether to retry | error envelope with HTTP mapping | missing from README — added |
 
 Nothing else was missing for v1. Providers, models, recipes and the ACP bridge
-stay out on purpose: they are P4.5/P7/P8, and adding them now would freeze
+stay out on purpose: they are the models phase (P4.5)/Language intelligence phase (P7)/Remote hosts phase (P8), and adding them now would freeze
 transports that have not been measured.

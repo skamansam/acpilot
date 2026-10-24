@@ -3,7 +3,7 @@ title: Profiles
 description: "One identity per context: agents, keys, policy, preferences, history."
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4
+<span class="pill pill--hangar">hangar</span> &nbsp; Profiles phase (P4)
 
 A **profile** is a named identity: `work`, `personal`, `client-acme`. It owns
 agents, credentials, language-server configuration, permission policy, editor
@@ -72,5 +72,5 @@ practical answer to "why is it doing that?".
 
 ## Status
 
-Not started. P4 lands the resolution function, the cascade, and the isolation
+Not started. The profiles phase (P4) lands the resolution function, the cascade, and the isolation
 tests before any UI exposes a profile switcher.

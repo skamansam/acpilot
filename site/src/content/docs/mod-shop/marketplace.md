@@ -3,7 +3,7 @@ title: The marketplace
 description: A curated list of repositories, changed by pull request, with no service behind it.
 ---
 
-<span class="pill pill--boarding">boarding</span> &nbsp; curated list landed; downloads are P4.6-4
+<span class="pill pill--boarding">boarding</span> &nbsp; curated list landed; downloads are task P4.6-4
 
 The marketplace is a file in this repository: [`marketplace/index.toml`](https://github.com/skamansam/acpilot/blob/main/marketplace/index.toml).
 It lists extension repositories that a human has reviewed. There is no account

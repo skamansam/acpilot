@@ -19,7 +19,7 @@
 //! and `bind`; the result is two processes, which is exactly what every launch
 //! did before this existed — single instance is an optimisation here, not a
 //! safety property. A lock file taken with `try_lock` before the bind is the fix
-//! when P10-5 does deep links, because then a lost request stops being cosmetic.
+//! when the desktop phase's task P10-5 does deep links, because then a lost request stops being cosmetic.
 
 use std::ffi::OsStr;
 use std::io::{self, Write};

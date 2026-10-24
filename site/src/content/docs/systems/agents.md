@@ -3,7 +3,7 @@ title: Agents and ACP
 description: What the daemon speaks, what it expects, and what it refuses to guess.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P2
+<span class="pill pill--hangar">hangar</span> &nbsp; Engine phase (P2)
 
 An **agent** is a program that can read your files, run commands, and write
 changes, driven over a protocol instead of a chat window. Acpilot's native
@@ -153,5 +153,5 @@ narrows that, and every decision lands on the broker's audit log with the rule
 that made it. `pty` and `http-jsonrpc` agents are accepted by the schema but refused
 by the supervisor until their phases land, so the diagram above is still the
 target, not a full description of today's daemon.
-Model-backed agents arrive in P4.5, on top of the same layer, and inherit
-whatever P2 gets right — or wrong — without a second implementation to blame.
+Model-backed agents arrive in the models phase (P4.5), on top of the same layer, and inherit
+whatever the engine phase (P2) gets right — or wrong — without a second implementation to blame.

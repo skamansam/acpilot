@@ -1,4 +1,4 @@
-# P0-3 — gpui against iced, on a GPU
+# Design phase's task P0-3 — gpui against iced, on a GPU
 
 Status: **closed, and the framework decision stands.** The frame budget is met by
 both frameworks; the first-paint budget is missed by both; the fallback is priced
@@ -41,7 +41,7 @@ window appears on the Windows desktop for ~2 s and the process prints one JSON
 object and exits.
 
 That is a Windows number for a Windows GPU, which is what the budget wants. It
-says nothing about macOS or Linux; P10-3's macOS work has no paint numbers yet.
+says nothing about macOS or Linux; the desktop phase's task P10-3's macOS work has no paint numbers yet.
 
 ## The two instruments
 
@@ -176,7 +176,7 @@ thread and cost a mutex lock each; four runs, one machine, one driver.
 
 ## Does the first-paint miss veto gpui?
 
-`TODO.md` §P0-3 says to fall back to `iced` if gpui "misses by >2×". The answer
+`TODO.md` §the design phase's task P0-3 says to fall back to `iced` if gpui "misses by >2×". The answer
 depends on the machine state, and that is the finding, not a hedge:
 
 - On a machine whose DLLs and driver caches are warm, gpui sits **on** the line:

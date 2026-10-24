@@ -1,8 +1,8 @@
 //! A deliberately small LSP client: spawn, request, notify, listen.
 //!
-//! P0-7 exists to find out what real servers do before P7 commits to a loop.
+//! The design phase's task P0-7 exists to find out what real servers do before the language-intelligence phase (P7) commits to a loop.
 //! `async-lsp` is the candidate library; this module is the control group, small
-//! enough to read in one sitting and generic enough that P7 can keep it if the
+//! enough to read in one sitting and generic enough that the language-intelligence phase (P7) can keep it if the
 //! library's transport abstraction turns out to cost more than it saves.
 //!
 //! It does not implement document sync, cancellation, or progress bookkeeping.

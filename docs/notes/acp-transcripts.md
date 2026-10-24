@@ -1,4 +1,4 @@
-# P0-1 — two real agents through one ACP client
+# Design phase's task P0-1 — two real agents through one ACP client
 
 Measured 2026-10-21 on Linux (WSL2, x86_64). The instrument is
 [`probes/acp-handshake`](../../probes/acp-handshake/src/main.rs) — one client, one
@@ -34,7 +34,7 @@ forces at least one tool call without asking the model to change anything.
    (`agent_message_chunk`, `user_message_chunk`, `tool_call`, `tool_call_update`,
    `available_commands_update`, `usage_update`, `config_option_update`) — plus
    `session_info_update` on replay. No `plan` and no `agent_thought_chunk` appeared
-   once, even though the schema and the plan capability allow them; P2-3 must
+   once, even though the schema and the plan capability allow them; the engine phase's task P2-3 must
    support them but cannot be tested against these two agents.
 3. **A denial is not an error.** `session/request_permission` arrived once, for a
    file write, with `allow_once` / `allow_always` / `reject_once` options. Answering
@@ -45,7 +45,7 @@ forces at least one tool call without asking the model to change anything.
 4. **`session/load` works on both, and is not a transcript.** Both advertise
    `loadSession: true`; both answer successfully. But the replay is *condensed*:
    Claude replayed 5 updates for a turn that had streamed 29, OpenCode 7 for 16.
-   Chunks are merged into one message each. P2-8's append-only `session.jsonl`
+   Chunks are merged into one message each. The engine phase's task P2-8's append-only `session.jsonl`
    is therefore still the source of truth; `load` is for resuming a session the
    daemon no longer remembers, not for rebuilding a UI.
 5. **The agent's version is a dependency with silent failure modes.** The installed
@@ -102,7 +102,7 @@ token counts in the `session/prompt` response `_meta.quota`; OpenCode puts them 
 the response's `usage` (`inputTokens`, `outputTokens`, `totalTokens`,
 `cachedReadTokens`) — which the typed response **silently dropped**, because
 `usage` on `PromptResponse` is behind the SDK's `unstable_end_turn_token_usage`
-feature. It was visible only on the wire capture. Enable that feature in P2 or the
+feature. It was visible only on the wire capture. Enable that feature in the engine phase (P2) or the
 run record will claim zero tokens for a turn that used 14,158.
 
 The shape of a tool call is not stable across its lifetime:
@@ -156,7 +156,7 @@ The answer is a normal JSON-RPC result, not a notification:
 The broker is not optional. The request is a *blocking* call from the agent's point
 of view: no prompt progress happens until it is answered, and the agent offers a
 diff and locations before you decide. That is enough to render the write exactly as
-it will land, which is what the TUI's permission card needs; it is also why P2-6
+it will land, which is what the TUI's permission card needs; it is also why the engine phase's task P2-6
 must answer from a script as well as from a keyboard.
 
 Denying is ordinary: `tool_call_update` → `status: "failed"`, content
@@ -192,20 +192,20 @@ where both agents put vendor extensions, and it is present on requests, response
 and updates.
 
 The SDK's `LineDirection` debug hook made this observable without a proxy. That is
-the cheapest way to keep the wire visible in P2, and it is what a bug report about
+the cheapest way to keep the wire visible in the engine phase (P2), and it is what a bug report about
 "did the agent get what I sent" should attach.
 
-## What this forces on P2
+## What this forces on the engine phase (P2)
 
-- **P2-3** must model `CommandsChanged`, `Notice`, `Compaction`, `Plan`, and
+- **the engine phase's task P2-3** must model `CommandsChanged`, `Notice`, `Compaction`, `Plan`, and
   `Thought` even though these runs never produced them, and must treat unknown
   `SessionUpdate` variants and unknown notifications as ignorable. Sequence numbers
   are ours to assign; the protocol gives none.
-- **P2-6** permission options map one-to-one, and the outcome is `selected` with an
+- **the engine phase's task P2-6** permission options map one-to-one, and the outcome is `selected` with an
   option id or `cancelled`. Denial must be audited as a decision and must leave the
   turn alive. The auto-deny used here is exactly the "no answer" policy tests need.
-- **P2-8** is still required: `load` replays a consolidated, timestamp-free history.
-- **P2-2** must record `agentInfo.version` in the session record, enable
+- **the engine phase's task P2-8** is still required: `load` replays a consolidated, timestamp-free history.
+- **the engine phase's task P2-2** must record `agentInfo.version` in the session record, enable
   `unstable_end_turn_token_usage` (or read `_meta`), and surface a turn that produced
   no text and zero tokens as a warning, because one of the two agents reported
   exactly that and called it success.

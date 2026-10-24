@@ -332,12 +332,12 @@ impl Session {
 }
 
 /// ConPTY probe: the same wsl.exe, the same helper, but the child's stdio is a
-/// pseudo console instead of two pipes. This is the half P0-2 could not measure.
+/// pseudo console instead of two pipes. This is the half the design phase's task P0-2 could not measure.
 ///
 /// The first run proved the point the hard way: nothing happened for 10 s, and
 /// the only bytes that came back were `ESC [ 6 n`, the cursor-position request.
 /// A bare ConPTY does not answer it, so `wsl.exe` waits before it starts the
-/// helper — the same terminal-query problem P0-2 hit with the TUIs. The probe now
+/// helper — the same terminal-query problem the design phase's task P0-2 hit with the TUIs. The probe now
 /// answers DSR and DA1 and records how many queries that took.
 pub struct ConPtyRun {
     pub bytes: Vec<u8>,

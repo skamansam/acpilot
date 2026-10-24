@@ -3,7 +3,7 @@ title: TUI
 description: The editor you can live in, in a terminal, over SSH, on a plane.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P6
+<span class="pill pill--hangar">hangar</span> &nbsp; Editor phase (P6)
 
 The terminal UI is the primary interface, not the fallback. It is what runs over
 an SSH session, inside tmux, on a machine with no GPU, and it is the reason the
@@ -48,5 +48,5 @@ gets you the first hour and costs you the second year.
 
 ## Status
 
-The crate exists and does nothing. P6 is where the editor becomes real; until
+The crate exists and does nothing. The editor phase (P6) is where the editor becomes real; until
 then there is no reason to pretend otherwise.

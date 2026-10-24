@@ -1,4 +1,4 @@
-# P0-7 — language servers: what three real servers do
+# Design phase's task P0-7 — language servers: what three real servers do
 
 Measured 2026-10-21 on Linux under WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2,
 x86_64), Rust 1.97.0. Fixtures were opened from the distro's own filesystem
@@ -29,7 +29,7 @@ the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,
 2. **The conversion is not the cost.** On a 100k-line, 6.7 MB file, one
    offset→position conversion is 17.6 ns in UTF-8 and 28.0 ns in UTF-16; the
    reverse is 10.0 ns and 16.1 ns. A keystroke will never notice. Rebuilding the
-   line index costs 2.26 ms, which *is* relevant: P7 must make the index
+   line index costs 2.26 ms, which *is* relevant: the language-intelligence phase (P7) must make the index
    incremental, not re-run it per edit.
 3. **Publish diagnostics are universal; pull diagnostics are not.**
    `rust-analyzer` advertises `diagnosticProvider` and answers
@@ -45,10 +45,10 @@ the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,
 5. **URIs were well formed.** All returned `file://` URIs parsed, had no host, and
    preserved percent-encoding for a directory containing a space and `ü`
    (`file:///tmp/lsp-probe%20%C3%BCn%C3%AFcode/index.ts`). Windows drive letters
-   are untested here (P0-5 owns that).
+   are untested here (the design phase's task P0-5 owns that).
 6. **`async-lsp` 0.2 is transport-agnostic, so non-stdio costs no extra protocol
    work** — its `MainLoop::run` takes any `AsyncBufRead`/`AsyncWrite`. What it
-   costs is adapters and ownership, below. P0 keeps the hand-rolled loop; P7-2 can
+   costs is adapters and ownership, below. The design phase (P0) keeps the hand-rolled loop; the language-intelligence phase's task P7-2 can
    choose with data instead of a guess.
 
 ## Capabilities as advertised
@@ -139,7 +139,7 @@ Checked against 0.2.4 from crates.io, in a scratch crate outside this repository
 - `MainLoop::run(input: impl AsyncBufRead, output: impl AsyncWrite)` and
   `run_buffered` are generic over the transport. Running over a PTY, socket, or
   in-memory duplex is the same call as stdio — no extra protocol code. This is the
-  thing P0-7 wanted to know, and the answer is favourable.
+  thing the design phase's task P0-7 wanted to know, and the answer is favourable.
 - It is `futures`-io based, not tokio-io based. Wrapping `tokio::process::ChildStdout`
   needs `tokio_util::compat`, i.e. a dependency and two adapters that the
   hand-rolled loop does not need.
@@ -150,13 +150,13 @@ Checked against 0.2.4 from crates.io, in a scratch crate outside this repository
   `acpilot-lsp` (both with tokio's `full` feature), so about 25 extra crates,
   and 9.1 s for a cold debug build of an otherwise empty binary. That is real
   weight for a client that currently needs five requests, but it is not
-  disqualifying once P7 needs the whole surface.
+  disqualifying once the language-intelligence phase (P7) needs the whole surface.
 - The trade-off is ownership: `MainLoop` owns the read loop. Raw notifications —
   exactly what the probe needed to count — are only visible by implementing
   `LanguageClient` callbacks, and a request that needs to race a notification
   needs the library's router rather than `select!`.
 
-Recommendation for P7-2: adopt `async-lsp` only if the P7 client needs more than
+Recommendation for the language-intelligence phase's task P7-2: adopt `async-lsp` only if the language-intelligence phase (P7) client needs more than
 a dozen typed requests. Otherwise keep `wire` + a loop shaped like `client.rs`,
 which is directly testable against a mock server and already uses tokio. Do not
 adopt it *because* of transport: both designs are transport-agnostic.
@@ -194,8 +194,8 @@ error as a readable diagnostic instead of a failed start.
 - One file per server, one definition, one diagnostic. This proves framing,
   negotiation, and column conversion; it does not measure a real project index.
 - Linux only. Windows drive letters, UNC paths, and `file://` with a host are
-  untested — that is P0-5's territory, and the URI parser here (`url`) is the one
-  P7 should keep using rather than string-building paths.
+  untested — that is the design phase's task P0-5's territory, and the URI parser here (`url`) is the one
+  the language-intelligence phase (P7) should keep using rather than string-building paths.
 - Timings are single runs on a warm machine, not a benchmark harness.
 - `didChange` was not exercised; the probe only opens a document. Incremental sync
-  (`change: 2` on all three) is P7's problem.
+  (`change: 2` on all three) is the language-intelligence phase's (P7) problem.

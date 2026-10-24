@@ -1,8 +1,8 @@
 //! The supervisor: one agent process, its stderr, and the restart decision.
 //!
-//! P2-1 made a manifest into an [`AgentSpec`]; this is the first code that acts
+//! The engine phase's task P2-1 made a manifest into an [`AgentSpec`]; this is the first code that acts
 //! on one. It deliberately stops at the process boundary — no JSON-RPC, no
-//! sessions — because those are P2-3's, and a supervisor that also spoke the
+//! sessions — because those are the engine phase's task P2-3's, and a supervisor that also spoke the
 //! protocol would be impossible to test without an agent.
 //!
 //! Three decisions are worth stating because each is a refusal:
@@ -342,7 +342,7 @@ pub struct Outcome {
 /// For a local command this is a `PATH` lookup on the host the daemon runs on. It
 /// is deliberately not a handshake: no process is started, so a status list can
 /// be built without side effects. `Unhealthy` and `Untrusted` are session facts
-/// (P2-2 trust pinning, P3 health) and stay unreported until there is a session
+/// (the engine phase's task P2-2 trust pinning, the service phase (P3) health) and stay unreported until there is a session
 /// to report them from.
 ///
 /// An `http-jsonrpc` agent is `Available` when it is configured: reachability is

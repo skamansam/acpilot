@@ -28,7 +28,7 @@ runs at install time, and a theme whose token pairs are not unreadable.
 
 ## What "install" means today
 
-The signed static index with per-version checksums is P4.6-4. Until it lands,
+The signed static index with per-version checksums is the mod-shop phase's task P4.6-4. Until it lands,
 listing gets a repository found; installing it means:
 
 ```bash

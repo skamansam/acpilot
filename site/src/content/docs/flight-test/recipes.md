@@ -3,7 +3,7 @@ title: Recipes
 description: One model, one prompt, one budget — as a file you can diff, review, and share.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5-3
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-3)
 
 A **recipe** is a tuned configuration for one model of one provider. It is TOML in
 the profile, it is reviewable in a diff, and sharing one means sending a file —

@@ -3,7 +3,7 @@ title: The manifest
 description: extension.toml, every field, and the checks that run before anything is loaded.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.6-1
+<span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6-1)
 
 An extension is a directory with an `extension.toml` at its root. The manifest is
 the entire interface: there is no install script, no build step at install time,
@@ -146,4 +146,4 @@ built-in extensions under `extensions/` are its first users. The checks above ar
 tests, not intentions: `crates/acpilot-extensions/tests/loader.rs` covers unknown
 keys, schema versions, publisher mismatches, path traversal, symlink escapes, and
 the collision and `extends` cycles. Installing from a registry and activating in
-a profile are P4.6-3 to P4.6-5.
+a profile are tasks P4.6-3 to P4.6-5.

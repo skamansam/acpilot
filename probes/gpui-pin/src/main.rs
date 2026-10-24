@@ -4,15 +4,15 @@
 //! cargo run --release
 //! ```
 //!
-//! This is the part of P0-3 that can be answered without a GPU: whether the
+//! This is the part of the design phase's task P0-3 that can be answered without a GPU: whether the
 //! version in `[workspace.dependencies]` compiles and links from the registry,
 //! with no `zed/` checkout, no git dependency, and no nightly toolchain. The
-//! latency half of P0-3 — first paint and keystroke→paint against 16 ms / 150 ms
+//! latency half of the design phase's task P0-3 — first paint and keystroke→paint against 16 ms / 150 ms
 //! — needs hardware rendering, and a software rasteriser would answer for
 //! llvmpipe rather than for gpui. `docs/notes/gui-bench.md` records that split.
 //!
 //! The `libc` pin in `Cargo.toml` is load-bearing: without it the dependency
-//! graph does not compile at all on current Linux, which is itself a P0-3
+//! graph does not compile at all on current Linux, which is itself a design phase's task P0-3
 //! finding — the pin buys a framework that needs a transitive version held back.
 
 fn main() {

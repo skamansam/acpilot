@@ -1,4 +1,4 @@
-//! Fixture for the P0-7 LSP probe: emoji, CJK, and a combining mark.
+//! Fixture for the design phase's task P0-7 LSP probe: emoji, CJK, and a combining mark.
 
 use std::collections::NotAType;
 

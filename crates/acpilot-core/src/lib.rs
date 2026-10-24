@@ -5,7 +5,7 @@
 //! dependency-light: if a type here needs a runtime to be useful, it belongs in a
 //! layer above.
 //!
-//! P2 fills in the domain types. P1 establishes the error contract every layer
+//! The engine phase (P2) fills in the domain types. The foundation phase (P1) establishes the error contract every layer
 //! shares, because exit codes and HTTP statuses are a promise to users and
 //! scripts, not an implementation detail.
 

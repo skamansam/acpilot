@@ -104,7 +104,7 @@ mirrored on GitHub Pages, plus a detached signature over the index.
   same format, which is how the schema gets tested.
 - The registry is a maintainer bottleneck. Accepted: a reviewed index is slower
   than a self-publish button and vastly cheaper than an incident.
-- Tier 2 is deferred, so transcript parsers stay data-driven (P2-7's
+- Tier 2 is deferred, so transcript parsers stay data-driven (the engine phase's task P2-7's
   `parser = "script:<path>"` escape hatch remains the answer until D18 is
   settled). Some extension requests will wait.
 - A grammar `.wasm` is still executable code inside tree-sitter's runtime. It is

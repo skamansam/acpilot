@@ -3,7 +3,7 @@ title: Configuration
 description: One cascade, per-key merging, and a command that tells you which file won.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4 &nbsp;·&nbsp; this shape may still change
+<span class="pill pill--hangar">hangar</span> &nbsp; Profiles phase (P4) &nbsp;·&nbsp; this shape may still change
 
 Configuration is layered, and every layer can override a single key rather than a
 whole file. The last word wins:

@@ -82,14 +82,14 @@ pub fn initial_manifest() -> String {
 
 /// Gap between typing a prompt and pressing Enter in a PTY agent.
 ///
-/// P0-2: sending `text` and Enter in one write silently fails to submit in
+/// Design phase's task P0-2: sending `text` and Enter in one write silently fails to submit in
 /// Freebuff and looks exactly like a completed turn. The value is a starting
-/// point, not a measurement — P2-7 owns tuning it per parser.
+/// point, not a measurement — the engine phase's task P2-7 owns tuning it per parser.
 pub const DEFAULT_SUBMIT_DELAY: Duration = Duration::from_millis(50);
 
 /// Backstop when a PTY agent's sentinel never fires.
 ///
-/// P0-2 measured this as the smallest timeout that truncated no turn: an idle
+/// Design phase's task P0-2 measured this as the smallest timeout that truncated no turn: an idle
 /// timeout below 5 s truncated 4 of 5 real turns, because the model can think
 /// for 3.4 s between two chunks of the same answer.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_millis(5_000);
@@ -221,7 +221,7 @@ impl Transport {
 
 /// What a PTY agent needs beyond its command.
 ///
-/// Every field is one of P0-2's findings: a sentinel is the primary
+/// Every field is one of the design phase's task P0-2's findings: a sentinel is the primary
 /// turn-complete signal and an idle timeout is only the backstop, so neither can
 /// be left to a default that guesses per program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,7 +250,7 @@ pub enum Parser {
     /// An escape hatch: a user-supplied parser at this path.
     ///
     /// Parsing a *manifest* only records the path. Whether a script may run at
-    /// all is a policy question for P2-7, which owns the loader.
+    /// all is a policy question for the engine phase's task P2-7, which owns the loader.
     Script(PathBuf),
 }
 
@@ -1020,7 +1020,7 @@ fn require_pty_profile(entry: &AgentEntry) -> Result<PtyProfile, AgentError> {
         .submit_delay_ms
         .map_or(DEFAULT_SUBMIT_DELAY, Duration::from_millis);
     let idle_timeout = match entry.idle_timeout_ms {
-        // Zero would mean "never give up", which is the one setting P0-2 showed
+        // Zero would mean "never give up", which is the one setting the design phase's task P0-2 showed
         // truncates turns. Leaving the key out is how you ask for the default.
         Some(0) => {
             return Err(AgentError::InvalidField {

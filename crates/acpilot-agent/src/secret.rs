@@ -188,7 +188,7 @@ pub struct SecretError {
 ///
 /// The registry calls this once per reference while it loads a manifest, which
 /// is what makes a missing credential a load error instead of a failure in the
-/// middle of a turn. The backend is injected: P4-5 supplies the OS keyring, and
+/// middle of a turn. The backend is injected: the profiles phase's task P4-5 supplies the OS keyring, and
 /// tests supply [`MapResolver`].
 pub trait SecretResolver: Send + Sync {
     /// Resolve one reference, or say why not.

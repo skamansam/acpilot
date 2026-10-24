@@ -2,7 +2,7 @@
 //!
 //! The GUI is the second UI over the same daemon API, so nothing here is
 //! allowed to hold domain logic: if the TUI cannot do something, the GUI should
-//! not be able to either. P10-2 starts with the shell — a window, the shared
+//! not be able to either. The desktop phase's task P10-2 starts with the shell — a window, the shared
 //! theme tokens, and the profiles it was launched with.
 //!
 //! Two layers, and the split is deliberate:

@@ -1,4 +1,4 @@
-# P0-2 — a program as an agent: three TUIs under one PTY driver
+# Design phase's task P0-2 — a program as an agent: three TUIs under one PTY driver
 
 Measured 2026-10-21 on Linux under WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2,
 x86_64), Rust 1.97.0. WSL2 runs a real kernel and hands out a real Linux PTY, so
@@ -187,7 +187,7 @@ Both contain the answer, the timing, and the sentinel in a fixed place — and
 both need the program's own grammar to separate them from ads, spinners, the
 status bar, and the thought. That is a profile, not a heuristic.
 
-## Consequences for P2-7
+## Consequences for the engine phase's task P2-7
 
 - `transport = "pty"` ships **profiles**, one per program: submit key + write
   split, startup gates, input row, message markers, completion sentinel, exit
@@ -208,11 +208,11 @@ status bar, and the thought. That is a profile, not a heuristic.
 
 - Two programs, one turn each, all on WSL2's Linux PTY. The Windows side —
   ConPTY, and `wsl.exe` starting a distro from Windows — was untouched here.
-  P0-5 covered it separately (`docs/notes/wsl-helper.md`): under ConPTY,
+  The design phase's task P0-5 covered it separately (`docs/notes/wsl-helper.md`): under ConPTY,
   `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same query
   problem this note found in the TUIs. It is not the same terminal. No resize,
   cancellation, tool-permission prompt, or multi-turn context was exercised.
-- The probe returns screen text; it does **not** extract messages. That is P2-7's
+- The probe returns screen text; it does **not** extract messages. That is the engine phase's task P2-7's
   job, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so
   Freebuff's three `CSI 6 n` probes in one chunk get one answer. Harmless here,

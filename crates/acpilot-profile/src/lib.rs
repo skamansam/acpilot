@@ -4,7 +4,7 @@
 //! reads at startup. Today this crate reads one table of that file — `[policy]`,
 //! the rules a running [`Broker`](acpilot_agent::Broker) answers from — because
 //! that is the part a daemon needs before it can open a session. The rest of the
-//! file (preferences, language servers, the keyring namespace) is P4's, and it
+//! file (preferences, language servers, the keyring namespace) is the profiles phase's (P4), and it
 //! will be read here rather than somewhere else for the same reason.
 //!
 //! Resolution is explicit and loud: a directory that does not hold a
@@ -71,7 +71,7 @@ impl Profile {
 
     /// The profile's name: the last segment of its directory.
     ///
-    /// The keyring namespaces every secret by the profile name, and P4-2's
+    /// The keyring namespaces every secret by the profile name, and the profiles phase's task P4-2's
     /// resolution turns a name into exactly `<config>/profiles/<name>`, so the
     /// segment the directory was opened by is the name those secrets were written
     /// under. `None` for a path with no last segment (`..`, a filesystem root).

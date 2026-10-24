@@ -20,10 +20,10 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Task {
     /// Everything CI enforces that can run locally: formatting, lints, the
-    /// workspace tests, and the P0-5 probe. `wsl-bench` needs a WSL2 runner and
+    /// workspace tests, and the design phase's P0-5 probe. `wsl-bench` needs a WSL2 runner and
     /// stays out.
     Check,
-    /// The P0-5 probe's checks alone. CI's `probes` job runs this, so the six
+    /// The checks of the design phase's P0-5 probe alone. CI's `probes` job runs this, so the six
     /// steps are written once — here — and cannot drift from what a developer
     /// runs locally.
     Probe,
@@ -96,7 +96,7 @@ fn run_check() -> ExitCode {
         }
     }
 
-    // The workspace is not the whole gate: the P0-5 probe is deliberately not a
+    // The workspace is not the whole gate: the design phase's P0-5 probe is deliberately not a
     // member, so `--workspace` never reaches it. Checking it here keeps one
     // command for "everything CI enforces".
     if !check_platforms() {
@@ -180,7 +180,7 @@ fn installed_targets() -> Vec<String> {
         .collect()
 }
 
-/// The P0-5 probe: a standalone crate plus a helper that cargo never compiles.
+/// The design phase's P0-5 probe: a standalone crate plus a helper that cargo never compiles.
 ///
 /// Same commands as the `p0-5 probe` job in `.github/workflows/ci.yml`, spawned
 /// directly rather than through a shell — a bash bundled with an editor is not

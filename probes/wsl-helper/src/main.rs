@@ -1,11 +1,11 @@
-//! P0-5 — the Windows half of the WSL helper.
+//! The design phase's task P0-5 — the Windows half of the WSL helper.
 //!
 //! `docs/notes/pty-agents.md` and `docs/notes/lsp-servers.md` both stop at the
 //! Windows boundary: WSL2's Linux PTY is a real PTY, and calling `wsl.exe` from
 //! inside WSL is interop, not the path the product ships. The helper actually
 //! runs the other way round — a Windows `acpilotd` spawns `wsl.exe`, which starts
 //! a Linux `acpilotd-helper`, and the two speak one JSON line at a time. This
-//! probe measures that direction and answers the questions in `TODO.md` §P0-5:
+//! probe measures that direction and answers the questions in `TODO.md` §the design phase's task P0-5:
 //!
 //! * what does one call cost, and what does one *message* cost once the helper is
 //!   already running? Those are different numbers by two orders of magnitude.

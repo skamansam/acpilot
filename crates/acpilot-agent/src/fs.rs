@@ -4,7 +4,7 @@
 //! is the side that knows where the workspace is and which machine it is on. So
 //! `fs/read_text_file` and `fs/write_text_file` arrive here, and every byte they
 //! move goes through [`Host`] rather than `std::fs` — the same code path serves a
-//! laptop and, once P3-9 lands the SFTP channel, a remote workspace.
+//! laptop and, once the service phase's task P3-9 lands the SFTP channel, a remote workspace.
 //!
 //! # The workspace is the boundary, and it is checked after resolution
 //!
@@ -19,7 +19,7 @@
 //!
 //! Reads only ever happen inside the workspace. Reads outside it are refused with
 //! a typed error; there is no approval flow for them, and inventing one before
-//! P2-6 owns the policy engine would mean two answers to the same question.
+//! The engine phase's task P2-6 owns the policy engine would mean two answers to the same question.
 //!
 //! # The shadow write
 //!
@@ -43,7 +43,7 @@
 //! waiting for an approval that cannot arrive. If something is listening and
 //! never answers, [`ASK_TIMEOUT`](crate::permission::ASK_TIMEOUT) ends the wait.
 //! The agent gets a denial either way: a blocked agent with no path to a decision
-//! is a hang, and a hang is what P2-9 found when an unimplemented method went
+//! is a hang, and a hang is what the engine phase's task P2-9 found when an unimplemented method went
 //! unanswered.
 //!
 //! # What this module is not

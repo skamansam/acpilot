@@ -3,7 +3,7 @@ title: "Hosts: SSH and WSL"
 description: Where the code actually lives, and why Windows does not crawl through UNC paths.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P8 (SSH), P9 (WSL)
+<span class="pill pill--hangar">hangar</span> &nbsp; Remote hosts phase (P8, SSH) &nbsp;·&nbsp; Windows phase (P9, WSL)
 
 A **host** is a machine with a filesystem and processes. Local is a host. An SSH
 box is a host. A WSL distribution is a host. A workspace lives on one, and
@@ -62,5 +62,5 @@ stale tree that looks live is worse than a tree that admits it is a poll.
 
 ## Status
 
-Not started. P0-4 proves ACP over an SSH exec channel; P0-5 proves the helper
-round-trip and path translation before P8 and P9 build on them.
+Not started. The design phase's task P0-4 proves ACP over an SSH exec channel; task P0-5 proves the helper
+round-trip and path translation, before the remote-hosts phase (P8) and the Windows phase (P9) build on them.

@@ -58,7 +58,7 @@ impl Pty {
     }
 
     /// Send bytes to the terminal exactly as typed — no newline is added, because
-    /// `text` vs `text\r` is the difference P0-2 measured.
+    /// `text` vs `text\r` is the difference the design phase's task P0-2 measured.
     pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.backend.write_all(bytes)
     }

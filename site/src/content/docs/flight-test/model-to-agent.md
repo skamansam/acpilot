@@ -3,7 +3,7 @@ title: From model to agent
 description: A recipe becomes an agent by becoming a process that speaks ACP — not by teaching the daemon about prompts.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5-5, P4.5-9
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-5, P4.5-9)
 
 Promotion is one command, and the command writes one manifest entry. That is the
 whole trick:

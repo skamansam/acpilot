@@ -376,7 +376,7 @@ trade if the pin is disciplined, so it is a task, not a footnote:
   git rev in the graph at this pin, but a build that needs the network to fetch is still a
   build that breaks on an air-gapped release day.
 - **Upgrades track releases, not a calendar.** A new gpui release is adopted within a week
-  (`XT-1` in TODO), with the P0-3 harness as the gate; the pin is exact so breakage is
+  (`XT-1` in TODO), with the design phase's P0-3 harness as the gate; the pin is exact so breakage is
   attributable, not a nightly gamble.
 - **Share the pin with the GUI builder.** When that project starts, both repos pin the same
   gpui version (and, if we ever escalate to a `rev`, the same one) and share one `patches/gpui/`
@@ -386,7 +386,7 @@ trade if the pin is disciplined, so it is a task, not a footnote:
   series in `patches/gpui/` with the upstream PR linked; a drifting fork is the failure mode
   this bullet exists to prevent.
 
-The P0-3 benchmark still has veto power, but as a comparison rather than an absolute: a
+The design phase's P0-3 benchmark still has veto power, but as a comparison rather than an absolute: a
 framework is vetoed when a measured alternative is more than 2× better on a budget it misses,
 or when it needs a nightly toolchain, cannot build from a vendored tree, or would need an
 unsound patch. No measurement supports switching — iced misses first paint harder — so the
@@ -497,13 +497,13 @@ xtask` for dev tasks, GitHub Actions matrix for linux/macos/windows.
 
 **Version policy: latest stable, no lag.** Every dependency sits at the newest stable release
 and is updated as soon as a new one exists — automated PRs (Dependabot or Renovate) on release,
-a weekly `cargo update` for the lockfile, majors reviewed by a human, and the P0-3 performance
+a weekly `cargo update` for the lockfile, majors reviewed by a human, and the design phase's task P0-3 performance
 harness in CI so an upgrade that costs milliseconds fails loudly. No dependency is allowed to
 drift without a reason recorded in this table:
 
 | Dependency | Held at | Why | Adopt when |
 | --- | --- | --- | --- |
-| `gpui` | `0.2.2` | No semver; one exact pin shared with the GUI-builder project (D1) | A release lands → upgrade within a week, P0-3 gates it |
+| `gpui` | `0.2.2` | No semver; one exact pin shared with the GUI-builder project (D1) | A release lands → upgrade within a week, the design phase's P0-3 gates it |
 | `ropey` | `1.6` | `2.0.0-beta.1` is a pre-release; the rope underpins every edit path | `2.0.0` ships |
 | `notify` | `8.2` | `9.0.0-rc.6` is an RC and file watching runs in the daemon's hot loop | `9.0.0` ships |
 | `lsp-types` | `0.97` | Only a fallback behind `acpilot-lsp::wire`; unmaintained upstream (D8) | Never, unless D8 flips |
@@ -558,21 +558,21 @@ acpilot/
 
 | Phase | Outcome |
 | --- | --- |
-| P0 | Probes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
-| P1 | Workspace skeleton, CI, `acpilot-proto`, error model |
-| P2 | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
-| P3 | `acpilotd` HTTP/SSE API + SQLite history |
-| P4 | Profiles: config cascade, per-profile secrets, state, and preferences |
-| P4.5 | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
-| P4.6 | Extensions: declarative packs for themes, language-server and agent presets, grammars, snippets; signed index; per-profile activation |
-| P5 | CLI (complete API coverage, `--profile` everywhere) |
-| P6 | TUI editor (usable daily driver for editing + one agent) |
-| P7 | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
-| P8 | SSH hosts: remote workspace, remote agents, remote PTY, remote LSP |
-| P9 | Windows + WSL hosts |
-| P10 | GUI (gpui) |
-| P11 | Web UI + `acpilot serve` |
-| P12 | Packaging, docs, v0.1 release |
+| Design phase (P0) | Probes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
+| Foundation phase (P1) | Workspace skeleton, CI, `acpilot-proto`, error model |
+| Engine phase (P2) | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
+| Service phase (P3) | `acpilotd` HTTP/SSE API + SQLite history |
+| Profiles phase (P4) | Profiles: config cascade, per-profile secrets, state, and preferences |
+| Models phase (P4.5) | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
+| Mod shop phase (P4.6) | Extensions: declarative packs for themes, language-server and agent presets, grammars, snippets; signed index; per-profile activation |
+| Command line phase (P5) | CLI (complete API coverage, `--profile` everywhere) |
+| Editor phase (P6) | TUI editor (usable daily driver for editing + one agent) |
+| Language intelligence phase (P7) | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
+| Remote hosts phase (P8) | SSH hosts: remote workspace, remote agents, remote PTY, remote LSP |
+| Windows phase (P9) | Windows + WSL hosts |
+| Desktop phase (P10) | GUI (gpui) |
+| Web phase (P11) | Web UI + `acpilot serve` |
+| Release phase (P12) | Packaging, docs, v0.1 release |
 
 **v0.1 "one agent, one machine"**: native ACP agent, local + WSL + SSH, TUI and CLI,
 permissions, profiles, LSP, session resume. GUI and web follow; they share the same daemon,

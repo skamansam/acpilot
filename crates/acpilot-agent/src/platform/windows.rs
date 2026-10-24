@@ -4,7 +4,7 @@
 //! that a grandchild cannot escape between the kill and the next spawn — but
 //! assigning one needs the `windows` crate's `unsafe` calls, and this workspace
 //! forbids unsafe code. `taskkill /T /F` reaches the same tree with a safe API;
-//! P2-5 owns replacing it when the terminal layer needs the stronger guarantee.
+//! The engine phase's task P2-5 owns replacing it when the terminal layer needs the stronger guarantee.
 //!
 //! `CREATE_NO_WINDOW` is spelled as a number rather than imported so this crate
 //! does not link the `windows` crate for one constant.

@@ -29,7 +29,7 @@
 //! terminal pane later.
 //!
 //! The other transport is [`ssh`], behind the default `ssh` feature: one
-//! connection per host, one channel per exec or terminal, built on what P0-4
+//! connection per host, one channel per exec or terminal, built on what the design phase's task P0-4
 //! measured rather than on a guess about how SSH frames data. A local-only
 //! build turns the feature off and links no crypto stack; the SSH code has no
 //! platform branch, so `cargo xtask check` type-checks the platform files with
@@ -297,7 +297,7 @@ impl Child {
 /// What a host must be able to do for the daemon to run anything on it.
 ///
 /// Two processes — one with pipes, one under a PTY — and three file operations,
-/// because that is what P0-4 measured and what the agent engine asks for first.
+/// because that is what the design phase's task P0-4 measured and what the agent engine asks for first.
 /// LSP operations join this trait later, when their caller exists: a trait
 /// invented ahead of its implementations is a guess with a version number.
 ///

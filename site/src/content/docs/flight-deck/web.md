@@ -3,7 +3,7 @@ title: Web
 description: The same daemon in a browser tab, for the machine you are not sitting at.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P11
+<span class="pill pill--hangar">hangar</span> &nbsp; Web phase (P11)
 
 The web UI exists for one specific scene: the daemon is running on your office
 workstation, and you are somewhere else. It is not a hosted service and there is
@@ -43,5 +43,5 @@ daemon does not pretend to be a web server fleet.
 
 ## Status
 
-Not started. The `web/` directory and the `acpilot-web` crate arrive with P11;
+Not started. The `web/` directory and the `acpilot-web` crate arrive with the web phase (P11);
 the page is here so the API decisions can be read against the frontend they serve.

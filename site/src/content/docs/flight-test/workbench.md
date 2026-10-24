@@ -3,7 +3,7 @@ title: The workbench
 description: Three panes, honest gauges, and the exact JSON that was sent.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5-8
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-8)
 
 The lab is one screen with three panes and a strip of instruments. It is a client
 of the daemon API — the same recipes, the same runs, the same transcript as the

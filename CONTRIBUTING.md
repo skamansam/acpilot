@@ -332,6 +332,13 @@ node .github/scripts/roadmap.mjs issue 17  # one issue
 The TODO.md import that created the issues is `.github/scripts/todo_issues.py`;
 it is idempotent and re-running it after editing `TODO.md` adds only what is new.
 
+`TODO.md` is a tree, and the board is too: one parent issue per phase and per
+cross-cutting section, with the work attached as sub-issues, so a card answers "how
+much of this phase is left" instead of "how many issues are open".
+`.github/scripts/issue_hierarchy.py` builds and repairs that tree from the labels
+(`phase:P2`, `section:testing`) rather than from a hand-kept list, closes a parent
+when its last child closes, and is a no-op when there is nothing to do.
+
 ## Releases
 
 Merging into `main` publishes a release, and the labels on the pull request decide

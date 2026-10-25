@@ -88,13 +88,14 @@ use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
     CompactionCapabilities, CompactionSummaryChunk, CompactionUpdate, ContentBlock, ContentChunk,
     CreateTerminalRequest, CurrentModeUpdate, FileSystemCapabilities, Implementation,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, Notice, NoticeCapabilities, NoticeSeverity,
-    PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionInfoUpdate, SessionNotification, SessionUpdate, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WriteTextFileRequest,
-    WriteTextFileResponse,
+    InitializeRequest, InitializeResponse, KillTerminalRequest, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, Notice, NoticeCapabilities,
+    NoticeSeverity, PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest,
+    ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionInfoUpdate, SessionNotification, SessionUpdate, TerminalOutputRequest, TextContent,
+    ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
 use serde::Serialize;
@@ -106,6 +107,7 @@ use tokio::task::JoinHandle;
 use crate::fs::Fs;
 use crate::permission::{Broker, DecidedBy, Subject};
 use crate::supervisor::{AgentProcess, StderrRing};
+use crate::terminal::Terminals;
 
 /// How many events a subscriber may fall behind before the oldest are dropped.
 ///
@@ -145,6 +147,13 @@ pub struct SessionOptions {
     /// never matches this session's requests, which is the honest answer when
     /// nobody said which agent is at the other end.
     pub agent: Option<String>,
+    /// The terminals this session's agent may open.
+    ///
+    /// `None` means the session does not advertise `terminal` at all, and a
+    /// request that arrives anyway is refused — the same rule [`Self::fs`]
+    /// follows, because a capability and the handler that serves it are one
+    /// decision.
+    pub terminals: Option<Arc<Terminals>>,
 }
 
 impl SessionOptions {
@@ -158,7 +167,15 @@ impl SessionOptions {
             fs: None,
             permission: None,
             agent: None,
+            terminals: None,
         }
+    }
+
+    /// Serve this session's `terminal/*` requests from `terminals`.
+    #[must_use]
+    pub fn terminals(mut self, terminals: Arc<Terminals>) -> Self {
+        self.terminals = Some(terminals);
+        self
     }
 
     /// Record which agent this session runs, for agent-scoped rules.
@@ -319,6 +336,13 @@ impl Session {
         let read_session = options.id.clone();
         let write_session = options.id.clone();
         let permission_session = options.id.clone();
+        // One clone per handler: each closure is `move`, so a shared `Option` would
+        // be moved away by the first one that registered.
+        let create_terminals = options.terminals.clone();
+        let output_terminals = options.terminals.clone();
+        let wait_terminals = options.terminals.clone();
+        let kill_terminals = options.terminals.clone();
+        let release_terminals = options.terminals.clone();
 
         let mut capabilities = ClientCapabilities::new().session(
             ClientSessionCapabilities::new()
@@ -331,6 +355,12 @@ impl Session {
             capabilities = capabilities.fs(FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true));
+        }
+        // One switch for all five methods: an agent picks a terminal by asking for
+        // one, so a client that advertised `terminal` but refused `create` would be
+        // advertising a capability it cannot serve.
+        if options.terminals.is_some() {
+            capabilities = capabilities.terminal(true);
         }
 
         let initialize = InitializeRequest::new(ProtocolVersion::V1)
@@ -419,11 +449,64 @@ impl Session {
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
-                // A terminal that was never created has no id to ask about, so
-                // create is the only one of the five methods an agent can reach.
                 .on_receive_request(
-                    async |_request: CreateTerminalRequest, responder, _cx| {
-                        responder.respond_with_error(not_served("terminal/create"))
+                    async move |request: CreateTerminalRequest, responder, _cx| {
+                        let Some(terminals) = create_terminals.clone() else {
+                            return responder.respond_with_error(not_served("terminal/create"));
+                        };
+                        match terminals.create(&request) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error.into_protocol()),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: TerminalOutputRequest, responder, _cx| {
+                        let Some(terminals) = output_terminals.clone() else {
+                            return responder.respond_with_error(not_served("terminal/output"));
+                        };
+                        match terminals.output(&request) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error.into_protocol()),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: WaitForTerminalExitRequest, responder, _cx| {
+                        let Some(terminals) = wait_terminals.clone() else {
+                            return responder
+                                .respond_with_error(not_served("terminal/wait_for_exit"));
+                        };
+                        match terminals.wait_for_exit(&request).await {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error.into_protocol()),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: KillTerminalRequest, responder, _cx| {
+                        let Some(terminals) = kill_terminals.clone() else {
+                            return responder.respond_with_error(not_served("terminal/kill"));
+                        };
+                        match terminals.kill(&request) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error.into_protocol()),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ReleaseTerminalRequest, responder, _cx| {
+                        let Some(terminals) = release_terminals.clone() else {
+                            return responder.respond_with_error(not_served("terminal/release"));
+                        };
+                        match terminals.release(&request) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error.into_protocol()),
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )

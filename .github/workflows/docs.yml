@@ -1,9 +1,11 @@
 name: Docs
 
-# The site is always built and link-checked. Deployment to GitHub Pages is gated
-# on the repository variable DOCS_DEPLOY=true, because Pages is not available for
-# private repositories on every plan — and a workflow that fails on every push for
-# an account setting is a workflow people learn to ignore.
+# The site is always built and link-checked, on a pull request that touches it as
+# well as on `main`: a broken link is a documentation bug, and finding it after the
+# merge is finding it too late to keep `main` shippable. Deployment to GitHub
+# Pages is gated on the repository variable DOCS_DEPLOY=true, because Pages is not
+# available for private repositories on every plan — and a workflow that fails on
+# every push for an account setting is a workflow people learn to ignore.
 #
 # To publish: make the repository public (or use a plan with Pages), then
 #   gh variable set DOCS_DEPLOY --body true
@@ -13,13 +15,19 @@ on:
   push:
     branches: [main]
     paths: ['site/**', '.github/workflows/docs.yml']
+  # A link that only the site build can resolve is exactly the kind of break a
+  # reviewer cannot see in a diff.
+  pull_request:
+    paths: ['site/**', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One build per ref: a pull request's build must not queue behind a deploy on
+# `main`, and a deploy must not be cancelled halfway through by the next push.
 concurrency:
-  group: docs
+  group: docs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,14 +60,17 @@ jobs:
         working-directory: site
         run: node scripts/check-links.mjs
 
+      # Publishing is a `main` thing. A pull request from this repository can
+      # read the variable too, and uploading its artifact would let an unreviewed
+      # branch stand in for the site.
       - uses: actions/upload-pages-artifact@v3
-        if: vars.DOCS_DEPLOY == 'true'
+        if: vars.DOCS_DEPLOY == 'true' && github.event_name != 'pull_request'
         with:
           path: site/dist
 
   deploy:
     needs: build
-    if: vars.DOCS_DEPLOY == 'true'
+    if: vars.DOCS_DEPLOY == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write

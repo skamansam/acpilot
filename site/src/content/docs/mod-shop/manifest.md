@@ -3,7 +3,7 @@ title: The manifest
 description: extension.toml, every field, and the checks that run before anything is loaded.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.6-1
+<span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6-1)
 
 An extension is a directory with an `extension.toml` at its root. The manifest is
 the entire interface: there is no install script, no build step at install time,
@@ -11,6 +11,7 @@ and nothing to execute.
 
 ```toml
 # extensions/acpilot.rust-pack/extension.toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/extension-v1.json"
 schema_version = 1
 id = "acpilot.rust-pack"            # publisher.id — never a bare name
 name = "Rust pack"
@@ -45,6 +46,7 @@ path = "grammars/rust"              # manifest.toml + .wasm + queries there
 
 | Field | Type | Notes |
 | --- | --- | --- |
+| `$schema` | string? | Where the JSON Schema lives. Ignored by the loader; see [Schema](#schema) |
 | `schema_version` | integer | `1` today; a newer version is refused with the version named |
 | `id` | string | `publisher.id`, lowercase, dot-separated; also the store key |
 | `name` | string | Display name |
@@ -70,15 +72,57 @@ Extension-provided presets land in the same typed registries as everything else,
 which is why an extension cannot invent a new transport or a new permission: the
 fragment is validated by the code that already validates your own files.
 
+An `agents` fragment is the same document a profile's `agents.toml` is — one
+reader parses both, so a PTY parser or an HTTP endpoint written in a pack means
+the same thing as one written in a profile. One rule is an extension's alone: it
+may not name a credential. `env`, `auth`, and `allow_cross_profile` are refused
+in a pack, because a pack that could name `keyring:work/token` could have another
+profile's secret handed to a process it also chose. Those belong in the profile's
+own `agents.toml`, which the same schema at
+[`agents-v1.json`](../../reference/manifest/) describes.
+
+## Schema
+
+The file can identify its schema, so an editor completes keys and underlines
+typos before `ext add` ever sees them:
+
+```toml
+"$schema" = "https://rudeboy.dev/acpilot/schema/extension-v1.json"
+```
+
+That document is published at
+`https://rudeboy.dev/acpilot/schema/extension-v1.json` — JSON Schema 2020-12,
+Apache-2.0 — and generated from the same Rust type the loader parses, so it
+cannot describe a key the loader would refuse. The four built-in manifests under
+`extensions/` are validated against it in CI, and a test checks that a file the
+schema rejects is a file the loader rejects. Taplo and Even Better TOML also read
+a first line of `#:schema <url>` if you would rather keep the document free of
+editor plumbing.
+
+What the schema checks: every field's type, `additionalProperties: false`, the
+shape of `id`, `version`, and `publisher`, the seven `kind` values, and at least
+one contribution. What it cannot check, because JSON Schema has no way to say it:
+two contributions with the same kind and path, and the `.`/`..` half of the path
+rule. **The loader stays the authority** — the schema is there so its refusals
+arrive as a squiggle rather than as a surprise on the next start.
+
+The `-v1` in the name is the major version, and this URL is frozen, the same rule
+as the agent manifest's schema (D6): within v1 the document may only gain
+optional keys or enum members, anything a `schema_version = 1` loader would read
+differently ships as `extension-v2.json`, and there is no `latest.json` to go
+stale in an editor's cache. `cargo xtask schema` regenerates both published
+documents together.
+
 ## Validation, before anything loads
 
 - **Unknown keys are errors.** Same rule as configuration, manifests, and recipes.
   An extension that spills a typo should fail loudly on the developer's machine,
   not quietly on a user's.
-- **Ids are namespaced and collision-free.** `theme` ids share a namespace with
-  the built-ins; `night-flight` already exists, so an extension ships
-  `acpilot.night-flight-syntax` instead. A collision is an error, never an
-  override.
+- **Ids are namespaced and collision-free.** An id is `publisher.name`, and a
+  theme's id must sit under its extension's publisher. `acpilot.night-flight`
+  already exists, so a variant ships `acpilot.night-flight-syntax` — a free name
+  because ids collide only when they are literally equal. A collision is an
+  error, never an override.
 - **Paths may not escape the extension directory.** `../` in a contribution path
   is rejected before the file is opened, and symlinks are resolved and checked the
   same way. This is the one check that must not have a "probably fine" branch.
@@ -94,3 +138,12 @@ command for a language server or an agent — and that command is trust-pinned o
 first use, with the extension's name in the prompt, so the question is "trust
 rust-analyzer from acpilot.rust-pack?" rather than a bare path in a dialog.
 </Aside>
+
+## What is implemented
+
+`crates/acpilot-extensions` parses and validates this schema, and the four
+built-in extensions under `extensions/` are its first users. The checks above are
+tests, not intentions: `crates/acpilot-extensions/tests/loader.rs` covers unknown
+keys, schema versions, publisher mismatches, path traversal, symlink escapes, and
+the collision and `extends` cycles. Installing from a registry and activating in
+a profile are tasks P4.6-3 to P4.6-5.

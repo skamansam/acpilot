@@ -3,7 +3,7 @@ title: Desktop
 description: The native app, on gpui, with an escape hatch already documented.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P10
+<span class="pill pill--hangar">hangar</span> &nbsp; Desktop phase (P10)
 
 The desktop app is the second cockpit, not the only one. It talks to the same
 daemon as the TUI, so a session started in the terminal opens here, mid-turn,
@@ -22,11 +22,16 @@ display-map design that would otherwise be months of work.
 | Tauri | Reuses the web UI, but then the "native" app is a browser with an IPC hop per edit |
 | **gpui** | Chosen: built for exactly this surface, Apache-2.0, and a sibling project uses it |
 
+The decision is recorded as **ADR 0009**, with the exact pin, the benchmark
+numbers, and the five triggers that would supersede it — the escape hatch is a
+written rule, not a sentiment.
+
 <Aside type="caution" title="The escape hatch is real">
-P0-3 benchmarks gpui against the 16 ms keystroke→paint and 150 ms first-paint
-budgets. If it misses by more than 2×, needs a nightly toolchain, or cannot build
-from a vendored tree, the fallback is iced, then Tauri — and nothing outside
-`acpilot-gui` has to change, because the text model is UI-agnostic.
+The design phase's P0-3 benchmark tests gpui against the 16 ms keystroke→paint and
+150 ms first-paint budgets. If a measured alternative is more than 2× better on a budget gpui
+misses, or gpui needs a nightly toolchain or cannot build from a vendored tree,
+the fallback is iced, then Tauri — and nothing outside `acpilot-gui` has to
+change, because the text model is UI-agnostic.
 </Aside>
 
 ## What it will do that the TUI cannot
@@ -36,9 +41,40 @@ from a vendored tree, the fallback is iced, then Tauri — and nothing outside
 - Menus, deep links (`acpilot://session/<id>`), and notifications that survive a
   closed window.
 - Real IME and screen-reader support. **Not inherited:** gpui at our pin ships no
-  accessibility bridge, so that is implementation work, timeboxed early in P10.
+  accessibility bridge, so that is implementation work, timeboxed early in the desktop phase (P10).
+
+## Starting up
+
+Launching `acpilot-gui` when it is already running does not start a second app:
+the new process hands the request to the one that is running, and its window
+opens there. On Linux and macOS the hand-over goes through a per-user socket in
+`$XDG_RUNTIME_DIR` (`$TMPDIR` on macOS), so it costs nothing to look for.
+
+That is a first-paint decision, not a single-instance rule for its own sake.
+Creating the graphics device happens before the first frame and dominates a cold
+start — 320–411 ms of a 616–652 ms launch on the machine where that benchmark ran, all of it
+inside device creation. A repeat launch never reaches that phase. Where the
+repeat-launch numbers were taken (Linux, X11, debug build) a cold launch put its
+window on screen in 69–70 ms and a repeat launch in 7–8 ms; method, per-phase
+numbers and their limits are in `docs/notes/gui-bench.md`.
+
+Two honest limits: on Windows there is no channel yet, so every launch is its own
+process until packaging; and on Linux the device is created per window at our
+pin, so the repeat launch saves the boot rather than the device.
 
 ## Status
 
-The crate is a placeholder with the dependency deliberately unwired, so `cargo
-test` does not compile a graphics stack before there is anything to draw.
+The crate drives a real window: the shared theme tokens, a menu bar, the profile
+list it was launched with, the command palette on `secondary-shift-p`, and
+**About** (the Acpilot menu, or `escape` to close it) naming the version, the
+licence, the field manual and the tools this was built with. Quit is
+`secondary-q` or the menu item. Panes,
+the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
+off by default, so `cargo test` still compiles no graphics stack.
+
+A launch names a path rather than a profile: `acpilot-gui` opens the project you
+are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile
+comes from those project settings. `--profile <dir>` remains for the case a path
+cannot express — two profiles of the same tree — and it wins when it is given. A
+directory that is not a project names no profile, and says so rather than opening a
+window with an empty sidebar.

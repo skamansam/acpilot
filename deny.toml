@@ -5,7 +5,17 @@
 
 [advisories]
 yanked = "warn"
-ignore = []
+# `unmaintained` says the crate's maintenance moved, not that the code is wrong.
+# All three below are one fact: zbus 5 kept `zbus_names` and `zvariant` as separate
+# crates and zbus 6 folded them back in. They arrive through `keyring` →
+# `secret-service` on Linux, where the Secret Service is the only system keyring
+# and cargo-deny reports no safe upgrade. Revisit when `secret-service` moves to
+# zbus 6, which is the release that makes these advisories moot.
+ignore = [
+  { id = "RUSTSEC-2026-0370", reason = "zvariant 5 is maintained inside zbus 6; secret-service still pins zbus 5" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 is maintained inside zbus 6; secret-service still pins zbus 5" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 is maintained inside zbus 6; secret-service still pins zbus 5" },
+]
 
 [licenses]
 allow = [

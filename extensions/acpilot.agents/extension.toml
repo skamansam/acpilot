@@ -1,0 +1,12 @@
+schema_version = 1
+id = "acpilot.agents"
+name = "Agent presets"
+version = "1.0.0"
+publisher = "acpilot"
+description = "The four agent presets Acpilot ships: ACP commands and what they are for."
+homepage = "https://rudeboy.dev/acpilot/systems/agents/"
+min_acpilot = "0.1.0"
+
+[[contributes]]
+kind = "agents"
+path = "agents.toml"

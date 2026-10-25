@@ -3,7 +3,7 @@ title: Remote control
 description: A remote driver — Devin, a CI job, another editor — can fly sessions here. It cannot sign for them.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5-10
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-10)
 
 Acpilot is usually the ACP **client**: it spawns agents and answers their
 callbacks. The bridge flips one seat. A remote driver connects to `acpilotd`,

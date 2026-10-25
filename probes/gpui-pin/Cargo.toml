@@ -1,0 +1,23 @@
+[workspace]
+
+[package]
+name = "gpui-pin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# P0-3's first question: does the pin build from crates.io alone, with no `zed/`
+# checkout and no git dependency? This crate exists so that answer is one command
+# instead of a paragraph in a note.
+[dependencies]
+# Wayland only: the default features also enable X11, which links against
+# libxkbcommon-x11 and needs its -dev package. This box has WSLg's Wayland socket
+# and no reason to carry an X11 backend; on a desktop both are available.
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland"] }
+
+# Not used by this crate. It is the pin that makes gpui build at all: gpui 0.2.2
+# pulls zed-async-tar -> xattr 0.2.3, which uses `libc::ENOATTR`, and libc
+# stopped exporting that on linux in 0.2.190. Without this line a fresh resolve
+# fails to compile on Linux before GPUI is even reached. See
+# docs/notes/gui-bench.md for the bisect.
+libc = "=0.2.189"

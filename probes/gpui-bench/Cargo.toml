@@ -1,0 +1,27 @@
+[workspace]
+
+[package]
+name = "gpui-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# P0-3's second question, the one `probes/gpui-pin` cannot answer: what does a
+# 100k-line document cost to draw, per frame, on a real GPU? Default features
+# are used here because this is the shipping configuration — `gpui-pin` narrows
+# them to Wayland to avoid an X11 dev package on the Linux box, which is not a
+# choice a Windows or macOS build should inherit.
+[dependencies]
+gpui = "0.2.2"
+# `ACPILOT_PROBE_TRACE=1` prints gpui's own log records on the same timeline as
+# the phase marks, which is how the window/device block gets attributed rather
+# than merely measured. `log` is already in the graph through gpui.
+log = "0.4"
+
+# See docs/notes/gui-bench.md: gpui 0.2.2 -> zed-async-tar -> xattr 0.2.3 uses
+# `libc::ENOATTR`, which Linux libc dropped in 0.2.190. Irrelevant on Windows and
+# macOS, load-bearing on Linux.
+libc = "=0.2.189"
+
+[profile.release]
+debug = 1

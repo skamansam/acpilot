@@ -3,7 +3,7 @@ title: The workbench
 description: Three panes, honest gauges, and the exact JSON that was sent.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5-8
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-8)
 
 The lab is one screen with three panes and a strip of instruments. It is a client
 of the daemon API — the same recipes, the same runs, the same transcript as the
@@ -89,6 +89,43 @@ The UI does not quietly swap one for the other: a number you cannot trust is
 styled like a number you cannot trust, which is the entire etiquette of an
 instrument panel.
 </Aside>
+
+## The stats bar
+
+Above the instruments, one row per **integration** — a provider in the lab, an
+agent in the cockpit — answers the two questions you ask mid-run: how much of the
+window is gone, and how much credit is left.
+
+```text
+lmstudio   ctx  ████████░░░░░░░░░░░░   12.3k / 32.8k    credits  —
+openrouter ctx  ██░░░░░░░░░░░░░░░░░░    8.1k / 128k     credits  ███░░░░░░  24 / 80
+claude     ctx  ██████████████░░░░░░   98.0k / 140k     credits  █████░░░░  45 / 100
+```
+
+Both bars are drawn from the same `IntegrationStats` document. The context bar
+needs a reported `used` and `window`; the credit bar needs `used` and `limit`, or
+a `remaining` beside a known ceiling. When those are absent the track is drawn
+indeterminate — not empty, not full — because a bar that fills from a guess is
+worse than a bar that admits it does not know.
+
+| Figure | Source | Shown as |
+| --- | --- | --- |
+| Context used | Provider `usage`, or the session transcript | `server` or `estimated` |
+| Context window | Provider metadata, or the recipe | `server` or `configured`; never defaulted |
+| Credits spent / left | Provider balance endpoint, or a plan in the profile | `server` or `configured` |
+| Anything else | Nobody | `unknown`, indeterminate track |
+
+Local servers are the normal case for a missing credit bar: LM Studio and Ollama
+do not bill, so there is nothing to show and no zero is invented. A hosted
+provider that exposes a balance — OpenRouter's `/api/v1/credits`, for example —
+reports it on the same probe that refreshes the model list, and the row's
+`updated_at` says when.
+
+Agents follow the same rule with a different source: usage reported by the
+agent's protocol is `server`, a transcript counted by the daemon is `estimated`,
+and an agent that reports neither still gets a row whose track is indeterminate.
+The row is never removed for being quiet — a bar that reflows when a provider
+stops answering teaches you to distrust it.
 
 ## The effective-request inspector
 

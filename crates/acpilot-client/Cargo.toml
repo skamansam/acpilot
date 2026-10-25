@@ -1,0 +1,29 @@
+[package]
+name = "acpilot-client"
+description = "Typed client for the daemon API: REST calls and event streams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Detaching a spawned daemon from the terminal's process group is a platform
+# fact, and `acpilot-host` is the one crate allowed to branch on the platform.
+acpilot-host = { workspace = true }
+acpilot-proto = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# A current-thread runtime is enough for a handful of calls and one stream, and
+# `ensure_blocking` is what a synchronous CLI entry point needs.
+tokio = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

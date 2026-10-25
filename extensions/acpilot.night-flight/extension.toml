@@ -1,0 +1,12 @@
+schema_version = 1
+id = "acpilot.night-flight"
+name = "Night flight"
+version = "1.0.0"
+publisher = "acpilot"
+description = "The default dark theme: navy panels, amber instruments, nothing glowing."
+homepage = "https://rudeboy.dev/acpilot/mod-shop/themes/"
+min_acpilot = "0.1.0"
+
+[[contributes]]
+kind = "theme"
+path = "night-flight.toml"

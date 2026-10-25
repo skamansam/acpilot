@@ -17,20 +17,48 @@ default = []
 docs = []
 
 [dependencies]
+acpilot-agent = { workspace = true }
 acpilot-core = { workspace = true }
+# Sessions serve an agent's `fs/*` calls from a workspace, and the local host is
+# where those files live until remote hosts land (P8).
+acpilot-host = { workspace = true }
+# A decision carries the time it was made, and the broker's audit rows use the
+# same clock; two spellings of a timestamp in one product is a bug waiting for a
+# consumer to parse the wrong one.
+acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The page served at `/app`. It is a separate crate so the SPA the web phase
+# builds is embedded by the daemon rather than compiled into it.
+acpilot-web = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+# The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
+# `futures` is where the workspace already gets it.
+futures = { workspace = true }
+jiff = { workspace = true }
 serde = { workspace = true }
+# The `etag` is a hash of the bytes as well as a timestamp, so an edit that kept
+# the mtime and the size is still visible as a change.
+sha2 = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 utoipa = { workspace = true }
+# The screen an attaching pane replays. A terminal's output is not a transcript:
+# a client that arrives late needs the current screen, which means parsing escape
+# sequences into cells rather than keeping bytes.
+vt100 = { workspace = true }
 
 [dev-dependencies]
+# The socket test talks to the daemon the way a client does, over the transport a
+# client uses, rather than through `oneshot` on the router.
+acpilot-client = { workspace = true }
 http-body-util = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

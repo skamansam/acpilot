@@ -8,6 +8,8 @@ use std::io;
 /// Exit codes are a public interface: scripts depend on them, so they are fixed
 /// here rather than derived from whatever a layer happens to return.
 pub mod exit {
+    /// It worked.
+    pub const SUCCESS: u8 = 0;
     /// Failure that has no more specific class.
     pub const FAILURE: u8 = 1;
     /// Bad invocation: unknown flag, malformed argument. Owned by the CLI parser.
@@ -27,6 +29,16 @@ pub enum AcpilotError {
     #[error("not found: {what}")]
     NotFound {
         /// What was being looked for, phrased for a human.
+        what: String,
+    },
+
+    /// The request is malformed: a value the endpoint cannot use, or one it does
+    /// not accept. Distinct from [`Self::Conflict`], which means the request was
+    /// understood and the state refused it — retrying a `400` unchanged is
+    /// pointless, retrying a `409` after looking at the state may not be.
+    #[error("invalid request: {what}")]
+    InvalidRequest {
+        /// Which field, and what it said.
         what: String,
     },
 
@@ -99,11 +111,17 @@ impl AcpilotError {
         Self::PermissionDenied { what: what.into() }
     }
 
+    /// Build an `InvalidRequest` with a formatted description.
+    pub fn invalid(what: impl Into<String>) -> Self {
+        Self::InvalidRequest { what: what.into() }
+    }
+
     /// Stable machine-readable code, matching `acpilot_proto::ErrorBody::code`.
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::NotFound { .. } => "not_found",
+            Self::InvalidRequest { .. } => "invalid_request",
             Self::Conflict { .. } => "conflict",
             Self::PermissionDenied { .. } => "permission_denied",
             Self::HostUnavailable { .. } => "host_unavailable",
@@ -122,6 +140,7 @@ impl AcpilotError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::NotFound { .. } => exit::NOT_FOUND,
+            Self::InvalidRequest { .. } => exit::USAGE,
             Self::Conflict { .. } => exit::CONFLICT,
             Self::PermissionDenied { .. } => exit::PERMISSION_DENIED,
             Self::HostUnavailable { .. }
@@ -140,6 +159,10 @@ mod tests {
     #[test]
     fn codes_are_stable_strings() {
         assert_eq!(AcpilotError::not_found("session s1").code(), "not_found");
+        assert_eq!(
+            AcpilotError::invalid("option `yolo`").code(),
+            "invalid_request"
+        );
         assert_eq!(AcpilotError::conflict("stale etag").code(), "conflict");
         assert_eq!(
             AcpilotError::denied("outside workspace").code(),
@@ -179,6 +202,11 @@ mod tests {
         assert_eq!(AcpilotError::not_found("x").exit_code(), 3);
         assert_eq!(AcpilotError::conflict("x").exit_code(), 4);
         assert_eq!(AcpilotError::denied("x").exit_code(), 5);
+        assert_eq!(
+            AcpilotError::invalid("option `yolo`").exit_code(),
+            exit::USAGE,
+            "a request this build cannot read is a usage error, not a crash"
+        );
         for generic in [
             AcpilotError::HostUnavailable { host: "h".into() },
             AcpilotError::ModelUnavailable {

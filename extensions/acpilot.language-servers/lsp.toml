@@ -1,0 +1,86 @@
+# The built-in language-server presets.
+#
+# These are data, not code: a preset names a program that must already be
+# installed. Nothing is downloaded, and the first run of a command is
+# trust-pinned exactly like a hand-written entry in the user's lsp.toml.
+schema_version = 1
+
+[[servers]]
+id = "rust-analyzer"
+name = "rust-analyzer"
+command = "rust-analyzer"
+args = []
+languages = ["rust"]
+root_markers = ["Cargo.toml", "rust-toolchain.toml"]
+
+[[servers]]
+id = "typescript"
+name = "typescript-language-server"
+command = "typescript-language-server"
+args = ["--stdio"]
+languages = ["typescript", "javascript", "typescriptreact", "javascriptreact"]
+root_markers = ["tsconfig.json", "jsconfig.json", "package.json"]
+
+[[servers]]
+id = "pyright"
+name = "Pyright"
+command = "pyright-langserver"
+args = ["--stdio"]
+languages = ["python"]
+root_markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
+
+[[servers]]
+id = "gopls"
+name = "gopls"
+command = "gopls"
+args = []
+languages = ["go"]
+root_markers = ["go.mod", "go.work"]
+
+[[servers]]
+id = "clangd"
+name = "clangd"
+command = "clangd"
+args = []
+languages = ["c", "cpp", "objective-c"]
+root_markers = ["compile_commands.json", "CMakeLists.txt", ".clangd"]
+
+[[servers]]
+id = "lua-language-server"
+name = "Lua Language Server"
+command = "lua-language-server"
+args = []
+languages = ["lua"]
+root_markers = [".luarc.json", ".luacheckrc", "stylua.toml"]
+
+[[servers]]
+id = "zls"
+name = "zls"
+command = "zls"
+args = []
+languages = ["zig"]
+root_markers = ["build.zig", "build.zig.zon"]
+
+[[servers]]
+id = "bash-language-server"
+name = "Bash Language Server"
+command = "bash-language-server"
+args = ["start"]
+languages = ["shellscript"]
+root_markers = [".shellcheckrc"]
+
+[[servers]]
+id = "taplo"
+name = "Taplo"
+command = "taplo"
+args = ["lsp", "stdio"]
+languages = ["toml"]
+root_markers = [".taplo.toml", "taplo.toml"]
+
+[[servers]]
+id = "yaml-language-server"
+name = "YAML Language Server"
+command = "yaml-language-server"
+args = ["--stdio"]
+languages = ["yaml"]
+root_markers = [".yamllint", ".yamllint.yaml"]

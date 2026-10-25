@@ -3,7 +3,7 @@ title: Configuration
 description: One cascade, per-key merging, and a command that tells you which file won.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4 &nbsp;·&nbsp; this shape may still change
+<span class="pill pill--hangar">hangar</span> &nbsp; Profiles phase (P4) &nbsp;·&nbsp; this shape may still change
 
 Configuration is layered, and every layer can override a single key rather than a
 whole file. The last word wins:
@@ -21,9 +21,14 @@ flowchart TD
 
 | Platform | Config | Data | Runtime |
 | --- | --- | --- | --- |
-| Linux | `~/.config/acpilot` | `~/.local/share/acpilot` | `$XDG_RUNTIME_DIR/acpilot` |
-| macOS | `~/Library/Application Support/acpilot` | same | Unix socket in the config dir |
-| Windows | `%APPDATA%\acpilot` | `%LOCALAPPDATA%\acpilot` | `\\.\pipe\acpilot-$USER` |
+| Linux | `~/.config/acpilot` | `~/.local/share/acpilot` | `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` |
+| macOS | `~/Library/Application Support/acpilot` | same | `$TMPDIR/acpilot/acpilot.sock` when `XDG_RUNTIME_DIR` is unset |
+| Windows | `%APPDATA%\acpilot` | `%LOCALAPPDATA%\acpilot` | loopback `127.0.0.1:7777` today; `\\.\pipe\acpilot-$USER` is P10-5 |
+
+The runtime directory holds the socket, the spawn lock and the daemon's log, and
+it is `0700` because the socket is `0600`: the filesystem, not a token, is what
+keeps another local user off the API. `acpilotd --addr <host:port>` binds TCP
+instead, which is opt-in precisely because a port has no such boundary.
 
 Only `acpilot-profile` is allowed to call `directories`. Every other crate
 resolves mutable paths through it, so "where does this file go" has exactly one
@@ -45,8 +50,35 @@ tab_width = 2
 insert_spaces = true
 format_on_save = true
 wrap = false
-theme = "night-flight"
+theme = "acpilot.night-flight"
 ```
+
+## Project config
+
+A project is a directory holding `.acpilot/config.toml`. That file is the only
+marker, and it exists only because someone saved settings there — opening a
+directory or a file never creates one.
+
+```toml
+# <project>/.acpilot/config.toml
+schema_version = 1
+profile = "work"                    # which profile this project runs under
+
+[preferences]
+tab_width = 2
+```
+
+Settings are merged per key, in this order: the built-in defaults
+(`acpilot-profile/defaults.toml`), then `~/.config/acpilot/config.toml`, then the
+project's `.acpilot/config.toml`. A key nobody sets keeps the default; a project
+file that sets one key changes one key.
+
+A path names the project: `acpilot tui src/main.rs` and `acpilot-gui src/main.rs`
+climb from the file to the nearest `.acpilot/config.toml`, while a directory is
+used as given. A file with no project above it is a **temporary project** — the
+file's own directory, with the user's settings and the defaults and nothing written
+to disk. That is what makes `acpilot notes.md` a text editor rather than a
+setup wizard.
 
 ## Profile config
 
@@ -79,7 +111,7 @@ kind = "lm_studio"                 # or "open_ai_compatible"
 label = "LM Studio (this machine)"
 base_url = "http://127.0.0.1:1234"
 enabled = true
-# credential_ref = "keyring:lmstudio/work"
+# credential_ref = "keyring:work/lmstudio"
 ```
 
 Recipes live one directory over, one file per model-plus-prompt:

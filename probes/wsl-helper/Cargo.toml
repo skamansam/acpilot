@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "wsl-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately standalone, like the other P0 probes: not a workspace member, so
+# nothing here can leak into the product. The lockfile is committed because the
+# point is to measure *these* versions.
+#
+# `portable-pty` is only used for the ConPTY probe; on Windows it is the
+# `CreatePseudoConsole` path, which is the half P0-2 could not reach.
+[dependencies]
+anyhow = "1"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

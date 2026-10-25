@@ -7,10 +7,81 @@ to make it unmaintainable is to let one of them grow its own copy of the logic.
 ## Before you start
 
 ```bash
-cargo xtask check        # fmt + clippy -D warnings + tests: what CI runs
-cargo test --workspace
-curl -s localhost:7777/v1/health   # after `cargo run -p acpilotd`
+# Linux and macOS
+cargo install --locked cargo-nextest prek   # once; CI installs nextest
+prek install                                # writes .git/hooks/pre-commit
+cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
+curl -s --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" http://localhost/v1/health
 ```
+
+```powershell
+# Windows, PowerShell 5.1 or 7. Same, except the health check: `curl` there is
+# an alias for Invoke-WebRequest that rejects -s, so name the binary.
+cargo install --locked cargo-nextest prek   # once; CI installs nextest
+prek install                                # writes .git/hooks/pre-commit
+cargo xtask check                           # fmt + clippy -D warnings + nextest: what CI runs
+curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd -- --addr 127.0.0.1:7777`
+```
+
+The daemon answers `GET /v1/health` on a unix socket once `cargo run -p acpilotd`
+is up — or once any client has started it, since `cargo run -p acpilot-cli -- tui`
+spawns `target/debug/acpilotd` (the sibling of the binary, not a `PATH` entry).
+The socket is `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS), which
+is why the health check passes `--unix-socket`; on Windows the daemon listens on
+`127.0.0.1:7777` until the named pipe exists, so pass `--addr` there.
+
+`--addr 127.0.0.1:7777` is also what a browser needs, for `/docs` under
+`--features docs`. It is an opt-in listener, and every request on it needs
+`Authorization: Bearer <token>` with the token the daemon writes to
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. The docs page is the one
+exception, so that there is somewhere to paste the token: open it, paste, and it
+fetches the contract and sends the header on every call.
+
+Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
+with `RUST_LOG` set: the spawn path captures its output in
+`$XDG_RUNTIME_DIR/acpilot/daemon-*.log` instead of your terminal.
+
+Every command in both blocks is a program rather than a shell builtin, so
+the only difference between them is the HTTP client's name — nothing here
+depends on the bash an editor ships.
+
+`cargo xtask check` runs `cargo nextest run --workspace --no-fail-fast`, the
+same command as CI. `cargo test --workspace` still works for a single crate or a
+`--test` filter, but it is not the gate: nextest isolates tests in separate
+processes and skips doctests, and the local check should fail for the same
+reasons CI does.
+
+One thing `cargo xtask check` deliberately does not do is build the desktop shell:
+`acpilot-gui`'s gpui dependency sits behind a `gui` feature that is off by
+default, so the workspace gate stays fast and does not need a graphics stack.
+CI's `gui` job is what keeps the shell from rotting, and locally it is two
+commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
+acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
+against and `libc` held at exactly 0.2.189; the crate manifest names both, and
+`README.md` §5.4 explains why the pin exists.
+
+`cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
+so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
+covers the repository. `cargo xtask probe` is the same steps without the
+workspace half, and it is what CI's `p0-5 probe` job runs. All of it spawns
+cargo, rustfmt, rustc and python directly instead of going through a shell,
+deliberately: a bash bundled with an editor is not part of the toolchain, Windows
+may flag it as a security risk, and several agents may run the same checks.
+`probes/wsl-helper/check.ps1`/`check.cmd` are wrappers around that same command
+for PowerShell and cmd.exe callers. Use PowerShell, cmd, or the distro's own
+shell for the distro half — not `bash.exe` out of an application's install
+directory.
+
+`.pre-commit-config.yaml` is the commit-time version of that gate, run by
+[prek](https://prek.j178.dev). It runs `cargo fmt`, clippy with `-D warnings`,
+the nextest workspace, the `docs`-feature test, and `cargo deny`. The OpenAPI
+snapshot and WCAG contrast checks are inside the nextest run, so they are not
+duplicated as separate hooks.
+
+`prek run --all-files` runs the same hooks without committing. The hooks are a
+convenience, not an authority: CI is what protects `main`, so if a hook ever
+disagrees with CI, fix the hook. Do not use `git commit --no-verify` to get past
+a failure — the same command will fail in CI, and later.
 
 The toolchain is pinned in `rust-toolchain.toml`; the MSRV floor is 1.95 and is
 chosen by our dependencies, not by taste. If an upgrade raises it, that is a
@@ -30,6 +101,80 @@ reviewed decision (README §5.9), so say so in the PR.
 Two things that do not belong anywhere: domain logic in a UI crate, and UI
 concerns in the daemon. If the TUI cannot do something, the GUI should not be able
 to either.
+
+## Probes
+
+A **probe** is a time-boxed measurement that answers one question a decision
+depends on. The question comes first; the code is only the instrument. `P0-4`
+asked "does an SSH exec channel preserve ACP framing?" and `probes/ssh` exists to
+answer it, not to become the SSH client.
+
+The directory was called `spikes/` until 2026-10-22. "Spike" is Extreme
+Programming jargon for the same idea — a spike solution buys knowledge before you
+commit — but the word says nothing about measuring, which is what every one of
+these does, and it suggests throwaway code, which some of them are not. The rule
+below is what the name is meant to carry.
+
+What a probe must be:
+
+- **Standalone.** Its own `[workspace]` and committed lockfile, so nothing in it
+  can leak into a product crate, and the versions measured are the versions
+  recorded. `probes/fixtures/` holds inputs they share.
+- **One question, with numbers.** The result goes in `docs/notes/<topic>.md`:
+  what was measured, on what machine and versions, and what the measurement does
+  *not* say. A probe that reports "it worked" has not answered anything.
+- **Bounded and cited.** The task in `TODO.md` states the question and exit
+  criteria, its result line states the answer, and any decision that followed
+  cites it (an ADR for the ones that bind us).
+- **Deletable.** A probe outlives its question only while something still runs
+  it: `probes/wsl-helper` is a CI fixture and a driver we ship against, and the
+  the design phase's P0-3 benchmark runs again on every framework upgrade. The rest are deleted once
+  the note is written, because a directory of half-used instruments is worse than
+  the note alone.
+
+If a probe has to run on another operating system, say so in its note and in CI
+rather than claiming the result transfers. The design phase's task P0-5 is the standing example: its
+WSL1-on-a-hosted-runner half is the version that would have been published as
+WSL2's if the note had not insisted otherwise.
+
+## Platforms
+
+Unix and macOS are built first; the Windows implementation is written last,
+because it is the half that cannot be developed or tested on the machines the
+project is written on. The rule that keeps that order from rotting is structural:
+**a `cfg` naming an operating system may appear only under a crate's
+`src/platform/`**, one file per platform, same signature. `acpilot-host` has the
+first one; `crates/acpilot-host/tests/platform_boundary.rs` fails the build if a
+branch appears anywhere else in any crate, and fails if a platform file goes
+missing. Do not add `cfg(windows)` to a shared module — add the platform file.
+
+`cargo xtask check` also type-checks `acpilot-host` for `x86_64-pc-windows-msvc`,
+`x86_64-apple-darwin` and `aarch64-apple-darwin` from whatever machine you are on
+(`cargo check` needs no linker), skipping targets you have not installed. That
+catches a broken Windows module before a CI runner does; CI's matrix still builds
+each platform natively, which is the authority.
+
+The cross-check runs `--no-default-features`, because optional transports are not
+part of it. `russh` (the `ssh` feature) compiles C for its target, which needs
+that target's toolchain, and the SSH module contains no `cfg` — cross-checking it
+would teach nothing that CI's native Windows and macOS builds do not. Keep it that
+way: platform-specific code goes in `src/platform/`, where this check will see it;
+transports stay platform-independent and are checked where they run.
+
+## Tests
+
+Unit tests sit in `#[cfg(test)]` modules next to the code; anything that crosses a
+process, a file, or a wire boundary gets an integration suite in
+`crates/<crate>/tests/`. `cargo nextest run --workspace` runs both, locally and in
+CI; `cargo xtask check` invokes exactly that command.
+
+Two suites are contracts rather than coverage, and should not be weakened:
+
+- `acpilot-proto/tests/openapi_snapshot.rs` — regenerate deliberately and
+  review the diff: `INSTA_UPDATE=always cargo test -p acpilot-proto` in bash or
+  zsh, `$env:INSTA_UPDATE='always'; cargo test -p acpilot-proto` in PowerShell.
+- `acpilot-proto/tests/wire_contract.rs` — every schema, parsed and re-serialised.
+  A failure here means the wire moved, not that the test is stale.
 
 ## Commits
 
@@ -54,6 +199,29 @@ ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
 - Wire change → the OpenAPI snapshot diff is part of the review, by design.
 - Performance-sensitive change → numbers, not adjectives, against the budgets in
   `TODO.md` §Performance budgets.
+
+## Releases
+
+Merging into `main` publishes a release, and the labels on the pull request decide
+the version (`.github/scripts/next_version.py`):
+
+| Labels | Bump | Example |
+| --- | --- | --- |
+| `breaking`, `major` | major | `0.3.1` → `1.0.0` |
+| `feature`, `enhancement` | minor | `0.3.1` → `0.4.0` |
+| `bug`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`, `dependencies`, `performance`, `security` | patch | `0.3.1` → `0.3.2` |
+| `skip-release` | none | — |
+
+The strongest label wins (a PR that is both a fix and a feature is a feature), an
+unlabelled PR is a patch, and the first release is `0.1.0` whatever the labels say.
+The mapping lives at the top of the script as data, so a new label is a line.
+
+A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and
+Windows x86_64, publishes a GitHub release with checksums, and rebuilds the docs
+site: the download page reads the releases API at build time, so nothing is
+committed back and `main` stays a tree only pull requests change. The `gui` feature
+is not in the release matrix yet — it needs a graphics stack at link time, which is
+a runner dependency to solve rather than a version to publish.
 
 ## Decisions
 

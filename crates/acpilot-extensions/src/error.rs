@@ -1,0 +1,205 @@
+//! One error type for every way a manifest, an asset, or a theme can be wrong.
+//!
+//! Variants are typed rather than stringly on purpose: the CLI renders these,
+//! and "this extension is blocked" has to be a decision in code, not a pattern
+//! match on a message. Every variant names the file it came from.
+
+use std::io;
+
+use thiserror::Error;
+
+/// What went wrong while reading an extension.
+#[derive(Debug, Error)]
+pub enum ExtensionError {
+    /// A file could not be read.
+    #[error("{path}: {source}")]
+    Io {
+        /// Path, as a human should see it.
+        path: String,
+        /// The underlying failure.
+        #[source]
+        source: io::Error,
+    },
+
+    /// A TOML file did not parse, or carried a key the schema does not know.
+    #[error("{path}: {message}")]
+    Toml {
+        /// Path, relative to the extension root.
+        path: String,
+        /// The parser's message, which already names the key and the line.
+        message: String,
+    },
+
+    /// The file was written for a schema this build does not speak.
+    #[error("{path}: schema_version {found} is not supported (this build speaks {expected})")]
+    SchemaVersion {
+        /// Path, relative to the extension root.
+        path: String,
+        /// Version found in the file.
+        found: u64,
+        /// Version this build understands.
+        expected: u32,
+    },
+
+    /// The extension needs a newer acpilot than the one running it.
+    #[error("{path}: requires acpilot {required} or newer; this build is {current}")]
+    NeedsNewerAcpilot {
+        /// Path, relative to the extension root.
+        path: String,
+        /// The manifest's `min_acpilot`.
+        required: String,
+        /// The running version.
+        current: &'static str,
+    },
+
+    /// An identifier is not the shape this registry requires.
+    #[error("{what} {id:?} {why}")]
+    InvalidId {
+        /// Which namespace: `extension id`, `theme id`, `preset id`.
+        what: &'static str,
+        /// The offending value.
+        id: String,
+        /// What the rule is, in a few words.
+        why: &'static str,
+    },
+
+    /// A required field is present but empty, which is never what was meant.
+    #[error("{path}: {field} may not be empty")]
+    EmptyField {
+        /// Path, relative to the extension root.
+        path: String,
+        /// Field name as written in the file.
+        field: &'static str,
+    },
+
+    /// Two things claim the same identifier. Never resolved by ordering.
+    #[error("duplicate {what} {id:?}: already provided by {owner}")]
+    Duplicate {
+        /// Which registry.
+        what: &'static str,
+        /// The duplicated identifier.
+        id: String,
+        /// Who had it first, in terms a human can act on.
+        owner: String,
+    },
+
+    /// The same contribution is listed twice in one manifest.
+    #[error("{path}: {kind} contribution {contribution:?} is listed twice")]
+    DuplicateContribution {
+        /// Path, relative to the extension root.
+        path: String,
+        /// Contribution kind, as written in the manifest.
+        kind: &'static str,
+        /// Contribution path.
+        contribution: String,
+    },
+
+    /// A contribution path points outside the extension directory.
+    #[error("contribution path {path:?} {why}")]
+    UnsafePath {
+        /// The offending path.
+        path: String,
+        /// Why it is refused.
+        why: &'static str,
+    },
+
+    /// A manifest pointed at a file that is not there.
+    #[error("{path}: no {kind} contribution at this path")]
+    MissingContribution {
+        /// The path the manifest named.
+        path: String,
+        /// Contribution kind, as written in the manifest.
+        kind: &'static str,
+    },
+
+    /// An `agents.toml` the agent manifest reader refused.
+    ///
+    /// The message is the reader's own, because there is one reader: it already
+    /// names the file or the agent, and re-wording it here would make the same
+    /// mistake read differently in `ext add` and in the registry.
+    #[error("{message}")]
+    AgentManifest {
+        /// The reader's message.
+        message: String,
+    },
+
+    /// An extension's agent asked for a credential.
+    ///
+    /// Only the profile's own `agents.toml` may do that: an extension that could
+    /// name `keyring:work/token` would be able to have another profile's secret
+    /// handed to a process it also chose.
+    #[error(
+        "{path}: agent {agent:?} sets {field}, which an extension may not; \
+         put it in the profile's own agents.toml"
+    )]
+    AgentCredential {
+        /// Path, relative to the extension root.
+        path: String,
+        /// Agent identifier.
+        agent: String,
+        /// Field name as written in the file.
+        field: &'static str,
+    },
+
+    /// A theme is incomplete, or its `extends` chain is.
+    #[error("theme {id}: {message}")]
+    Theme {
+        /// The theme's identifier, or the file path when the id is unreadable.
+        id: String,
+        /// What is wrong, with the missing token or the cycle named.
+        message: String,
+    },
+
+    /// A store path or record was asked for and is not there.
+    #[error("not found: {what}")]
+    NotFound {
+        /// What was being looked for, phrased for a human.
+        what: String,
+    },
+
+    /// That version is already in the store. Replacing it would change bytes
+    /// under a checksum somebody already approved, so it is refused.
+    #[error("{id}@{version} is already installed; remove it first or install a different version")]
+    AlreadyInstalled {
+        /// Extension id.
+        id: String,
+        /// Version already present.
+        version: String,
+    },
+
+    /// A checksum record is not in the one format the store writes.
+    #[error("{path}: {message}")]
+    Record {
+        /// Path to the record file.
+        path: String,
+        /// Why it is not usable.
+        message: String,
+    },
+
+    /// A tree contains something a content-addressed store cannot represent.
+    #[error("{path}: {why}")]
+    UnsupportedEntry {
+        /// The offending entry.
+        path: String,
+        /// Why it is refused.
+        why: &'static str,
+    },
+
+    /// A file from another editor could not be understood.
+    #[error("{path}: {message}")]
+    Import {
+        /// The file being imported.
+        path: String,
+        /// What is wrong with it.
+        message: String,
+    },
+
+    /// Activation was requested for something that is present but blocked.
+    #[error("cannot activate {id}: {blocked}")]
+    BlockedActivation {
+        /// Extension id.
+        id: String,
+        /// The blocked versions, by name, so the next command is obvious.
+        blocked: String,
+    },
+}

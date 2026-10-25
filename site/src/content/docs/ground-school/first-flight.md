@@ -6,19 +6,28 @@ description: The five-minute version, and the honest footnote about what is miss
 <span class="pill pill--boarding">boarding</span>
 
 A first flight usually means "start a session, ask an agent to change a file,
-approve the diff". That flight is not available yet — the engine is P2. What you
-can do today is pre-flight: start the daemon, read its contract, and confirm the
-instrument panel lights up.
+approve the diff". That flight is not available yet — it lands in the engine phase (P2). What you
+can do today is pre-flight: open the terminal UI — which brings the daemon up with
+it — and read the contract.
 
 ## Pre-flight (works now)
 
-```bash
-cargo run -p acpilotd
-```
+`acpilot tui` probes `GET /v1/health` and starts the daemon if nothing answers
+(ADR 0004), which is why this block needs no second terminal:
 
 ```bash
-curl -s localhost:7777/v1/health | jq
-curl -s localhost:7777/v1/openapi.json | jq '.info'
+cargo build --bins     # acpilot and acpilotd; the client starts the sibling, not one on PATH
+cargo run -p acpilot-cli -- tui
+```
+
+The same daemon answers `curl`, so the contract is readable without opening a
+window — the TUI stays attached until you quit it, and the daemon outlives it. It
+listens on a socket, so the socket is what `curl` is pointed at:
+
+```bash
+SOCK="$XDG_RUNTIME_DIR/acpilot/acpilot.sock"     # $TMPDIR on macOS
+curl -s --unix-socket "$SOCK" http://localhost/v1/health | jq
+curl -s --unix-socket "$SOCK" http://localhost/v1/openapi.json | jq '.info'
 ```
 
 That is the whole cockpit at the moment: a healthy daemon and a contract with
@@ -26,7 +35,7 @@ nothing behind it yet. Short flight. Good landing.
 
 ## The flight you will actually take
 
-When P2 lands, the sequence below is the target. It is written down now because
+When the engine phase (P2) lands, the sequence below is the target. It is written down now because
 the API and the permission flow are designed backwards from it — if this feels
 like too many steps, the design is wrong, not the documentation.
 

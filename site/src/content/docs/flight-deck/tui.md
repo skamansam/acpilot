@@ -3,7 +3,7 @@ title: TUI
 description: The editor you can live in, in a terminal, over SSH, on a plane.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P6
+<span class="pill pill--hangar">hangar</span> &nbsp; Editor phase (P6)
 
 The terminal UI is the primary interface, not the fallback. It is what runs over
 an SSH session, inside tmux, on a machine with no GPU, and it is the reason the
@@ -48,5 +48,7 @@ gets you the first hour and costs you the second year.
 
 ## Status
 
-The crate exists and does nothing. P6 is where the editor becomes real; until
-then there is no reason to pretend otherwise.
+The crate is a working client: it lists the daemon's sessions, streams the open
+session's transcript, answers a permission request with `y`, `a` or `n`, and starts
+the daemon if nothing is listening (ADR 0004). Editor panes, inline diffs and the
+workspace picker are the editor phase (P6).

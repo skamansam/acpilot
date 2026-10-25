@@ -69,6 +69,19 @@ pub struct PromptRequest {
     pub idempotency_key: Option<String>,
 }
 
+/// Response to a cancel request.
+///
+/// `cancelled` is false when the session had no turn in flight: the caller's
+/// intent ("stop") was already true, which is not an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CancelAccepted {
+    /// The turn that was running, when one was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Whether a turn was in flight when the cancel arrived.
+    pub cancelled: bool,
+}
+
 /// Response to an accepted prompt.
 ///
 /// The turn itself streams over SSE; this only acknowledges that it started.

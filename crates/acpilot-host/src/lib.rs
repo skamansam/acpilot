@@ -1,8 +1,549 @@
 //! Where files and processes actually live.
 //!
-//! Empty in P1. Every filesystem and process operation in Acpilot is meant to go
-//! through this trait, so that "on the remote box" and "in the WSL distro" are
-//! the same code path as "on this laptop" — including language servers and
-//! agents, not just editing. Windows→WSL deliberately goes through the helper
-//! binary rather than `\\wsl.localhost` paths, which are slow enough to feel
-//! broken.
+//! Every filesystem and process operation in Acpilot is meant to go through this
+//! trait, so that "on the remote box" and "in the WSL distro" are the same code
+//! path as "on this laptop" — including language servers and agents, not just
+//! editing. Windows→WSL deliberately goes through the helper binary rather than
+//! `\\wsl.localhost` paths, which are slow enough to feel broken.
+//!
+//! ## Unix and macOS first, Windows last
+//!
+//! The project is built and tested on unix, so the unix implementation exists
+//! first and the Windows one is written last — otherwise every Windows special
+//! case is written blind and only ever exercised by a CI runner. The rule that
+//! keeps that order honest is structural, not documentary:
+//!
+//! **`cfg(windows)` and `cfg(unix)` may appear only under `src/platform/`.**
+//!
+//! There is one file per platform, and both must satisfy the same
+//! `platform::spawn_pty` contract; `tests/platform_boundary.rs` fails if a
+//! branch appears anywhere else in any crate's sources, so a Windows special
+//! case cannot spread through the host layer one `cfg!` at a time.
+//!
+//! Exec does not branch at all: `std::process` is portable, so `Host::spawn` has
+//! exactly one implementation. The local PTY is one implementation too, because
+//! `portable-pty` already branches (`forkpty` on unix, ConPTY on Windows); what
+//! the platform files hold is what differs *above* that — ConPTY's echo, its
+//! `\r\n`, and the terminal queries a program will wait on — so it is written
+//! down where a Windows special case would go rather than discovered in a
+//! terminal pane later.
+//!
+//! The other transport is [`ssh`], behind the default `ssh` feature: one
+//! connection per host, one channel per exec or terminal, built on what the design phase's task P0-4
+//! measured rather than on a guess about how SSH frames data. A local-only
+//! build turns the feature off and links no crypto stack; the SSH code has no
+//! platform branch, so `cargo xtask check` type-checks the platform files with
+//! it off and CI builds it natively per OS.
+
+mod platform;
+mod pty;
+#[cfg(feature = "ssh")]
+pub mod ssh;
+/// The token a TCP listener requires, and how to rotate it.
+pub mod token;
+
+use std::ffi::OsString;
+use std::fmt;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+pub use platform::CASE_INSENSITIVE_PATHS;
+pub use pty::Pty;
+#[cfg(feature = "ssh")]
+pub use ssh::{HostKeyPolicy, SshConfig, SshHost};
+
+/// Start `command` in a process group of its own.
+///
+/// The caller is a UI that is about to hand the terminal over to a full-screen
+/// loop, so the process it starts must survive that terminal closing. What
+/// "detached" means differs per platform and is written once, in
+/// `src/platform/` — this is the seam, not the branch.
+pub fn detach(command: &mut std::process::Command) {
+    platform::detach(command);
+}
+
+/// Make a directory readable only by its owner.
+///
+/// A no-op on Windows, where the per-user location is the boundary instead of a
+/// mode bit. On POSIX this is how the daemon's runtime directory keeps other
+/// local users away from its socket and log.
+///
+/// # Errors
+///
+/// The `set_permissions` failure, unchanged: there is nothing useful to say
+/// about it that the OS has not already said.
+pub fn private_dir(path: &Path) -> io::Result<()> {
+    platform::private_dir(path)
+}
+
+/// Make a file readable and writable only by its owner.
+///
+/// # Errors
+///
+/// The `set_permissions` failure, unchanged.
+pub fn private_file(path: &Path) -> io::Result<()> {
+    platform::private_file(path)
+}
+
+/// The per-user directory for runtime state: sockets, pid files, logs.
+///
+/// `XDG_RUNTIME_DIR` where the platform has one and the temporary directory where
+/// it does not (macOS). A subdirectory of it, not the directory itself, because
+/// the daemon sets `0700` on what it creates here and the session directory is
+/// not ours to tighten. Nothing durable lives here: this is the directory a
+/// logout or a reboot is allowed to empty.
+pub fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("acpilot")
+}
+
+/// What a client should talk to when nobody said.
+///
+/// The unix socket on a platform that has one, and loopback HTTP where it does
+/// not. Written here rather than in each client because two answers to "where is
+/// the daemon" is how a CLI and a TUI end up on different daemons.
+pub fn default_endpoint() -> String {
+    platform::default_endpoint()
+}
+
+/// The shell a terminal starts when the client did not name a program.
+///
+/// `$SHELL` is a unix convention and `/bin/sh` is a unix path, so the answer
+/// belongs to the platform file rather than to whoever is opening a pane. A
+/// client that names its own command never sees this.
+pub fn default_shell() -> ExecCommand {
+    ExecCommand::new(platform::default_shell())
+}
+
+/// One command to run on a host, wherever that host is.
+///
+/// Arguments and environment are `OsString` because a path is not guaranteed to
+/// be UTF-8, and silently lossy-converting one is how a file that exists becomes
+/// a file that does not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecCommand {
+    /// Program to execute, resolved on the host — not on the machine calling in.
+    pub program: OsString,
+    /// Arguments, verbatim.
+    pub args: Vec<OsString>,
+    /// Working directory on the host. `None` inherits the host process's.
+    pub cwd: Option<PathBuf>,
+    /// Environment to add. Nothing is inherited twice; the host decides what the
+    /// rest of its environment looks like.
+    pub env: Vec<(OsString, OsString)>,
+}
+
+impl ExecCommand {
+    pub fn new(program: impl Into<OsString>) -> Self {
+        Self {
+            program: program.into(),
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    #[must_use]
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    #[must_use]
+    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    #[must_use]
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
+    }
+
+    /// `program arg1 arg2`, for messages. Not a shell command line.
+    #[must_use]
+    pub fn command_line(&self) -> String {
+        let mut out = self.program.to_string_lossy().into_owned();
+        for arg in &self.args {
+            out.push(' ');
+            out.push_str(&arg.to_string_lossy());
+        }
+        out
+    }
+}
+
+/// A terminal size in cells. Pixels are deliberately absent: nothing in the
+/// product has needed them, and a zero would be a lie where `None` is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Size {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl Size {
+    /// What a program gets when nobody has said otherwise.
+    pub const DEFAULT: Self = Self { cols: 80, rows: 24 };
+
+    #[must_use]
+    pub const fn new(cols: u16, rows: u16) -> Self {
+        Self { cols, rows }
+    }
+}
+
+impl Default for Size {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// How a host is reached. Matches the three transports the daemon offers, and
+/// exists so a session record can say which one it used without carrying a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HostKind {
+    /// This machine.
+    Local,
+    /// A remote machine over SSH.
+    Ssh,
+    /// A WSL distro, reached through `wsl.exe` and the helper binary.
+    Wsl,
+}
+
+impl fmt::Display for HostKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Local => "local",
+            Self::Ssh => "ssh",
+            Self::Wsl => "wsl",
+        })
+    }
+}
+
+/// How a process ended.
+///
+/// `std::process::ExitStatus` and `portable_pty::ExitStatus` are different
+/// types; the seam normalises both so callers do not branch on which side of the
+/// port a process ran on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exit {
+    /// Exit code where the platform reports one. `None` means a signal, which
+    /// only unix reports — and which a supervisor must not read as success.
+    pub code: Option<i32>,
+    pub success: bool,
+}
+
+impl From<std::process::ExitStatus> for Exit {
+    fn from(status: std::process::ExitStatus) -> Self {
+        Self {
+            code: status.code(),
+            success: status.success(),
+        }
+    }
+}
+
+/// A spawned process with piped stdin, stdout and stderr, wherever it runs.
+///
+/// The pipes are `Box<dyn Write>`/`Box<dyn Read>` rather than `std::process`
+/// handles because a process on the far side of an SSH channel has file
+/// descriptors on this machine only if they are invented; the seam makes the
+/// caller pay the same price either way.
+pub struct Child {
+    program: String,
+    backend: Box<dyn ChildBackend + Send>,
+    stdin: Option<Box<dyn Write + Send>>,
+    stdout: Option<Box<dyn Read + Send>>,
+    stderr: Option<Box<dyn Read + Send>>,
+}
+
+impl fmt::Debug for Child {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Child")
+            .field("program", &self.program)
+            .field("pid", &self.backend.id())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Everything about a child that is not its pipes: identity, ending it, and
+/// waiting for it.
+pub(crate) trait ChildBackend: Send {
+    fn id(&self) -> Option<u32>;
+    fn kill(&mut self) -> io::Result<()>;
+    fn wait(&mut self) -> io::Result<Exit>;
+    fn try_wait(&mut self) -> io::Result<Option<Exit>>;
+}
+
+/// `std::process::Child`, which is what a local exec is.
+struct ProcessChild(std::process::Child);
+
+impl ChildBackend for ProcessChild {
+    fn id(&self) -> Option<u32> {
+        Some(self.0.id())
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        self.0.kill()
+    }
+
+    fn wait(&mut self) -> io::Result<Exit> {
+        self.0.wait().map(Exit::from)
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<Exit>> {
+        self.0.try_wait().map(|status| status.map(Exit::from))
+    }
+}
+
+impl Child {
+    pub(crate) fn new(
+        program: String,
+        backend: Box<dyn ChildBackend + Send>,
+        stdin: Option<Box<dyn Write + Send>>,
+        stdout: Option<Box<dyn Read + Send>>,
+        stderr: Option<Box<dyn Read + Send>>,
+    ) -> Self {
+        Self {
+            program,
+            backend,
+            stdin,
+            stdout,
+            stderr,
+        }
+    }
+
+    /// The program as it was asked for, for error messages that name the agent
+    /// rather than the daemon.
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// The process id on the host that runs it. `None` over SSH, where the pid
+    /// would be the remote one and nothing here can use it.
+    #[must_use]
+    pub fn id(&self) -> Option<u32> {
+        self.backend.id()
+    }
+
+    pub fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.stdin.take()
+    }
+
+    pub fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.stdout.take()
+    }
+
+    pub fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.stderr.take()
+    }
+
+    pub fn kill(&mut self) -> io::Result<()> {
+        self.backend.kill()
+    }
+
+    pub fn wait(&mut self) -> io::Result<Exit> {
+        self.backend.wait()
+    }
+
+    pub fn try_wait(&mut self) -> io::Result<Option<Exit>> {
+        self.backend.try_wait()
+    }
+}
+
+/// What a host must be able to do for the daemon to run anything on it.
+///
+/// Two processes — one with pipes, one under a PTY — and three file operations,
+/// because that is what the design phase's task P0-4 measured and what the agent engine asks for first.
+/// LSP operations join this trait later, when their caller exists: a trait
+/// invented ahead of its implementations is a guess with a version number.
+///
+/// The file operations are deliberately narrow. They read and write whole
+/// files, and they resolve a path *on the host*. Whether a file is text, what
+/// its encoding is, and whether a write is allowed are questions for the caller;
+/// answering them here would put policy in the transport.
+pub trait Host: fmt::Debug + Send + Sync {
+    fn kind(&self) -> HostKind;
+
+    /// Run a command with piped stdio. The caller owns the pipes and must read
+    /// them, because a full pipe blocks the child.
+    fn spawn(&self, command: &ExecCommand) -> Result<Child, HostError>;
+
+    /// Run a command under a pseudo-terminal of the given size.
+    ///
+    /// A PTY is not "pipes with a nice name": programs detect it, colour their
+    /// output, and refuse to prompt without it. A transport that cannot make one
+    /// returns [`HostError::Unsupported`] rather than quietly handing back pipes,
+    /// which is the failure mode that looks like a working terminal until someone
+    /// opens a TUI. Both local platforms can make one: `forkpty` on unix, ConPTY
+    /// on Windows.
+    fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError>;
+
+    /// Resolve `path` the way this host's filesystem would: symlinks followed,
+    /// `..` collapsed.
+    ///
+    /// This belongs on the host, not in the caller, because it is the only way a
+    /// containment check can be sound: `workspace/link` may be a symlink to
+    /// `/etc`, and a guard comparing path strings would call that contained. It
+    /// fails for a path that does not exist, which is why a caller writing a new
+    /// file resolves its parent instead.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, HostError>;
+
+    /// Read a whole file as bytes.
+    ///
+    /// Bytes rather than `String`: an agent asking for a binary is a refusal the
+    /// caller should report, and a lossy conversion here would return something
+    /// plausible instead.
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, HostError>;
+
+    /// Replace a file's contents.
+    ///
+    /// Directories are not created: a path whose parent is missing is a mistake
+    /// to report, not a tree to build behind the caller's back.
+    fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), HostError>;
+}
+
+/// This machine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalHost;
+
+impl LocalHost {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Host for LocalHost {
+    fn kind(&self) -> HostKind {
+        HostKind::Local
+    }
+
+    fn spawn(&self, command: &ExecCommand) -> Result<Child, HostError> {
+        let mut process = std::process::Command::new(&command.program);
+        process
+            .args(&command.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(cwd) = &command.cwd {
+            process.current_dir(cwd);
+        }
+        for (key, value) in &command.env {
+            process.env(key, value);
+        }
+
+        let mut child = process.spawn().map_err(|source| HostError::Spawn {
+            command: command.command_line(),
+            source,
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Write + Send>);
+        let stdout = child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>);
+        let stderr = child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>);
+        Ok(Child::new(
+            command.program.to_string_lossy().into_owned(),
+            Box::new(ProcessChild(child)),
+            stdin,
+            stdout,
+            stderr,
+        ))
+    }
+
+    fn spawn_pty(&self, command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
+        platform::spawn_pty(command, size)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, HostError> {
+        std::fs::canonicalize(path).map_err(|source| HostError::Io {
+            operation: "canonicalize",
+            source,
+        })
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, HostError> {
+        std::fs::read(path).map_err(|source| HostError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
+    fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), HostError> {
+        std::fs::write(path, contents).map_err(|source| HostError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+}
+
+/// Why a host operation did not happen.
+#[derive(Debug, thiserror::Error)]
+pub enum HostError {
+    /// The platform cannot do this yet, and the message says who owes it.
+    ///
+    /// A typed refusal, because the alternative — a fallback that returns
+    /// something plausible — turns "not implemented" into "works on my machine".
+    #[error("{feature} is not implemented on {platform} yet ({owner})")]
+    Unsupported {
+        feature: &'static str,
+        platform: &'static str,
+        owner: &'static str,
+    },
+
+    #[error("cannot spawn `{command}`: {source}")]
+    Spawn {
+        command: String,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("pty for `{command}`: {message}")]
+    Pty { command: String, message: String },
+
+    #[error("read {}: {source}", path.display())]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("write {}: {source}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// The SSH side of the seam: connecting, authenticating, or opening a
+    /// channel. `operation` is one of "connect", "authenticate", "exec", "pty".
+    #[error("ssh {operation}: {message}")]
+    Ssh {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation}: {source}")]
+    Io {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+}

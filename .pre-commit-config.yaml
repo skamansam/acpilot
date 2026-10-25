@@ -1,0 +1,68 @@
+# Git hooks, run by prek (https://prek.j178.dev) or pre-commit.
+#
+# These are the same commands CI runs, so a commit that passes here does not fail
+# for a reason the author could have seen locally. `xtask check` remains the
+# single entry point for the whole gate; this file is the commit-time version of
+# it, plus the CI jobs that `xtask check` does not cover yet.
+#
+# Install once per clone:
+#
+#     prek install
+#
+# Run everything without committing:
+#
+#     prek run --all-files
+#
+# Hooks run serially on purpose: cargo takes its own locks, and two hooks
+# compiling the same workspace only makes the wait longer.
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        require_serial: true
+
+      # A warning is a failure here exactly as it is in CI. `--all-targets`
+      # includes tests, examples and benches, which is where most new warnings
+      # otherwise hide.
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        files: '(\.rs$|Cargo\.toml$|Cargo\.lock$|clippy\.toml$|rust-toolchain\.toml$)'
+        pass_filenames: false
+        require_serial: true
+
+      # The whole workspace through nextest: the same command as CI and as
+      # `xtask check`. This includes the OpenAPI snapshot test and the WCAG
+      # contrast test, so neither needs a duplicate hook.
+      - id: cargo-nextest
+        name: cargo nextest
+        entry: cargo nextest run --workspace --no-fail-fast
+        language: system
+        files: '(\.rs$|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.snap$)'
+        pass_filenames: false
+        require_serial: true
+
+      # CI tests the `docs` feature separately because it is off by default. Use
+      # `cargo test` rather than nextest to match CI exactly, doctests included.
+      - id: cargo-test-docs-feature
+        name: cargo test (docs feature)
+        entry: cargo test -p acpilotd --features docs
+        language: system
+        files: '(\.rs$|Cargo\.toml$|Cargo\.lock$)'
+        pass_filenames: false
+        require_serial: true
+
+      - id: cargo-deny
+        name: cargo deny
+        entry: cargo deny check
+        language: system
+        files: '(Cargo\.(toml|lock)$|deny\.toml$)'
+        pass_filenames: false
+        require_serial: true

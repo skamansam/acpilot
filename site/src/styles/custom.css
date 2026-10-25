@@ -136,6 +136,35 @@ header.header {
   color: var(--sl-color-gray-3);
 }
 
+/* --- Right sidebar: the chart table ----------------------------------- */
+
+/* Starlight sizes this column to `max(sidebar, sidebar + spare / 2)`, so on a
+ * wide window it swallows half the leftover space: the divider drifts left, the
+ * table of contents hugs it, and the right edge of the page empties out. The
+ * column is a fixed instrument, not a reservoir — pin its width and let the
+ * article take what is left. */
+@media (min-width: 72rem) {
+  .right-sidebar-container {
+    width: var(--sl-sidebar-width);
+    flex: 0 0 auto;
+  }
+
+  /* This box is fixed to the viewport, but its width was `100%` — of the
+   * viewport, not of the column — so it overhung the right edge. */
+  .right-sidebar {
+    width: var(--sl-sidebar-width);
+  }
+
+  /* The article gets the remaining width and centres in it, rather than being
+   * sized to the content plus half the spare space and pushed right. */
+  [data-has-sidebar][data-has-toc] .main-pane {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    --sl-content-margin-inline: auto;
+  }
+}
+
 /* --- Hero: a runway seen from above ----------------------------------- */
 
 .hero {

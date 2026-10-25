@@ -38,7 +38,7 @@ pub enum LspServerStatus {
     Stopped,
 }
 
-/// A language server as returned by `GET /v1/lsp`.
+/// A language server as returned by `GET /v1/lsp/servers`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LspServerSummary {
     /// Server identifier.

@@ -1,5 +1,11 @@
 # Acpilot
 
+> **Vibecoded, on purpose.** While I am a software developer, I lack the time to
+> hand-code all my ideas, and as a result this project is vibecoded with
+> [Freebuff](https://freebuff.com). The phases, the ADRs and the tests in here are
+> how I keep that honest: every claim in the docs is meant to be checked against the
+> code, and where it is not true yet, the page says so.
+
 **[Read the field manual](https://rudeboy.dev/acpilot/)** — the docs site under [`site/`](site/),
 written in the tone of a flight crew that has seen too much and honest about which phase each
 page belongs to. Preview locally with `cd site && npm run dev`.
@@ -15,7 +21,8 @@ you prefer: terminal, TUI, native GUI, or browser.
 "autopilot", which is roughly how it feels when a dozen agents are working and you are
 only stepping in to approve the dangerous bits.
 
-- Status: **pre-alpha / design**. No code yet — see [TODO.md](TODO.md).
+- Status: **pre-alpha**. The workspace, the daemon API and the agent engine build and are
+tested; what is left is tracked in [TODO.md](TODO.md).
 - License: dual MIT OR Apache-2.0.
 - Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon).
 - Directory: `acpilot/`, planned Rust workspace (edition 2024), layout in §6.
@@ -83,6 +90,12 @@ Acpilot is a **daemon plus thin clients**. The daemon (`acpilotd`) owns the cont
 plane: workspaces, hosts, sessions, agent processes, permissions, terminals, language
 servers, profiles, and history. Clients never talk to an agent directly.
 
+Any client starts the daemon on demand (ADR 0004): it probes `GET /v1/health`, and if
+nothing answers it spawns `acpilotd` detached, behind a lock so two windows cannot start
+two daemons. One process per user serves every project — workspaces live inside it, not
+in separate instances — and `--no-spawn` turns the behaviour off for tests and service
+managers.
+
 ```
    acpilot (CLI)  ─┐
    acpilot tui    ─┤   HTTP/JSON + SSE (events) + WS (terminals, streams)
@@ -138,29 +151,35 @@ API, never ambient state, so a client cannot accidentally act as the wrong ident
 
 ```toml
 # ~/.config/acpilot/profiles/work/agents.toml
-[agents.claude]
-label     = "Claude Code"
+schema_version = 1
+
+[[agents]]
+id        = "claude"
+name      = "Claude Code"
 transport = "acp-stdio"
 command   = "npx"
 args      = ["-y", "@zed-industries/claude-code-acp"]
 env       = { ANTHROPIC_API_KEY = "keyring:anthropic" }
 
-[agents.freebuff]
-label     = "Freebuff"
-transport = "pty"            # program-as-agent: no ACP, we drive it in a PTY
+[[agents]]
+id        = "freebuff"
+transport = "pty"                 # program-as-agent: no ACP, we drive it in a PTY
 command   = "freebuff"
-prompt    = "chat"           # how to hand it a turn
-parser    = "ansi-transcript" # built-in transcript adapters, see TODO P2-7
+parser    = "ansi-transcript"     # built-in transcript adapters, see TODO P2-7
+sentinel  = "▍Enter a coding task" # the input row back at rest ends the turn
 
-[agents.devin-remote]
+[[agents]]
+id        = "devin-remote"
 transport = "http-jsonrpc"
 url       = "https://devin.internal/acp"
-auth      = "oauth:devin"
+auth      = "keyring:devin"
 ```
 
 `transport = "acp-stdio"` is the native path and the one implemented first. `pty` is the
 "run any program as an agent" path: launch it in a PTY, stream the screen, detect turns,
 and expose it through the same session/turn API. `http-jsonrpc` covers hosted agents.
+`keyring:<name>` resolves in the profile the file belongs to; reaching into another one
+needs `keyring:<profile>/<name>` *and* `allow_cross_profile = true` on that agent.
 
 ### Profiles
 
@@ -185,7 +204,7 @@ silently is the failure mode with the worst consequences.
 
 | Scoped to a profile | Global |
 | --- | --- |
-| Agents and their credentials (`keyring:<profile>/<name>`) | Daemon settings (bind, token, log level) |
+| Agents and their credentials (`keyring:<name>`, resolved in this profile) | Daemon settings (bind, token, log level) |
 | Language servers and their settings | Profile registry and `active_profile` |
 | Permission policy, workspace trust, LSP trust pins | Host definitions (one machine, many identities) |
 | Editor, theme, keymap and UI preferences | |
@@ -243,28 +262,52 @@ auth, optional TLS termination, no cloud dependency.
 ### API — HTTP + SSE + WS
 
 ```
-GET    /v1/health
+GET    /v1/health                         GET  /v1/openapi.json
 GET    /v1/hosts                          POST /v1/hosts
+                                          POST /v1/hosts/{id}/test
 GET    /v1/workspaces                     POST /v1/workspaces
 GET    /v1/agents                         POST /v1/agents/{id}/refresh
+                                          POST /v1/agents/{id}/trust
 GET    /v1/sessions                       POST /v1/sessions
 GET    /v1/sessions/{id}                  DELETE /v1/sessions/{id}
 POST   /v1/sessions/{id}/prompt           POST /v1/sessions/{id}/cancel
 POST   /v1/sessions/{id}/mode             GET  /v1/sessions/{id}/events   (SSE)
+WS     /v1/sessions/{id}/stream           GET  /v1/events                 (SSE)
 GET    /v1/permissions?status=pending     POST /v1/permissions/{id}/resolve
 GET    /v1/files?workspace=&path=         PUT  /v1/files
-GET    /v1/terminals                      POST /v1/terminals
-WS     /v1/terminals/{id}/attach          WS   /v1/sessions/{id}/stream
-GET    /v1/profiles                        POST /v1/profiles
-GET    /v1/profiles/{id}                   PATCH/DELETE /v1/profiles/{id}
-GET    /v1/profiles/{id}/preferences       PATCH .../preferences
-GET    /v1/lsp/servers                     POST /v1/lsp/servers/{id}/restart
-GET    /v1/lsp/servers/{id}/logs           GET  /v1/lsp/diagnostics
+GET    /v1/files/list
+GET    /v1/terminals?session=             POST /v1/terminals
+WS     /v1/terminals/{id}/attach
+GET    /v1/profiles                       POST /v1/profiles
+GET    /v1/profiles/{id}                  PATCH/DELETE /v1/profiles/{id}
+POST   /v1/profiles/{id}/activate         POST /v1/profiles/{id}/export
+GET    /v1/profiles/{id}/preferences      PATCH .../preferences
+GET    /v1/lsp/servers                    POST /v1/lsp/servers/{id}/restart
+GET    /v1/lsp/servers/{id}/logs          GET  /v1/lsp/diagnostics
 POST   /v1/lsp/request
 ```
 
-Every route except `/v1/events` takes `X-Acpilot-Profile`, and on a mutating request the
-header is *required* — a client cannot silently act as the wrong identity.
+The list is **frozen** for v1, with the reasoning and the rejected alternatives in
+[`docs/api.md`](docs/api.md). Providers, models, recipes and the ACP bridge are deliberately
+later; none of them changes a route above.
+
+Every route takes `X-Acpilot-Profile`; on a mutating request the header is *required* — a
+client cannot silently act as the wrong identity. On a read or a stream, omitting it means
+the active profile, and a stream binds whichever profile it was opened with.
+
+Agent output streams over SSE with a per-session monotonic sequence number: `Last-Event-ID`
+replays from the transcript, a heartbeat every 15 s proves the stream is alive, and an id
+the daemon cannot replay is answered with `resync` rather than silence. A prompt returns
+`202` with a `turn_id` instead of waiting for the agent, and an `idempotency_key` makes a
+retried prompt the same turn. Pending permissions are *state*
+(`GET /v1/permissions?status=pending`), while resolving one is idempotent for a repeated
+answer and `409` for a different one — which is what makes a script able to answer a prompt.
+
+Every failure is the same envelope, `{code, message, details?}`, and `code` is stable
+enough to switch on: `invalid_request` (400), `permission_denied` (403), `not_found`
+(404), `conflict` (409), `timeout` (504), `host_unavailable`, `model_unavailable` and
+`agent_failed` (502), `protocol` and `io` (500). The 502/500 split is the "retry" versus
+"file a bug" signal.
 
 OpenAPI 3.1 is generated from the Rust types (`utoipa`); TS and Rust clients are
 generated from it so a third-party UI is a weekend project, not a fork.
@@ -323,12 +366,12 @@ reference implementation for editing keymaps.
 
 ### 5.4 GUI
 
-This is the one genuinely contested decision, so it gets a benchmark spike with hard exit
+This is the one genuinely contested decision, so it gets a benchmark probe with hard exit
 criteria (TODO `P0-3`) and a decision ADR (TODO `P10-1`) rather than a fait accompli.
 
 | Candidate | Case for | Case against |
 | --- | --- | --- |
-| **`gpui` 0.2.2** (chosen) | Built for exactly this: shaped line layout and line wrapping in `gpui::text_system`, `uniform_list` for virtualised rows, drag-and-drop and IME in the framework itself, and in Zed's `crates/editor` the display-map design (folds, blocks, inlays) we can copy into `acpilot-text` — plus the *reference ACP client* (agent panel, diff review, terminal view) as readable source. Apache-2.0, stable Rust (Zed pins 1.91.1), Linux/macOS/Windows backends. The decisive reason is not technical: a sibling project here will be a **GUI builder written in gpui**, so Acpilot becomes the second real user — framework knowledge, upgrade work, and any upstream fixes are paid once across both instead of sunk into a one-off. The `zed/` checkout on disk is reference reading for those patterns, not a dependency. | No semver contract: `0.2.2` was published **2025-10-22** and main has moved on since, so we adopt a year-old surface deliberately and wait for features rather than tracking main. Pulls `zed-font-kit` as a **git dependency pinned by rev**, so a crates.io-only build is not self-contained. No `accesskit` at this version, so screen-reader support is work we do, not a checkbox we inherit. Upstream's release cadence becomes ours, and the gaps we hit are the same ones the GUI builder waits on. |
+| **`gpui` 0.2.2** (chosen) | Built for exactly this: shaped line layout and line wrapping in `gpui::text_system`, `uniform_list` for virtualised rows, drag-and-drop and IME in the framework itself, and in Zed's `crates/editor` the display-map design (folds, blocks, inlays) we can copy into `acpilot-text` — plus the *reference ACP client* (agent panel, diff review, terminal view) as readable source. Apache-2.0, stable Rust (Zed pins 1.91.1), Linux/macOS/Windows backends. The decisive reason is not technical: a sibling project here will be a **GUI builder written in gpui**, so Acpilot becomes the second real user — framework knowledge, upgrade work, and any upstream fixes are paid once across both instead of sunk into a one-off. The `zed/` checkout on disk is reference reading for those patterns, not a dependency. | No semver contract: `0.2.2` was published **2025-10-22** and main has moved on since, so we adopt a year-old surface deliberately and wait for features rather than tracking main. Resolves entirely from crates.io at this pin — `zed-font-kit` 0.14.1-zed is published, not a git rev — so a vendored build is self-contained. No `accesskit` at this version, so screen-reader support is work we do, not a checkbox we inherit. Upstream's release cadence becomes ours, and the gaps we hit are the same ones the GUI builder waits on. |
 | `iced` 0.14 (fallback, held in reserve) | Stable public API since 0.10, real semver, MIT, MSRV 1.88, Elm-style update loop, `wgpu` + tiny-skia fallback, `accesskit` already wired, used by System76's COSMIC | Wrong shape for an editor: `text_editor` is a textarea-grade widget, so the shaped, virtualised, fold-aware surface is entirely ours to build — the thing gpui gives away |
 | `egui` 0.37 / `eframe` | Fastest to a working panel; instant dev loop; `accesskit` support | Immediate mode rebuilds text layout every frame; weak native selection/IME story; feels like a debug tool, not an editor |
 | Tauri 2 + the web UI | Reuses the CodeMirror frontend wholesale; small binaries; great text editing for free | WebView variance, an IPC hop for every edit, and the "native" app is a browser — contradicts the Rust-native premise |
@@ -338,26 +381,34 @@ accept a dependency without a stability contract, and in exchange we stop writin
 surface from scratch and start from the same primitives Zed's editor uses. It is only a good
 trade if the pin is disciplined, so it is a task, not a footnote:
 
-- **Pin, don't float.** `gpui = "0.2.2"` in the manifest. When we need a fix that only exists
-  on main, bump to an exact git `rev` and record why in the ADR — never `branch = "main"`.
-- **Vendor for reproducible builds.** `cargo vendor` (or a registry mirror) in CI, because one
-  of gpui's own dependencies is already a git rev. A build that needs GitHub at compile time
-  is a build that breaks on an air-gapped release day.
+- **Pin, don't float.** `gpui = "=0.2.2"` in the manifest — the `=` is load-bearing, because a
+  bare `"0.2.2"` is a caret requirement that quietly matches every later `0.2.x`. When we need
+  a fix that only exists on main, bump to an exact git `rev` and record why in the ADR — never
+  `branch = "main"`.
+- **Vendor for reproducible builds.** `cargo vendor` (or a registry mirror) in CI. There is no
+  git rev in the graph at this pin, but a build that needs the network to fetch is still a
+  build that breaks on an air-gapped release day.
 - **Upgrades track releases, not a calendar.** A new gpui release is adopted within a week
-  (`XT-1` in TODO), with the P0-3 harness as the gate; the pin is exact so breakage is
+  (`XT-1` in TODO), with the design phase's P0-3 harness as the gate; the pin is exact so breakage is
   attributable, not a nightly gamble.
 - **Share the pin with the GUI builder.** When that project starts, both repos pin the same
-  gpui `rev` and share one `patches/gpui/` series and one upgrade cadence. Two divergent pins
-  would double the upgrade cost and split our upstream pressure for no benefit.
+  gpui version (and, if we ever escalate to a `rev`, the same one) and share one `patches/gpui/`
+  series and one upgrade cadence. Two divergent pins would double the upgrade cost and split our
+  upstream pressure for no benefit.
 - **Patch narrowly, upstream first.** If we must carry a change, it lives as a small commit
   series in `patches/gpui/` with the upstream PR linked; a drifting fork is the failure mode
   this bullet exists to prevent.
 
-The P0-3 benchmark still has veto power: if gpui misses the 16 ms p95 keystroke→paint or
-150 ms first-paint budgets by more than 2×, or needs a nightly toolchain or an unsound patch
-to get there, the fallback order is **iced 0.14** (semver, `accesskit`) → Tauri (reuse the web
-UI). The cost of that switch stays bounded because nothing UI-specific lives outside
+The design phase's P0-3 benchmark still has veto power, but as a comparison rather than an absolute: a
+framework is vetoed when a measured alternative is more than 2× better on a budget it misses,
+or when it needs a nightly toolchain, cannot build from a vendored tree, or would need an
+unsound patch. No measurement supports switching — iced misses first paint harder — so the
+fallback order stays **iced 0.14** (semver, a documented `accesskit` path) → Tauri (reuse the
+web UI). The cost of that switch stays bounded because nothing UI-specific lives outside
 `acpilot-gui`.
+
+The decision record — the pin, the numbers, and the triggers that would reverse it — is
+`docs/adr/0009-gui-framework.md`.
 
 ### 5.5 Web UI
 
@@ -398,7 +449,14 @@ than to reimplement it.
 path — 9P is slow and silently changes case/permission semantics. Run the daemon helper
 *inside* the distro instead (`wsl.exe -d Ubuntu -- acpilotd-helper --stdio`), so file and
 agent operations are in-distro and only the control plane crosses the boundary. UNC is the
-fallback for read-only browsing.
+fallback for read-only browsing. Measured on the dev box, same file and same cache: 13.0 ms
+per 37 KB read over UNC against 0.096 ms in-distro, 136× — `docs/notes/wsl-helper.md`.
+
+The path a user opens is only a door. A folder that arrives as
+`\\wsl.localhost\Ubuntu-24.04\home\sam\proj` becomes the host `wsl://Ubuntu-24.04`
+plus the Linux cwd `/home/sam/proj`; the Windows path never becomes the identity of the
+workspace. On a machine without WSL there is no `wsl://` host at all — detection is one
+`wsl.exe -l -q`, and absent, failing, or empty is not an error and never a prompt.
 
 ### 5.7 Language servers (LSP)
 
@@ -452,13 +510,13 @@ xtask` for dev tasks, GitHub Actions matrix for linux/macos/windows.
 
 **Version policy: latest stable, no lag.** Every dependency sits at the newest stable release
 and is updated as soon as a new one exists — automated PRs (Dependabot or Renovate) on release,
-a weekly `cargo update` for the lockfile, majors reviewed by a human, and the P0-3 performance
+a weekly `cargo update` for the lockfile, majors reviewed by a human, and the design phase's task P0-3 performance
 harness in CI so an upgrade that costs milliseconds fails loudly. No dependency is allowed to
 drift without a reason recorded in this table:
 
 | Dependency | Held at | Why | Adopt when |
 | --- | --- | --- | --- |
-| `gpui` | `0.2.2` | No semver; one exact pin shared with the GUI-builder project (D1) | A release lands → upgrade within a week, P0-3 gates it |
+| `gpui` | `0.2.2` | No semver; one exact pin shared with the GUI-builder project (D1) | A release lands → upgrade within a week, the design phase's P0-3 gates it |
 | `ropey` | `1.6` | `2.0.0-beta.1` is a pre-release; the rope underpins every edit path | `2.0.0` ships |
 | `notify` | `8.2` | `9.0.0-rc.6` is an RC and file watching runs in the daemon's hot loop | `9.0.0` ships |
 | `lsp-types` | `0.97` | Only a fallback behind `acpilot-lsp::wire`; unmaintained upstream (D8) | Never, unless D8 flips |
@@ -485,19 +543,24 @@ acpilot/
 │   ├── acpilot-core/          # domain: workspaces, sessions, agents, permissions
 │   ├── acpilot-text/          # rope, selection, edits, tree-sitter, diff — UI-agnostic
 │   ├── acpilot-agent/         # ACP client engine, supervision, transcript adapters
+│   ├── acpilot-model/         # local model backends, capability probes, recipes
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
 │   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
+│   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
+│   ├── acpilot-client/        # typed client for the daemon API: REST + SSE
 │   ├── acpilotd/              # daemon: axum API, sqlite, event bus
 │   ├── acpilotd-helper/       # tiny in-host shim for SSH/WSL (stdio JSON-RPC)
 │   ├── acpilot-cli/           # `acpilot` binary: CLI + subcommand dispatch
-│   ├── acpilot-tui/           # ratatui UI
+│   ├── acpilot-tui/           # ratatui UI, started by `acpilot tui`
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
+├── extensions/                # built-in extensions (themes, presets), embedded in the binary
+├── marketplace/               # curated list of extension repositories, reviewed by PR
 ├── web/                       # Svelte 5 + Vite + CodeMirror 6 + xterm.js (P11)
 ├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one
-├── spikes/                    # throwaway P0 experiments (deleted before v0.1)
+├── probes/                    # time-boxed P0 measurements, one question each (CONTRIBUTING §Probes)
 ├── migrations/                # sqlite migrations
 ├── docs/                      # ADRs, ACP + LSP notes, protocol map
 ├── xtask/                     # build/dev/packaging tasks
@@ -509,21 +572,21 @@ acpilot/
 
 | Phase | Outcome |
 | --- | --- |
-| P0 | Spikes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
-| P1 | Workspace skeleton, CI, `acpilot-proto`, error model |
-| P2 | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
-| P3 | `acpilotd` HTTP/SSE API + SQLite history |
-| P4 | Profiles: config cascade, per-profile secrets, state, and preferences |
-| P4.5 | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
-| P4.6 | Extensions: declarative packs for themes, language-server and agent presets, grammars, snippets; signed index; per-profile activation |
-| P5 | CLI (complete API coverage, `--profile` everywhere) |
-| P6 | TUI editor (usable daily driver for editing + one agent) |
-| P7 | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
-| P8 | SSH hosts: remote workspace, remote agents, remote PTY, remote LSP |
-| P9 | Windows + WSL hosts |
-| P10 | GUI (gpui) |
-| P11 | Web UI + `acpilot serve` |
-| P12 | Packaging, docs, v0.1 release |
+| Design phase (P0) | Probes: ACP handshake, PTY program-agent, gpui text benchmark, SSH PTY, WSL helper, LSP round-trip |
+| Foundation phase (P1) | Workspace skeleton, CI, `acpilot-proto`, error model |
+| Engine phase (P2) | ACP engine + session manager + permission broker (headless, tested against a mock agent) |
+| Service phase (P3) | `acpilotd` HTTP/SSE API + SQLite history |
+| Profiles phase (P4) | Profiles: config cascade, per-profile secrets, state, and preferences |
+| Models phase (P4.5) | Local models: LM Studio provider, the model lab (tune a prompt/params/context, record runs), recipe→agent promotion, ACP bridge for remote drivers |
+| Mod shop phase (P4.6) | Extensions: declarative packs for themes, language-server and agent presets, grammars, snippets; signed index; per-profile activation |
+| Command line phase (P5) | CLI (complete API coverage, `--profile` everywhere) |
+| Editor phase (P6) | TUI editor (usable daily driver for editing + one agent) |
+| Language intelligence phase (P7) | Language servers: diagnostics, completion, hover, rename, format-on-save, remote LSP |
+| Remote hosts phase (P8) | SSH hosts: remote workspace, remote agents, remote PTY, remote LSP |
+| Windows phase (P9) | Windows + WSL hosts |
+| Desktop phase (P10) | GUI (gpui) |
+| Web phase (P11) | Web UI + `acpilot serve` |
+| Release phase (P12) | Packaging, docs, v0.1 release |
 
 **v0.1 "one agent, one machine"**: native ACP agent, local + WSL + SSH, TUI and CLI,
 permissions, profiles, LSP, session resume. GUI and web follow; they share the same daemon,

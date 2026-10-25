@@ -1,0 +1,324 @@
+---
+// Rendered from site/src/data/themes.json, which `cargo xtask docs-data`
+// generates from the same files the binary embeds. The palettes and the contrast
+// ratios on this page are therefore the ones the build enforces, not a hand-made
+// mock-up that can drift.
+import data from '../data/themes.json';
+
+const { themes, aa_threshold: threshold } = data;
+
+const uiTokens = [
+  'bg',
+  'bg_panel',
+  'border',
+  'text',
+  'text_muted',
+  'accent',
+  'accent_high',
+  'success',
+  'warning',
+  'danger',
+] as const;
+
+const syntaxTokens = [
+  'comment',
+  'keyword',
+  'string',
+  'number',
+  'type',
+  'function',
+  'variable',
+  'constant',
+  'operator',
+  'punctuation',
+] as const;
+---
+
+<section class="theme-gallery" aria-label="Built-in themes">
+  {
+    themes.map((theme) => (
+      <article
+        class="theme-card"
+        id={`theme-${theme.id}`}
+        data-appearance={theme.appearance}
+        style={`--t-bg:${theme.ui.bg};--t-panel:${theme.ui.bg_panel};--t-text:${theme.ui.text};--t-muted:${theme.ui.text_muted};--t-accent:${theme.ui.accent};--t-border:${theme.ui.border};--t-keyword:${theme.syntax.keyword};--t-string:${theme.syntax.string};--t-number:${theme.syntax.number};--t-type:${theme.syntax.type};--t-function:${theme.syntax.function};--t-comment:${theme.syntax.comment};--t-constant:${theme.syntax.constant};--t-operator:${theme.syntax.operator};--t-punctuation:${theme.syntax.punctuation}`}
+      >
+        <header class="theme-head">
+          <div>
+            <h3>{theme.name}</h3>
+            <p class="theme-id">{theme.id}</p>
+          </div>
+          <span class="theme-badge">{theme.appearance}</span>
+        </header>
+
+        <div class="theme-window" aria-hidden="true">
+          <div class="theme-titlebar">
+            <span class="theme-dots">
+              <i /> <i /> <i />
+            </span>
+            <span class="theme-file">preflight.rs</span>
+            <span class="theme-gauge">FL 090</span>
+          </div>
+          <pre class="theme-code"><code><span class="ln">1</span><span class="tok-comment">// preflight: always carry a reserve</span>
+<span class="ln">2</span><span class="tok-keyword">fn</span> <span class="tok-function">refuel</span><span class="tok-punct">(</span><span class="tok-plain">litres</span><span class="tok-punct">:</span> <span class="tok-type">u32</span><span class="tok-punct">)</span> <span class="tok-operator">-&gt;</span> <span class="tok-type">Fuel</span> <span class="tok-punct">&#123;</span>
+<span class="ln">3</span>    <span class="tok-keyword">let</span> <span class="tok-plain">reserve</span> <span class="tok-operator">=</span> <span class="tok-number">0.15</span><span class="tok-punct">;</span>
+<span class="ln">4</span>    <span class="tok-type">Fuel</span><span class="tok-punct">::</span><span class="tok-function">new</span><span class="tok-punct">(</span><span class="tok-plain">litres</span><span class="tok-punct">,</span> <span class="tok-plain">reserve</span><span class="tok-punct">)</span>
+<span class="ln">5</span><span class="tok-punct">&#125;</span>
+<span class="ln">6</span>
+<span class="ln">7</span><span class="tok-comment">// "minimum fuel" is not a suggestion</span>
+<span class="ln">8</span><span class="tok-keyword">const</span> <span class="tok-constant">MINIMUM</span><span class="tok-punct">:</span> <span class="tok-type">f64</span> <span class="tok-operator">=</span> <span class="tok-number">45.0</span><span class="tok-punct">;</span></code></pre>
+        </div>
+
+        <div class="swatches">
+          <p class="swatch-label">Interface</p>
+          <ul>
+            {uiTokens.map((token) => (
+              <li>
+                <span class="chip" style={`background:${theme.ui[token]}`} />
+                <span class="chip-name">{token}</span>
+                <span class="chip-hex">{theme.ui[token]}</span>
+              </li>
+            ))}
+          </ul>
+          <p class="swatch-label">Syntax</p>
+          <ul>
+            {syntaxTokens.map((token) => (
+              <li>
+                <span class="chip" style={`background:${theme.syntax[token]}`} />
+                <span class="chip-name">{token}</span>
+                <span class="chip-hex">{theme.syntax[token]}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <footer class="theme-foot">
+          <span>
+            weak pair <strong>{(theme.minimum ?? 0).toFixed(2)}:1</strong> across {theme.pairs.length} pairs
+          </span>
+          <span class="theme-pass">AA {threshold.toFixed(1)}:1</span>
+        </footer>
+      </article>
+    ))
+  }
+</section>
+
+<style>
+  .theme-gallery {
+    display: grid;
+    gap: 1.5rem;
+    margin-block: 1.5rem 2rem;
+  }
+
+  .theme-card {
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    background: var(--sl-color-bg-nav);
+  }
+
+  .theme-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-block-end: 0.75rem;
+  }
+
+  .theme-head h3 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+
+  .theme-id {
+    margin: 0.15rem 0 0;
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .theme-badge {
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 999px;
+    padding: 0.15rem 0.5rem;
+    color: var(--sl-color-gray-3);
+    white-space: nowrap;
+  }
+
+  .theme-window {
+    background: var(--t-bg);
+    border: 1px solid var(--t-border);
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+
+  .theme-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.6rem;
+    background: var(--t-panel);
+    border-block-end: 1px solid var(--t-border);
+    color: var(--t-muted);
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+  }
+
+  .theme-dots {
+    display: inline-flex;
+    gap: 0.25rem;
+  }
+
+  .theme-dots i {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--t-border);
+    display: block;
+  }
+
+  .theme-file {
+    flex: 1;
+  }
+
+  .theme-gauge {
+    color: var(--t-accent);
+  }
+
+  pre.theme-code {
+    margin: 0;
+    padding: 0.7rem 0.75rem;
+    background: var(--t-bg);
+    color: var(--t-text);
+    font-family: var(--sl-font-mono);
+    font-size: 0.74rem;
+    line-height: 1.65;
+    overflow-x: auto;
+    border: 0;
+    border-radius: 0;
+  }
+
+  pre.theme-code code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+    border: 0;
+  }
+
+  .ln {
+    display: inline-block;
+    width: 1.4em;
+    text-align: right;
+    margin-inline-end: 1em;
+    color: var(--t-muted);
+    user-select: none;
+  }
+
+  .tok-comment {
+    color: var(--t-comment);
+    font-style: italic;
+  }
+  .tok-keyword {
+    color: var(--t-keyword);
+  }
+  .tok-string {
+    color: var(--t-string);
+  }
+  .tok-number {
+    color: var(--t-number);
+  }
+  .tok-type {
+    color: var(--t-type);
+  }
+  .tok-function {
+    color: var(--t-function);
+  }
+  .tok-constant {
+    color: var(--t-constant);
+  }
+  .tok-operator {
+    color: var(--t-operator);
+  }
+  .tok-punct {
+    color: var(--t-punctuation);
+  }
+  .tok-plain {
+    color: var(--t-text);
+  }
+
+  .swatches {
+    margin-block-start: 0.85rem;
+  }
+
+  .swatch-label {
+    margin: 0.5rem 0 0.3rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+
+  .swatches ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+    gap: 0.25rem 0.75rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .swatches li {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    color: var(--sl-color-text);
+  }
+
+  .chip {
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 0.15rem;
+    border: 1px solid var(--sl-color-hairline);
+    flex: none;
+  }
+
+  .chip-name {
+    flex: 1;
+  }
+
+  .chip-hex {
+    color: var(--sl-color-gray-3);
+  }
+
+  .theme-foot {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-block-start: 0.85rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .theme-foot strong {
+    color: var(--sl-color-text);
+  }
+
+  .theme-pass {
+    color: var(--t-accent);
+  }
+
+  @media (min-width: 50rem) {
+    .theme-gallery {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+</style>

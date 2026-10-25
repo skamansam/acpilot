@@ -1,6 +1,6 @@
 ---
 source: crates/acpilot-proto/tests/openapi_snapshot.rs
-expression: document
+expression: canonical(document)
 ---
 {
   "components": {
@@ -237,6 +237,26 @@ expression: document
         ],
         "type": "string"
       },
+      "CancelAccepted": {
+        "description": "Response to a cancel request.\n\n`cancelled` is false when the session had no turn in flight: the caller's\nintent (\"stop\") was already true, which is not an error.",
+        "properties": {
+          "cancelled": {
+            "description": "Whether a turn was in flight when the cancel arrived.",
+            "type": "boolean"
+          },
+          "turn_id": {
+            "description": "The turn that was running, when one was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "type": "object"
+      },
       "ContextBudget": {
         "description": "The budget for one run, in tokens except where stated.",
         "properties": {
@@ -268,6 +288,35 @@ expression: document
           "reserve_output",
           "strategy",
           "max_corpus_bytes"
+        ],
+        "type": "object"
+      },
+      "ContextStats": {
+        "description": "Context-window usage for one integration.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/StatSource",
+            "description": "Where `used_tokens` and `window_tokens` came from."
+          },
+          "used_tokens": {
+            "description": "Tokens currently in the conversation, including the system prompt and\nany corpus that was assembled for the next turn.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_tokens": {
+            "description": "The window to measure against. Absent when neither the server nor the\nrecipe states one; a client must not substitute a default.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "used_tokens",
+          "source"
         ],
         "type": "object"
       },
@@ -329,6 +378,87 @@ expression: document
         "required": [
           "workspace_id",
           "agent_id"
+        ],
+        "type": "object"
+      },
+      "CreateTerminalRequest": {
+        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing;\na shell with no session would be a second, sessionless way to run commands on\nthe daemon's host.",
+        "properties": {
+          "args": {
+            "description": "Arguments for `command`, verbatim.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "Program to run. Defaults to the daemon host's own shell.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cwd": {
+            "description": "Directory to start in, relative to the workspace root. Defaults to the root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Session that owns the terminal."
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize",
+            "description": "Initial dimensions. Both must be non-zero: a terminal with no columns\ncannot display anything, and `vt100` takes `NonZeroU16` for the same reason."
+          }
+        },
+        "required": [
+          "session_id",
+          "size"
+        ],
+        "type": "object"
+      },
+      "CreditStats": {
+        "description": "Credit balance for one integration.\n\nAmounts are in the provider's own unit — credits, not necessarily currency —\nand `currency` carries the label to show. Any field may be absent: some\nproviders report only a balance, some only usage, and local servers report\nneither. [`limit`](Self::limit) is separate because a remaining balance is not\nthe same as a plan ceiling.",
+        "properties": {
+          "currency": {
+            "description": "What the amounts are counted in, for example `credits` or `USD`.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Plan ceiling for the period, when reported. With `used` this makes the\nbar's denominator; without it the bar is indeterminate.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "remaining": {
+            "description": "Credits left, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/StatSource",
+            "description": "Where the figures came from."
+          },
+          "used": {
+            "description": "Credits spent in the current billing period, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "currency",
+          "source"
         ],
         "type": "object"
       },
@@ -416,7 +546,7 @@ expression: document
         "type": "string"
       },
       "ErrorBody": {
-        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`not_found`, `conflict`,\n`permission_denied`, `host_unavailable`, `agent_failed`, `protocol`, `io`).\nClients switch on `code`; `message` is for humans and may be reworded.",
+        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`; `message` is for humans and may be reworded.",
         "properties": {
           "code": {
             "description": "Stable identifier for the failure class.",
@@ -806,6 +936,64 @@ expression: document
         ],
         "type": "object"
       },
+      "IntegrationKind": {
+        "description": "What the stats describe.\n\nProviders and agents share the bar because they share the questions, not\nbecause they share a lifecycle: a provider can serve several agents, and an\nagent can outlive the provider that answered its last turn.",
+        "enum": [
+          "provider",
+          "agent"
+        ],
+        "type": "string"
+      },
+      "IntegrationStats": {
+        "description": "One integration's stats, as returned by `GET /v1/stats`.\n\nA list of these is what the stats bar renders. Integrations with nothing\nreported still appear, with `source: unknown`, so the bar has a stable row\ninstead of disappearing when a provider is quiet.",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextStats",
+                "description": "Context usage, absent when the integration has no conversation attached\n(a provider that has not served a turn, for example)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credits": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CreditStats",
+                "description": "Credit balance, absent for local servers and for plans that do not\nexpose one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "Provider or agent identifier.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/IntegrationKind",
+            "description": "Which kind of integration this is."
+          },
+          "label": {
+            "description": "Display label, so a bar can be drawn without a second lookup.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "RFC 3339 timestamp of the last observation. A stale bar is better than a\nsilently frozen one, so the age is on the wire.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "LspServerStatus": {
         "description": "Lifecycle state of a language server.",
         "enum": [
@@ -818,7 +1006,7 @@ expression: document
         "type": "string"
       },
       "LspServerSummary": {
-        "description": "A language server as returned by `GET /v1/lsp`.",
+        "description": "A language server as returned by `GET /v1/lsp/servers`.",
         "properties": {
           "command": {
             "description": "Command that was spawned.",
@@ -1680,6 +1868,16 @@ expression: document
         ],
         "type": "object"
       },
+      "StatSource": {
+        "description": "Where one figure came from.\n\nThis is recorded per figure rather than per integration: a server may report a\ncontext window but no balance, and a configured plan may name a credit ceiling\nthe server never mentions.",
+        "enum": [
+          "server",
+          "configured",
+          "estimated",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "String": {
         "type": "string"
       },
@@ -1706,7 +1904,7 @@ expression: document
         "type": "object"
       },
       "TerminalSummary": {
-        "description": "A terminal as returned by `GET /v1/sessions/{id}/terminals`.",
+        "description": "A terminal as returned by `GET /v1/terminals`.",
         "properties": {
           "alive": {
             "description": "Whether the child process is still running.",
@@ -1912,6 +2110,13 @@ expression: document
         "minimum": 0,
         "type": "integer"
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "description": "A TCP listener requires this on every request. The daemon writes the token to a `0600` file in its runtime directory (`token`, beside the socket) and logs the path when it binds. A request over the unix socket needs none: that transport's access control is the filesystem.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -1923,5 +2128,10 @@ expression: document
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
-  "paths": {}
+  "paths": {},
+  "security": [
+    {
+      "bearer": []
+    }
+  ]
 }

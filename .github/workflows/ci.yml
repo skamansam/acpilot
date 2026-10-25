@@ -47,6 +47,184 @@ jobs:
       - name: Test (docs feature)
         run: cargo test -p acpilotd --features docs
 
+      # The themes page promises this gate, so it gets a named step: a red build
+      # says which check failed without opening the log. Every foreground token
+      # is measured against both surfaces in every built-in theme; a pair below
+      # WCAG AA fails with the token names and both ratios.
+      - name: Theme contrast (WCAG AA)
+        run: cargo test -p acpilot-extensions --test themes built_in_themes_meet_wcag_aa
+
+  # The desktop shell is behind a feature that is off by default, so the `check`
+  # job above never compiles it — which means it is one refactor away from not
+  # building at all. This job is the price of that default: it builds, links and
+  # tests the shell with the feature on.
+  #
+  # One Linux job rather than three: the code we write is platform-neutral, and
+  # the platform-specific parts belong to gpui, whose own CI is not ours to
+  # reproduce. macOS and Windows builds arrive with packaging (P10-8), where
+  # they are needed for the reason they are expensive.
+  #
+  # The two things Linux needs that the runner does not have are the dev symlinks
+  # gpui's Linux backend links against even with X11 off, and the `libc` version
+  # its `xattr` dependency still uses. Both are documented in ADR 0009 §5; the
+  # `libc` one is asserted here because `cargo update` breaks it silently and the
+  # error a developer sees is `xattr`'s, not ours.
+  gui:
+    name: desktop shell (gui feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System libraries gpui links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libwayland-dev \
+            libfreetype-dev libfontconfig1-dev pkg-config clang
+
+      - name: The libc pin gpui 0.2.2 needs
+        run: |
+          set -euo pipefail
+          versions=$(awk '/^name = "libc"$/ { getline; split($0, parts, "\""); print parts[2] }' Cargo.lock)
+          test -n "$versions" || { echo "Cargo.lock lists no libc"; exit 1; }
+          for version in $versions; do
+            if [ "$version" != "0.2.189" ]; then
+              echo "Cargo.lock has libc $version; gpui 0.2.2 -> xattr 0.2.3 uses libc::ENOATTR,"
+              echo "which 0.2.190 removed. The pin is exact. Run:"
+              echo "  cargo update -p libc --precise 0.2.189"
+              exit 1
+            fi
+          done
+
+      - name: Clippy (gui feature)
+        run: cargo clippy -p acpilot-gui --features gui --all-targets -- -D warnings
+
+      # `check` and a test build do not link the binary, and the Linux link is
+      # exactly where the missing xkbcommon-x11 symlink shows up.
+      - name: Build the binary
+        run: cargo build -p acpilot-gui --features gui
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Test (gui feature)
+        run: cargo nextest run -p acpilot-gui --features gui --no-fail-fast
+
+  # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
+  # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into
+  # `acpilot-host` on every platform. So both halves are tested on both operating
+  # systems: a translation bug or a helper that only works on the machine it was
+  # written on is exactly what `docs/notes/wsl-helper.md` must not be wrong about.
+  # The WSL round trip itself needs a WSL2 distro, which no hosted runner has;
+  # it lives in the opt-in `wsl-bench` job below. The checks here are the
+  # deterministic half of that note's "Testing both sides" table, and they are
+  # not written out here: `cargo xtask probe` runs them, so CI and a developer's
+  # shell cannot drift apart.
+  probes:
+    name: p0-5 probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Deliberately not macOS: it is neither half of the Windows ↔ WSL pair.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `cargo xtask` is a workspace member, so the workspace target joins the
+          # probe's own (a standalone crate with its own lockfile) in the key.
+          workspaces: |
+            . -> target
+            probes/wsl-helper -> target
+
+      # The six checks — fmt for the crate and for the helper that cargo never
+      # sees, clippy, the 23 tests, the helper's 4, and the process-level
+      # protocol checker — live in xtask so that the command here and the one a
+      # developer runs are the same command. That also keeps the Windows job off
+      # bash: xtask spawns cargo, rustfmt, rustc and python directly.
+      - name: Probe checks
+        run: cargo xtask probe
+
+      # The guard stays here rather than in xtask: it asserts the binary's own
+      # exit codes (1 and 2), a property of the program rather than of a command
+      # line, and it only means anything where wsl.exe is absent.
+      - name: Platform guard
+        if: runner.os == 'Linux'
+        working-directory: probes/wsl-helper
+        run: |
+          set +e
+          cargo run --quiet -- > /dev/null 2>&1
+          bare=$?
+          cargo run --quiet -- --help > /dev/null 2>&1
+          help=$?
+          set -e
+          test "$bare" -eq 1 || { echo "bare run exited $bare, expected 1"; exit 1; }
+          test "$help" -eq 2 || { echo "--help exited $help, expected 2"; exit 1; }
+
+  # The end-to-end half of P0-5: start a real distro, spawn the Linux helper
+  # through wsl.exe, and time it. This is the only job that reproduces the
+  # numbers in `docs/notes/wsl-helper.md`, and it needs the one thing
+  # `windows-latest` cannot give — WSL2. WSL2 runs a real kernel in a Hyper-V VM,
+  # so it needs nested virtualisation, which standard hosted runners do not have
+  # (actions/runner-images#5920); the image can offer WSL1 only, and WSL1 numbers
+  # describe a different product. So the job is opt-in, and only runs where WSL2
+  # exists:
+  #
+  #   gh variable set WSL_BENCH  --body true
+  #   gh variable set WSL_RUNNER --body '["self-hosted","windows","wsl2"]'
+  #
+  # Register a Windows machine with the `wsl2` label to turn it on. The distro's
+  # own `wsl.exe -l -v` row is then the gate (`--require-wsl2`), so a runner that
+  # stopped being WSL2 fails here instead of publishing WSL1 timings as if they
+  # were the shipped path.
+  wsl-bench:
+    name: p0-5 bench (WSL2)
+    if: vars.WSL_BENCH == 'true'
+    runs-on: ${{ fromJSON(vars.WSL_RUNNER || '["self-hosted","windows","wsl2"]') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: probes/wsl-helper -> target
+
+      # `install` compiles helper/acpilotd-helper.rs with the distro's own rustc
+      # and writes ~/.local/bin/acpilotd-helper — the same path a developer uses,
+      # so the prerequisite is a rustc inside the distro.
+      - name: Install the helper inside the distro
+        run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- install
+
+      # No `shell:` override on purpose: the only argument that needs quoting is
+      # an expression, so this line is valid under bash and under pwsh.
+      - name: Bench
+        run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- bench --require-wsl2 --oracle --json "${{ runner.temp }}/wsl-helper.json"
+
+      # The JSON is the artifact worth keeping: it is what the note's table is
+      # regenerated from, and `wsl_version` in it says which product it measured.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wsl-helper-bench
+          path: ${{ runner.temp }}/wsl-helper.json
+          if-no-files-found: warn
+
   deny:
     name: licences and advisories
     runs-on: ubuntu-latest

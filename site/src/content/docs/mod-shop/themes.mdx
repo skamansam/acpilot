@@ -1,0 +1,139 @@
+---
+title: Themes
+description: One token set, four cockpits, and a contrast check that fails the build.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import ThemeGallery from '../../../components/ThemeGallery.astro';
+
+<span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6-6)
+
+A theme is the most-installed extension and the easiest to get wrong. It is also
+the one thing every surface must agree on: the TUI, the desktop app, the browser,
+and the docs should not each invent what "muted text" means.
+
+```toml
+# themes/night-flight-syntax.toml
+schema_version = 1
+id = "acpilot.night-flight-syntax"
+name = "Night flight (syntax)"
+appearance = "dark"
+extends = "acpilot.night-flight"     # inherit every token it does not set
+
+[ui]
+accent      = "#ffd98a"
+
+[syntax]
+comment   = "#7d8ca3"
+keyword   = "#f7c65c"
+string    = "#8ad6a0"
+number    = "#e0a3ff"
+type      = "#8fc7ff"
+function  = "#ffd9a0"
+variable  = "#e8edf6"
+constant  = "#ffb3c1"
+operator  = "#b9c4d4"
+punctuation = "#97a5b8"
+```
+
+## Tokens
+
+| Group | Tokens | Used by |
+| --- | --- | --- |
+| Surface | `bg`, `bg_panel`, `border` | Panes, cards, sidebar, dialogs |
+| Text | `text`, `text_muted` | Body, hints, line numbers |
+| Emphasis | `accent`, `accent_high` | Selection, focus, the current page |
+| Status | `success`, `warning`, `danger` | Diagnostics, permission prompts, failed turns |
+| Syntax | `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `constant`, `operator`, `punctuation` | Highlighting, code blocks, diffs |
+
+Token tables are a closed set: `text_mutted` is an error naming the key, not a
+token that silently does nothing. A theme that omits a token inherits it from the
+theme named by `extends`; a theme with no `extends` must set every token, because
+there is nothing left to inherit from.
+
+## Contrast is enforced, not reviewed
+
+Every built-in theme is measured in CI. Seventeen foreground tokens — seven
+interface, ten syntax — are checked against **both** surfaces (`bg` and
+`bg_panel`), so **34 pairs per theme**, and each must clear WCAG AA (4.5:1). A
+pair below the line fails the build with the token names and both ratios printed.
+
+`bg`, `bg_panel`, and `border` are excluded, and deliberately: the first two are
+the paper rather than the ink, and WCAG 1.4.11 covers boundaries needed to
+identify a control, not a hairline separator. Forcing 3:1 hairlines would make
+every theme look like a wireframe.
+
+That rule exists because of a real bug in this very manual: the sidebar's selected
+item once painted near-black text on a dark panel, and it was unreadable until
+somebody measured it. "It looked fine on my monitor" is how a theme ships broken.
+
+The gate lives in `crates/acpilot-extensions` and runs as
+`built_in_themes_meet_wcag_aa`; CI gives it a step of its own so a red build says
+which check failed.
+
+## Every built-in, rendered
+
+<ThemeGallery />
+
+The gallery is generated, not drawn by hand: `cargo xtask docs-data` writes
+`site/src/data/themes.json` from the extensions the binary embeds, and a test
+fails if the committed file drifts. The ratios shown are the ones the gate
+enforces, which is the only way a preview can be trusted to describe the product.
+
+## Importing a TextMate theme
+
+```bash
+acpilot ext import-theme --from ~/Downloads/Dracula.tmTheme --id you.dracula \
+  --activate work
+```
+
+The importer reads the plist (dict, array, string, number, no external
+entities), maps the global background, foreground, caret, gutter and line
+highlight onto the interface tokens, and maps scope rules onto the syntax tokens.
+Everything the file does not define is inherited from the built-in with the same
+appearance, so a minimal theme still works.
+
+It is honest about the edges: eight-digit colours lose their alpha (and say so),
+unknown scopes are ignored, and any pair below WCAG AA is printed as a warning
+with both tokens and the ratio. The result is an ordinary extension — stored,
+checksummed, and blockable like any other — which is why the id must be
+namespaced and why `acpilot.night-flight` itself cannot be replaced.
+
+## Switching, without a restart
+
+The theme is a preference, so changing it emits `prefs.changed` and every attached
+client re-reads the tokens:
+
+```bash
+acpilot theme set acpilot.night-flight-syntax
+acpilot theme ls --json | jq '.[] | select(.appearance=="light")'
+```
+
+<Aside type="note" title="Pairing, not guessing">
+`appearance` tells the UI which half of a pair it is. Starlight's light/dark
+toggle, the TUI's `:theme` command, and the desktop app's switcher all use it to
+pick the right theme per mode instead of recolouring one in the dark.
+</Aside>
+
+## Where the built-ins live
+
+The two themes are ordinary extension directories under `extensions/` at the
+repository root:
+
+```text
+extensions/acpilot.night-flight/
+  extension.toml
+  night-flight.toml
+extensions/acpilot.paper/
+  extension.toml
+  paper.toml
+```
+
+`include_str!` embeds them, so a manifest that points at a missing asset is a
+build error. They are loaded through the same loader as an installed extension,
+marked `built_in`, and cannot be uninstalled — only a different theme can be
+selected for a profile. If the schema is incomplete, our own two themes are the
+first to say so, which is the cheapest possible time to find out.
+
+Theme ids are namespaced (`publisher.name`), which is why a variant pack ships
+`acpilot.night-flight-syntax` and never `night-flight`.

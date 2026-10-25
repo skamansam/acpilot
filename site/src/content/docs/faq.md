@@ -82,7 +82,7 @@ about an airplane, because the alternative is sounding like a release note.
 
 ### When can I use it?
 
-P2 — agents that actually run — is next. The [flight status](../status/) page is
+The engine phase (P2) — agents that actually run — is next. The [flight status](../status/) page is
 updated in the same pull request as each phase, so it is the only schedule worth
 trusting.
 

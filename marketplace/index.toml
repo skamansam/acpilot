@@ -1,0 +1,21 @@
+schema_version = 1
+
+# The curated marketplace.
+#
+# This file is the whole registry: a reviewed list of extension repositories,
+# changed only by pull request to this repository. There is no marketplace
+# service, no publisher account, and no crawl.
+#
+# An entry is added once the extension is public, licensed, has no install-time
+# script, and its manifest passes `acpilot ext add --from <checkout>`. Until the
+# signed index lands (P4.6-4), installing from an entry means checking the
+# repository out and running `acpilot ext add --from <dir>`.
+#
+# [[extensions]]
+# id = "acpilot.rust-pack"
+# repo = "https://github.com/acpilot/extensions"
+# path = "rust-pack"                  # directory containing extension.toml
+# description = "rust-analyzer preset, a night-flight variant, and Rust snippets."
+# publisher = "acpilot"
+
+extensions = []

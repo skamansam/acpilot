@@ -3,7 +3,7 @@ title: Agents and ACP
 description: What the daemon speaks, what it expects, and what it refuses to guess.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P2
+<span class="pill pill--hangar">hangar</span> &nbsp; Engine phase (P2)
 
 An **agent** is a program that can read your files, run commands, and write
 changes, driven over a protocol instead of a chat window. Acpilot's native
@@ -72,8 +72,86 @@ same reason your shell asks before running a downloaded script.
 
 ## What is built today
 
-Nothing in this page runs yet. P2 builds the registry, supervisor, and session
-layer headless, tested against a mock agent, so the daemon is trustworthy before
-a UI is built on top of it. Model-backed agents arrive in P4.5, on top of that
-same layer, and they inherit whatever P2 gets right — or wrong — without a
-second implementation to blame.
+The manifest and the process come first, because every later layer is built
+against them. `agents.toml` is parsed and validated, secrets are resolved when
+the profile loads, and the registry keeps one validated snapshot that a bad save
+cannot half-replace. The supervisor starts an `acp-stdio` agent, keeps its stderr
+in a bounded ring that is readable while it runs, restarts it on a crash when the
+manifest says `on-crash`, and ends the process tree rather than only the wrapper
+when a session closes.
+
+`GET /v1/agents` lists what the daemon was given, in declaration order, with
+`available` or `missing` from a `PATH` lookup on the daemon's host. That status
+costs no process: listing agents cannot start one. A handshake-dependent
+`unhealthy` or a trust-pinned `untrusted` arrives with sessions and trust storing,
+not before.
+
+A session is the client side of the protocol. It takes the supervisor's two
+pipes and speaks ACP over them, so the same code serves a child process, an SSH
+host, or a test. `initialize` completes before the handle is returned — no caller
+holds a session whose capabilities it has not seen — and every `session/update`
+becomes one numbered event before it is broadcast, so a slow subscriber drops
+events but cannot renumber them. One turn runs at a time: a second prompt is
+refused here rather than left to whatever an agent does with two. `session/cancel`
+is a notification, so it reaches an agent mid-turn.
+
+A permission request is classified — file read, file write, terminal, tool,
+other — and handed to the broker, which answers from a rule, from the defaults,
+or by asking a person. The agent's own option ids are used for the answer, so an
+agent that called its allow option `yolo` receives `yolo`; a decision the agent
+offered no option for cancels the request rather than inventing an approval. A
+session with no broker refuses everything with the agent's own reject option,
+because no grant should be implied by a session that has no policy. Either way
+the answer is recorded as a notice, so the transcript says what the agent was
+told. A request for a method this build does not implement — today,
+`terminal/create` — is answered with `MethodNotFound` naming the method: not
+advertising a capability does not stop an agent asking, and a request with no
+answer is a hang, not a refusal. All of it is exercised against a mock agent that
+runs as a real child process, so the pipes, the handshake and the tree kill are
+run in CI rather than only type-checked.
+
+## Files
+
+An agent does not open files; it asks its client to. A session is given a
+workspace, and `fs/read_text_file` and `fs/write_text_file` are served from it
+through the same host seam the daemon edits and runs processes through — so the
+same code reads a laptop's disk and, once the SFTP channel lands, an SSH
+workspace's.
+
+The path an agent asks about is resolved **on the host**, symlinks followed,
+before it is compared with the workspace. Comparing the text that arrived would
+miss `workspace/link`, which is a path that looks contained and points at `/etc`.
+A relative path is refused rather than joined onto the workspace: the protocol
+says absolute, and guessing a base directory turns an agent's bug into a file in
+an unexpected place.
+
+Reads outside the workspace are refused by name. Writes outside it are not
+refused — they wait. The broker publishes a pending permission request, the turn
+blocks, and the file is untouched until somebody approves it. That is the whole
+point of calling it a shadow write: the old contents are still the contents
+while the decision is open, so a diff can be shown against a file that has not
+moved, and a crash leaves the disk as it was. Nothing is written speculatively
+and rolled back, because a file restored by a rollback is not the same inode the
+editor had open.
+
+Two rules keep a blocked write from becoming a hang. If nothing is listening for
+pending requests the write is refused immediately, since an approval that nobody
+can give is not worth waiting for; and a request nobody answers expires after
+five minutes. Either way the agent gets a denial, and the refusal is recorded as
+a notice, so the transcript shows what the agent was told.
+
+A session without a workspace advertises no filesystem at all, and refuses a
+request that arrives anyway. The capability and the handler are one decision:
+advertising something this client cannot serve is the same bug as refusing
+something it advertised.
+
+Terminals (engine phase, task P2-5) are not built yet, and the shipped policy is deliberately plain:
+files inside the workspace are read and written, a shell or an unrecognised tool
+is asked about, and anything outside is asked about too. A rule — `allow`, `ask`
+or `deny`, optionally scoped by agent, tool and path glob — is how a workspace
+narrows that, and every decision lands on the broker's audit log with the rule
+that made it. `pty` and `http-jsonrpc` agents are accepted by the schema but refused
+by the supervisor until their phases land, so the diagram above is still the
+target, not a full description of today's daemon.
+Model-backed agents arrive in the models phase (P4.5), on top of the same layer, and inherit
+whatever the engine phase (P2) gets right — or wrong — without a second implementation to blame.

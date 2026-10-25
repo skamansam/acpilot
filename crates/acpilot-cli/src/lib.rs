@@ -1,10 +1,17 @@
 //! CLI behaviour that is worth testing without spawning a process.
 //!
-//! The CLI is a client of the daemon API — it holds no domain logic. The one
-//! thing it owns outright is the process exit code, because that is the interface
-//! scripts see, so it lives here with tests rather than in `main`.
+//! The CLI is a client of the daemon API — it holds no domain logic. The things
+//! it owns outright are the process exit code and the filesystem verbs (`ext
+//! add|verify|prune|activate|deactivate|why`), because those must work when the
+//! daemon does not.
 
 use acpilot_core::AcpilotError;
+
+pub mod cli;
+pub mod ext;
+pub mod secret;
+
+pub use cli::{Cli, Command, ExtCommand, SecretCommand};
 
 /// Exit code for a failed command.
 ///

@@ -1,0 +1,28 @@
+schema_version = 1
+id = "acpilot.paper"
+name = "Paper"
+appearance = "light"
+
+[ui]
+bg = "#fbf7ef"
+bg_panel = "#f4eee1"
+text = "#1a2333"
+text_muted = "#5f594a"
+accent = "#8a5a10"
+accent_high = "#6b4408"
+border = "#ddd2bb"
+success = "#1f6b3f"
+warning = "#7a4a00"
+danger = "#a01f1f"
+
+[syntax]
+comment = "#6b6353"
+keyword = "#8a5a10"
+string = "#1f6b3f"
+number = "#6a2f8f"
+type = "#1a4f8a"
+function = "#7a3a00"
+variable = "#1a2333"
+constant = "#8a1f3f"
+operator = "#3a3a34"
+punctuation = "#5f594a"

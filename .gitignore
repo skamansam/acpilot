@@ -1,6 +1,9 @@
 /target
 **/*.rs.bk
 
+# P0 probes are standalone crates with their own target directories
+/probes/*/target
+
 # snapshot/patch review leftovers
 *.snap.new
 *.rej

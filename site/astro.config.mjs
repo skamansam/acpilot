@@ -26,6 +26,12 @@ export default defineConfig({
       logo: { src: './src/assets/logo.svg', alt: 'Acpilot: an aircraft inside an instrument gauge' },
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
+      // The footer is overridden for one reason: it is where the vibecoded
+      // disclosure belongs, on every page, and Starlight renders that component
+      // last.
+      components: {
+        Footer: './src/components/Footer.astro',
+      },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/skamansam/acpilot' },
       ],
@@ -35,6 +41,7 @@ export default defineConfig({
       lastUpdated: true,
       pagination: true,
       sidebar: [
+        { label: 'Download', link: '/download/' },
         {
           label: 'Ground school',
           items: [
@@ -80,7 +87,9 @@ export default defineConfig({
             { label: 'The mod shop', link: '/mod-shop/' },
             { label: 'The manifest', link: '/mod-shop/manifest/' },
             { label: 'Installing and approving', link: '/mod-shop/registry/' },
+            { label: 'The marketplace', link: '/mod-shop/marketplace/' },
             { label: 'Themes', link: '/mod-shop/themes/' },
+            { label: 'Planned extensions', link: '/mod-shop/planned/' },
           ],
         },
         {

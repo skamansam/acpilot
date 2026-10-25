@@ -3,7 +3,7 @@ title: The mod shop
 description: Extensions for themes, presets, grammars, and snippets — installed once, approved per profile.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.6
+<span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6)
 
 An **extension** is a modification approved for one airframe at a time. It is a
 directory with a manifest and some assets: a theme, a set of language-server
@@ -36,7 +36,7 @@ tree-sitter runtime the editor already embeds — narrower than a plugin API, no
 the same as inert, and [the registry page](registry/) says so out loud.
 
 Code extensions would mean a WASM runtime, an ABI, a capability model, and a
-memory budget: a project, not a checkbox. That is why P4.6 ships the tier that
+memory budget: a project, not a checkbox. That is why the mod-shop phase (P4.6) ships the tier that
 answers most requests and leaves the other one honest on the roadmap.
 
 <Aside type="note" title="Form 337, but faster">
@@ -65,9 +65,54 @@ registries** — the same `lsp.toml`, `agents.toml`, and theme tokens the produc
 already reads. When a new kind of contribution is needed, the registry gets a new
 type; the extension format does not grow an API.
 
+## Four we intend to build
+
+The tier above is not a paper question: three of these need it, and they are what
+the runtime has to answer for. All four are agent-visible — a panel a person can
+drive and an agent cannot is a feature that only works when someone is watching.
+
+| Extension | What it does |
+| --- | --- |
+| `acpilot.api-workbench` | Imports an OpenAPI document — starting with Acpilot's own — and turns an operation into a request: parameters, schema-shaped bodies, environments with keyring secrets, auth, response diffing, and a tool an agent can call instead of being handed your token. Every send goes through the daemon, so it is audited and policy-checked like any other tool call. |
+| `acpilot.regex-lab` | Writes a pattern against a test corpus: named groups and spans, replacement preview, four engine flavors (Rust, PCRE2, JavaScript, RE2), the parse tree explained, and the pattern saved as a small regression suite. The engine is wasm; nothing else in the editor changes. |
+| `acpilot.db-workbench` | Browses and edits a database: schema, completion, `EXPLAIN`, paged results, generated `UPDATE … WHERE <primary key>` previews, and migrations listed but never applied on open. The agent sees the schema, never the DSN; it proposes SQL and runs it through the broker, where a `DELETE` with no `WHERE` is refused by name. |
+| `acpilot.frontends` | Hands out the frontends the daemon already has: its embedded web bundle at `http://host:port/app`, and the released CLI/TUI/GUI artifacts from a directory the operator names — versioned, checksummed, token-gated, and off by default, because a daemon that serves executables is a supply-chain surface. The point is a remote or air-gapped host with no build toolchain, and a client that matches the daemon's API by construction. |
+
+Three wait on D18 — the capability set for code extensions — and they are what
+settles it: `net.http` for the API workbench, `compute` for the regex lab,
+`net.socket` for the database. If that tier slips past v0.1 they ship as
+first-party panels instead, because the value does not depend on a third party
+being able to install them. Frontend delivery needs no runtime at all: it needs
+the web build (web phase, task P11-6) and the release artifacts (release phase, task P12-1), which is why it is the
+one we could ship first.
+
+What makes them a studio rather than four windows is the last piece: every action
+is a brokered tool named `<extension>.<action>`, with its target in the permission
+subject and one audit row per call (D26, the studio phase's task P14-5). That is what lets one prompt
+import a spec, call the endpoint it describes, and assert the row it wrote — three
+different extensions, one approval trail.
+
+## On the shelf
+
+The component-system packs and the blog extension are not in the table above because
+they need something the product does not have yet: a sandboxed panel that renders a
+component. [Planned extensions](planned/) lists each one, what it contributes, and
+which phase it waits on — including why one core panel unblocks seven packs and the
+blog only partly.
+
 ## What is built today
 
-The contract (this page and its neighbours), the OpenAPI types, and the ADR that
-argues the split. No manifest has been loaded yet. P4.6 starts by moving the
-built-in themes and presets into the extension format, so the schema is tested by
-the things we already ship before anyone else's file is trusted.
+The contract (this page and its neighbours), the OpenAPI types, the ADR, and the
+loader. `crates/acpilot-extensions` parses and validates manifests, refuses paths
+that leave the extension directory, and resolves theme inheritance and
+collisions. The four built-ins in `extensions/` — two themes, ten language-server
+presets, four agent presets — are embedded in the binary and load through that
+same code, so the schema is tested by the things we already ship before anyone
+else's file is trusted.
+
+Installing is a checksummed, atomic store; a version whose bytes change is
+`Blocked` and invisible to every loader. Activation is a per-profile list with
+three layers of precedence and `acpilot ext why` naming the winner and everything
+it overrode. The [marketplace](marketplace/) is a curated list of repositories
+in this repository, changed by pull request. The signed index and download URLs
+are task P4.6-4.

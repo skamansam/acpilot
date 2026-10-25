@@ -11,9 +11,27 @@ name = "acpilot"
 path = "src/main.rs"
 
 [dependencies]
+acpilot-agent = { workspace = true }
+acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
+acpilot-extensions = { workspace = true }
+# Where the daemon put the token a TCP endpoint needs, and the runtime directory
+# its socket lives in: platform paths belong in the crate that owns them, not in a
+# third spelling here.
+acpilot-host = { workspace = true }
+# Which root a launch is about, and which profile its settings name: one resolver
+# for the CLI and the GUI, so `acpilot <path>` and `acpilot-gui <path>` cannot open
+# two different projects.
+acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# `acpilot tui` starts in this binary rather than as a second executable: one
+# process per surface, and the TUI inherits the same argument surface.
+acpilot-tui = { workspace = true }
 clap = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

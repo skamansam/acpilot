@@ -3,7 +3,7 @@ title: Secrets
 description: Keys live in the OS keyring, scoped to a profile, and never cross the API.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4
+<span class="pill pill--hangar">hangar</span> &nbsp; Profiles phase (P4)
 
 Agent credentials are the most dangerous data this product touches. They are
 handled with three rules, in order.
@@ -14,14 +14,17 @@ handled with three rules, in order.
 # agents.toml — what is on disk
 [[agents]]
 id = "claude-code"
+transport = "acp-stdio"
 command = "npx"
 args = ["-y", "@zed-industries/claude-code-acp"]
-api_key = "keyring:claude-code/work"
+env = { ANTHROPIC_API_KEY = "keyring:claude-code" }
 ```
 
-The value is a reference. The secret lives in the OS keyring under a
-profile-scoped name (`acpilot:work:claude-code`), so a copied config directory
-does not copy credentials.
+The value is a reference. The secret lives in the OS keyring under the service
+`acpilot` and the account `work/claude-code`, so a copied config directory does
+not copy credentials. The reference names only the entry; the profile is the
+directory the file lives in, which is why the same line means two different
+secrets in `profiles/work` and `profiles/personal`.
 
 ## 2. The API never returns a secret
 
@@ -52,5 +55,19 @@ directory hash of the survivors is unchanged).
 
 ## Status
 
-Not started. P4-4 builds the keyring namespace and the export-redaction tests;
-until then there is nothing to leak, which is the one advantage of a skeleton.
+The backend exists. `acpilot-agent::keyring` resolves `keyring:<name>` and
+`keyring:<profile>/<name>` through the OS store — Keychain on macOS, Credential
+Manager on Windows, Secret Service on unix — under the `acpilot` service and the
+account `<profile>/<name>`. A missing entry fails the manifest load and names the
+account to add, rather than failing mid-turn. The namespace and every error path
+are tested against an injected store, so the suite needs no logged-in desktop.
+
+`acpilot secret set|list|rm` writes and removes through the same namespace. `set`
+reads the value from stdin — there is no `--value`, because an argument is
+visible in shell history and in `ps` — and never prints it back. `list` parses
+the profile's `agents.toml` and reports `present` or `missing` per account, so it
+shows what the manifest expects without reading any value out of the keyring.
+
+Still to come in the profiles phase (task P4-5): profile resolution supplies the profile name, legacy
+unscoped entries are adopted into `default`, each cross-profile resolution logs a
+warning, and `profile export` redacts a secret back to its reference.

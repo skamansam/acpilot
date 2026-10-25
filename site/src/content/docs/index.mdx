@@ -10,15 +10,39 @@ hero:
     file: ../../assets/logo.svg
     alt: An aircraft inside an instrument gauge
   actions:
+    - text: Download
+      link: ./download/
+      icon: download
+      variant: primary
     - text: Start ground school
       link: ./ground-school/installation/
       icon: right-arrow
+      variant: minimal
     - text: Check flight status
       link: ./status/
       variant: minimal
 ---
 
-import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import { Card, CardGrid, Aside, LinkCard } from '@astrojs/starlight/components';
+
+## Download
+
+Builds for Linux, macOS and Windows, from the newest tagged version down. The page
+picks the build for the browser you are reading it in, and every archive lists its
+SHA-256 beside it.
+
+<CardGrid>
+  <LinkCard
+    title="Get Acpilot"
+    description="Latest version, every platform, all release notes newest first."
+    href="./download/"
+  />
+  <LinkCard
+    title="Not published yet?"
+    description="A release is created by merging a PR that bumps the workspace version."
+    href="https://github.com/skamansam/acpilot/actions"
+  />
+</CardGrid>
 
 <Aside type="note" title="Now boarding">
 **The autopilot is very good. That is exactly the problem.** Acpilot is a code

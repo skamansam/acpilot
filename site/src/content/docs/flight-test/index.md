@@ -3,7 +3,7 @@ title: The model lab
 description: Point Acpilot at a model you already run, tune the prompt and the knobs, then keep the result as an agent.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; P4.5
+<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5)
 
 A **local model** is not an agent. It is an HTTP endpoint that continues text. It
 has never heard of your repository, cannot open a file, and will cheerfully agree
@@ -64,13 +64,13 @@ yesterday?":
 ## What is built today
 
 The contract is: this page and the five beside it, the OpenAPI types behind them,
-and an ADR that says why. No server has been probed yet. P4.5 builds the crate,
+and an ADR that says why. No server has been probed yet. The models phase (P4.5) will build the crate,
 the shim agent, and the lab in that order — with the API first, because a
 workbench that invents its own state would be the sixth thing to disagree about
 what happened.
 
 <Aside type="caution" title="Altitude check">
-Pages in this section describe P4.5. The [flight status](../status/) page is the
+Pages in this section describe the models phase (P4.5). The [flight status](../status/) page is the
 one that tells you whether it flies; this page tells you which runway was
 planned.
 </Aside>

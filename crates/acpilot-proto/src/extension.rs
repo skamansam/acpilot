@@ -7,6 +7,7 @@
 //! a manifest that names a command still meets the trust pin and the broker when
 //! something finally runs it.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -18,7 +19,7 @@ pub type ExtensionId = String;
 /// One extension may contribute several kinds; a "Rust pack" is a bundle rather
 /// than a category, which is why this is a list on the summary and a single value
 /// on each contribution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionKind {
     /// A colour scheme shared by TUI, GUI, and web.

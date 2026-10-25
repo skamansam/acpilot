@@ -1,0 +1,32 @@
+[package]
+name = "acpilot-extensions"
+description = "Extension manifests, theme tokens, presets, and the loader that reads them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# The reader of `agents.toml`, not a second copy of it: an extension's agent
+# contribution and the profile's own file are parsed by the same code, so a file
+# cannot be one thing to the daemon and another to `acpilot ext why`.
+acpilot-agent = { workspace = true }
+acpilot-proto = { workspace = true }
+directories = { workspace = true }
+# The published `extension-v1.json` schema is generated from `Manifest`, the type
+# the loader parses, so an editor and a refusal cannot describe different files.
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+# Validation against the published schema is a test, not a runtime cost, and
+# nothing here resolves a remote reference: the default features pull TLS and an
+# HTTP client for `$ref`s this schema does not have.
+jsonschema = { workspace = true, default-features = false }
+
+[lints]
+workspace = true

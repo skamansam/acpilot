@@ -5,9 +5,10 @@ use utoipa::ToSchema;
 
 /// Machine-readable error payload.
 ///
-/// `code` is a stable, documented identifier (`not_found`, `conflict`,
-/// `permission_denied`, `host_unavailable`, `agent_failed`, `protocol`, `io`).
-/// Clients switch on `code`; `message` is for humans and may be reworded.
+/// `code` is a stable, documented identifier (`invalid_request`, `not_found`,
+/// `conflict`, `permission_denied`, `timeout`, `host_unavailable`,
+/// `model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on
+/// `code`; `message` is for humans and may be reworded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ErrorBody {
     /// Stable identifier for the failure class.

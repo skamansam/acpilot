@@ -28,6 +28,7 @@ pub mod secret;
 pub mod session;
 pub mod supervisor;
 pub mod terminal;
+pub mod transcript;
 
 pub use error::AgentError;
 pub use fs::{Fs, FsError};
@@ -52,3 +53,4 @@ pub use supervisor::{
     AgentProcess, MAX_RESTARTS, Outcome, STDERR_CAPACITY, StderrRing, Supervisor, availability,
 };
 pub use terminal::{IDLE_TIMEOUT, MAX_OUTPUT, TerminalError, Terminals};
+pub use transcript::{Grant, Meta as TranscriptMeta, Transcript, TranscriptError};

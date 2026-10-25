@@ -17,20 +17,34 @@
 //! sequence the ring no longer holds is told so rather than served a transcript
 //! with a hole in it it cannot name.
 //!
+//! # The ring is not the record
+//!
+//! The ring is what a client catches up from while the session is live, and it is
+//! deliberately small. What survives the process is the append-only transcript the
+//! engine phase's task P2-8 added: every record is appended to
+//! `<transcripts>/<id>/session.jsonl` as it is recorded, with the permission
+//! decisions flushed at the end of each turn. A write failure costs the file, not
+//! the conversation — it is logged once and the session carries on, because losing
+//! the record is bad and ending the turn to say so is worse.
+//!
 //! # What is deliberately not here
 //!
-//! No persistence: the transcript table is the engine phase's task P2-8, and until
-//! it lands a daemon restart forgets its sessions. No fork, no prompt queue, no
-//! per-session policy — each is a feature with a task id, not a shortcut taken
-//! while wiring the routes.
+//! A restart still forgets the *list* of sessions: the transcripts are on disk, but
+//! no route enumerates them, and `GET /v1/sessions/{id}/events` answers 404 for a
+//! session this process did not start. Resuming a stored conversation is the
+//! service phase's task P3-7, which is where the SQLite table and the session row
+//! land. No fork, no prompt queue, no per-session policy — each is a feature with a
+//! task id, not a shortcut taken while wiring the routes.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use acpilot_agent::session::{Session, SessionOptions};
 use acpilot_agent::supervisor::AgentProcess;
-use acpilot_agent::{AgentSpec, Fs};
+use acpilot_agent::transcript::{FILE_NAME, Meta as TranscriptMeta, Transcript};
+use acpilot_agent::{AgentSpec, Broker, Fs};
 use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
 use acpilot_proto::ErrorBody;
@@ -149,6 +163,20 @@ pub struct Record {
     log: Mutex<Log>,
     /// The turn in flight, so a cancel can say which one it stopped.
     turn: Mutex<Option<String>>,
+    /// The append-only file this session's events and grants are written to.
+    ///
+    /// `None` when the daemon was given no transcript directory (a test, or an
+    /// embedded use that keeps its own record). A write failure is logged once and
+    /// then ignored: a full disk must not end the conversation it was recording.
+    transcript: Option<Arc<Transcript>>,
+    /// Whether a failed transcript write has already been reported for this
+    /// session, so a broken disk is one warning rather than one per event.
+    transcript_warned: AtomicBool,
+    /// The broker whose decisions belong in this session's transcript.
+    broker: Option<Arc<Broker>>,
+    /// The last audit sequence written, so a turn appends what is new and not the
+    /// whole profile's history again.
+    grants_written: Mutex<u64>,
     /// The mailbox of the task that owns the [`Session`].
     ///
     /// The ACP handle is `Send` but not `Sync` — the SDK's connection owns an
@@ -189,9 +217,30 @@ impl Record {
         id: SessionId,
         workspace_id: String,
         agent_id: String,
+        broker: Option<Arc<Broker>>,
+        transcripts: Option<&Path>,
     ) -> (Arc<Self>, mpsc::Receiver<Command>) {
         let now = jiff::Timestamp::now().to_string();
         let (commands, mailbox) = mpsc::channel(COMMAND_BUFFER);
+        let transcript = transcripts.and_then(|directory| {
+            let meta = TranscriptMeta {
+                version: acpilot_agent::transcript::VERSION,
+                session: id.clone(),
+                workspace: workspace_id.clone(),
+                agent: agent_id.clone(),
+                created_at: now.clone(),
+            };
+            match Transcript::create(directory.join(&id).join(FILE_NAME), &meta) {
+                Ok(transcript) => Some(Arc::new(transcript)),
+                Err(error) => {
+                    // A session that cannot keep a file still runs: the transcript
+                    // is the record, not the conversation, and refusing to start
+                    // would trade a missing file for an unusable daemon.
+                    tracing::warn!(%error, session = %id, "no transcript for this session");
+                    None
+                }
+            }
+        });
         (
             Arc::new(Self {
                 id,
@@ -208,6 +257,10 @@ impl Record {
                     live: broadcast::channel(REPLAY_CAPACITY).0,
                 }),
                 turn: Mutex::new(None),
+                transcript,
+                transcript_warned: AtomicBool::new(false),
+                broker,
+                grants_written: Mutex::new(0),
                 commands,
             }),
             mailbox,
@@ -284,7 +337,46 @@ impl Record {
         }
         // No listener is not an error: a session with nothing attached still
         // keeps its transcript for the client that arrives later.
-        let _ = log.live.send(event);
+        let _ = log.live.send(event.clone());
+        drop(log);
+        // The file is written outside the ring's lock: a slow disk must not block
+        // a subscriber, and a subscriber must not hold up the file.
+        if let Some(transcript) = &self.transcript
+            && let Err(error) = transcript.event(&event)
+            && !self.transcript_warned.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(%error, session = %self.id, "the transcript is no longer being written");
+        }
+    }
+
+    /// Append the permission decisions this session made since the last call.
+    ///
+    /// The broker keeps one audit log for the whole profile, so what is new is
+    /// "after the last sequence we wrote", not "everything for this session": a
+    /// second conversation's grants must not be appended twice. Called when a turn
+    /// ends rather than per event, because a decision is already on the broker's
+    /// log by the time the call that needed it returns.
+    fn flush_grants(&self) {
+        let (Some(transcript), Some(broker)) = (&self.transcript, &self.broker) else {
+            return;
+        };
+        let mut written = self
+            .grants_written
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let cutoff = *written;
+        for entry in broker
+            .audit_for(&self.id)
+            .into_iter()
+            .filter(|entry| entry.seq > cutoff)
+        {
+            *written = entry.seq;
+            if let Err(error) = transcript.grant(entry)
+                && !self.transcript_warned.swap(true, Ordering::Relaxed)
+            {
+                tracing::warn!(%error, session = %self.id, "a grant was not written to the transcript");
+            }
+        }
     }
 
     /// Everything after `after`, oldest first.
@@ -403,22 +495,46 @@ pub async fn create(
     })?;
 
     let id = next_id(state);
-    let (record, mailbox) = Record::new(id.clone(), workspace.id.clone(), spec.id.clone());
+    let fs = Arc::new(Fs::with_broker(Arc::new(LocalHost), Arc::clone(broker)));
+    let options = options_for(state, &id, &spec.id, fs);
+    // The session opens before its record exists, so an agent that will not start
+    // leaves no transcript behind: a file with a `meta` line and no conversation is
+    // worse than no file, and it would hold the id forever.
+    let session = start(Arc::clone(&spec), options, workspace.root.as_path()).await?;
+
+    let (record, mailbox) = Record::new(
+        id.clone(),
+        workspace.id.clone(),
+        spec.id.clone(),
+        Some(Arc::clone(broker)),
+        state.transcripts(),
+    );
     if let Some(title) = &request.title {
         record.title_from(title);
     }
-
-    let fs = Fs::with_broker(Arc::new(LocalHost), Arc::clone(broker));
-    let options = SessionOptions::new(id.clone())
-        .agent(spec.id.clone())
-        .fs(Arc::new(fs));
-    let session = start(Arc::clone(&spec), options, workspace.root.as_path()).await?;
 
     // The session is moved onto its own thread before the route can return, so
     // no client ever sees a session id that has nobody listening on it.
     spawn_owner(session, Arc::clone(&record), mailbox);
     state.sessions.insert(Arc::clone(&record));
     Ok(record.summary())
+}
+
+/// The options a session is opened with.
+///
+/// One function so the two registries a session is handed are visible together: a
+/// filesystem answers `fs/*` and the daemon's agent-terminal registry answers
+/// `terminal/*`. Each is also the switch that advertises the capability, so a
+/// session can never claim one it cannot serve.
+///
+/// The terminal registry is the daemon's, not a fresh one: a terminal an agent
+/// opens is owned by this session id, and one store means the idle sweep and the
+/// session's own release see the same processes.
+fn options_for(state: &AppState, id: &str, agent: &str, fs: Arc<Fs>) -> SessionOptions {
+    SessionOptions::new(id.to_owned())
+        .agent(agent.to_owned())
+        .fs(fs)
+        .terminals(Arc::clone(state.agent_terminals()))
 }
 
 /// Run one session's owner loop on a thread of its own.
@@ -451,7 +567,10 @@ fn spawn_owner(session: Session, record: Arc<Record>, mailbox: mpsc::Receiver<Co
                     return;
                 }
             };
-            runtime.block_on(drive(session, record, mailbox));
+            runtime.block_on(drive(session, record.clone(), mailbox));
+            // The session is over: whatever it decided on the way out belongs in
+            // its file, and nothing else will ask the broker for it again.
+            record.flush_grants();
         });
     if let Err(error) = spawned {
         record.notice(
@@ -517,6 +636,9 @@ async fn drive_turn(
         tokio::select! {
             outcome = &mut turn => {
                 record.set_turn(None);
+                // The turn is over, so every permission it asked about has an
+                // answer; the file learns them now rather than one write per ask.
+                record.flush_grants();
                 match outcome {
                     Ok(_) => record.set_status(SessionStatus::Idle),
                     Err(error) => {
@@ -591,14 +713,26 @@ fn agent_failed(error: impl std::fmt::Display) -> ApiError {
 }
 
 /// `s1`, `s2`, … — opaque, stable for the life of the daemon, never reused.
+///
+/// "Never reused" now outlives the process: a transcript on disk is the record of
+/// a session id that a client may still hold, so a restarted daemon's first
+/// conversation does not open at `s1` if `s1` already has a file. The count of live
+/// sessions is only a starting point, not the answer.
 fn next_id(state: &AppState) -> SessionId {
-    let id = format!("s{}", state.sessions.list().len() + 1);
-    if state.sessions.get(&id).is_some() {
-        // A deleted session leaves its number behind; the id must not be reused
-        // while a client may still be holding a transcript for it.
-        return format!("s{}-{}", jiff::Timestamp::now().as_millisecond(), id);
+    let mut number = state.sessions.list().len() + 1;
+    loop {
+        let id = format!("s{number}");
+        let live = state.sessions.get(&id).is_some();
+        // `<transcript>/<id>/session.jsonl` is how a stored conversation is named;
+        // its directory is the one thing a restart still has to compare with.
+        let stored = state
+            .transcripts()
+            .is_some_and(|directory| directory.join(&id).exists());
+        if !live && !stored {
+            return id;
+        }
+        number += 1;
     }
-    id
 }
 
 /// `GET /v1/sessions`.
@@ -1050,6 +1184,9 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
 
 #[cfg(test)]
 mod tests {
+    use acpilot_agent::permission::{Broker, Policy};
+    use acpilot_agent::transcript::Entry;
+
     use super::*;
 
     #[test]
@@ -1059,6 +1196,103 @@ mod tests {
         assert!(title.ends_with('…'), "{title}");
         assert!(title.chars().count() <= TITLE_LIMIT + 1, "{title}");
         assert!(!title.contains("  "), "{title}");
+    }
+
+    #[tokio::test]
+    async fn a_transcript_holds_the_events_and_grants_a_session_made() {
+        use acpilot_agent::permission::Subject;
+        use acpilot_proto::permission::PermissionKind;
+
+        let transcripts = tempfile::tempdir().expect("temp dir");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let broker = Arc::new(Broker::with_timeout(
+            Policy::default(),
+            workspace.path(),
+            None,
+        ));
+        let (record, _mailbox) = Record::new(
+            "s1".to_owned(),
+            "work".to_owned(),
+            "mock".to_owned(),
+            Some(Arc::clone(&broker)),
+            Some(transcripts.path()),
+        );
+
+        record.notice("Test", "one");
+        record.notice("Test", "two");
+        // A write inside the workspace, which the shipped policy allows: the
+        // interesting half is that the decision reaches the file, not who made it.
+        let file = workspace.path().join("notes.md");
+        broker
+            .ask(
+                "s1",
+                Subject::new(PermissionKind::FileWrite, "Write notes.md").path(&file),
+            )
+            .await;
+        record.flush_grants();
+
+        let path = transcripts.path().join("s1").join(FILE_NAME);
+        let entries = acpilot_agent::transcript::read(&path).expect("the transcript reads back");
+        assert!(
+            matches!(entries.first(), Some(Entry::Meta(meta)) if meta.session == "s1" && meta.agent == "mock"),
+            "the first line says whose conversation this is: {entries:?}"
+        );
+        let replayed = acpilot_agent::transcript::replay(&path, 1).expect("it replays");
+        assert_eq!(
+            replayed.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![2],
+            "a client that saw sequence 1 is owed the rest"
+        );
+        let Some(Entry::Grant(grant)) = entries.last() else {
+            panic!("the decision is the last record: {entries:?}");
+        };
+        assert_eq!(grant.session, "s1");
+        assert_eq!(grant.decided_by, "default");
+        assert!(
+            grant
+                .path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("notes.md")),
+            "the grant names the file it was about: {grant:?}"
+        );
+    }
+
+    #[test]
+    fn a_stored_transcript_keeps_its_session_id_from_being_reused() {
+        let transcripts = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir(transcripts.path().join("s1")).expect("a stored session");
+        let state = AppState::new().with_transcripts(transcripts.path());
+        assert_eq!(
+            next_id(&state),
+            "s2",
+            "a restarted daemon must not open a new conversation on top of a stored one"
+        );
+        assert_eq!(
+            next_id(&AppState::new()),
+            "s1",
+            "with nowhere to keep a transcript, the count of live sessions is the answer"
+        );
+    }
+
+    #[test]
+    fn a_session_is_handed_the_daemon_terminal_registry() {
+        let state = AppState::new();
+        let broker = Arc::new(Broker::with_timeout(
+            Policy::default(),
+            std::env::temp_dir(),
+            None,
+        ));
+        let fs = Arc::new(Fs::with_broker(Arc::new(LocalHost), broker));
+        let options = options_for(&state, "s1", "mock", fs);
+
+        assert_eq!(options.id, "s1");
+        assert_eq!(options.agent.as_deref(), Some("mock"));
+        assert!(options.fs.is_some(), "a session gets a filesystem");
+        let terminals = options.terminals.expect("a session advertises `terminal`");
+        assert!(
+            Arc::ptr_eq(&terminals, state.agent_terminals()),
+            "the registry is the daemon's, so a session's terminals are swept and released with it"
+        );
     }
 
     #[test]
@@ -1076,7 +1310,8 @@ mod tests {
 
     #[test]
     fn the_replay_ring_keeps_the_newest_events() {
-        let (record, _mailbox) = Record::new("s1".into(), "default".into(), "mock".into());
+        let (record, _mailbox) =
+            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
         for seq in 1..=REPLAY_CAPACITY + 10 {
             record.record(event(&record, seq as u64));
         }
@@ -1088,7 +1323,8 @@ mod tests {
 
     #[test]
     fn replay_after_returns_only_later_events() {
-        let (record, _mailbox) = Record::new("s1".into(), "default".into(), "mock".into());
+        let (record, _mailbox) =
+            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
         for seq in 1..=3 {
             record.record(event(&record, seq));
         }
@@ -1102,7 +1338,8 @@ mod tests {
 
     #[test]
     fn the_default_title_names_the_agent() {
-        let (record, _mailbox) = Record::new("s1".into(), "default".into(), "claude".into());
+        let (record, _mailbox) =
+            Record::new("s1".into(), "default".into(), "claude".into(), None, None);
         assert_eq!(record.summary().title, "claude session");
         record.title_from("update the readme");
         assert_eq!(record.summary().title, "update the readme");

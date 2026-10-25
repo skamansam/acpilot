@@ -275,6 +275,38 @@ async fn a_session_that_serves_terminals_creates_one_for_the_agent() {
     );
 }
 
+/// A session's terminals go with it. They are processes nobody can ask about
+/// once the handle is gone, and waiting for the idle sweep would mean half an
+/// hour of a forgotten shell per conversation.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_session_takes_its_terminals_with_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let terminals = Arc::new(Terminals::new(Arc::new(LocalHost)));
+    let mut session = open_with(dir.path(), None, Some(Arc::clone(&terminals))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+
+    session.prompt("terminal").await.expect("the turn ends");
+    let reported = reports(&mut events, 1, "terminal/create").await;
+    assert!(
+        reported[0].contains("accepted"),
+        "the agent was given a terminal, not a refusal: {}",
+        reported[0]
+    );
+    assert_eq!(terminals.live(), 1);
+
+    drop(session);
+    assert_eq!(
+        terminals.live(),
+        0,
+        "the session ended, so its terminal did too"
+    );
+}
+
 #[tokio::test]
 async fn a_hung_turn_stays_pending_and_does_not_wedge_the_session() {
     let dir = tempfile::tempdir().expect("temp dir");

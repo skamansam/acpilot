@@ -49,6 +49,28 @@ pub fn config_dir() -> PathBuf {
     )
 }
 
+/// The platform's data root for Acpilot: `~/.local/share/acpilot` on Linux,
+/// Application Support on macOS, `%LOCALAPPDATA%\\acpilot` on Windows.
+///
+/// [`config_dir`] is where settings live and this is where state lives — a
+/// transcript, a downloaded model, an installed extension. They are the same
+/// directory on a platform that draws no line between them, and separate on one
+/// that does; either way this crate is the only caller of `directories`, so
+/// "where does this file go" has one answer.
+///
+/// `ACPILOT_HOME` overrides it together with [`config_dir`], because a test or a
+/// portable install wants every file Acpilot writes under one directory it owns.
+#[must_use]
+pub fn data_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("ACPILOT_HOME") {
+        return PathBuf::from(home);
+    }
+    directories::ProjectDirs::from("", "", "acpilot").map_or_else(
+        || std::env::temp_dir().join("acpilot"),
+        |directories| directories.data_dir().to_path_buf(),
+    )
+}
+
 /// Where profiles live: one directory per name under `<config>/profiles`.
 #[must_use]
 pub fn profiles_dir() -> PathBuf {

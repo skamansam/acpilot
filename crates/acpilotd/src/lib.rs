@@ -12,9 +12,11 @@ use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use acpilot_agent::Terminals as AgentTerminals;
 use acpilot_agent::supervisor::availability;
-use acpilot_agent::{AgentSpec, Broker, KeyringResolver, PermissionOption, Registry};
+use acpilot_agent::{AgentSpec, Broker, IDLE_TIMEOUT, KeyringResolver, PermissionOption, Registry};
 use acpilot_core::AcpilotError;
+use acpilot_host::LocalHost;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
@@ -55,6 +57,14 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 /// says `resync` rather than growing without bound, which is the same trade the
 /// broker's own announcement channel makes.
 const EVENT_BUFFER: usize = 32;
+
+/// How often the daemon sweeps terminals no agent has touched.
+///
+/// A minute against [`IDLE_TIMEOUT`]'s half hour: a process an agent opened and
+/// forgot is gone soon after it stops being useful, and the sweep is a lock and a
+/// timestamp comparison per terminal. `terminal/release` is optional in ACP, so
+/// without this a command that outlived one tool call would outlive the daemon.
+pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Health payload. Deliberately minimal: a health check should not be able to fail
 /// because a subsystem is slow.
@@ -183,7 +193,7 @@ pub struct Workspace {
 }
 
 /// [`Registry`], which is the same path the daemon will use once profiles land.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AppState {
     agents: Option<Arc<Registry>>,
     broker: Option<Arc<Broker>>,
@@ -193,6 +203,22 @@ pub struct AppState {
     sessions: Sessions,
     /// Every terminal this daemon owns.
     terminals: Terminals,
+    /// Where each session's `session.jsonl` is kept, when the daemon keeps one.
+    ///
+    /// `None` in tests and in an embedded daemon that keeps its own record: a
+    /// transcript directory is a decision about a filesystem, and the default for
+    /// a library value is not to write into somebody's home directory.
+    transcripts: Option<std::path::PathBuf>,
+    /// The terminals *agents* ask their client to open.
+    ///
+    /// A different store from [`Self::terminals`], which is the panes a client
+    /// attaches to: these are served by the same `acpilot-agent` code a headless
+    /// session uses, and one registry here is enough because terminal ownership
+    /// is keyed by session id. It runs on this daemon's host — the same [`Host`]
+    /// the file methods use, so a remote workspace (P3-9) moves both at once.
+    ///
+    /// [`Host`]: acpilot_host::Host
+    agent_terminals: Arc<AgentTerminals>,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -201,6 +227,26 @@ pub struct AppState {
     /// only way to tell those two apart, and it is the daemon's to remember:
     /// the broker's job is to answer, not to be a history.
     decided: Arc<Mutex<HashMap<String, PermissionDecision>>>,
+}
+
+impl Default for AppState {
+    /// No profile loaded: the agent list is empty and nothing is pending.
+    ///
+    /// Written out rather than derived because the agent-terminal registry is a
+    /// [`LocalHost`] and the host is not a default: this is where the daemon says
+    /// which machine an agent's commands run on.
+    fn default() -> Self {
+        Self {
+            agents: None,
+            broker: None,
+            workspace: None,
+            sessions: Sessions::default(),
+            terminals: Terminals::default(),
+            transcripts: None,
+            agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
+            decided: Arc::default(),
+        }
+    }
 }
 
 impl AppState {
@@ -257,6 +303,63 @@ impl AppState {
     /// The terminal store the terminal routes drive.
     pub fn terminals(&self) -> &Terminals {
         &self.terminals
+    }
+
+    /// Keep each session's transcript under `directory`.
+    ///
+    /// A session gets its own subdirectory, so two conversations never share a
+    /// file and a stored transcript can grow siblings (P3-7's database). The
+    /// directory is created per session when the session starts.
+    #[must_use]
+    pub fn with_transcripts(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.transcripts = Some(directory.into());
+        self
+    }
+
+    /// Where transcripts are kept, when the daemon keeps them.
+    pub fn transcripts(&self) -> Option<&std::path::Path> {
+        self.transcripts.as_deref()
+    }
+
+    /// The terminals an agent's `terminal/*` requests are served from.
+    ///
+    /// One for the whole daemon, because the registry is keyed by session id and
+    /// a session can only reach its own. Cloned into a session's options when the
+    /// session starts, so the capability it advertises and the handler that serves
+    /// it are the same switch.
+    pub fn agent_terminals(&self) -> &Arc<AgentTerminals> {
+        &self.agent_terminals
+    }
+
+    /// Kill agent terminals nobody has touched in [`IDLE_TIMEOUT`], on a timer.
+    ///
+    /// A terminal is a process, and a process with no reader keeps running. The
+    /// session releases its own terminals when it ends, so this is the backstop
+    /// for a session that stays open while an agent forgets one — which is the
+    /// normal case, because `terminal/release` is optional in ACP.
+    ///
+    /// Spawned by the daemon binary rather than by [`AppState::new`] so the state
+    /// stays constructible outside a runtime; calling it twice would give every
+    /// terminal two sweepers, which is harmless but pointless.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn reap_terminals_on_a_timer(&self) {
+        let terminals = Arc::clone(&self.agent_terminals);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(REAP_INTERVAL);
+            // The first tick of an interval fires immediately; nothing can be
+            // idle before a session has run, so it is skipped.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let reaped = terminals.reap(IDLE_TIMEOUT);
+                if reaped > 0 {
+                    tracing::info!(reaped, "released terminals no agent had touched");
+                }
+            }
+        });
     }
 
     fn decision(&self, id: &str) -> Option<PermissionDecision> {
@@ -344,6 +447,16 @@ pub fn state_for(
         Some(directory) => state_for_profile(directory, workspace),
         None => Ok(AppState::new().with_workspace(workspace_at(workspace)?)),
     }
+}
+
+/// Where the daemon keeps the transcripts of its sessions.
+///
+/// `<data>/acpilot/transcripts`, moved with the rest of Acpilot's state by
+/// `ACPILOT_HOME`. A caller can point [`AppState::with_transcripts`] somewhere
+/// else; this is the answer for a daemon started by its own binary.
+#[must_use]
+pub fn transcript_dir() -> std::path::PathBuf {
+    acpilot_profile::data_dir().join("transcripts")
 }
 
 /// The root a daemon was started against, resolved and named once.

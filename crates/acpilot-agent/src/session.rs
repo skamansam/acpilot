@@ -19,8 +19,10 @@
 //! Every `session/update` becomes one [`SessionEvent`] with a sequence number
 //! assigned here, starting at 1 and never reused. The number is assigned before
 //! the event is broadcast, so a slow subscriber drops events but cannot renumber
-//! them; the transcript (P2-8) is what makes a gap recoverable. The broadcast
-//! channel is the daemon's feed (the service phase's task P3-3 adds replay on top).
+//! them; the transcript (P2-8) is what makes a gap recoverable, because the same
+//! numbered event is appended to the conversation's file as it is recorded. The
+//! broadcast channel is the daemon's feed (the service phase's task P3-3 adds
+//! replay on top).
 //!
 //! The kind is the closed [`SessionEventKind`] enum, but the *payload* is
 //! deliberately explicit rather than a passthrough of the ACP object with its
@@ -68,11 +70,12 @@
 //!
 //! # Requests this build cannot serve
 //!
-//! Terminals arrive with the engine phase's task P2-5, but an agent may ask before then. Each request is
-//! answered with `MethodNotFound` and a message naming the gap. Answering is not
-//! politeness: a request with no response leaves the agent waiting forever, which
-//! is how the engine phase's P2-9 fixture found this, and an error is the one thing an agent can
-//! act on.
+//! An agent may ask for a capability its client never advertised — terminals and
+//! files arrive in [`SessionOptions`], not in the protocol's goodwill. Each request
+//! for one this session does not serve is answered with `MethodNotFound` and a
+//! message naming the gap. Answering is not politeness: a request with no response
+//! leaves the agent waiting forever, which is how the engine phase's P2-9 fixture
+//! found this, and an error is the one thing an agent can act on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,9 +96,9 @@ use agent_client_protocol::schema::v1::{
     NoticeSeverity, PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest,
     ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionInfoUpdate, SessionNotification, SessionUpdate, TerminalOutputRequest, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
-    WriteTextFileRequest, WriteTextFileResponse,
+    SessionId as AcpSessionId, SessionInfoUpdate, SessionNotification, SessionUpdate,
+    TerminalOutputRequest, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind,
+    UsageUpdate, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
 use serde::Serialize;
@@ -255,6 +258,13 @@ pub struct Session {
     process: Option<AgentProcess>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
+    /// The registry this session's `terminal/*` requests are served from.
+    ///
+    /// Kept so [`Drop`] can end them with the session. A terminal is a process,
+    /// and its session is the only thing that can ask about it; leaving it to the
+    /// daemon's idle sweep would keep a command alive for up to half an hour after
+    /// the conversation it belonged to is gone.
+    terminals: Option<Arc<Terminals>>,
 }
 
 impl std::fmt::Debug for Session {
@@ -567,6 +577,7 @@ impl Session {
             process: None,
             stop: Some(stop_tx),
             task: Some(task),
+            terminals: options.terminals,
         })
     }
 
@@ -709,6 +720,14 @@ impl Drop for Session {
         }
         if let Some(task) = self.task.take() {
             task.abort();
+        }
+        // Terminals outlive the agent's own exit: a backgrounded command is a
+        // child of the daemon, not of the agent process. Nobody can ask about
+        // them once this handle is gone, so they go now rather than waiting for
+        // the idle sweep. Keyed by the agent's own session id, which is what its
+        // `terminal/*` requests carry — not the daemon's id for the conversation.
+        if let (Some(terminals), Some(acp_id)) = (self.terminals.take(), self.acp_id.as_ref()) {
+            terminals.release_session(&AcpSessionId::new(acp_id.clone()));
         }
     }
 }

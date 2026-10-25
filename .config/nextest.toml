@@ -1,0 +1,12 @@
+# A hung test is a failing test that takes an hour to say so.
+#
+# The Windows ConPTY test sat in `wait()` for 53 minutes before the job was
+# cancelled by hand, and a gate nobody can read is a gate that gets ignored. A
+# test that is still running after a minute is marked slow, and one still running
+# after five is terminated — so the report names the test that hung instead of
+# timing the job out.
+#
+# The budget is generous on purpose: the whole workspace runs in about a second
+# on Linux, and a GitHub Windows runner is the slow case, not a slow test.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }

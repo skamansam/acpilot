@@ -11,6 +11,12 @@ use crate::profiles::ShellProfile;
 pub enum CommandId {
     /// Make this profile the current one.
     SelectProfile(usize),
+    /// Show the About panel.
+    ///
+    /// It is in the palette because the native menu that carries it is drawn on
+    /// macOS only; without this row, About has no way to open on Linux or
+    /// Windows, where gpui 0.2.2 draws no menu bar at all.
+    About,
     /// Leave the app.
     Quit,
 }
@@ -38,6 +44,11 @@ pub fn commands(profiles: &[ShellProfile]) -> Vec<Command> {
             detail: format!("{} · {}", profile.root().display(), profile.summary()),
         })
         .collect();
+    commands.push(Command {
+        id: CommandId::About,
+        label: "About Acpilot".to_owned(),
+        detail: format!("Version {}", acpilot_core::VERSION),
+    });
     commands.push(Command {
         id: CommandId::Quit,
         label: "Quit Acpilot".to_owned(),
@@ -115,9 +126,9 @@ mod tests {
     }
 
     #[test]
-    fn there_is_one_entry_per_profile_and_one_to_leave() {
+    fn there_is_one_entry_per_profile_one_for_about_and_one_to_leave() {
         let (_dirs, commands) = list();
-        assert_eq!(commands.len(), 3);
+        assert_eq!(commands.len(), 4);
         assert_eq!(commands[0].label, "Switch to work");
         assert_eq!(commands[0].id, CommandId::SelectProfile(0));
         assert!(
@@ -128,14 +139,33 @@ mod tests {
         assert!(commands[0].detail.contains("own agents"));
         assert_eq!(commands[1].id, CommandId::SelectProfile(1));
         assert!(commands[1].detail.contains("shipped policy"));
-        assert_eq!(commands[2].id, CommandId::Quit);
+        assert_eq!(commands[2].id, CommandId::About);
+        assert_eq!(commands[3].id, CommandId::Quit);
+    }
+
+    #[test]
+    fn about_is_reachable_without_a_menu_bar() {
+        // The native menu is drawn on macOS only, so the palette row is the only
+        // way to open About on Linux and Windows. Its detail carries the version
+        // the same constant names, so a wrong build number is visible here too.
+        let (_dirs, commands) = list();
+        let about = commands
+            .iter()
+            .find(|command| command.id == CommandId::About)
+            .expect("the palette offers About");
+        assert!(
+            about.detail.contains(acpilot_core::VERSION),
+            "{}",
+            about.detail
+        );
+        assert!(!filter(&commands, "about").is_empty());
     }
 
     #[test]
     fn an_empty_query_shows_everything_in_order() {
         let (_dirs, commands) = list();
-        assert_eq!(filter(&commands, ""), vec![0, 1, 2]);
-        assert_eq!(filter(&commands, "   "), vec![0, 1, 2]);
+        assert_eq!(filter(&commands, ""), vec![0, 1, 2, 3]);
+        assert_eq!(filter(&commands, "   "), vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -143,7 +173,7 @@ mod tests {
         let (_dirs, commands) = list();
         assert_eq!(filter(&commands, "work"), vec![0]);
         assert_eq!(filter(&commands, "WORK"), vec![0]);
-        assert_eq!(filter(&commands, "quit"), vec![2]);
+        assert_eq!(filter(&commands, "quit"), vec![3]);
     }
 
     #[test]

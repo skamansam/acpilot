@@ -56,9 +56,37 @@ One thing `cargo xtask check` deliberately does not do is build the desktop shel
 default, so the workspace gate stays fast and does not need a graphics stack.
 CI's `gui` job is what keeps the shell from rotting, and locally it is two
 commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
-acpilot-gui --features gui`. On Linux that needs the dev packages gpui links
-against and `libc` held at exactly 0.2.189; the crate manifest names both, and
-`README.md` §5.4 explains why the pin exists.
+acpilot-gui --features gui,gui-tests`. The second feature is gpui's headless test
+harness: without it the About panel and the palette that opens it have no
+`Context` to live in, so the tests that draw the window would only be testing a
+copy of it. It is separate from `gui` because it compiles gpui's `test-support`
+machinery, which the default workspace gate should not pay for. On Linux both
+need the dev packages gpui links against:
+
+```bash
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+  libwayland-dev libfreetype-dev libfontconfig1-dev pkg-config clang
+```
+
+and `libc` held at exactly 0.2.189; the crate manifest names both, and `README.md`
+§5.4 explains why the pin exists. The `xkbcommon-x11` half of that list is not
+avoidable from this workspace — gpui 0.2.2 asks its `xkbcommon` dependency for
+`x11` in its own manifest, and Cargo features only ever add (ADR 0009 §5).
+
+The web UI is built, not hand-written, and the build output is committed so
+`cargo build` never needs Node:
+
+```bash
+cd web
+npm ci
+npm run check   # svelte-check: types and accessibility lint
+npm test        # vitest in happy-dom: the token flow, storage and headers
+npm run build   # one HTML file, written into crates/acpilot-web/assets/
+```
+
+Run `npm run build` whenever you change anything under `web/`, and commit the
+regenerated `crates/acpilot-web/assets/index.html` in the same commit. CI's `web`
+job rebuilds it and fails with a diff if you forget.
 
 `cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command
@@ -194,6 +222,80 @@ ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
 
 - `cargo xtask check` green locally; CI runs the same commands on Linux, macOS
   and Windows, so a platform-specific shortcut will be caught.
+- One check is required to merge: **`required checks`**, the job at the bottom of
+  `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`, `deny` and
+  `docs`, and passes only when all of them pass, so the ruleset below points at
+  one name instead of a list that has to be edited whenever a job is added or
+  renamed.
+
+The rule itself is repository settings, not a file. It is a ruleset called
+`protect main`, not legacy branch protection: rulesets are what GitHub maintains
+now, they cover deletion and force pushes as rules rather than as flags, and the
+old `branches/main/protection` endpoint is read-only-compatible rather than the
+place to add things. An administrator creates the ruleset once with:
+
+```bash
+gh api -X POST "repos/:owner/:repo/rulesets" --input - <<'JSON'
+{
+  "name": "protect main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/main"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": true,
+        "required_status_checks": [{ "context": "required checks" }]
+      }
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    }
+  ]
+}
+JSON
+```
+
+Each rule earns its place:
+
+- `strict_required_status_checks_policy` is the "require branches to be up to date
+  before merging" half: a green run from before the base branch moved is not
+  evidence about the tree that will merge. `context` is the `required checks` job.
+- `pull_request` is what makes `main` take pull requests only, and the count is `0`
+  on purpose: the hold-up is the CI run, not a second person on a repository that
+  has one maintainer. Leaving the rule out leaves direct pushes to `main` allowed,
+  which is the whole thing this exists to stop.
+- `deletion` and `non_fast_forward` are branch deletion and force pushes. Without
+  them a branch can still have its history rewritten or its ref removed by whoever
+  may write to it.
+- `bypass_actors` is absent, which means nobody: a rule the people who wrote it can
+  skip is a suggestion. That replaces legacy `enforce_admins`, and a ruleset cannot
+  quietly leave administrators exempt the way an unchecked box can.
+- `do_not_enforce_on_create` keeps branch *creation* out of it, so a new branch
+  that happens to be named from the include pattern is still creatable; it says
+  nothing about updates to an existing `main`.
+
+Reading it back matters more than writing it — a ruleset that is inactive, or
+whose conditions miss `refs/heads/main`, enforces nothing and looks configured:
+
+```bash
+gh api repos/:owner/:repo/rulesets --jq '.[] | {name, target, enforcement}'
+gh api repos/:owner/:repo/rules/branches/main   # what actually applies
+```
 - New dependency → a sentence on why the existing ones do not do the job, plus a
   `cargo deny` clean run. The version policy is "latest stable" (README §5.9).
 - Wire change → the OpenAPI snapshot diff is part of the review, by design.
@@ -220,8 +322,9 @@ A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and
 Windows x86_64, publishes a GitHub release with checksums, and rebuilds the docs
 site: the download page reads the releases API at build time, so nothing is
 committed back and `main` stays a tree only pull requests change. The `gui` feature
-is not in the release matrix yet — it needs a graphics stack at link time, which is
-a runner dependency to solve rather than a version to publish.
+ships in the same tarball as the CLI and the daemon, built with `--features
+acpilot-gui/gui`; the Linux runner installs the graphics stack it links against,
+and the Windows and macOS runners use their own system frameworks.
 
 ## Decisions
 

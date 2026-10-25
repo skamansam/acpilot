@@ -11,7 +11,7 @@
 //! | --- | --- |
 //! | `stream <n>` | emits `n` message chunks numbered from 1, then ends the turn |
 //! | `permission` | asks the client to allow a shell command, reports the answer, ends the turn |
-//! | `fs` | reads `seed.txt` in the session's cwd, reads `/etc/passwd`, writes a file in the cwd, reports each answer, ends the turn |
+//! | `fs` | reads `seed.txt` in the session's cwd, reads a path outside it (the cwd's parent), writes a file in the cwd, reports each answer, ends the turn |
 //! | `write <path>` | writes one file at the absolute path given, reports the answer, ends the turn |
 //! | `terminal` | asks the client to open a terminal, reports the answer, ends the turn |
 //! | `hang` | never answers, so the request stays pending |
@@ -223,12 +223,16 @@ async fn exercise_files(connection: &ConnectionTo<Client>, session: &SessionId) 
         ))
         .block_task()
         .await;
-    // Outside the workspace by construction, whatever the workspace is.
+    // Outside the workspace by construction on every platform: the directory the
+    // workspace itself sits in. A hard-coded `/etc/passwd` is not an absolute path
+    // on Windows, where the refusal would then be about the path's shape rather
+    // than its location — a different assertion wearing the same name.
+    let outside_path = workspace
+        .parent()
+        .expect("the workspace is not a filesystem root")
+        .to_path_buf();
     let outside = connection
-        .send_request(ReadTextFileRequest::new(
-            session.clone(),
-            PathBuf::from("/etc/passwd"),
-        ))
+        .send_request(ReadTextFileRequest::new(session.clone(), outside_path))
         .block_task()
         .await;
     let write = write_file(

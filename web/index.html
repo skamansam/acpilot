@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <!--
+    The shell Vite builds. The version meta tag is filled in by the daemon
+    (`acpilot_web::page`), which is why it is readable before anyone has a
+    token: the page holds no data, and saying which build is answering is the
+    one fact it can offer without one.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="acpilot-version" content="{{version}}" />
+    <meta name="color-scheme" content="dark" />
+    <title>Acpilot</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

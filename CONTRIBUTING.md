@@ -302,6 +302,43 @@ gh api repos/:owner/:repo/rules/branches/main   # what actually applies
 - Performance-sensitive change → numbers, not adjectives, against the budgets in
   `TODO.md` §Performance budgets.
 
+## The roadmap
+
+The **ACPilot Roadmap** project (Projects v2) follows the repository in two halves.
+The issue half is GitHub's: built-in project workflows set a card to *Todo* when
+its issue is added or reopened and *Done* when it closes, with no Action involved.
+Keep *Item added*, *Item closed* and *Item reopened* switched on in the project's
+Workflows menu — the two *Done* ones are on by default, the others are one toggle.
+
+The pull-request half is `.github/workflows/roadmap.yml`, because no built-in can
+say that a draft is *In progress*, a PR ready for review is *In review*, a merged
+PR is *Done*, and a PR closed without merging is not finished work. The mapping
+and the GraphQL calls live in `.github/scripts/roadmap.mjs`.
+
+That job needs `secrets.PROJECT_TOKEN`, a classic personal access token with the
+`project` scope: the workflow's own `GITHUB_TOKEN` cannot see a project owned by a
+user account. Until the secret exists the job skips itself and says so in the run
+summary, so the PR lane stays inert rather than claiming to work.
+
+Seeding the board, or filling in what an event missed, is the same script:
+
+```bash
+GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
+  node .github/scripts/roadmap.mjs backfill
+node .github/scripts/roadmap.mjs pr 42     # one pull request
+node .github/scripts/roadmap.mjs issue 17  # one issue
+```
+
+The TODO.md import that created the issues is `.github/scripts/todo_issues.py`;
+it is idempotent and re-running it after editing `TODO.md` adds only what is new.
+
+`TODO.md` is a tree, and the board is too: one parent issue per phase and per
+cross-cutting section, with the work attached as sub-issues, so a card answers "how
+much of this phase is left" instead of "how many issues are open".
+`.github/scripts/issue_hierarchy.py` builds and repairs that tree from the labels
+(`phase:P2`, `section:testing`) rather than from a hand-kept list, closes a parent
+when its last child closes, and is a no-op when there is nothing to do.
+
 ## Releases
 
 Merging into `main` publishes a release, and the labels on the pull request decide

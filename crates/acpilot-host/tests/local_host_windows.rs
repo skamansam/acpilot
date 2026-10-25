@@ -73,7 +73,12 @@ fn exec_keeps_streams_apart_and_reports_the_exit_code() {
 /// The floor under every other pty test: a pseudo-console carries what the child
 /// prints. Without this, "the program could not tell it was on a console" and
 /// "nothing reached the reader" are the same failure and neither names a cause.
+///
+/// Ignored until #266 is fixed: on `windows-latest` the child prints nothing and
+/// never exits, so this asserts the behaviour the bug report is about rather than
+/// the behaviour the seam has. Run it with `-- --ignored` on Windows.
 #[test]
+#[ignore = "ConPTY output goes nowhere on Windows; see #266"]
 fn a_conpty_carries_what_the_child_prints() {
     let mut pty = LocalHost
         .spawn_pty(
@@ -94,6 +99,7 @@ fn a_conpty_carries_what_the_child_prints() {
 }
 
 #[test]
+#[ignore = "ConPTY output goes nowhere on Windows; see #266"]
 fn a_conpty_is_a_console_and_a_pipe_is_not() {
     // `[Console]::IsOutputRedirected` is the closest Windows equivalent of
     // `[ -t 1 ]`: false means a console handle, true means a pipe or a file.

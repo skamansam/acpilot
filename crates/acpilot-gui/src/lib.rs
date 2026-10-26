@@ -20,6 +20,7 @@
 //!
 //! Framework decision and the pin: `docs/adr/0009-gui-framework.md`.
 
+pub mod daemon;
 pub mod keymap;
 pub mod palette;
 pub mod platform;

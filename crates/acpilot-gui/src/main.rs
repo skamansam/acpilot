@@ -19,14 +19,17 @@
 //! ms, because the device is already there.
 
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use acpilot_gui::app;
 use acpilot_gui::platform::{self, Claim};
 use acpilot_gui::profiles;
 use acpilot_gui::theme::GuiTheme;
+use acpilot_gui::{Shell, daemon};
 use clap::Parser;
 use futures::StreamExt as _;
-use gpui::{App, Application};
+use gpui::{App, Application, Entity};
 
 /// The Acpilot desktop app.
 #[derive(Debug, Parser)]
@@ -52,6 +55,50 @@ struct Cli {
     /// at another one without editing either.
     #[arg(long, value_name = "ID")]
     theme: Option<String>,
+}
+
+/// Recolour every open window when the daemon announces new settings.
+///
+/// A poll on the app's own timer rather than an `await` on the channel: the
+/// receiver is a blocking one filled by a plain thread, and the window's executor
+/// has to stay free to draw. 120 ms is under the threshold where a recolour reads
+/// as a missed frame and far above a busy loop. Only the newest theme is applied —
+/// two saves inside one tick are one repaint, not two flickers.
+fn recolour_on_settings(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<GuiTheme>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let mut latest: Option<GuiTheme> = None;
+            while let Ok(theme) = changed.try_recv() {
+                latest = Some(theme);
+            }
+            let Some(theme) = latest else {
+                continue;
+            };
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                let theme = theme.clone();
+                // The app is shutting down when this fails, which is the one
+                // reason to stop asking.
+                if cx
+                    .update(|cx| shell.update(cx, |shell, cx| shell.set_theme(theme, cx)))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
 }
 
 fn main() -> ExitCode {
@@ -99,6 +146,14 @@ fn main() -> ExitCode {
         }
     };
 
+    // The daemon's answer is the live one: the launch theme above is what the
+    // window opens with, and a `prefs` frame replaces it. A daemon that is not
+    // running costs this thread one failed request, not a window.
+    let (settings, changed) = std::sync::mpsc::channel::<GuiTheme>();
+    daemon::follow(daemon::endpoint(), extensions.clone(), move |theme| {
+        let _ = settings.send(theme);
+    });
+
     // The claim is taken before the runtime starts, so a launch that is only
     // handing over never pays for a renderer. It is also taken after the profiles
     // and theme are validated: a second instance with a typo in `--profile`
@@ -121,8 +176,16 @@ fn main() -> ExitCode {
         // Once, on the app: a second window shares this keymap, and binding it
         // again per window would append a duplicate for every launch.
         cx.bind_keys(app::key_bindings());
-        app::open_window(cx, profiles.clone(), theme.clone())
+        // Every window, so a settings change reaches all of them. A forwarded
+        // launch opens one more while the app is running; it joins the list.
+        let shells: Arc<Mutex<Vec<Entity<Shell>>>> = Arc::default();
+        let opened = app::open_window(cx, profiles.clone(), theme.clone())
             .expect("the platform accepted a window");
+        shells
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(opened);
+        recolour_on_settings(cx, Arc::clone(&shells), changed);
 
         let Some(mut requests) = requests else {
             return;
@@ -139,7 +202,13 @@ fn main() -> ExitCode {
                     let started = std::time::Instant::now();
                     let opened = app::open_window(cx, profiles, theme);
                     cx.activate(true);
-                    opened.map(|()| (cx.windows().len(), started.elapsed()))
+                    if let Ok(shell) = &opened {
+                        shells
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push(shell.clone());
+                    }
+                    opened.map(|_| (cx.windows().len(), started.elapsed()))
                 });
                 match opened {
                     // The app is shutting down; the channel's sender is dropped

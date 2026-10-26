@@ -105,6 +105,7 @@ dependencies = [
 name = "acpilot-gui"
 version = "0.1.0"
 dependencies = [
+ "acpilot-client",
  "acpilot-core",
  "acpilot-extensions",
  "acpilot-profile",
@@ -115,6 +116,7 @@ dependencies = [
  "gpui",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

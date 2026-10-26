@@ -111,9 +111,19 @@ list it was launched with, the command palette on `secondary-shift-p`, and
 licence, the field manual and the tools this was built with. Quit is
 `secondary-q` or the menu item. The window's theme is a setting — `theme_gui`
 over `theme`, from the user's config or the project's — and `--theme` is only the
-override for looking at another one without editing either. Panes,
-the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
-off by default, so `cargo test` still compiles no graphics stack.
+override for looking at another one without editing either.
+
+The theme is also the window's first daemon connection, and it is a connection
+rather than a file read on purpose: `acpilot-gui` subscribes to `GET /v1/events`
+and redraws when a `prefs` frame names another theme. The frame that opens the
+stream carries the current preferences, so a window on a machine that cannot see
+the daemon's `config.toml` — a remote host, a container — still opens with the
+right colours, and a save reaches every open window without a relaunch. A daemon
+that is not running costs one request and leaves the launch theme in place; no
+daemon is spawned, because a window that starts one has taken on the sessions it
+serves. Panes and the editor are P10-3, and owning sessions over that connection
+is P10-4. The `gui` feature is off by default, so `cargo test` still compiles no
+graphics stack.
 
 A launch names a path rather than a profile: `acpilot-gui` opens the project you
 are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile

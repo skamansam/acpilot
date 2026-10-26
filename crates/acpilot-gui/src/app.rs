@@ -10,7 +10,7 @@
 //! here.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, InteractiveElement, IntoElement,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     KeyBinding, KeyDownEvent, Menu, MenuItem, ParentElement, Render, SharedString,
     Size as GpuiSize, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions,
     actions, div, point, px, rgb,
@@ -162,6 +162,26 @@ impl Shell {
     #[must_use]
     pub fn current(&self) -> Option<&ShellProfile> {
         self.profiles.get(self.selected)
+    }
+
+    /// The theme the window is drawing with.
+    #[must_use]
+    pub fn theme(&self) -> &GuiTheme {
+        &self.theme
+    }
+
+    /// Recolour the window.
+    ///
+    /// Called when the daemon announces the settings changed. A theme that is the
+    /// one already on screen is not a repaint: the frame that opens a connection
+    /// carries the same preferences the window launched with, and every window
+    /// would flicker once at startup for a change that did not happen.
+    pub fn set_theme(&mut self, theme: GuiTheme, cx: &mut Context<Self>) {
+        if self.theme == theme {
+            return;
+        }
+        self.theme = theme;
+        cx.notify();
     }
 
     /// Run a palette command.
@@ -344,15 +364,18 @@ impl Shell {
 /// Every window is its own view with its own command palette; the keymap and the
 /// theme are already on the app, so a second window costs a view and nothing
 /// else. That is what makes the activation path cheap — see [`crate::platform`].
+///
+/// The view is returned because the theme is now live: the daemon announces a
+/// save, and every open window has to be recoloured without being reopened.
 pub fn open_window(
     cx: &mut App,
     profiles: Vec<ShellProfile>,
     theme: GuiTheme,
-) -> anyhow::Result<()> {
-    cx.open_window(window_options(), move |_window, cx| {
+) -> anyhow::Result<Entity<Shell>> {
+    let handle = cx.open_window(window_options(), move |_window, cx| {
         cx.new(|cx| Shell::new(profiles, theme, cx))
     })?;
-    Ok(())
+    handle.entity(cx)
 }
 
 /// The window the app opens with.

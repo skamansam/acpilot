@@ -43,4 +43,6 @@ pub use registry::Registry;
 pub use schema::{SCHEMA_PATH, SCHEMA_URL, json_schema, schema_json_text};
 pub use source::{AssetSource, DirSource, EmbeddedSource};
 pub use store::{ActiveSet, BlockReason, Store, StoreStatus, StoredExtension};
-pub use theme::{Color, Palette, ResolvedTheme, SyntaxToken, Theme, UiToken};
+pub use theme::{
+    Color, Palette, ResolvedTheme, SyntaxToken, Theme, ThemeError, ThemeRegistry, UiToken,
+};

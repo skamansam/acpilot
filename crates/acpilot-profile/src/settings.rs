@@ -81,6 +81,7 @@ pub enum SettingsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acpilot_proto::profile::ThemeSurface;
     use std::fs;
     use std::path::PathBuf;
 
@@ -153,6 +154,61 @@ mod tests {
         let settings = Settings::load(Some(&user), Some(&project)).expect("merged");
         assert!(settings.profile.is_none());
         assert!(settings.preferences.wrap);
+    }
+
+    #[test]
+    fn a_surface_that_names_its_own_theme_keeps_it() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(
+            directory.path(),
+            "user.toml",
+            "[preferences]\ntheme = \"acpilot.paper\"\ntheme_tui = \"acpilot.night-flight\"\n",
+        );
+        let settings = Settings::load(Some(&user), None).expect("merged");
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Tui),
+            "acpilot.night-flight",
+            "the terminal's own key wins for the terminal"
+        );
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Gui),
+            "acpilot.paper",
+            "and the window falls back to the shared one"
+        );
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Web),
+            "acpilot.paper"
+        );
+    }
+
+    #[test]
+    fn a_project_can_theme_one_surface_without_touching_the_others() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(
+            directory.path(),
+            "user.toml",
+            "[preferences]\ntheme = \"acpilot.night-flight\"\n",
+        );
+        let project = write(
+            directory.path(),
+            "project.toml",
+            "[preferences]\ntheme_web = \"acpilot.paper\"\n",
+        );
+        let settings = Settings::load(Some(&user), Some(&project)).expect("merged");
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Web),
+            "acpilot.paper",
+            "the project overrides the browser's theme for that project"
+        );
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Tui),
+            "acpilot.night-flight",
+            "and the terminal, which it said nothing about, keeps the user's"
+        );
+        assert_eq!(
+            settings.preferences.theme_for(ThemeSurface::Gui),
+            "acpilot.night-flight"
+        );
     }
 
     #[test]

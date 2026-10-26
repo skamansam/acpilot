@@ -17,9 +17,14 @@ mod unix;
 mod windows;
 
 #[cfg(unix)]
-pub(crate) use unix::http;
+pub(crate) use unix::{http, socket};
 #[cfg(windows)]
-pub(crate) use windows::http;
+pub(crate) use windows::{http, socket};
+
+// The type a terminal attach hands the WebSocket handshake. Declared in
+// `terminal` because that is where the frames live; named here because opening
+// the stream is the platform's half.
+pub(crate) use crate::terminal::Duplex;
 
 /// Whether an endpoint names a URL rather than a socket path.
 pub(crate) fn is_url(endpoint: &str) -> bool {

@@ -1342,8 +1342,29 @@ expression: canonical(document)
             "type": "integer"
           },
           "theme": {
-            "description": "Theme identifier, shared by TUI, GUI and web.",
+            "description": "Theme identifier for every surface that does not name its own.\n\nA theme is an extension, so this is the id of one: `acpilot.night-flight`\nunless someone says otherwise.",
             "type": "string"
+          },
+          "theme_gui": {
+            "description": "Theme for the desktop app, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_tui": {
+            "description": "Theme for the terminal UI, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_web": {
+            "description": "Theme for the browser UI, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "trim_trailing_whitespace": {
             "description": "Strip trailing whitespace on save.",

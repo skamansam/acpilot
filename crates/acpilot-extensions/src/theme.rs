@@ -382,6 +382,167 @@ impl Palette {
     }
 }
 
+/// Why a theme could not be produced.
+///
+/// One error type for every surface: the TUI, the desktop app and the web UI ask
+/// the same question — "give me this theme, complete" — so they get the same
+/// answer, and a broken theme is one message rather than three interpretations of
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ThemeError {
+    /// No loaded extension contributes a theme with that id.
+    #[error("no loaded extension provides the theme {id:?}")]
+    Unknown {
+        /// The id that was asked for.
+        id: String,
+    },
+    /// A theme inherits from one that is not loaded.
+    #[error("theme {required_by:?} inherits from {id:?}, which is not loaded")]
+    MissingBase {
+        /// The base id that could not be found.
+        id: String,
+        /// The theme that named it.
+        required_by: String,
+    },
+    /// `extends` leads back to a theme already in the chain.
+    #[error("theme inheritance loops back to {id:?}")]
+    Cycle {
+        /// The id that closed the loop.
+        id: String,
+    },
+    /// The palette does not set every UI token.
+    #[error(
+        "theme {id:?} does not set {}; a surface would have nothing to draw with",
+        tokens.join(", ")
+    )]
+    MissingTokens {
+        /// The theme as resolved, for the message.
+        id: String,
+        /// The tokens it left out.
+        tokens: Vec<&'static str>,
+    },
+}
+
+/// Every theme a set of loaded extensions provides.
+///
+/// Resolution lives here, next to the tokens, rather than in a frontend: "the same
+/// theme extension draws all three UIs" is only true if all three follow the same
+/// `extends` chain and refuse the same holes. A frontend's job is the conversion
+/// to its own colour type, not a second opinion about what a theme means.
+pub struct ThemeRegistry<'a> {
+    themes: Vec<(&'a Theme, &'a crate::loader::LoadedExtension)>,
+}
+
+impl<'a> ThemeRegistry<'a> {
+    /// Index the themes the extensions contribute.
+    #[must_use]
+    pub fn new(extensions: &'a [crate::loader::LoadedExtension]) -> Self {
+        let themes = extensions
+            .iter()
+            .flat_map(|extension| {
+                extension
+                    .contributions
+                    .iter()
+                    .filter_map(move |contribution| match contribution {
+                        crate::loader::Contribution::Theme(theme) => {
+                            Some((theme.as_ref(), extension))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
+        Self { themes }
+    }
+
+    /// The ids of every theme on offer, in the order they were loaded.
+    #[must_use]
+    pub fn ids(&self) -> Vec<&'a str> {
+        self.themes
+            .iter()
+            .map(|(theme, _)| theme.id.as_str())
+            .collect()
+    }
+
+    /// Find a theme by id and resolve its inheritance.
+    ///
+    /// # Errors
+    ///
+    /// The id is not there, a base it names is not there, or `extends` loops.
+    pub fn resolve(&self, id: &str) -> Result<ResolvedTheme, ThemeError> {
+        let (theme, owner) = self
+            .themes
+            .iter()
+            .find(|(theme, _)| theme.id == id)
+            .copied()
+            .ok_or_else(|| ThemeError::Unknown { id: id.to_owned() })?;
+
+        // Requests come from a file, so a cycle is something a person can write;
+        // walking it away with a depth limit would be a hang instead.
+        let mut chain = vec![theme];
+        let mut seen = vec![theme.id.as_str()];
+        let mut cursor = theme;
+        while let Some(base_id) = cursor.extends.as_deref() {
+            if seen.contains(&base_id) {
+                return Err(ThemeError::Cycle {
+                    id: base_id.to_owned(),
+                });
+            }
+            seen.push(base_id);
+            let (base, _) = self
+                .themes
+                .iter()
+                .find(|(theme, _)| theme.id == base_id)
+                .copied()
+                .ok_or_else(|| ThemeError::MissingBase {
+                    id: base_id.to_owned(),
+                    required_by: cursor.id.clone(),
+                })?;
+            chain.push(base);
+            cursor = base;
+        }
+
+        // Root first: each layer overrides the one before it.
+        let mut palette = Palette::default();
+        for layer in chain.iter().rev() {
+            palette = layer
+                .resolve(Some(&palette), &owner.manifest.id, owner.built_in)
+                .palette;
+        }
+
+        Ok(ResolvedTheme {
+            id: theme.id.clone(),
+            name: theme.name.clone(),
+            appearance: theme.appearance,
+            built_in: owner.built_in,
+            extension_id: owner.manifest.id.clone(),
+            palette,
+        })
+    }
+
+    /// A theme with every UI token present, which is what a surface needs.
+    ///
+    /// # Errors
+    ///
+    /// [`ThemeRegistry::resolve`]'s errors, or [`ThemeError::MissingTokens`] when
+    /// the chain leaves a token unset.
+    pub fn complete(&self, id: &str) -> Result<ResolvedTheme, ThemeError> {
+        let theme = self.resolve(id)?;
+        let missing: Vec<&'static str> = UiToken::ALL
+            .iter()
+            .filter(|token| !theme.palette.ui.contains_key(*token))
+            .map(|token| token.as_str())
+            .collect();
+        if missing.is_empty() {
+            Ok(theme)
+        } else {
+            Err(ThemeError::MissingTokens {
+                id: theme.id,
+                tokens: missing,
+            })
+        }
+    }
+}
+
 /// A theme after inheritance, ready to hand to a surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTheme {

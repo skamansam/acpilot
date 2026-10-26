@@ -355,7 +355,7 @@ holds no domain logic — it deserialises into `acpilot-proto` types and calls t
 | Widgets / layout / diffing | **`ratatui` 0.30** (+ `crossterm` backend) | `cursive` (retained, callback-based — real widgets, harder to compose with async), `iocraft` (declarative, young), `tuirealm` |
 | Text buffer | **`ropey`** (1.6.x; 2.0 is in beta — pin stable behind `acpilot-text`) | `xi-rope`, plain `Vec<String>` (no) |
 | Syntax highlighting | **`tree-sitter` 0.27** + `tree-sitter-highlight` | `syntect` + `two-face` (regex-based, no incremental parse, but zero grammar build cost) |
-| Terminal panes | `tui-term` 0.3 (wraps `vt100` 0.18) | render raw escape codes (no) |
+| Terminal panes | **`vt100` 0.18**, drawn as styled lines over the daemon's attach socket | `tui-term` (a widget that owns the frame; a pane has to send keystrokes and resizes back), render raw escape codes (no) |
 | Transcript rendering | `pulldown-cmark` (markdown → styled lines, our own small renderer) | `tui-markdown` (quick start, less control) |
 | Clipboard | `arboard` 3.7 | OSC 52 only (works over SSH) |
 
@@ -435,7 +435,7 @@ events plus optimistic local edits.
 | SFTP | `russh-sftp` 3.0 | Remote file read/write and workspace browsing. |
 | Escalation path | `openssh` 0.11 | Shell out to the system `ssh` when a config uses FIDO keys / `Match` / ControlMaster and russh cannot express it. Feature-flagged "system ssh" mode. |
 | PTY | **`portable-pty` 0.9** | WezTerm's cross-platform PTY: ConPTY on Windows, `forkpty` elsewhere. |
-| Terminal emulation | `vt100` 0.18 | Parse PTY output into a screen; `tui-term` (TUI) and `xterm.js` (web) render it. |
+| Terminal emulation | `vt100` 0.18 | Parse PTY output into a screen. The TUI draws the cells themselves, because the pane also types into the program and tells it its size. |
 | WSL | `wsl.exe` + `windows` crate + `winreg` | Enumerate distros from the registry / `wsl -l -q`; launch `wsl.exe -d <distro> --cd <dir> -- acpilotd-helper`; ConPTY for the PTY case. |
 | Windows services | `windows` 0.62 | Job objects for process-tree cleanup, named pipes for the local daemon socket. |
 
@@ -553,6 +553,7 @@ acpilot/
 │   ├── acpilotd-helper/       # tiny in-host shim for SSH/WSL (stdio JSON-RPC)
 │   ├── acpilot-cli/           # `acpilot` binary: CLI + subcommand dispatch
 │   ├── acpilot-tui/           # ratatui UI, started by `acpilot tui`
+│   ├── acpilot-demo/          # seeded world the design pass draws, shared with the GUI
 │   ├── acpilot-gui/           # gpui app (pinned; see §5.4)
 │   └── acpilot-web/           # embed the built SPA + static serving
 ├── extensions/                # built-in extensions (themes, presets), embedded in the binary

@@ -21,13 +21,19 @@ flowchart LR
 Panels are the same three in every UI — files, text, agents — because the mental
 model should not change when you change cockpit.
 
+The colours are not this crate's: every pane, card and status label is drawn from
+the theme tokens the desktop app and the browser read, resolved from
+`theme_tui` (over `theme`) in the project's settings. A theme is an extension, so
+one pack recolours all three surfaces at once, and a project can choose a
+different one without changing anything global.
+
 ## What it is built on
 
 | Need | Choice |
 | --- | --- |
 | Rendering | `ratatui` + `crossterm` — immediate mode, the editor loop owns state |
 | Text | `ropey` for the buffer, `tree-sitter` for highlighting |
-| Agent terminals | `tui-term` over `vt100` grids |
+| Agent terminals | a `vt100` grid drawn as styled lines, fed by the attach WebSocket |
 | Transcript | markdown rendered to styled lines, not a browser |
 
 <Aside type="note" title="Why not the obvious textarea widget">
@@ -50,5 +56,34 @@ gets you the first hour and costs you the second year.
 
 The crate is a working client: it lists the daemon's sessions, streams the open
 session's transcript, answers a permission request with `y`, `a` or `n`, and starts
-the daemon if nothing is listening (ADR 0004). Editor panes, inline diffs and the
-workspace picker are the editor phase (P6).
+the daemon if nothing is listening (ADR 0004). `Ctrl-T` opens a terminal pane over
+the shells an agent asked for — the same PTY the agent reads, typed into and resized
+live, with the program's colours — asking which one when a session has several, and
+`Ctrl-T` again leaves it without ending the program. The pane keeps ten thousand
+lines behind its screen: `F2` reads back through them, `/` finds a string in that
+history — case-insensitive until the query has a capital in it, landing on the
+newest match before the cursor, with `n` and `N` to walk older and newer — and `v` and `y` copy a selection to the clipboard over OSC 52,
+which is what makes a copy work over SSH. The transcript is a pane like the others —
+`Tab` reaches it, or `F3` from anywhere — and answers to the same copy keys, so a
+long answer is scrolled, searched and yanked with what the terminal already taught;
+`?` lists those keys rather than the editor's while a pane is being read.
+
+A menu bar across the top (`F9`) names every pane and the client's own commands as
+rows, each row drawn with the chord that runs it from anywhere — a pane's own keys
+are named in the pane, not in the bar — with **About** under Help: version, licence,
+field manual, what built it and which daemon it is talking to. The underlined letter
+in a title is the `Alt` chord that opens it, the way a menu bar has named its own
+keys since before a terminal could report a mouse; the bar and its lists also answer
+the mouse — click a title, slide along the bar to another, click a row to run it —
+while a shell still gets `Alt` and a letter as the two bytes it has always meant.
+`Ctrl-Left` and `Ctrl-Right` move the two dividers, and a mouse drag on either one
+does the same thing, so the tree, the editor and the sidebar are the widths the
+person reading them wants rather than the widths a constant guessed.
+
+`acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
+sidebar, command palette, which-key hints and the stats bar — with no daemon and
+nothing read from disk. Every command that is not built yet is tagged with the task
+that would build it, so the screen is also the work list; `docs/notes/tui-shell.md`
+is the layout and the decisions it is meant to settle. The desktop app renders the
+same world when it gets its shell, so the two cannot drift apart. Editor panes,
+inline diffs and the workspace picker are the editor phase (P6).

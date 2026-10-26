@@ -15,3 +15,15 @@ pub(crate) fn http(endpoint: &str, token: Option<&str>) -> (String, reqwest::Cli
     // naming it, rather than being silently redirected to a port.
     (endpoint.to_owned(), reqwest::Client::new())
 }
+
+/// A terminal attach over a socket: not a transport this platform has yet.
+///
+/// The named pipe is ADR 0004's Windows endpoint and is still unbuilt, so a path
+/// fails here by name. Failing is the honest answer: a pane that quietly attached
+/// to a port the daemon does not listen on would look like a broken terminal.
+pub(crate) async fn socket(endpoint: &str) -> std::io::Result<Box<dyn super::Duplex>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("{endpoint}: this platform has no socket transport; attach over http://"),
+    ))
+}

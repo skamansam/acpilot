@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "xtask", about = "Acpilot development tasks")]
@@ -27,6 +27,48 @@ enum Task {
     /// steps are written once — here — and cannot drift from what a developer
     /// runs locally.
     Probe,
+    /// Build a client, or the daemon it talks to, without running anything.
+    ///
+    /// `build` rather than `cargo build` for two reasons a newcomer pays for
+    /// once each: the TUI is a library inside the `acpilot` binary *and* spawns
+    /// `acpilotd` as a sibling, so building it means building two packages; and
+    /// the desktop app sits behind a `gui` feature that a plain `cargo run`
+    /// forgets. Both facts live here instead of in a wiki page.
+    Build {
+        /// What to build: `tui`, `gui`, `daemon`, or `all`.
+        #[arg(value_enum)]
+        app: App,
+        /// An optimised build. Off by default: a debug build is what a
+        /// development loop wants, and it is several times faster to produce.
+        #[arg(long)]
+        release: bool,
+    },
+    /// Run a client, or the daemon, in the foreground as a debug build.
+    ///
+    /// Arguments after `--` go to the program, so the flags are the program's
+    /// own: `cargo xtask run tui -- .` opens this directory, and
+    /// `cargo xtask run daemon -- --profile DIR` is the daemon's flag, not this
+    /// task's.
+    Run {
+        /// What to run: `tui`, `gui`, or `daemon`.
+        #[arg(value_enum)]
+        app: App,
+        /// Arguments for the program, verbatim.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run one app's tests.
+    ///
+    /// `test gui` is the reason this exists: the shell's tests need the `gui`
+    /// feature *and* gpui's headless `test-support` harness, a pair the
+    /// workspace gate deliberately does not compile. `test tui` and `test
+    /// daemon` are the same packages the build task names, so a change to one
+    /// frontend has a single command that covers it and its daemon.
+    Test {
+        /// What to test: `tui`, `gui`, `daemon`, or `all`.
+        #[arg(value_enum)]
+        app: App,
+    },
     /// Regenerate the theme data the documentation site renders.
     DocsData,
     /// Write the published `agents.toml` JSON Schema.
@@ -49,11 +91,207 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
+        Task::Build { app, release } => {
+            if build(app, release) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Task::Run { app, args } => run_app(app, &args),
+        Task::Test { app } => {
+            if test(app) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         Task::DocsData => run_docs_data(),
         Task::Schema => run_schema(),
         Task::Dev => not_yet("dev", "P3 owns the daemon and P11 the web dev server"),
         Task::WebBuild => not_yet("web-build", "P11 adds the web frontend"),
         Task::Dist => not_yet("dist", "P12 adds packaging"),
+    }
+}
+
+/// The programs a developer builds and runs, named the way they are talked
+/// about: the TUI, the desktop shell, the daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum App {
+    /// The terminal UI: the `acpilot` binary's `tui` subcommand.
+    Tui,
+    /// The desktop shell, which only compiles behind `--features gui`.
+    Gui,
+    /// The daemon on its own, for a client to attach to or a debugger to hold.
+    Daemon,
+    /// Both clients and the daemon they talk to. A build target, not something
+    /// to run: there is one foreground process per terminal.
+    All,
+}
+
+impl App {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Gui => "gui",
+            Self::Daemon => "daemon",
+            Self::All => "all",
+        }
+    }
+}
+
+/// The cargo invocations that produce `app`.
+///
+/// Two facts that a plain `cargo build -p acpilot` hides, and that cost a
+/// newcomer an afternoon each:
+///
+/// * the TUI is a library inside the `acpilot` binary, and `acpilot tui` starts
+///   `acpilotd` as a *sibling binary* rather than linking it, so building the
+///   TUI means building two packages — a client whose daemon is missing only
+///   finds that out at launch;
+/// * the desktop app is behind a `gui` feature that is off by default, so that
+///   the workspace gate never compiles a renderer or needs a graphics stack.
+fn build_commands(app: App) -> Vec<Vec<&'static str>> {
+    match app {
+        App::Tui => vec![vec!["-p", "acpilot-cli", "-p", "acpilotd"]],
+        App::Gui => vec![vec!["-p", "acpilot-gui", "--features", "gui"]],
+        App::Daemon => vec![vec!["-p", "acpilotd"]],
+        // One invocation per feature set: `--features gui` applies to every
+        // selected package, and the CLI does not have that feature.
+        App::All => vec![
+            vec!["-p", "acpilot-cli", "-p", "acpilotd"],
+            vec!["-p", "acpilot-gui", "--features", "gui"],
+        ],
+    }
+}
+
+/// Build every package `app` needs, stopping at the first failure.
+fn build(app: App, release: bool) -> bool {
+    for arguments in build_commands(app) {
+        let mut command = Command::new(env!("CARGO"));
+        command.arg("build").args(&arguments);
+        if release {
+            command.arg("--release");
+        }
+        if !run_step(&format!("build ({})", app.label()), command) {
+            warn_about_graphics(app);
+            return false;
+        }
+    }
+    true
+}
+
+/// The cargo invocations that test `app`.
+///
+/// `gui` is the one that is not the workspace gate: the shell's tests need the
+/// `gui` feature and gpui's headless `test-support` harness, a pair the plain
+/// gate does not compile on purpose. The TUI's own tests live in its crate, not
+/// in the `acpilot` binary that links it, so the TUI set names that crate too.
+fn test_commands(app: App) -> Vec<Vec<&'static str>> {
+    match app {
+        App::Tui => vec![vec![
+            "-p",
+            "acpilot-cli",
+            "-p",
+            "acpilot-tui",
+            "-p",
+            "acpilotd",
+        ]],
+        // `--no-fail-fast` for the same reason the workspace run has it: a
+        // second failing test is another thing to fix in the same edit, and
+        // CI's gui job has always run this way.
+        App::Gui => vec![vec![
+            "-p",
+            "acpilot-gui",
+            "--features",
+            "gui,gui-tests",
+            "--no-fail-fast",
+        ]],
+        App::Daemon => vec![vec!["-p", "acpilotd"]],
+        // The workspace first — the same run the gate does — and then the shell,
+        // which the gate left out.
+        App::All => vec![
+            vec!["--workspace", "--no-fail-fast"],
+            vec![
+                "-p",
+                "acpilot-gui",
+                "--features",
+                "gui,gui-tests",
+                "--no-fail-fast",
+            ],
+        ],
+    }
+}
+
+fn test(app: App) -> bool {
+    for arguments in test_commands(app) {
+        let mut command = Command::new(env!("CARGO"));
+        command.args(["nextest", "run"]).args(&arguments);
+        if !run_step(&format!("test ({})", app.label()), command) {
+            warn_about_graphics(app);
+            return false;
+        }
+    }
+    true
+}
+
+/// Say where gpui's Linux libraries come from when a build or a test links it.
+///
+/// The failure is almost never the code: gpui links a dev symlink that is its
+/// own package on Debian/Ubuntu, and `unable to find library -lxkbcommon-x11`
+/// does not say where to get it. The list is in `crates/acpilot-gui/Cargo.toml`
+/// and ADR 0009 §5; naming it here is the afternoon it saves.
+fn warn_about_graphics(app: App) {
+    if cfg!(target_os = "linux") && matches!(app, App::Gui | App::All) {
+        eprintln!(
+            "==> the desktop shell needs gpui's system libraries — on Debian/Ubuntu: \
+             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libwayland-dev \
+             libfreetype-dev libfontconfig1-dev pkg-config clang"
+        );
+    }
+}
+
+/// What `cargo run` needs for `app`: the package, its features, and the
+/// subcommand that reaches the program when the package ships several.
+///
+/// [`None`] for [`App::All`], which is a build target.
+fn run_package(app: App) -> Option<&'static [&'static str]> {
+    match app {
+        App::Tui => Some(&["-p", "acpilot-cli"]),
+        App::Gui => Some(&["-p", "acpilot-gui", "--features", "gui"]),
+        App::Daemon => Some(&["-p", "acpilotd"]),
+        App::All => None,
+    }
+}
+
+fn run_entry(app: App) -> &'static [&'static str] {
+    match app {
+        App::Tui => &["tui"],
+        App::Gui | App::Daemon | App::All => &[],
+    }
+}
+
+fn run_app(app: App, args: &[String]) -> ExitCode {
+    let Some(package) = run_package(app) else {
+        eprintln!("xtask run: name one of tui, gui or daemon — `all` is a build target");
+        return ExitCode::from(2);
+    };
+
+    // Built before `cargo run` rather than left to it: the TUI starts `acpilotd`
+    // as the sibling of its own executable, and running the client alone would
+    // start a daemon only if one had been built at some point before. Cargo
+    // makes the second build of the same target a no-op.
+    if !build(app, false) {
+        return ExitCode::FAILURE;
+    }
+
+    let mut command = Command::new(env!("CARGO"));
+    command.arg("run").args(package).arg("--");
+    command.args(run_entry(app)).args(args);
+    if run_step(&format!("run ({})", app.label()), command) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -379,4 +617,74 @@ fn run_schema() -> ExitCode {
 fn not_yet(name: &str, owner: &str) -> ExitCode {
     eprintln!("xtask {name}: not implemented yet — {owner}");
     ExitCode::from(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn building_the_tui_builds_the_daemon_it_spawns() {
+        // `acpilot tui` looks for `acpilotd` beside its own executable, so a TUI
+        // build that left the daemon behind would launch and then fail.
+        assert_eq!(
+            build_commands(App::Tui),
+            vec![vec!["-p", "acpilot-cli", "-p", "acpilotd"]]
+        );
+    }
+
+    #[test]
+    fn the_gui_is_built_and_run_behind_its_feature() {
+        assert_eq!(
+            build_commands(App::Gui),
+            vec![vec!["-p", "acpilot-gui", "--features", "gui"]]
+        );
+        assert_eq!(
+            run_package(App::Gui),
+            Some(&["-p", "acpilot-gui", "--features", "gui"][..])
+        );
+    }
+
+    #[test]
+    fn all_builds_both_clients_and_is_not_something_to_run() {
+        assert_eq!(build_commands(App::All).len(), 2);
+        assert_eq!(run_package(App::All), None);
+    }
+
+    #[test]
+    fn testing_the_gui_asks_for_the_harness_the_gate_leaves_out() {
+        assert_eq!(
+            test_commands(App::Gui),
+            vec![vec![
+                "-p",
+                "acpilot-gui",
+                "--features",
+                "gui,gui-tests",
+                "--no-fail-fast",
+            ]]
+        );
+        // `all` is the gate plus the shell: two runs, in that order.
+        let all = test_commands(App::All);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0], vec!["--workspace", "--no-fail-fast"]);
+        assert!(all[1].contains(&"gui,gui-tests"));
+    }
+
+    #[test]
+    fn testing_the_tui_covers_its_own_crate_and_the_daemon() {
+        let commands = test_commands(App::Tui);
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains(&"acpilot-tui"));
+        assert!(commands[0].contains(&"acpilotd"));
+    }
+
+    #[test]
+    fn running_the_tui_asks_the_cli_for_its_tui_subcommand() {
+        assert_eq!(run_package(App::Tui), Some(&["-p", "acpilot-cli"][..]));
+        assert_eq!(run_entry(App::Tui), &["tui"]);
+        // The daemon and the GUI are their own binaries; nothing goes between
+        // `--` and the caller's arguments.
+        assert!(run_entry(App::Daemon).is_empty());
+        assert!(run_entry(App::Gui).is_empty());
+    }
 }

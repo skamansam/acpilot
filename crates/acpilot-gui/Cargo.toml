@@ -41,6 +41,9 @@ required-features = ["gui"]
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-profile = { workspace = true }
+# The preferences the launch reads: which theme this surface draws with is a
+# protocol type, shared with the daemon's settings cascade.
+acpilot-proto = { workspace = true }
 # `open_window` hands gpui's error back rather than panicking: a window that
 # cannot be created is a launch to report, not a process to abort.
 anyhow = { workspace = true }

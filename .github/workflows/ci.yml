@@ -158,8 +158,13 @@ jobs:
       # It is not in the default feature set because it compiles gpui's
       # `test-support` machinery, which the plain workspace gate should not pay
       # for.
+      #
+      # The command is the task rather than the raw `nextest` line so that a
+      # developer's `cargo xtask test gui` and this job cannot drift apart — the
+      # task is where the two features are named once. `xtask test all` is the
+      # same run after the workspace gate, which is what the local session does.
       - name: Test (gui feature, with the window harness)
-        run: cargo nextest run -p acpilot-gui --features gui,gui-tests --no-fail-fast
+        run: cargo xtask test gui
 
   # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
   # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into

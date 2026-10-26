@@ -20,6 +20,10 @@ thiserror = { workspace = true }
 # A current-thread runtime is enough for a handful of calls and one stream, and
 # `ensure_blocking` is what a synchronous CLI entry point needs.
 tokio = { workspace = true }
+# A terminal attach is the one route that upgrades, so the client needs the other
+# half of the WebSocket. The feature list is the workspace's: handshake and stream,
+# and no TLS.
+tokio-tungstenite = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

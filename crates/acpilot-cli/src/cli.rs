@@ -10,7 +10,9 @@ use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
 use acpilot_profile::Profile;
 use acpilot_profile::project::Root;
+use acpilot_profile::settings::Settings;
 use acpilot_proto::API_PREFIX;
+use acpilot_proto::profile::ThemeSurface;
 use clap::{Args, Parser, Subcommand};
 
 use crate::ext::{self, Paths};
@@ -102,6 +104,15 @@ pub enum Command {
         /// somewhere this machine's runtime directory cannot describe.
         #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
         token: Option<String>,
+        /// Draw the interface on seeded data, with no daemon and nothing read from
+        /// disk.
+        ///
+        /// The design pass: every pane is filled from `acpilot-demo`, and every
+        /// action that is not built answers with the task that would build it. It
+        /// is how the layout is argued about before the backend for it exists, and
+        /// it is the same world the desktop app draws when it gets its shell.
+        #[arg(long)]
+        demo: bool,
     },
 }
 
@@ -264,7 +275,8 @@ pub fn run(cli: Cli) -> u8 {
             profile,
             workspace,
             token,
-        }) => run_tui(path, api_url, no_spawn, profile, workspace, token),
+            demo,
+        }) => run_tui(path, api_url, no_spawn, profile, workspace, token, demo),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -291,7 +303,36 @@ fn run_tui(
     profile: Option<PathBuf>,
     workspace: Option<PathBuf>,
     token: Option<String>,
+    demo: bool,
 ) -> u8 {
+    // The design pass comes first, before anything is resolved: it has no daemon
+    // to start, no project to find and no profile to read, and a flag that still
+    // touched the disk would be a flag that fails on a machine with neither.
+    if demo {
+        // The design pass reads nothing from disk, themes included: it draws in the
+        // built-in default, which is the theme a person who set nothing has.
+        let theme = match Settings::load(None, None) {
+            Ok(settings) => match tui_theme(&settings) {
+                Ok(theme) => theme,
+                Err(message) => {
+                    eprintln!("acpilot tui: {message}");
+                    return exit::FAILURE;
+                }
+            },
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                return exit::FAILURE;
+            }
+        };
+        return match acpilot_tui::run_demo(acpilot_demo::demo(), theme) {
+            Ok(()) => exit::SUCCESS,
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                exit::FAILURE
+            }
+        };
+    }
+
     // What the person named, or where they are: the workspace and the project are
     // implied by the argument rather than by two flags that have to agree with it.
     let root = match Root::resolve(path.as_deref()) {
@@ -302,12 +343,29 @@ fn run_tui(
         }
     };
     let workspace = workspace.unwrap_or_else(|| root.root().to_path_buf());
+    // The settings are read once, here: the profile they name and the theme they
+    // name come from the same cascade, and reading it twice is how two keys end up
+    // resolved from two different files.
+    let settings = match root.settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let theme = match tui_theme(&settings) {
+        Ok(theme) => theme,
+        Err(message) => {
+            eprintln!("acpilot tui: {message}");
+            return exit::FAILURE;
+        }
+    };
     // The profile is the project's, unless the caller named one. A project that
     // names none means the daemon's default, which is a profile nobody has to
     // spell out on the command line.
     let profile = match profile {
         Some(directory) => Some(directory),
-        None => match implied_profile(&root) {
+        None => match implied_profile(&settings) {
             Ok(profile) => profile,
             Err(code) => return code,
         },
@@ -356,7 +414,7 @@ fn run_tui(
         }
     }
 
-    match acpilot_tui::run(&running.endpoint, token.as_deref()) {
+    match acpilot_tui::run(&running.endpoint, token.as_deref(), theme) {
         Ok(()) => exit::SUCCESS,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
@@ -365,21 +423,37 @@ fn run_tui(
     }
 }
 
+/// The theme the terminal draws with, resolved from the settings' id.
+///
+/// The same extension the desktop app and the browser use, resolved by the same
+/// code: `[preferences] theme_tui` overrides `theme`, and a project's
+/// `.acpilot/config.toml` overrides either for that project alone. A theme that is
+/// not installed is refused by name rather than drawn as the terminal's own
+/// colours — a setting that silently does nothing is worse than a message.
+fn tui_theme(settings: &Settings) -> Result<acpilot_tui::Theme, String> {
+    let id = settings.preferences.theme_for(ThemeSurface::Tui);
+    let extensions = acpilot_extensions::builtin::load_all().map_err(|errors| {
+        let mut message = String::from("the built-in extensions do not load:");
+        for error in errors {
+            message.push_str("\n  ");
+            message.push_str(&error.to_string());
+        }
+        message
+    })?;
+    acpilot_extensions::ThemeRegistry::new(&extensions)
+        .complete(id)
+        .map(|resolved| acpilot_tui::Theme::from_resolved(&resolved))
+        .map_err(|error| error.to_string())
+}
+
 /// The profile directory a root's settings name, when they name one.
 ///
 /// A project that says `profile = "work"` means `<config>/profiles/work`. A name
 /// that is not there is refused rather than ignored: starting a daemon on the
 /// default profile because a name had a typo is how a work prompt goes out under a
 /// personal key.
-fn implied_profile(root: &Root) -> Result<Option<PathBuf>, u8> {
-    let settings = match root.settings() {
-        Ok(settings) => settings,
-        Err(error) => {
-            eprintln!("acpilot tui: {error}");
-            return Err(exit::FAILURE);
-        }
-    };
-    let Some(name) = settings.profile else {
+fn implied_profile(settings: &Settings) -> Result<Option<PathBuf>, u8> {
+    let Some(name) = settings.profile.clone() else {
         return Ok(None);
     };
     match Profile::named(&name) {

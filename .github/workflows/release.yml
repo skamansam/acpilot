@@ -173,6 +173,18 @@ jobs:
     needs: [version, build]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    # Publishing a release needs `contents: write`, which the workflow already
+    # grants. Asking the Docs workflow to run needs `actions: write` as well: the
+    # dispatch is an API call on the Actions resource, and the inherited token
+    # could not make it — which is why the last step of every release failed with
+    # `gh` exit 1 after the release itself had already been published.
+    #
+    # `workflow_dispatch` is the one trigger the recursive-workflow rule exempts,
+    # so the token that dispatches does start the run; the missing permission was
+    # the whole failure.
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:

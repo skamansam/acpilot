@@ -21,6 +21,8 @@
 
 use std::path::PathBuf;
 
+use acpilot_profile::project::Root;
+use acpilot_proto::profile::ThemeSurface;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -86,14 +88,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let state = acpilotd::state_for(cli.profile.as_deref(), &cli.workspace)?
+    let mut state = acpilotd::state_for(cli.profile.as_deref(), &cli.workspace)?
         // Conversations outlive the process that streamed them, which is the point
         // of a transcript: a client that reconnects after a restart can read what
         // happened. Where that lives is the data directory, not the socket's.
         .with_transcripts(acpilotd::transcript_dir());
+    // The browser is the third surface reading the project's theme setting. It is
+    // resolved here, once, from the same cascade the terminal and the window use:
+    // a page with its own palette would be a fourth place a colour is written down.
+    if let Some(palette) = web_palette(&cli.workspace) {
+        state = state.with_web_palette(palette);
+    }
     // A terminal is a process; one an agent opened and never released has to end
     // on its own, because `terminal/release` is optional in ACP.
     state.reap_terminals_on_a_timer();
+    // And one an agent opened should be watchable: the same PTY, seen through a
+    // pane a client can attach to.
+    state.mirror_agent_terminals();
 
     let target = acpilotd::resolve_target(cli.addr, cli.socket)
         .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidInput, why))?;
@@ -102,4 +113,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     acpilotd::serve(acpilotd::router_with(state), target, acpilotd::shutdown()).await?;
 
     Ok(())
+}
+
+/// The palette the web page is drawn with, from the workspace's settings.
+///
+/// `None` leaves the page's own colours, and every failure is a warning rather than
+/// a startup error: a theme that is not installed is a bad setting, and a daemon
+/// that refused to serve the API because a browser page could not be coloured would
+/// be a worse trade than a plain page.
+fn web_palette(workspace: &std::path::Path) -> Option<acpilot_extensions::Palette> {
+    let root = match Root::resolve(Some(workspace)) {
+        Ok(root) => root,
+        Err(error) => {
+            tracing::warn!(%error, "the workspace does not resolve, so the page keeps its colours");
+            return None;
+        }
+    };
+    let settings = match root.settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(%error, "the settings do not load, so the page keeps its colours");
+            return None;
+        }
+    };
+    let id = settings.preferences.theme_for(ThemeSurface::Web);
+    let extensions = match acpilot_extensions::builtin::load_all() {
+        Ok(extensions) => extensions,
+        Err(errors) => {
+            for error in errors {
+                tracing::warn!(%error, "a built-in extension does not load");
+            }
+            return None;
+        }
+    };
+    match acpilot_extensions::ThemeRegistry::new(&extensions).complete(id) {
+        Ok(theme) => Some(theme.palette),
+        Err(error) => {
+            tracing::warn!(%error, theme = id, "the web theme does not resolve");
+            None
+        }
+    }
 }

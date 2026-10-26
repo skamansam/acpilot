@@ -24,6 +24,10 @@ acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
 acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
+# The seeded world the interface is designed against. Data only, in protocol types,
+# so the terminal and the desktop app render one copy of it instead of two that
+# drift apart in the first week (P6-3, P10).
+acpilot-demo = { version = "0.1.0", path = "crates/acpilot-demo" }
 # The page a browser lands on when it is pointed at the daemon. Embedded, so the
 # daemon serves its own frontend and a release tarball has no asset directory to
 # lose.
@@ -54,6 +58,11 @@ rustix = { version = "1", features = ["process"] }
 # `ws` is the terminal attach transport: a terminal is bytes in both directions,
 # and a WebSocket is the only route in the API that upgrades rather than answers.
 axum = { version = "0.8", features = ["ws"] }
+# The client half of that upgrade: `handshake` speaks it over a stream the client
+# already knows how to open (a unix socket or loopback TCP), `stream` is the
+# frames. No TLS feature — the daemon serves none, and an `https://` endpoint is
+# refused by name rather than spoken to in the clear.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "stream"] }
 axum-extra = "0.12"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "compression-full", "cors"] }
@@ -69,7 +78,8 @@ eventsource-stream = "0.2"
 # tui
 ratatui = "0.30"
 crossterm = "0.29"
-tui-term = "0.3"
+# The screen behind a terminal pane, parsed here rather than by a widget: the pane
+# also sends keystrokes and resizes back, so it owns the attach, not just the grid.
 vt100 = "0.18"
 
 # gui

@@ -21,6 +21,7 @@
 
 pub mod daemon;
 mod platform;
+pub mod terminal;
 
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
@@ -28,6 +29,7 @@ use acpilot_proto::permission::{PermissionDecision, PermissionOption, Permission
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
+use acpilot_proto::terminal::TerminalSummary;
 use eventsource_stream::Eventsource;
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -70,6 +72,13 @@ pub enum ClientError {
     /// An event stream failed, or delivered a frame that did not parse.
     #[error("the event stream failed: {0}")]
     Stream(String),
+
+    /// A terminal attach failed: it could not be opened, or the socket broke.
+    ///
+    /// Separate from [`Self::Stream`] because a terminal is not an event feed a
+    /// caller can resync: a pane that lost its socket has to attach again.
+    #[error("the terminal failed: {0}")]
+    Terminal(String),
 }
 
 impl ClientError {
@@ -216,6 +225,20 @@ impl Client {
     /// `GET /v1/sessions`.
     pub async fn sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
         self.get("/v1/sessions").await
+    }
+
+    /// `GET /v1/terminals?session=`.
+    ///
+    /// `None` lists every terminal the daemon owns, which is what a debugger
+    /// wants; a pane asks for the ones its session opened.
+    pub async fn terminals(
+        &self,
+        session: Option<&str>,
+    ) -> Result<Vec<TerminalSummary>, ClientError> {
+        match session {
+            Some(id) => self.get(&format!("/v1/terminals?session={id}")).await,
+            None => self.get("/v1/terminals").await,
+        }
     }
 
     /// `GET /v1/sessions/{id}`.

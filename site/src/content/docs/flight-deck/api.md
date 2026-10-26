@@ -52,6 +52,9 @@ way, output the other — and text frames are control: `resize` from the client,
 screen follow, and those bytes are the escape sequences that redraw what the
 terminal already shows, so attaching late is the normal case rather than a race.
 Closing the socket leaves the process running: a pane is a view, not an owner.
+The same route serves the terminals an agent opens — they are listed under an
+`agent-` id, over the PTY the agent already has, so a person can watch and type
+into the shell an agent started without a second process behind it.
 
 ## Planned
 

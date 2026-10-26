@@ -7,11 +7,22 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The product's version, so About names the build the tarball names.
+acpilot-core = { workspace = true }
 acpilot-client = { workspace = true }
+# The design pass's seeded world. Shared with the desktop app (P10) so both draw
+# the same sessions, tree and transcript, and so a layout decision is one decision.
+acpilot-demo = { workspace = true }
+# The theme tokens the three surfaces share: the terminal is one of them, so it
+# reads the same token file rather than keeping a private palette.
+acpilot-extensions = { workspace = true }
 acpilot-proto = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 ratatui = { workspace = true }
+# The screen a pane draws. The daemon sends bytes, not cells: a client that
+# rendered raw escape sequences would print `ESC[1;31m` instead of red text.
+vt100 = { workspace = true }
 # Session events carry their payload as JSON, because the ACP updates they come
 # from are not one shape; reading them is the app's job, not a typed bypass.
 serde_json = { workspace = true }

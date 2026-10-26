@@ -30,6 +30,9 @@ acpilot-proto = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }
+# The web page is the third surface drawn from the same theme tokens: the daemon
+# resolves the palette once at startup rather than serving a page with its own.
+acpilot-extensions = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
@@ -53,6 +56,9 @@ utoipa = { workspace = true }
 vt100 = { workspace = true }
 
 [dev-dependencies]
+# A pane over an agent's terminal is tested by asking the agent side for one, so
+# this crate needs the protocol's request type — tests only: no route speaks ACP.
+agent-client-protocol = { workspace = true }
 # The socket test talks to the daemon the way a client does, over the transport a
 # client uses, rather than through `oneshot` on the router.
 acpilot-client = { workspace = true }

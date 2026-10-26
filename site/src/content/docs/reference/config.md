@@ -39,19 +39,42 @@ answer.
 ```toml
 # ~/.config/acpilot/config.toml
 schema_version = 1
-active_profile = "work"
+profile = "work"                    # the profile a launch runs under, when it names one
 
-[daemon]
-addr = "127.0.0.1:7777"
-log = "info"
-
-[editor]
+[preferences]
 tab_width = 2
 insert_spaces = true
 format_on_save = true
+trim_trailing_whitespace = true
 wrap = false
 theme = "acpilot.night-flight"
+diagnostics_min_severity = "warning"
 ```
+
+The daemon reads its own flags and `ACPILOT_ADDR` today; a `[daemon]` table in
+this file is the profiles phase's (P4) and is not read yet.
+
+### Themes
+
+A theme is an extension, and the same one draws the terminal UI, the desktop app
+and the browser the daemon serves: one set of tokens, so "muted text" cannot mean
+three greys. `theme` is the answer for every surface that does not name its own;
+set a per-surface key only when one of them should differ — a light window beside
+a dark terminal is a preference, not a mistake.
+
+```toml
+[preferences]
+theme = "acpilot.night-flight"      # every surface
+# theme_tui = "acpilot.paper"       # just the terminal
+# theme_gui = "acpilot.paper"       # just the desktop app
+# theme_web = "acpilot.paper"       # just the browser page
+```
+
+Any theme a loaded extension provides works here. A project's
+`.acpilot/config.toml` may override any of the four keys on its own, so a client
+repository can be light while everything else stays night flight. An id that no
+loaded extension provides is refused by name rather than drawn in default
+colours.
 
 ## Project config
 

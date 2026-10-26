@@ -11,60 +11,14 @@
 //! name, at load, turns that into one line of error text.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use acpilot_extensions::ThemeAppearance;
-use acpilot_extensions::loader::{Contribution, LoadedExtension};
-use acpilot_extensions::theme::{Palette, Theme, UiToken};
+use acpilot_extensions::loader::LoadedExtension;
+use acpilot_extensions::theme::{Palette, ThemeRegistry, UiToken};
 
-/// Why a theme could not be handed to the window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ThemeError {
-    /// No loaded extension contributes a theme with that id.
-    Unknown {
-        /// The id that was asked for.
-        id: String,
-    },
-    /// A theme inherits from one that is not loaded.
-    MissingBase {
-        /// The base id that could not be found.
-        id: String,
-        /// The theme that named it.
-        required_by: String,
-    },
-    /// `extends` leads back to a theme already in the chain.
-    Cycle {
-        /// The id that closed the loop.
-        id: String,
-    },
-    /// The palette does not set every UI token.
-    MissingTokens {
-        /// The theme as resolved, for the message.
-        id: String,
-        /// The tokens it left out.
-        tokens: Vec<&'static str>,
-    },
-}
-
-impl fmt::Display for ThemeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown { id } => write!(f, "no loaded extension provides the theme {id:?}"),
-            Self::MissingBase { id, required_by } => write!(
-                f,
-                "theme {required_by:?} inherits from {id:?}, which is not loaded"
-            ),
-            Self::Cycle { id } => write!(f, "theme inheritance loops back to {id:?}"),
-            Self::MissingTokens { id, tokens } => write!(
-                f,
-                "theme {id:?} does not set {}; a surface would have nothing to draw with",
-                tokens.join(", ")
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ThemeError {}
+/// The shared [`acpilot_extensions::theme::ThemeError`], so a surface that already
+/// depends on this crate does not need a second import to say what went wrong.
+pub use acpilot_extensions::theme::ThemeError;
 
 /// A complete palette in the form gpui wants.
 ///
@@ -119,61 +73,18 @@ impl GuiTheme {
 
     /// Find a theme by id among loaded extensions and resolve its inheritance.
     ///
-    /// Resolution walks `extends` to a root and folds back down, so a pack can
-    /// ship a three-line theme over one of ours without copying twelve tokens.
+    /// The walk and the hole check are the shared ones
+    /// ([`ThemeRegistry::complete`]): a pack can ship a three-line theme over one
+    /// of ours without copying twelve tokens, and the terminal, the window and the
+    /// browser all accept or refuse it for the same reasons.
     pub fn from_extensions(extensions: &[LoadedExtension], id: &str) -> Result<Self, ThemeError> {
-        let themes: Vec<(&Theme, &LoadedExtension)> = extensions
-            .iter()
-            .flat_map(|extension| {
-                extension
-                    .contributions
-                    .iter()
-                    .filter_map(move |contribution| match contribution {
-                        Contribution::Theme(theme) => Some((theme.as_ref(), extension)),
-                        _ => None,
-                    })
-            })
-            .collect();
-
-        let (theme, owner) = themes
-            .iter()
-            .find(|(theme, _)| theme.id == id)
-            .copied()
-            .ok_or_else(|| ThemeError::Unknown { id: id.to_owned() })?;
-
-        // Requests come from a file, so a cycle is a manifest bug the user can
-        // write; walking it away with a depth limit would be a hang instead.
-        let mut chain = vec![theme];
-        let mut seen = vec![theme.id.as_str()];
-        let mut cursor = theme;
-        while let Some(base_id) = cursor.extends.as_deref() {
-            if seen.contains(&base_id) {
-                return Err(ThemeError::Cycle {
-                    id: base_id.to_owned(),
-                });
-            }
-            seen.push(base_id);
-            let (base, _) = themes
-                .iter()
-                .find(|(theme, _)| theme.id == base_id)
-                .copied()
-                .ok_or_else(|| ThemeError::MissingBase {
-                    id: base_id.to_owned(),
-                    required_by: cursor.id.clone(),
-                })?;
-            chain.push(base);
-            cursor = base;
-        }
-
-        // Root first: each layer overrides the one before it.
-        let mut palette = Palette::default();
-        for layer in chain.iter().rev() {
-            palette = layer
-                .resolve(Some(&palette), &owner.manifest.id, owner.built_in)
-                .palette;
-        }
-
-        Self::new(&theme.id, &theme.name, theme.appearance, &palette)
+        let resolved = ThemeRegistry::new(extensions).complete(id)?;
+        Self::new(
+            resolved.id,
+            resolved.name,
+            resolved.appearance,
+            &resolved.palette,
+        )
     }
 
     /// The theme's namespaced id.
@@ -270,11 +181,13 @@ mod tests {
     #[test]
     fn a_palette_with_a_hole_names_every_missing_token() {
         let extensions = built_ins();
-        let theme: &Theme = extensions
+        let theme = extensions
             .iter()
             .flat_map(|extension| &extension.contributions)
             .find_map(|contribution| match contribution {
-                Contribution::Theme(theme) if theme.id == "acpilot.night-flight" => {
+                acpilot_extensions::loader::Contribution::Theme(theme)
+                    if theme.id == "acpilot.night-flight" =>
+                {
                     Some(theme.as_ref())
                 }
                 _ => None,
@@ -308,7 +221,7 @@ mod tests {
                 extension
                     .contributions
                     .iter()
-                    .any(|contribution| matches!(contribution, Contribution::Theme(theme) if theme.id == "acpilot.night-flight"))
+                    .any(|contribution| matches!(contribution, acpilot_extensions::loader::Contribution::Theme(theme) if theme.id == "acpilot.night-flight"))
             })
             .expect("night-flight ships in a built-in");
 

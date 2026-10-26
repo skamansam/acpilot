@@ -127,6 +127,21 @@ impl Sessions {
             .cloned()
     }
 
+    /// The id a client holds for the conversation the agent calls `acp_id`.
+    ///
+    /// A scan rather than a second map: a daemon has one session per open
+    /// conversation, and a second index would be a second thing to keep in step
+    /// with creation, removal and a failed start.
+    #[must_use]
+    pub fn id_for_acp(&self, acp_id: &str) -> Option<SessionId> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .find(|record| record.answers_to(acp_id))
+            .map(|record| record.id.clone())
+    }
+
     /// Forget a session and end its agent.
     pub fn remove(&self, id: &str) -> bool {
         let removed = self
@@ -163,6 +178,12 @@ pub struct Record {
     log: Mutex<Log>,
     /// The turn in flight, so a cancel can say which one it stopped.
     turn: Mutex<Option<String>>,
+    /// What the agent called this session, once `session/new` returned.
+    ///
+    /// The idle may not echo the id we proposed — ACP lets the agent choose — so
+    /// anything keyed by the agent's session id (its terminals, its permission
+    /// requests) has to be mapped back to the id a client holds.
+    acp_id: Mutex<Option<String>>,
     /// The append-only file this session's events and grants are written to.
     ///
     /// `None` when the daemon was given no transcript directory (a test, or an
@@ -257,6 +278,7 @@ impl Record {
                     live: broadcast::channel(REPLAY_CAPACITY).0,
                 }),
                 turn: Mutex::new(None),
+                acp_id: Mutex::new(None),
                 transcript,
                 transcript_warned: AtomicBool::new(false),
                 broker,
@@ -271,6 +293,20 @@ impl Record {
     #[must_use]
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Remember what the agent called this session.
+    fn set_acp_id(&self, acp_id: Option<&str>) {
+        *self.acp_id.lock().unwrap_or_else(PoisonError::into_inner) = acp_id.map(str::to_owned);
+    }
+
+    /// Whether the agent knows this conversation by `acp_id`.
+    fn answers_to(&self, acp_id: &str) -> bool {
+        self.acp_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_deref()
+            == Some(acp_id)
     }
 
     /// What the API reports for this session.
@@ -512,6 +548,9 @@ pub async fn create(
     if let Some(title) = &request.title {
         record.title_from(title);
     }
+    // The agent may have chosen its own name for the conversation; a terminal it
+    // opens is keyed by that, so the pane store needs the way back.
+    record.set_acp_id(session.acp_session_id());
 
     // The session is moved onto its own thread before the route can return, so
     // no client ever sees a session id that has nobody listening on it.

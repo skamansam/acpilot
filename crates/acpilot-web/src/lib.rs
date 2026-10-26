@@ -14,6 +14,8 @@
 //! and the session list once it has one, and offers About and Quit. The editor,
 //! transcript and terminal are the rest of the web phase (P11-3 – P11-5).
 
+use acpilot_extensions::theme::{Palette, UiToken};
+
 /// The page, with `{{version}}` still in it.
 pub const PAGE: &str = include_str!("../assets/index.html");
 
@@ -28,6 +30,62 @@ pub const PAGE: &str = include_str!("../assets/index.html");
 pub fn page(version: &str) -> String {
     PAGE.replace("{{version}}", version)
 }
+
+/// The page, themed with a resolved palette.
+///
+/// The browser is the third surface reading the same theme extension, so the
+/// variables its stylesheet is written against come from the token file rather
+/// than from the colours someone typed into the page. The variables it does not
+/// have — a warning colour, a brighter accent — are mapped onto the ones it does,
+/// because a page that grew a second palette would be a fourth place a colour is
+/// written down.
+///
+/// A palette with holes leaves the page's own colours alone: a browser with no
+/// `--text` is a page nobody can read, and the daemon has no business shipping that.
+#[must_use]
+pub fn themed_page(version: &str, palette: &Palette) -> String {
+    let Some(vars) = variables(palette) else {
+        return page(version);
+    };
+    page(version).replace(DEFAULT_VARS, &vars)
+}
+
+/// The variables the stylesheet is written against, in the page's order.
+///
+/// Kept as a string rather than a struct because it is a stylesheet fragment: the
+/// names are the contract with the CSS, and a test reads them back out.
+fn variables(palette: &Palette) -> Option<String> {
+    let token = |token: UiToken| palette.ui(token).map(|color| color.to_string());
+    let bg = token(UiToken::Bg)?;
+    let vars = format!(
+        ":root{{color-scheme:{};--bg: {};--panel: {};--border: {};--text: {};--muted: {};\
+         --accent: {};--on-accent: {};--danger: {};--ok: {}}}",
+        if palette
+            .ui(UiToken::Bg)
+            .is_some_and(|bg| bg.relative_luminance() < 0.5)
+        {
+            "dark"
+        } else {
+            "light"
+        },
+        bg,
+        token(UiToken::BgPanel)?,
+        token(UiToken::Border)?,
+        token(UiToken::Text)?,
+        token(UiToken::TextMuted)?,
+        token(UiToken::Accent)?,
+        token(UiToken::Bg)?,
+        token(UiToken::Danger)?,
+        token(UiToken::Success)?,
+    );
+    Some(vars)
+}
+
+/// The page's own `:root` block, which a theme replaces.
+///
+/// Looked up rather than copied: the file is the truth, and this constant is how
+/// the replacement finds it.
+const DEFAULT_VARS: &str = ":root{color-scheme:dark;--bg: #0b1220;--panel: #131c2e;--border: #223049;--text: #e6ecf7;--muted: #93a4c0;--accent: #5aa9ff;--on-accent: #08101d;--danger: #ff8a80;--ok: #7ee0a3}";
 
 #[cfg(test)]
 mod tests {
@@ -65,6 +123,42 @@ mod tests {
         assert!(
             html.contains("Authorization"),
             "the token travels in a header, never a query string"
+        );
+    }
+
+    fn night_flight() -> acpilot_extensions::Palette {
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
+        acpilot_extensions::ThemeRegistry::new(&extensions)
+            .complete("acpilot.night-flight")
+            .expect("night flight resolves")
+            .palette
+    }
+
+    #[test]
+    fn a_themed_page_carries_the_token_values_not_its_own_palette() {
+        let html = themed_page("0.0.1", &night_flight());
+        assert!(html.contains("--bg: #070d18"), "the theme's background");
+        assert!(html.contains("--accent: #f7c65c"), "and its accent");
+        assert!(
+            !html.contains("--bg: #0b1220"),
+            "the page's hardcoded palette is gone, not painted over"
+        );
+        assert_eq!(
+            html.matches("color-scheme:").count(),
+            1,
+            "one declaration, so the browser has nothing to arbitrate"
+        );
+    }
+
+    #[test]
+    fn a_palette_with_a_hole_leaves_the_page_readable() {
+        let mut palette = night_flight();
+        palette.ui.remove(&acpilot_extensions::UiToken::Text);
+        let html = themed_page("0.0.1", &palette);
+        assert_eq!(
+            html,
+            page("0.0.1"),
+            "the page's own colours are the fallback"
         );
     }
 

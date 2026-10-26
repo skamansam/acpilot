@@ -45,9 +45,13 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     profile: Vec<std::path::PathBuf>,
 
-    /// Theme id to draw with, from any loaded extension.
-    #[arg(long, value_name = "ID", default_value = "acpilot.night-flight")]
-    theme: String,
+    /// Theme id to draw with, overriding the one the settings name.
+    ///
+    /// The theme is a setting: `[preferences] theme_gui` in the user's config, or
+    /// in the project's `.acpilot/config.toml`, and this flag is only for looking
+    /// at another one without editing either.
+    #[arg(long, value_name = "ID")]
+    theme: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -74,7 +78,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let theme = match GuiTheme::from_extensions(&extensions, &cli.theme) {
+    // The settings are the ground truth: the theme is a preference, and this flag
+    // is the override. A launch whose settings do not parse should say so rather
+    // than draw in a theme nobody chose.
+    let theme_id = match cli.theme.clone() {
+        Some(id) => id,
+        None => match profiles::theme_id(cli.path.as_deref()) {
+            Ok(id) => id,
+            Err(error) => {
+                eprintln!("acpilot-gui: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let theme = match GuiTheme::from_extensions(&extensions, &theme_id) {
         Ok(theme) => theme,
         Err(error) => {
             eprintln!("acpilot-gui: theme: {error}");

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use acpilot_profile::project::{PROJECT_DIR, PROJECT_FILE, Root};
 use acpilot_profile::settings::SettingsError;
 use acpilot_profile::{Profile, ProfileError};
+use acpilot_proto::profile::ThemeSurface;
 use thiserror::Error;
 
 /// One profile, read far enough to describe it in a sidebar.
@@ -130,6 +131,21 @@ pub enum LaunchError {
         /// The root that named nothing.
         root: PathBuf,
     },
+}
+
+/// The theme id the desktop app's settings name.
+///
+/// The GUI's own key (`theme_gui`) when it is set, otherwise the shared `theme`.
+/// Resolved from the same cascade the profile is: `--theme` overrides the answer,
+/// and a project's settings override the user's for that project.
+///
+/// # Errors
+///
+/// The root cannot be resolved, or its settings do not parse.
+pub fn theme_id(path: Option<&Path>) -> Result<String, LaunchError> {
+    let root = Root::resolve(path).map_err(|error| LaunchError::Project(Box::new(error)))?;
+    let settings = root.settings()?;
+    Ok(settings.preferences.theme_for(ThemeSurface::Gui).to_owned())
 }
 
 /// The profiles a launch opens: `named` when it was given, else the one the

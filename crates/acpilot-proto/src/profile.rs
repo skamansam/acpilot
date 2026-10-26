@@ -7,6 +7,24 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Which frontend is asking for a theme.
+///
+/// The theme is one setting per surface rather than one for all of them, because a
+/// terminal is not a window: a person may want a light editor on the desktop and a
+/// dark prompt in the terminal beside it. Every surface falls back to
+/// [`Preferences::theme`] when its own key is unset, so the usual answer — one
+/// theme, everywhere — stays one line of settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeSurface {
+    /// The terminal UI.
+    Tui,
+    /// The desktop app.
+    Gui,
+    /// The browser UI the daemon serves.
+    Web,
+}
+
 /// Opaque profile identifier, derived from its directory name.
 pub type ProfileId = String;
 
@@ -44,8 +62,38 @@ pub struct Preferences {
     pub trim_trailing_whitespace: bool,
     /// Soft-wrap long lines.
     pub wrap: bool,
-    /// Theme identifier, shared by TUI, GUI and web.
+    /// Theme identifier for every surface that does not name its own.
+    ///
+    /// A theme is an extension, so this is the id of one: `acpilot.night-flight`
+    /// unless someone says otherwise.
     pub theme: String,
+    /// Theme for the terminal UI, when it should differ from [`Preferences::theme`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_tui: Option<String>,
+    /// Theme for the desktop app, when it should differ from [`Preferences::theme`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_gui: Option<String>,
+    /// Theme for the browser UI, when it should differ from [`Preferences::theme`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_web: Option<String>,
     /// Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.
     pub diagnostics_min_severity: String,
+}
+
+impl Preferences {
+    /// The theme one surface draws with.
+    ///
+    /// Its own key when that is set, otherwise [`Preferences::theme`]. Resolution
+    /// happens here rather than in three frontends, because three fallbacks is
+    /// three chances for the terminal and the window to disagree about what "the
+    /// theme" means.
+    #[must_use]
+    pub fn theme_for(&self, surface: ThemeSurface) -> &str {
+        let own = match surface {
+            ThemeSurface::Tui => self.theme_tui.as_deref(),
+            ThemeSurface::Gui => self.theme_gui.as_deref(),
+            ThemeSurface::Web => self.theme_web.as_deref(),
+        };
+        own.unwrap_or(&self.theme)
+    }
 }

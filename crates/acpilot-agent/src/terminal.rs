@@ -36,6 +36,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,12 +48,19 @@ use agent_client_protocol::schema::v1::{
     WaitForTerminalExitRequest, WaitForTerminalExitResponse,
 };
 use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 /// How much output a terminal keeps. One mebibyte is roughly a screenful of
 /// compiler errors or a few thousand lines of test output, which is what an agent
 /// actually reads back; beyond that the oldest bytes are the least interesting.
 pub const MAX_OUTPUT: usize = 1024 * 1024;
+
+/// Frames buffered for a watcher that is slower than the program.
+///
+/// A watcher is a client pane drawing a screen; one that falls this far behind is
+/// not catching up, and the bytes it misses are already on the screen it will be
+/// replayed. Same trade as the ring, different reader.
+const WATCH_BUFFER: usize = 256;
 
 /// How long a terminal may go untouched before [`Terminals::reap`] kills it.
 ///
@@ -151,8 +159,14 @@ impl Ring {
     }
 
     fn text(&self) -> String {
-        let bytes: Vec<u8> = self.bytes.iter().copied().collect();
-        String::from_utf8_lossy(&bytes).into_owned()
+        String::from_utf8_lossy(&self.raw()).into_owned()
+    }
+
+    /// The bytes as they arrived, for a watcher's screen rather than an agent's
+    /// paste: no truncation at a character boundary, because a terminal parser
+    /// wants the escape sequences whole.
+    fn raw(&self) -> Vec<u8> {
+        self.bytes.iter().copied().collect()
     }
 }
 
@@ -160,8 +174,16 @@ impl Ring {
 struct Handle {
     id: TerminalId,
     session: SessionId,
+    /// The command line as the agent asked for it, for a pane's title.
+    command: String,
     pty: Mutex<Pty>,
     output: Mutex<Ring>,
+    /// Bytes as they arrive, for whoever is watching the screen rather than
+    /// polling [`Terminals::output`].
+    bytes: broadcast::Sender<Vec<u8>>,
+    /// Whether the program is still running. Set by the reader thread when the
+    /// PTY closes, and never set back: a terminal that ended does not restart.
+    alive: AtomicBool,
     exit: watch::Sender<Option<acpilot_host::Exit>>,
     exit_rx: Mutex<watch::Receiver<Option<acpilot_host::Exit>>>,
     last_used: Mutex<Instant>,
@@ -194,6 +216,156 @@ impl Handle {
     }
 }
 
+/// A live view of one terminal an agent opened.
+///
+/// The ACP methods are a request/response protocol: an agent polls
+/// `terminal/output` and awaits `terminal/wait_for_exit`. That is the wrong shape
+/// for a pane, which needs the bytes as they arrive, somewhere to put a
+/// keystroke, and a wake-up when the program ends. This is exactly those three,
+/// over the same process — so a person can attach to the shell an agent started
+/// without the daemon owning a second PTY for it, and without the two disagreeing
+/// about what the command printed.
+///
+/// It is a *view*: writing to it does not touch the agent's ring or the agent's
+/// idea of how much output it has seen, and dropping it does not kill the program.
+/// [`Self::kill`] is how a pane ends one, and that is a decision a person made.
+#[derive(Clone)]
+pub struct TerminalHandle {
+    handle: Arc<Handle>,
+}
+
+impl std::fmt::Debug for TerminalHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TerminalHandle")
+            .field("id", &self.handle.id)
+            .field("session", &self.handle.session)
+            .field("alive", &self.alive())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TerminalHandle {
+    /// The agent's id for the terminal.
+    #[must_use]
+    pub fn id(&self) -> &TerminalId {
+        &self.handle.id
+    }
+
+    /// The agent session that asked for it.
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        &self.handle.session.0
+    }
+
+    /// The command line, for a pane's title.
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.handle.command
+    }
+
+    /// The terminal's current dimensions.
+    #[must_use]
+    pub fn size(&self) -> Size {
+        self.handle.pty.lock().expect("terminal pty").size()
+    }
+
+    /// Whether the program is still running.
+    #[must_use]
+    pub fn alive(&self) -> bool {
+        self.handle.alive.load(Ordering::Acquire)
+    }
+
+    /// Bytes as if typed. No newline is added: `text` and `text\r` differ.
+    ///
+    /// # Errors
+    ///
+    /// The write to the PTY failed, which in practice means the program is gone.
+    pub fn write(&self, bytes: &[u8]) -> io::Result<()> {
+        self.handle.touch();
+        self.handle
+            .pty
+            .lock()
+            .expect("terminal pty")
+            .write_all(bytes)
+    }
+
+    /// Tell the program the pane changed shape.
+    ///
+    /// # Errors
+    ///
+    /// A zero dimension (which `vt100` cannot hold) or a backend that refused it.
+    pub fn resize(&self, size: Size) -> Result<(), TerminalError> {
+        if size.cols == 0 || size.rows == 0 {
+            return Err(TerminalError::Pty {
+                id: self.handle.id.clone(),
+                source: acpilot_host::HostError::Pty {
+                    command: self.handle.command.clone(),
+                    message: "a terminal needs at least one row and one column".to_owned(),
+                },
+            });
+        }
+        self.handle.touch();
+        self.handle
+            .pty
+            .lock()
+            .expect("terminal pty")
+            .resize(size)
+            .map_err(|source| TerminalError::Pty {
+                id: self.handle.id.clone(),
+                source: acpilot_host::HostError::Pty {
+                    command: self.handle.command.clone(),
+                    message: source.to_string(),
+                },
+            })
+    }
+
+    /// End the program. The exit status reaches [`Self::exited`] like any other.
+    ///
+    /// # Errors
+    ///
+    /// The backend could not signal it, which is not a reason to believe it is
+    /// running.
+    pub fn kill(&self) -> Result<(), TerminalError> {
+        self.handle.touch();
+        self.handle
+            .pty
+            .lock()
+            .expect("terminal pty")
+            .kill()
+            .map_err(|source| TerminalError::Pty {
+                id: self.handle.id.clone(),
+                source: acpilot_host::HostError::Pty {
+                    command: self.handle.command.clone(),
+                    message: source.to_string(),
+                },
+            })
+    }
+
+    /// What has been printed so far, and every byte after it.
+    ///
+    /// The two halves are taken under the reader's lock, which is what makes the
+    /// pair gapless: a chunk pushed before this call is in the backlog and not in
+    /// the stream, a chunk pushed after it is in the stream and not in the
+    /// backlog, and a pane that draws both shows every byte exactly once. Asking
+    /// for the ring and then subscribing is how a screen ends up with a hole.
+    #[must_use]
+    pub fn watch(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let output = self.handle.output.lock().expect("terminal output");
+        let receiver = self.handle.bytes.subscribe();
+        (output.raw(), receiver)
+    }
+
+    /// How the program ended, once it has.
+    ///
+    /// A `watch` channel rather than a future because more than one watcher may
+    /// be waiting, and the answer never changes once it is there.
+    #[must_use]
+    pub fn exited(&self) -> watch::Receiver<Option<acpilot_host::Exit>> {
+        self.handle.exit_rx.lock().expect("terminal exit").clone()
+    }
+}
+
 /// Every terminal this client is serving, keyed by session and id.
 ///
 /// One of these per client, not per session: the ids are handed out here, and the
@@ -201,6 +373,12 @@ impl Handle {
 pub struct Terminals {
     host: Arc<dyn Host>,
     limit: usize,
+    /// Every terminal this registry opens, for whoever wants to watch them.
+    ///
+    /// The daemon subscribes so a person can attach to the shell an agent asked
+    /// for; a headless client ignores it. Throwing the send away would be a
+    /// silent capability, so the channel exists whether or not anyone listens.
+    opened: broadcast::Sender<TerminalHandle>,
     inner: Mutex<Inner>,
 }
 
@@ -233,11 +411,22 @@ impl Terminals {
         Self {
             host,
             limit,
+            opened: broadcast::channel(WATCH_BUFFER).0,
             inner: Mutex::new(Inner {
                 next: 0,
                 entries: HashMap::new(),
             }),
         }
+    }
+
+    /// Every terminal opened from now on.
+    ///
+    /// A subscription, not a replay: a client that starts a daemon finds the
+    /// terminals it opened before it attached in the registry it asked for them
+    /// from, not in a channel that would grow with every command ever run.
+    #[must_use]
+    pub fn subscribe_opened(&self) -> broadcast::Receiver<TerminalHandle> {
+        self.opened.subscribe()
     }
 
     /// `terminal/create`: start the command and hand back an id.
@@ -264,11 +453,12 @@ impl Terminals {
             .map(|entry| (entry.name.clone().into(), entry.value.clone().into()))
             .collect();
 
+        let command_line = command.command_line();
         let mut pty = self
             .host
             .spawn_pty(&command, Size::DEFAULT)
             .map_err(|source| TerminalError::Spawn {
-                command: command.command_line(),
+                command: command_line.clone(),
                 source,
             })?;
         // The reader is taken before the terminal is stored, so the unnecessary
@@ -298,8 +488,11 @@ impl Terminals {
         let handle = Arc::new(Handle {
             id: id.clone(),
             session: request.session_id.clone(),
+            command: command_line,
             pty: Mutex::new(pty),
             output: Mutex::new(Ring::new(limit)),
+            bytes: broadcast::channel(WATCH_BUFFER).0,
+            alive: AtomicBool::new(true),
             exit,
             exit_rx: Mutex::new(exit_rx),
             last_used: Mutex::new(Instant::now()),
@@ -314,6 +507,13 @@ impl Terminals {
             inner.entries.insert(key, Arc::clone(&handle));
         }
 
+        // Announced after the registry holds it, so a watcher that reacts at once
+        // finds the same terminal the agent can reach. No watcher is not an error:
+        // a headless client is the normal case.
+        let _ = self.opened.send(TerminalHandle {
+            handle: Arc::clone(&handle),
+        });
+
         let reader_handle = Arc::clone(&handle);
         // A blocking read belongs on a thread of its own: this is a file
         // descriptor that may be quiet for minutes, and parking a runtime worker
@@ -327,8 +527,12 @@ impl Terminals {
                     match reader.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(read) => {
+                            // Push and send under the ring's lock: that is what lets
+                            // `TerminalHandle::watch` hand a pane a backlog and a
+                            // stream that neither overlap nor leave a gap.
                             if let Ok(mut output) = reader_handle.output.lock() {
                                 output.push(&buffer[..read]);
+                                let _ = reader_handle.bytes.send(buffer[..read].to_vec());
                             }
                         }
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -338,6 +542,7 @@ impl Terminals {
                         Err(_) => break,
                     }
                 }
+                reader_handle.alive.store(false, Ordering::Release);
                 reader_handle.record_exit();
             })
             .map_err(|source| TerminalError::Spawn {

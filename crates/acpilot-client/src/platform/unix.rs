@@ -19,3 +19,12 @@ pub(crate) fn http(endpoint: &str, token: Option<&str>) -> (String, reqwest::Cli
         .expect("the HTTP client over a unix socket is always buildable");
     ("http://localhost".to_owned(), client)
 }
+
+/// The socket a terminal attach upgrades.
+///
+/// The HTTP client has its own connector; the WebSocket handshake needs the byte
+/// stream itself, so the socket is opened here rather than borrowed from
+/// `reqwest`.
+pub(crate) async fn socket(endpoint: &str) -> std::io::Result<Box<dyn super::Duplex>> {
+    Ok(Box::new(tokio::net::UnixStream::connect(endpoint).await?))
+}

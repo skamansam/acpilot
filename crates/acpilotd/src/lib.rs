@@ -42,7 +42,7 @@ pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
 pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
-pub use terminals::{Terminal, Terminals};
+pub use terminals::{Output, Terminal, Terminals};
 
 use axum::response::Html;
 
@@ -209,6 +209,11 @@ pub struct AppState {
     /// transcript directory is a decision about a filesystem, and the default for
     /// a library value is not to write into somebody's home directory.
     transcripts: Option<std::path::PathBuf>,
+    /// The colours the web page is themed with, when the launch resolved a theme.
+    ///
+    /// `None` is the page's own palette, which is what a daemon started with no
+    /// settings has always served.
+    web_palette: Option<acpilot_extensions::Palette>,
     /// The terminals *agents* ask their client to open.
     ///
     /// A different store from [`Self::terminals`], which is the panes a client
@@ -243,6 +248,7 @@ impl Default for AppState {
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
+            web_palette: None,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             decided: Arc::default(),
         }
@@ -316,6 +322,13 @@ impl AppState {
         self
     }
 
+    /// Theme the browser UI with these tokens.
+    #[must_use]
+    pub fn with_web_palette(mut self, palette: acpilot_extensions::Palette) -> Self {
+        self.web_palette = Some(palette);
+        self
+    }
+
     /// Where transcripts are kept, when the daemon keeps them.
     pub fn transcripts(&self) -> Option<&std::path::Path> {
         self.transcripts.as_deref()
@@ -329,6 +342,49 @@ impl AppState {
     /// it are the same switch.
     pub fn agent_terminals(&self) -> &Arc<AgentTerminals> {
         &self.agent_terminals
+    }
+
+    /// Give every terminal an agent opens a pane of its own, from now on.
+    ///
+    /// The agent's terminal is the process; the pane is the screen a person can
+    /// attach to and type into. They are the same PTY — the pane reads the bytes
+    /// the agent's reader already got and writes to the same descriptor — so a
+    /// shell the agent started can be watched and driven from a client without the
+    /// daemon owning a second process for it.
+    ///
+    /// A session the daemon cannot map (its `session/new` failed after the agent
+    /// chose an id, say) is filed under the agent's own id rather than dropped: a
+    /// pane with an unfamiliar owner is more useful than a shell nobody can see.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn mirror_agent_terminals(&self) {
+        let panes = self.terminals.clone();
+        let sessions = self.sessions.clone();
+        let mut opened = self.agent_terminals.subscribe_opened();
+        tokio::spawn(async move {
+            loop {
+                match opened.recv().await {
+                    Ok(handle) => {
+                        let session_id = sessions
+                            .id_for_acp(handle.session_id())
+                            .unwrap_or_else(|| handle.session_id().to_owned());
+                        panes.adopt(session_id, handle);
+                    }
+                    // A mirror that falls 256 terminals behind loses those
+                    // panes, not the processes: every terminal it skipped still
+                    // works for the agent, which is the owner, and the next one
+                    // opened is adopted as normal. Said out loud rather than
+                    // silently, because a shell with no pane is something the
+                    // log should be able to explain.
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "pane mirror fell behind");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
     }
 
     /// Kill agent terminals nobody has touched in [`IDLE_TIMEOUT`], on a timer.
@@ -877,8 +933,11 @@ fn resolve_doc() {}
 /// version, and two buttons. What it proves is that the daemon can be reached from
 /// a browser at all, which is the first question when the web UI is the one that
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
-async fn web_app() -> Html<String> {
-    Html(acpilot_web::page(acpilot_core::VERSION))
+async fn web_app(State(state): State<AppState>) -> Html<String> {
+    Html(match &state.web_palette {
+        Some(palette) => acpilot_web::themed_page(acpilot_core::VERSION, palette),
+        None => acpilot_web::page(acpilot_core::VERSION),
+    })
 }
 
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.

@@ -24,8 +24,11 @@ curl.exe -s localhost:7777/v1/health        # after `cargo run -p acpilotd -- --
 ```
 
 The daemon answers `GET /v1/health` on a unix socket once `cargo run -p acpilotd`
-is up — or once any client has started it, since `cargo run -p acpilot-cli -- tui`
-spawns `target/debug/acpilotd` (the sibling of the binary, not a `PATH` entry).
+is up — or once any client has started it, since `cargo xtask run tui` spawns
+`target/debug/acpilotd` (the sibling of the binary, not a `PATH` entry). The
+first launch is `cargo xtask run tui -- .`: the task builds the client *and* the
+daemon (a TUI whose sibling is missing only finds out at launch) and passes
+anything after `--` to `acpilot`.
 The socket is `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS), which
 is why the health check passes `--unix-socket`; on Windows the daemon listens on
 `127.0.0.1:7777` until the named pipe exists, so pass `--addr` there.
@@ -54,13 +57,17 @@ reasons CI does.
 One thing `cargo xtask check` deliberately does not do is build the desktop shell:
 `acpilot-gui`'s gpui dependency sits behind a `gui` feature that is off by
 default, so the workspace gate stays fast and does not need a graphics stack.
-CI's `gui` job is what keeps the shell from rotting, and locally it is two
-commands — `cargo build -p acpilot-gui --features gui` and `cargo nextest run -p
-acpilot-gui --features gui,gui-tests`. The second feature is gpui's headless test
-harness: without it the About panel and the palette that opens it have no
-`Context` to live in, so the tests that draw the window would only be testing a
-copy of it. It is separate from `gui` because it compiles gpui's `test-support`
-machinery, which the default workspace gate should not pay for. On Linux both
+CI's `gui` job is what keeps the shell from rotting. Locally it is
+`cargo xtask build gui`, `cargo xtask run gui` and `cargo xtask test gui` — the
+tasks carry the feature flag a plain `cargo build` forgets — and `test gui` adds
+`gui-tests` on top of `gui`, because the headless harness is a second feature and
+`cargo xtask check` compiles neither. `cargo xtask build all` compiles both
+clients and the daemon in one go; `cargo xtask run daemon` is the backend on its
+own, for a debugger or a second client. That harness is gpui's own: without it
+the About panel and the palette that opens it have no `Context` to live in, so
+the tests that draw the window would only be testing a copy of it. It is separate
+from `gui` because it compiles gpui's `test-support` machinery, which the default
+workspace gate should not pay for. On Linux both
 need the dev packages gpui links against:
 
 ```bash
@@ -87,6 +94,18 @@ npm run build   # one HTML file, written into crates/acpilot-web/assets/
 Run `npm run build` whenever you change anything under `web/`, and commit the
 regenerated `crates/acpilot-web/assets/index.html` in the same commit. CI's `web`
 job rebuilds it and fails with a diff if you forget.
+
+The interface itself can be looked at without a daemon:
+
+```bash
+cargo run -p acpilot-cli -- tui --demo
+```
+
+That draws the whole shell — files, editor, agent sidebar, palette, stats bar — on
+the seeded world in `acpilot-demo`, with every command that is not built tagged with
+the task that would build it. It reads nothing from disk, so it is the same screen on
+any machine, and it is what a layout change is reviewed on before its backend
+exists. The layout and the open questions are `docs/notes/tui-shell.md`.
 
 `cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command

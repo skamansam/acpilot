@@ -296,6 +296,15 @@ a view of a terminal, not its owner; the process ends when it ends. A pane that
 stops reading is closed with an error code rather than queued forever, and
 reattaching costs it one screen.
 
+A terminal an agent asked its client for (`terminal/create` in ACP) is listed and
+attached the same way, under an `agent-` prefixed id. It is the same PTY, not a
+copy: the daemon draws a screen from the bytes the agent's reader already got and
+writes keystrokes to the same descriptor, so a shell an agent started can be
+watched and driven without a second process printing to nobody. Such a pane ends
+when the agent's program ends — a pane opened after the fact still replays what
+the command printed — and killing the pane is not offered, because the process
+belongs to the session that started it.
+
 ## Errors
 
 Every failure is this shape, whether it came from a route, an agent, or a host

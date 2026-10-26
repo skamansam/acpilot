@@ -1,0 +1,21 @@
+[package]
+name = "acpilot-demo"
+description = "The seeded world the TUI and the GUI are designed against, before the backend exists"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Data, not behaviour: this crate holds the screens a design pass is argued about,
+# so two frontends render one world instead of two private guesses. It knows
+# nothing about ratatui or gpui, and must stay that way — a fixture that needed a
+# renderer could not be shared with the other one.
+[dependencies]
+# A session, an agent and a permission are protocol types in every frontend. A
+# fixture that invented its own shape would be a design that cannot be wired up.
+acpilot-proto = { workspace = true }
+# Event payloads are the ACP updates the daemon stores, which are JSON.
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -167,7 +167,7 @@ data: {"seq":42}
 
 | `event` | `data` | Replayed? |
 | --- | --- | --- |
-| `session` | `SessionEvent` (`kind` is one of the eight below) | yes, from the transcript |
+| `session` | `SessionEvent` (`kind` is one of the eight below) | yes, from the session's ring, and on disk in its transcript |
 | `permission` | `{"type":"requested","request":PermissionRequest}` or `{"type":"resolved","id":…,"decision":PermissionDecision}` | `resolved` yes; `requested` live-only, on both streams |
 | `heartbeat` | `{"seq": n}` every 15 s | no |
 | `resync` | `{"latest_seq": n}` | no |
@@ -177,11 +177,14 @@ data: {"seq":42}
 in `payload`; a new kind is a wire change and shows up in the OpenAPI snapshot.
 
 **Reconnect.** The client sends `Last-Event-ID: <seq>` and receives everything
-after it, in order, with no gaps. Replay comes from the transcript (P2-8), so it
-survives a daemon restart. If the id is unknown — older than retention, or from a
-different daemon instance — the server answers `event: resync` with the latest
-sequence and the client refetches session state (`GET /v1/sessions/{id}`) instead
-of pretending it can catch up. The first frame is always `retry: 2000`.
+after it, in order, with no gaps. Replay is served from the live session's ring,
+and every one of those events is appended to the session's transcript as it is
+recorded, so the file outlives the process even though no route reads it back yet:
+enumerating stored sessions is P3-7's, with the SQLite table. If the id is unknown
+— older than the ring, or a session this process did not start — the server answers
+`event: resync` with the latest sequence and the client refetches session state
+(`GET /v1/sessions/{id}`) instead of pretending it can catch up. The first frame is
+always `retry: 2000`.
 
 **Heartbeat** exists so a proxy cannot silently hold a dead stream open; a client
 that has seen no frame for 45 s (three heartbeats) reconnects.

@@ -18,14 +18,19 @@ use std::time::{Duration, Instant};
 
 use acpilot_agent::{
     AgentProcess, Broker, DecidedBy, Decision, Fs, MapResolver, Policy, Registry, Rule, Session,
-    SessionOptions,
+    SessionOptions, Terminals,
 };
 use acpilot_host::LocalHost;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::PermissionOption;
 use agent_client_protocol::schema::v1::StopReason;
 use tokio::sync::broadcast::Receiver;
-use tokio::time::{sleep, timeout};
+// `sleep` is only used by the Linux-only test that watches a pid disappear, so
+// importing it everywhere is an unused import on macOS and Windows — which is
+// `-D warnings`, and was failing both legs of CI while the code was fine.
+#[cfg(target_os = "linux")]
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 /// The fixture agent, as Cargo built it for this test run.
 const MOCK: &str = env!("CARGO_BIN_EXE_acpilot-mock-agent");
@@ -57,11 +62,12 @@ fn manifest(dir: &Path) -> PathBuf {
 
 /// Load the manifest, start the child, and open a session over its pipes.
 async fn open(dir: &Path) -> Session {
-    open_with(dir, None).await
+    open_with(dir, None, None).await
 }
 
-/// The same, with a workspace the agent's `fs/*` requests can be served from.
-async fn open_with(dir: &Path, fs: Option<Arc<Fs>>) -> Session {
+/// The same, with a workspace the agent's `fs/*` requests can be served from and
+/// terminals it may open.
+async fn open_with(dir: &Path, fs: Option<Arc<Fs>>, terminals: Option<Arc<Terminals>>) -> Session {
     let registry =
         Registry::load(manifest(dir), Arc::new(MapResolver::new())).expect("the manifest loads");
     let spec = registry.get("mock").expect("the mock agent is declared");
@@ -69,6 +75,9 @@ async fn open_with(dir: &Path, fs: Option<Arc<Fs>>) -> Session {
     let mut options = SessionOptions::new("session-1");
     if let Some(fs) = fs {
         options = options.fs(fs);
+    }
+    if let Some(terminals) = terminals {
+        options = options.terminals(terminals);
     }
     Session::spawn(process, options)
         .await
@@ -226,6 +235,78 @@ async fn file_and_terminal_requests_are_refused_because_nothing_advertises_them(
     }
 }
 
+/// The other half of the refusal above: a session that does serve terminals hands
+/// the agent a real one, and hands it back when reaped.
+///
+/// Unix only: the fixture asks for `/bin/sh`, which is the point of the test on a
+/// machine that has one and would only fail on one that does not. What the client
+/// does with the answer is platform-neutral; starting a program is not.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_that_serves_terminals_creates_one_for_the_agent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let terminals = Arc::new(Terminals::new(Arc::new(LocalHost)));
+    let mut session = open_with(dir.path(), None, Some(Arc::clone(&terminals))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+
+    session.prompt("terminal").await.expect("the turn ends");
+
+    let reported = reports(&mut events, 1, "terminal/create").await;
+    assert!(
+        reported[0].contains("accepted"),
+        "the agent was given a terminal, not a refusal: {}",
+        reported[0]
+    );
+    assert_eq!(
+        terminals.live(),
+        1,
+        "the terminal is live until it is released or reaped"
+    );
+    // Reaping with no idle grace closes it, which is also how this test leaves no
+    // orphaned shell behind: the registry owns the process, not the session.
+    assert_eq!(
+        terminals.reap(Duration::ZERO),
+        1,
+        "a terminal nobody touched is reaped"
+    );
+}
+
+/// A session's terminals go with it. They are processes nobody can ask about
+/// once the handle is gone, and waiting for the idle sweep would mean half an
+/// hour of a forgotten shell per conversation.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_session_takes_its_terminals_with_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let terminals = Arc::new(Terminals::new(Arc::new(LocalHost)));
+    let mut session = open_with(dir.path(), None, Some(Arc::clone(&terminals))).await;
+    let mut events = session.events();
+    session
+        .new_session(dir.path())
+        .await
+        .expect("session/new works");
+
+    session.prompt("terminal").await.expect("the turn ends");
+    let reported = reports(&mut events, 1, "terminal/create").await;
+    assert!(
+        reported[0].contains("accepted"),
+        "the agent was given a terminal, not a refusal: {}",
+        reported[0]
+    );
+    assert_eq!(terminals.live(), 1);
+
+    drop(session);
+    assert_eq!(
+        terminals.live(),
+        0,
+        "the session ended, so its terminal did too"
+    );
+}
+
 #[tokio::test]
 async fn a_hung_turn_stays_pending_and_does_not_wedge_the_session() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -256,7 +337,7 @@ async fn a_hung_turn_stays_pending_and_does_not_wedge_the_session() {
 async fn files_inside_the_workspace_are_served_and_a_file_outside_is_refused() {
     let dir = tempfile::tempdir().expect("temp dir");
     fs::write(dir.path().join("seed.txt"), "seeded\n").expect("write the seed");
-    let mut session = open_with(dir.path(), Some(workspace(dir.path()))).await;
+    let mut session = open_with(dir.path(), Some(workspace(dir.path())), None).await;
     let mut events = session.events();
     session
         .new_session(dir.path())
@@ -297,7 +378,7 @@ async fn a_rule_naming_the_agent_decides_that_agents_request() {
         fs::canonicalize(dir.path()).expect("the workspace resolves"),
     ));
     let files = Arc::new(Fs::with_broker(Arc::new(LocalHost), Arc::clone(&broker)));
-    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files)), None).await;
     let mut events = session.events();
     session
         .new_session(dir.path())
@@ -329,7 +410,7 @@ async fn a_write_outside_the_workspace_holds_the_turn_until_it_is_approved() {
     let dir = tempfile::tempdir().expect("temp dir");
     let elsewhere = tempfile::tempdir().expect("temp dir");
     let files = workspace(dir.path());
-    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files)), None).await;
     session
         .new_session(dir.path())
         .await
@@ -377,7 +458,7 @@ async fn a_denied_write_is_reported_and_the_turn_still_ends() {
     let dir = tempfile::tempdir().expect("temp dir");
     let elsewhere = tempfile::tempdir().expect("temp dir");
     let files = workspace(dir.path());
-    let mut session = open_with(dir.path(), Some(Arc::clone(&files))).await;
+    let mut session = open_with(dir.path(), Some(Arc::clone(&files)), None).await;
     let mut events = session.events();
     session
         .new_session(dir.path())

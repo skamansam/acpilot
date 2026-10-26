@@ -54,6 +54,45 @@ jobs:
       - name: Theme contrast (WCAG AA)
         run: cargo test -p acpilot-extensions --test themes built_in_themes_meet_wcag_aa
 
+  # `crates/acpilot-web/assets/index.html` is built, not hand-written, and it is
+  # committed so that building the daemon needs no Node. That trade only works if
+  # the committed page is the one `web/` produces, which is what this job checks:
+  # a source change without a rebuild fails here, in the pull request, rather than
+  # shipping a daemon whose `/app` is older than its own repository.
+  web:
+    name: web UI matches web/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Type-check
+        working-directory: web
+        run: npm run check
+
+      # The token flow is a browser fact, so it is tested in a DOM rather than
+      # checked by hand: the token is kept in the tab, sent only in an
+      # `Authorization` header, and forgotten when the daemon refuses it.
+      - name: Token-flow tests
+        working-directory: web
+        run: npm test
+
+      - name: Build into the crate that embeds it
+        working-directory: web
+        run: npm run build
+
+      - name: Fail if the embedded page drifted from its source
+        run: git diff --exit-code -- crates/acpilot-web/assets/index.html
+
   # The desktop shell is behind a feature that is off by default, so the `check`
   # job above never compiles it — which means it is one refactor away from not
   # building at all. This job is the price of that default: it builds, links and
@@ -61,8 +100,9 @@ jobs:
   #
   # One Linux job rather than three: the code we write is platform-neutral, and
   # the platform-specific parts belong to gpui, whose own CI is not ours to
-  # reproduce. macOS and Windows builds arrive with packaging (P10-8), where
-  # they are needed for the reason they are expensive.
+  # reproduce. The release matrix is where macOS and Windows are built, because
+  # that is where their output is needed — checking them on every push would pay
+  # the same price twice.
   #
   # The two things Linux needs that the runner does not have are the dev symlinks
   # gpui's Linux backend links against even with X11 off, and the `libc` version
@@ -103,7 +143,7 @@ jobs:
           done
 
       - name: Clippy (gui feature)
-        run: cargo clippy -p acpilot-gui --features gui --all-targets -- -D warnings
+        run: cargo clippy -p acpilot-gui --features gui,gui-tests --all-targets -- -D warnings
 
       # `check` and a test build do not link the binary, and the Linux link is
       # exactly where the missing xkbcommon-x11 symlink shows up.
@@ -113,8 +153,13 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Test (gui feature)
-        run: cargo nextest run -p acpilot-gui --features gui --no-fail-fast
+      # `gui-tests` adds gpui's headless harness, so the About panel and the
+      # palette that opens it are tested in a real `Context` without a display.
+      # It is not in the default feature set because it compiles gpui's
+      # `test-support` machinery, which the plain workspace gate should not pay
+      # for.
+      - name: Test (gui feature, with the window harness)
+        run: cargo nextest run -p acpilot-gui --features gui,gui-tests --no-fail-fast
 
   # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
   # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into
@@ -248,3 +293,50 @@ jobs:
         run: INSTA_UPDATE=always cargo test -p acpilot-proto
       - name: Fail if the snapshot changed
         run: git diff --exit-code -- crates/acpilot-proto/tests/snapshots
+
+  # One check to require in branch protection, so the rule does not have to be
+  # restated every time a job is added — and cannot silently stop covering one
+  # when a job is renamed. It needs every gate above and passes only if all of
+  # them passed, which is exactly the predicate a required check should express.
+  #
+  # The opt-in jobs (`wsl-bench`) are deliberately not in `needs`: they are
+  # skipped on a hosted runner, and a skipped job in `needs` would either block
+  # every pull request or need the same exception twice.
+  #
+  # Protect `main` with:
+  #
+  #   required status checks: "required checks"
+  #   require branches to be up to date before merging: yes
+  #
+  # The individual jobs stay listed in the PR's checks tab either way; this is the
+  # one a rule points at.
+  required:
+    name: required checks
+    needs: [check, web, gui, probes, deny, docs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every required job succeeded
+        env:
+          RESULTS: >-
+            check=${{ needs.check.result }}
+            web=${{ needs.web.result }}
+            gui=${{ needs.gui.result }}
+            probes=${{ needs.probes.result }}
+            deny=${{ needs.deny.result }}
+            docs=${{ needs.docs.result }}
+        run: |
+          set -euo pipefail
+          failed=""
+          for pair in $RESULTS; do
+            name=${pair%%=*}
+            result=${pair#*=}
+            echo "$name: $result"
+            if [ "$result" != "success" ]; then
+              failed="$failed $name($result)"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "required job(s) did not pass:$failed"
+            exit 1
+          fi

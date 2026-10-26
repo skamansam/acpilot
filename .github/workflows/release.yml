@@ -94,16 +94,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `acpilot` is the CLI, the TUI and the GUI launcher; `acpilotd` is the
-      # daemon. The GUI is left out of this first release on purpose: its `gui`
-      # feature needs a graphics stack at link time, which is a runner dependency
-      # to solve rather than a version to publish.
+      # The graphics stack gpui links against. Linux only: the Windows and macOS
+      # runners have their system frameworks already. `libxkbcommon-x11-dev` is
+      # here because gpui 0.2.2's `xkbcommon` dependency enables the X11 feature
+      # unconditionally, so the linker asks for `-lxkbcommon-x11` even though the
+      # shell is built Wayland-only-capable; see ADR 0009 §5.
+      - name: System libraries gpui links against
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libwayland-dev \
+            libfreetype-dev libfontconfig1-dev pkg-config clang
+
+      - name: The libc pin gpui 0.2.2 needs
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          versions=$(awk '/^name = "libc"$/ { getline; split($0, parts, "\""); print parts[2] }' Cargo.lock)
+          test -n "$versions" || { echo "Cargo.lock lists no libc"; exit 1; }
+          for version in $versions; do
+            if [ "$version" != "0.2.189" ]; then
+              echo "Cargo.lock has libc $version; gpui 0.2.2 -> xattr 0.2.3 uses libc::ENOATTR,"
+              echo "which 0.2.190 removed. The pin is exact. Run:"
+              echo "  cargo update -p libc --precise 0.2.189"
+              exit 1
+            fi
+          done
+
+      # `acpilot` is the CLI and the TUI; `acpilotd` is the daemon; `acpilot-gui`
+      # is the desktop app, built with its feature on because off is the default
+      # (a `cargo test --workspace` should not compile a graphics stack). All
+      # three ship in one tarball per platform, so the desktop app is a launch
+      # away from the daemon it talks to rather than a second download.
       - name: Build
         env:
           # Compiled in by `acpilot_core::VERSION`, so the binaries report the tag
           # they are published as rather than the number in `Cargo.toml`.
           ACPILOT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
-        run: cargo build --release --locked -p acpilot-cli -p acpilotd
+        run: cargo build --release --locked -p acpilot-cli -p acpilotd -p acpilot-gui --features acpilot-gui/gui
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
@@ -112,7 +141,7 @@ jobs:
           set -euo pipefail
           stage="acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
           mkdir -p "$stage"
-          cp target/release/acpilot target/release/acpilotd "$stage/"
+          cp target/release/acpilot target/release/acpilotd target/release/acpilot-gui "$stage/"
           cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
           tar -czf "$stage.tar.gz" "$stage"
           shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
@@ -123,7 +152,7 @@ jobs:
         run: |
           $stage = "acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item target/release/acpilot.exe, target/release/acpilotd.exe $stage
+          Copy-Item target/release/acpilot.exe, target/release/acpilotd.exe, target/release/acpilot-gui.exe $stage
           Copy-Item README.md $stage
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
           $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()

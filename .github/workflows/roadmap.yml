@@ -1,0 +1,61 @@
+# Keep the ACPilot Roadmap project's pull-request cards in step with the repo.
+#
+# The issue lane needs nothing from this file. GitHub's own project workflows
+# already move a card when its issue changes — Item added to project -> Todo,
+# Item closed -> Done, Item reopened -> Todo — and they run as GitHub rather than
+# as a workflow, so a token's reach does not apply to them. The three that matter
+# are in the project's Workflows menu; Item closed and Pull request merged are on
+# by default, Item added and Item reopened are one toggle each.
+#
+# What no built-in can express is the middle of a pull request's life: a draft is
+# In progress, a PR ready for review is In review, and a PR closed without merging
+# is not finished work. That mapping, and the GraphQL calls behind it, live in
+# `.github/scripts/roadmap.mjs`.
+#
+# The project is owned by a user account and `GITHUB_TOKEN` only reaches projects
+# owned by an organisation, so this job needs a classic PAT with the `project`
+# scope in `secrets.PROJECT_TOKEN`. Until that secret exists the job has nothing
+# to talk to, and says so instead of passing while quietly doing nothing.
+
+name: Roadmap
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, closed]
+
+permissions:
+  contents: read
+
+# One event per pull request at a time: a merge that closes the PR must not race
+# the review transition that arrived just before it.
+concurrency:
+  group: roadmap-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+    steps:
+      - name: Say what is missing
+        if: env.PROJECT_TOKEN == ''
+        run: |
+          echo "::notice title=Roadmap::No PROJECT_TOKEN, so pull-request cards are not moved. \
+          Add a classic personal access token with the \`project\` scope as a repository secret named PROJECT_TOKEN."
+
+      - uses: actions/checkout@v4
+        if: env.PROJECT_TOKEN != ''
+
+      - uses: actions/setup-node@v4
+        if: env.PROJECT_TOKEN != ''
+        with:
+          node-version: 22
+
+      - name: Update the board
+        if: env.PROJECT_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.PROJECT_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ROADMAP_PROJECT: ACPilot Roadmap
+        run: node .github/scripts/roadmap.mjs pr "${{ github.event.pull_request.number }}"

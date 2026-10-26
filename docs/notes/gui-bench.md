@@ -258,7 +258,11 @@ Unchanged, and both still true on Windows:
 - `libc` must be held at **≤ 0.2.189** while gpui 0.2.2 is in the graph
   (`zed-async-tar` → `xattr` 0.2.3 uses `libc::ENOATTR`, dropped in 0.2.190).
   Irrelevant on Windows, load-bearing on Linux.
-- The Linux link needs `libxkbcommon-x11`'s dev symlink even with X11 off.
+- The Linux link needs `libxkbcommon-x11`'s dev symlink even with X11 off. This
+  is not fixable from this workspace: `gpui 0.2.2` asks its `xkbcommon`
+  dependency for `x11` in its own manifest, and features are additive, so a
+  downstream `default-features = false` does not remove it. Tried and recorded
+  in ADR 0009 §5 rather than left as a to-do.
 
 The build itself is fine: `gpui` 0.2.2 from crates.io alone, no git dependency, no
 `zed/` checkout, no nightly. `iced` 0.14 builds clean from crates.io on both

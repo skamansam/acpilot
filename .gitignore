@@ -22,6 +22,10 @@ site/.astro
 .history/
 HISTORY.md
 
+# Python scratch from the tools in .github/scripts
+__pycache__/
+*.pyc
+
 # local runtime state
 .acpilot/
 *.sqlite

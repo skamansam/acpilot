@@ -103,10 +103,11 @@ offered no option for cancels the request rather than inventing an approval. A
 session with no broker refuses everything with the agent's own reject option,
 because no grant should be implied by a session that has no policy. Either way
 the answer is recorded as a notice, so the transcript says what the agent was
-told. A request for a method this build does not implement — today,
-`terminal/create` — is answered with `MethodNotFound` naming the method: not
-advertising a capability does not stop an agent asking, and a request with no
-answer is a hang, not a refusal. All of it is exercised against a mock agent that
+told. A request for a method this build does not implement — an `fs/*` call on a
+session with no workspace, a `terminal/*` call on one the daemon gave no registry —
+is answered with `MethodNotFound` naming the method: not advertising a capability
+does not stop an agent asking, and a request with no answer is a hang, not a
+refusal. All of it is exercised against a mock agent that
 runs as a real child process, so the pipes, the handshake and the tree kill are
 run in CI rather than only type-checked.
 
@@ -145,7 +146,23 @@ request that arrives anyway. The capability and the handler are one decision:
 advertising something this client cannot serve is the same bug as refusing
 something it advertised.
 
-Terminals (engine phase, task P2-5) are not built yet, and the shipped policy is deliberately plain:
+## Terminals
+
+An agent does not run a command either; it asks its client to. `terminal/create`
+arrives at the session, the daemon's terminal registry starts a PTY for it through
+the same host seam the file methods use, and the command runs where the workspace
+is — this machine today, an SSH host once P3-9 moves the seam. Output is a
+one-mebibyte ring truncated on a character boundary, because an agent pastes it
+back into a message and a `String` cannot hold half a character. A terminal
+belongs to the session that asked for it: an id alone does not reach one, so two
+agents in one workspace cannot read each other's shell. `terminal/release` closes
+it, a session that ends takes its terminals with it, and one nobody has touched
+for half an hour is killed by the daemon's sweep — the release call is optional in
+ACP, and a forgotten process is the normal case rather than the exception.
+
+## Permissions
+
+The shipped policy is deliberately plain:
 files inside the workspace are read and written, a shell or an unrecognised tool
 is asked about, and anything outside is asked about too. A rule — `allow`, `ask`
 or `deny`, optionally scoped by agent, tool and path glob — is how a workspace

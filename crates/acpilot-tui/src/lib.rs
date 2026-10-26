@@ -191,32 +191,23 @@ pub fn query_terminal_colours() -> Option<TerminalColours> {
 
 /// Watch the settings files and send a new theme when one of them changes.
 ///
-/// The directory is watched rather than the file because a settings file is often
-/// created after the client starts, and because an editor that saves by rename
-/// would otherwise stop being watched the first time it saved. Events are
-/// debounced: one save is several writes, and a theme that flickered through three
-/// palettes would be worse than one that changed once.
+/// The watching is [`acpilot_profile::watch`]'s, not this crate's: the daemon
+/// announces the same saves on its own stream, and two watchers would be two
+/// debounce policies and two answers to an editor that saves by rename. A client
+/// with no settings to watch — the design pass, the demo — simply has no thread.
 fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
+    let paths: Vec<std::path::PathBuf> = [files.user.clone(), files.project.clone()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let Some(changes) = acpilot_profile::watch::changes(paths) else {
+        return;
+    };
     std::thread::spawn(move || {
-        let (events, inbox) = std::sync::mpsc::channel();
-        let Ok(mut watcher) = notify::recommended_watcher(move |event| {
-            let _ = events.send(event);
-        }) else {
-            return;
-        };
-        let mut watched = Vec::new();
-        watch_directories(&mut watcher, &files, &mut watched);
-        if watched.is_empty() {
-            // The design pass and the demo read no settings: nothing to re-read.
-            return;
-        }
-        while let Ok(Ok(_)) = inbox.recv() {
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            while inbox.try_recv().is_ok() {}
-            // The file may have appeared in a directory the first event created, so
-            // the watch is re-armed before the settings are read.
-            watch_directories(&mut watcher, &files, &mut watched);
+        while changes.recv().is_ok() {
             let Some(theme) = reload_theme(&files) else {
+                // A file that is half-written, or an id no extension provides: the
+                // colours on screen stay, and the next save is read normally.
                 continue;
             };
             if updates.send(Update::Theme(theme)).is_err() {
@@ -225,52 +216,6 @@ fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Up
             }
         }
     });
-}
-
-/// Watch every settings directory that exists, once each.
-///
-/// Called again on each event: a directory created since the last one may hold the
-/// file now, which is how a project that had no `.acpilot` when the client started
-/// still gets a theme when one is written.
-fn watch_directories(
-    watcher: &mut impl notify::Watcher,
-    files: &ThemeFiles,
-    watched: &mut Vec<std::path::PathBuf>,
-) {
-    for directory in [files.user.as_deref(), files.project.as_deref()]
-        .into_iter()
-        .flatten()
-        .filter_map(nearest_directory)
-    {
-        if watched.contains(&directory) {
-            continue;
-        }
-        // A directory that cannot be watched is not a failed launch: the theme
-        // simply stays the one that is on screen.
-        if watcher
-            .watch(&directory, notify::RecursiveMode::NonRecursive)
-            .is_ok()
-        {
-            watched.push(directory);
-        }
-    }
-}
-
-/// The directory to watch for `path`: its own, or the nearest ancestor that exists.
-///
-/// A settings file is not necessarily there when the client starts — a project that
-/// has never been configured has no `.acpilot` directory — and watching a path that
-/// does not exist fails rather than waiting for it. The nearest existing ancestor
-/// exists by construction, so the creation below it is the event that re-arms the
-/// watch closer to the file.
-fn nearest_directory(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut directory = path.parent()?;
-    loop {
-        if directory.is_dir() {
-            return Some(directory.to_path_buf());
-        }
-        directory = directory.parent()?;
-    }
 }
 
 /// Run the design pass: the seeded world from `acpilot-demo`, drawn by this UI.
@@ -449,17 +394,6 @@ mod tests {
             })
             .is_none(),
             "no theme, so the caller keeps what it is drawing"
-        );
-    }
-
-    #[test]
-    fn a_settings_file_that_is_not_there_yet_is_watched_at_the_nearest_directory() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let missing = directory.path().join(".acpilot").join("config.toml");
-        assert_eq!(
-            nearest_directory(&missing).as_deref(),
-            Some(directory.path()),
-            "the project root, because `.acpilot` does not exist yet"
         );
     }
 

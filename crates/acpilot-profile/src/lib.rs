@@ -16,6 +16,7 @@
 
 pub mod project;
 pub mod settings;
+pub mod watch;
 
 use std::fs;
 use std::io;

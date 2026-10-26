@@ -29,8 +29,6 @@ vt100 = { workspace = true }
 # Session events carry their payload as JSON, because the ACP updates they come
 # from are not one shape; reading them is the app's job, not a typed bypass.
 serde_json = { workspace = true }
-# Watching the settings files, so `[preferences] theme_tui` applies while open.
-notify = { workspace = true }
 # Asking the terminal what its background and foreground are, so
 # `[preferences] theme_follow_terminal` has a pair to solve a palette around.
 terminal-colorsaurus = { workspace = true }

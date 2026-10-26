@@ -575,7 +575,10 @@ Three rules:
     in one file rather than four UIs.
   - Daemon watches profile files (`notify`, 200 ms debounce) and emits `profile.changed` /
     `prefs.changed`; UIs apply theme, keymap, and format-on-save without restart. A syntax error
-    keeps the last good config and raises a notice.
+    keeps the last good config and raises a notice. **Done for the theme, without the event**:
+    `acpilot tui` watches the user's and the project's settings and recolours itself on save, and
+    the daemon resolves `theme_web` per request, so neither needs a restart. `prefs.changed` and
+    the remaining preferences are this task.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 
@@ -829,7 +832,9 @@ v0.1 (D18).
     theme (17 foreground tokens x 2 surfaces), `built_in_themes_meet_wcag_aa`. **Consumers and settings done**:
     `theme` plus `theme_tui`/`theme_gui`/`theme_web` in the settings cascade, one shared
     `ThemeRegistry` resolver, the TUI drawing every pane from it, the desktop app and the daemon's
-    page reading the same palettes. Hot switch via `prefs.changed` remains.
+    page reading the same palettes. **Hot switch done for the two surfaces that can re-read a
+    file**: the TUI watches the settings files and recolours on save, the web page is resolved per
+    request; `prefs.changed` and the desktop app's window remain.
 
 - [ ] **P4.6-7 · Presets that point at programs** (1d)
   - A `language_servers` or `agents` contribution merges into the typed registries; a command it

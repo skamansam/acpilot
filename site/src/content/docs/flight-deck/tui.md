@@ -25,7 +25,10 @@ The colours are not this crate's: every pane, card and status label is drawn fro
 the theme tokens the desktop app and the browser read, resolved from
 `theme_tui` (over `theme`) in the project's settings. A theme is an extension, so
 one pack recolours all three surfaces at once, and a project can choose a
-different one without changing anything global.
+different one without changing anything global. Saving the settings file is the
+recolour: the client watches the user's and the project's `config.toml`, and the
+status bar names the theme it switched to, so editing `theme_tui` in one window
+is not a note to restart in another.
 
 ## What it is built on
 

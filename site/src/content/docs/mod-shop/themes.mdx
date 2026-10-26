@@ -101,18 +101,26 @@ namespaced and why `acpilot.night-flight` itself cannot be replaced.
 
 ## Switching, without a restart
 
-The theme is a preference, so changing it emits `prefs.changed` and every attached
-client re-reads the tokens:
+The theme is a preference in `config.toml`, and saving the file is the switch —
+naming another id is enough:
 
-```bash
-acpilot theme set acpilot.night-flight-syntax
-acpilot theme ls --json | jq '.[] | select(.appearance=="light")'
+```toml
+[preferences]
+theme = "acpilot.night-flight-syntax"
 ```
 
+`acpilot tui` watches the user's and the project's settings and recolours the open
+client, naming the theme in its status bar, so an edit in one window lands in the
+other. The daemon reads `theme_web` every time it serves the page, so the browser
+is the new palette on its next load. A file that does not parse, or an id no loaded
+extension provides, leaves what is on screen alone and is read again on the next
+save. Pushing the change to clients that are not watching a file — a daemon-side
+`prefs.changed` — is P4-7.
+
 <Aside type="note" title="Pairing, not guessing">
-`appearance` tells the UI which half of a pair it is. Starlight's light/dark
-toggle, the TUI's `:theme` command, and the desktop app's switcher all use it to
-pick the right theme per mode instead of recolouring one in the dark.
+`appearance` says which half of a pair a theme is, so a surface can hold one id for
+each mode — light beside dark in the same window — instead of recolouring a single
+theme in the dark.
 </Aside>
 
 ## Where the built-ins live

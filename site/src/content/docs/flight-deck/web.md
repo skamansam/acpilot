@@ -13,9 +13,11 @@ no account to create — the daemon serves its own frontend.
 
 `acpilotd` embeds the built SPA, so "install the web UI" means "run the daemon".
 The page is themed by the same extension the terminal and the desktop app read:
-the daemon resolves `theme_web` (over `theme`) from the workspace's settings at
-startup and serves the page with those tokens as its CSS variables, so `--bg` and
-`--accent` are the theme's, not values someone typed into a stylesheet.
+the daemon resolves `theme_web` (over `theme`) from the workspace's settings each
+time the page is served and sends those tokens as its CSS variables, so `--bg` and
+`--accent` are the theme's, not values someone typed into a stylesheet. Reading it
+per request is what makes a settings file only worth saving once: nothing has to be
+restarted for the next load to be the new colours.
 
 Routes are profile- and workspace-aware:
 

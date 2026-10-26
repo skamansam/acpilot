@@ -51,12 +51,131 @@ const FRAME: Duration = Duration::from_millis(120);
 /// The terminal is restored on the way out, including when a draw fails: a TUI
 /// that leaves the cursor hidden and the screen in raw mode is worse than the
 /// crash that caused it.
-pub fn run(daemon: &str, token: Option<&str>, theme: Theme) -> io::Result<()> {
+pub fn run(daemon: &str, token: Option<&str>, theme: Theme, files: ThemeFiles) -> io::Result<()> {
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
+    let changes = updates.clone();
     let worker = backend::spawn(daemon.to_owned(), token.map(str::to_owned), updates);
+    watch_theme(files, changes);
     let mut app = App::new(daemon);
     app.set_theme(theme);
     drive(app, worker, inbox)
+}
+
+/// The settings files a running client re-reads when they change.
+///
+/// Paths rather than a value: a theme edited while the client is open should be
+/// the theme on screen, and that means knowing what to watch. `None` is a surface
+/// with no such file — the design pass reads nothing from disk — which is why the
+/// default watches nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThemeFiles {
+    /// The user's `config.toml`.
+    pub user: Option<std::path::PathBuf>,
+    /// The project's `.acpilot/config.toml`, when the launch is in a project.
+    pub project: Option<std::path::PathBuf>,
+}
+
+/// Re-resolve the terminal's theme from the settings files.
+///
+/// [`None`] when the settings do not load or name a theme that is not installed:
+/// a client that is already drawing keeps the colours it has rather than going
+/// blank because a file was half-written when it was read.
+#[must_use]
+pub fn reload_theme(files: &ThemeFiles) -> Option<Theme> {
+    use acpilot_proto::profile::ThemeSurface;
+
+    let settings =
+        acpilot_profile::settings::Settings::load(files.user.as_deref(), files.project.as_deref())
+            .ok()?;
+    let extensions = acpilot_extensions::builtin::load_all().ok()?;
+    let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
+        .complete(settings.preferences.theme_for(ThemeSurface::Tui))
+        .ok()?;
+    Some(Theme::from_resolved(&resolved))
+}
+
+/// Watch the settings files and send a new theme when one of them changes.
+///
+/// The directory is watched rather than the file because a settings file is often
+/// created after the client starts, and because an editor that saves by rename
+/// would otherwise stop being watched the first time it saved. Events are
+/// debounced: one save is several writes, and a theme that flickered through three
+/// palettes would be worse than one that changed once.
+fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
+    std::thread::spawn(move || {
+        let (events, inbox) = std::sync::mpsc::channel();
+        let Ok(mut watcher) = notify::recommended_watcher(move |event| {
+            let _ = events.send(event);
+        }) else {
+            return;
+        };
+        let mut watched = Vec::new();
+        watch_directories(&mut watcher, &files, &mut watched);
+        if watched.is_empty() {
+            // The design pass and the demo read no settings: nothing to re-read.
+            return;
+        }
+        while let Ok(Ok(_)) = inbox.recv() {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            while inbox.try_recv().is_ok() {}
+            // The file may have appeared in a directory the first event created, so
+            // the watch is re-armed before the settings are read.
+            watch_directories(&mut watcher, &files, &mut watched);
+            let Some(theme) = reload_theme(&files) else {
+                continue;
+            };
+            if updates.send(Update::Theme(theme)).is_err() {
+                // The client is gone; so is the reason to watch.
+                return;
+            }
+        }
+    });
+}
+
+/// Watch every settings directory that exists, once each.
+///
+/// Called again on each event: a directory created since the last one may hold the
+/// file now, which is how a project that had no `.acpilot` when the client started
+/// still gets a theme when one is written.
+fn watch_directories(
+    watcher: &mut impl notify::Watcher,
+    files: &ThemeFiles,
+    watched: &mut Vec<std::path::PathBuf>,
+) {
+    for directory in [files.user.as_deref(), files.project.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter_map(nearest_directory)
+    {
+        if watched.contains(&directory) {
+            continue;
+        }
+        // A directory that cannot be watched is not a failed launch: the theme
+        // simply stays the one that is on screen.
+        if watcher
+            .watch(&directory, notify::RecursiveMode::NonRecursive)
+            .is_ok()
+        {
+            watched.push(directory);
+        }
+    }
+}
+
+/// The directory to watch for `path`: its own, or the nearest ancestor that exists.
+///
+/// A settings file is not necessarily there when the client starts — a project that
+/// has never been configured has no `.acpilot` directory — and watching a path that
+/// does not exist fails rather than waiting for it. The nearest existing ancestor
+/// exists by construction, so the creation below it is the event that re-arms the
+/// watch closer to the file.
+fn nearest_directory(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut directory = path.parent()?;
+    loop {
+        if directory.is_dir() {
+            return Some(directory.to_path_buf());
+        }
+        directory = directory.parent()?;
+    }
 }
 
 /// Run the design pass: the seeded world from `acpilot-demo`, drawn by this UI.
@@ -156,5 +275,110 @@ fn event_loop(
         if app.should_quit {
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn write(directory: &std::path::Path, name: &str, text: &str) -> std::path::PathBuf {
+        let path = directory.join(name);
+        fs::write(&path, text).expect("settings file");
+        path
+    }
+
+    #[test]
+    fn a_theme_edit_is_the_theme_after_it_is_saved() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(
+            directory.path(),
+            "config.toml",
+            "[preferences]\ntheme_tui = \"acpilot.night-flight\"\n",
+        );
+        let files = ThemeFiles {
+            user: Some(user.clone()),
+            project: None,
+        };
+        assert_eq!(
+            reload_theme(&files).expect("a theme").name(),
+            "Night flight"
+        );
+
+        // The same file, saved again with another id: no restart in between.
+        write(
+            directory.path(),
+            "config.toml",
+            "[preferences]\ntheme_tui = \"acpilot.paper\"\n",
+        );
+        assert_eq!(reload_theme(&files).expect("a theme").name(), "Paper");
+    }
+
+    #[test]
+    fn the_projects_theme_wins_over_the_users_for_that_project() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(
+            directory.path(),
+            "user.toml",
+            "[preferences]\ntheme = \"acpilot.paper\"\n",
+        );
+        let project = write(
+            directory.path(),
+            "project.toml",
+            "[preferences]\ntheme_tui = \"acpilot.night-flight\"\n",
+        );
+        let files = ThemeFiles {
+            user: Some(user),
+            project: Some(project),
+        };
+        assert_eq!(
+            reload_theme(&files).expect("a theme").name(),
+            "Night flight",
+            "the project's terminal theme, over the user's shared one"
+        );
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_keeps_the_current_theme() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(directory.path(), "config.toml", "[preferences\ntheme = 3\n");
+        assert!(
+            reload_theme(&ThemeFiles {
+                user: Some(user),
+                project: None,
+            })
+            .is_none(),
+            "no theme, so the caller keeps what it is drawing"
+        );
+    }
+
+    #[test]
+    fn a_settings_file_that_is_not_there_yet_is_watched_at_the_nearest_directory() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let missing = directory.path().join(".acpilot").join("config.toml");
+        assert_eq!(
+            nearest_directory(&missing).as_deref(),
+            Some(directory.path()),
+            "the project root, because `.acpilot` does not exist yet"
+        );
+    }
+
+    #[test]
+    fn a_theme_that_is_not_installed_is_not_silently_the_default() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(
+            directory.path(),
+            "config.toml",
+            "[preferences]\ntheme_tui = \"acpilot.no-such-theme\"\n",
+        );
+        assert!(
+            reload_theme(&ThemeFiles {
+                user: Some(user),
+                project: None,
+            })
+            .is_none()
+        );
     }
 }

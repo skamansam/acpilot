@@ -119,6 +119,12 @@ pub enum Update {
     },
     /// Something the user should read, but which is not a transcript event.
     Status(String),
+    /// The settings named a different theme, and it resolved.
+    ///
+    /// Not from the daemon: the watcher in [`crate::watch_theme`] sends this, and
+    /// it arrives through the same channel as everything else so a theme change is
+    /// one more thing the loop applies rather than a second path into the state.
+    Theme(crate::theme::Theme),
 }
 
 /// The worker's handle: where requests go, and the thread running it.

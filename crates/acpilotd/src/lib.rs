@@ -209,11 +209,6 @@ pub struct AppState {
     /// transcript directory is a decision about a filesystem, and the default for
     /// a library value is not to write into somebody's home directory.
     transcripts: Option<std::path::PathBuf>,
-    /// The colours the web page is themed with, when the launch resolved a theme.
-    ///
-    /// `None` is the page's own palette, which is what a daemon started with no
-    /// settings has always served.
-    web_palette: Option<acpilot_extensions::Palette>,
     /// The terminals *agents* ask their client to open.
     ///
     /// A different store from [`Self::terminals`], which is the panes a client
@@ -248,7 +243,6 @@ impl Default for AppState {
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
-            web_palette: None,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             decided: Arc::default(),
         }
@@ -322,11 +316,24 @@ impl AppState {
         self
     }
 
-    /// Theme the browser UI with these tokens.
+    /// The palette the web page is drawn with, resolved now.
+    ///
+    /// Read per request rather than at startup: the browser page is the one
+    /// surface whose theme can be re-read for free, and a settings file edited
+    /// while the daemon runs should be the colours on the next page load instead of
+    /// a reason to restart. `None` leaves the page's own palette, which is what a
+    /// daemon with no workspace or no settings has always served.
     #[must_use]
-    pub fn with_web_palette(mut self, palette: acpilot_extensions::Palette) -> Self {
-        self.web_palette = Some(palette);
-        self
+    pub fn web_palette(&self) -> Option<acpilot_extensions::Palette> {
+        use acpilot_proto::profile::ThemeSurface;
+
+        let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
+        let settings = root.settings().ok()?;
+        let extensions = acpilot_extensions::builtin::load_all().ok()?;
+        let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
+            .complete(settings.preferences.theme_for(ThemeSurface::Web))
+            .ok()?;
+        Some(resolved.palette)
     }
 
     /// Where transcripts are kept, when the daemon keeps them.
@@ -934,8 +941,8 @@ fn resolve_doc() {}
 /// a browser at all, which is the first question when the web UI is the one that
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
 async fn web_app(State(state): State<AppState>) -> Html<String> {
-    Html(match &state.web_palette {
-        Some(palette) => acpilot_web::themed_page(acpilot_core::VERSION, palette),
+    Html(match state.web_palette() {
+        Some(palette) => acpilot_web::themed_page(acpilot_core::VERSION, &palette),
         None => acpilot_web::page(acpilot_core::VERSION),
     })
 }
@@ -1079,6 +1086,51 @@ pub fn router_with(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_web_page_theme_is_read_when_the_page_is_asked_for() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let marker = directory.path().join(".acpilot");
+        std::fs::create_dir_all(&marker).expect("marker directory");
+        let config = marker.join("config.toml");
+        std::fs::write(&config, "[preferences]\ntheme_web = \"acpilot.paper\"\n")
+            .expect("project settings");
+
+        let state = AppState::new().with_workspace(Workspace {
+            id: "thing".to_owned(),
+            root: directory.path().to_path_buf(),
+        });
+        let palette = state.web_palette().expect("a theme is named");
+        assert_eq!(
+            palette
+                .ui(acpilot_extensions::UiToken::Bg)
+                .expect("a background")
+                .to_string(),
+            "#fbf7ef",
+            "paper's background, from the project's settings"
+        );
+
+        // Editing the file is the next page load's colours: no restart, no cache.
+        std::fs::write(
+            &config,
+            "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+        )
+        .expect("project settings");
+        let palette = state.web_palette().expect("a theme is named");
+        assert_eq!(
+            palette
+                .ui(acpilot_extensions::UiToken::Bg)
+                .expect("a background")
+                .to_string(),
+            "#070d18",
+            "night flight, because the file changed"
+        );
+    }
+
+    #[test]
+    fn a_daemon_with_no_workspace_serves_the_pages_own_palette() {
+        assert!(AppState::new().web_palette().is_none());
+    }
 
     #[test]
     fn statuses_match_the_documented_contract() {

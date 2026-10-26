@@ -76,6 +76,14 @@ repository can be light while everything else stays night flight. An id that no
 loaded extension provides is refused by name rather than drawn in default
 colours.
 
+Saving the file applies it. `acpilot tui` watches the user's and the project's
+settings and recolours itself when either changes, naming the theme in its status
+bar; the daemon resolves `theme_web` per request, so the browser page is the new
+palette on its next load. A file that does not parse, or that names a theme no
+loaded extension provides, leaves the running client on the colours it already
+has — a half-written file is not a reason to go blank — and the next save is read
+normally.
+
 ## Project config
 
 A project is a directory holding `.acpilot/config.toml`. That file is the only

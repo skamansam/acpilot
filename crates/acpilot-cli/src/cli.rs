@@ -414,7 +414,13 @@ fn run_tui(
         }
     }
 
-    match acpilot_tui::run(&running.endpoint, token.as_deref(), theme) {
+    // The files the theme came from: the client watches them, so an edit to either
+    // is the colours on screen rather than a note to restart.
+    let theme_files = acpilot_tui::ThemeFiles {
+        user: Some(acpilot_profile::user_config_path()),
+        project: root.project().map(|project| project.config_path()),
+    };
+    match acpilot_tui::run(&running.endpoint, token.as_deref(), theme, theme_files) {
         Ok(()) => exit::SUCCESS,
         Err(error) => {
             eprintln!("acpilot tui: {error}");

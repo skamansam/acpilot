@@ -16,6 +16,9 @@ acpilot-demo = { workspace = true }
 # The theme tokens the three surfaces share: the terminal is one of them, so it
 # reads the same token file rather than keeping a private palette.
 acpilot-extensions = { workspace = true }
+# Where the theme setting lives: a running client re-reads the same cascade the
+# CLI resolved at launch, so an edit is a recolour rather than a restart.
+acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
@@ -26,7 +29,12 @@ vt100 = { workspace = true }
 # Session events carry their payload as JSON, because the ACP updates they come
 # from are not one shape; reading them is the app's job, not a typed bypass.
 serde_json = { workspace = true }
+# Watching the settings files, so `[preferences] theme_tui` applies while open.
+notify = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

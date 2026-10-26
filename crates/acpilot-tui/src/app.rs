@@ -1665,6 +1665,17 @@ impl App {
                 self.status = format!("turn {turn_id} accepted at {first_seq}");
             }
             Update::Status(message) => self.status = message,
+            Update::Theme(theme) => {
+                // The settings changed under a running client. Say which theme it is
+                // now, because a screen that recoloured itself silently looks like a
+                // bug to anyone who did not just edit the file.
+                self.status = if theme.name().is_empty() {
+                    "theme · terminal defaults".to_owned()
+                } else {
+                    format!("theme · {}", theme.name())
+                };
+                self.set_theme(theme);
+            }
         }
     }
 

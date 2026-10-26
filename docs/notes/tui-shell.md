@@ -85,7 +85,7 @@ permission card, the toast.
 | Permission card | real answer path, seeded diff preview | P6-8, P6-9 |
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
 | Command palette, which-key, toast | real | — |
-| Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved once for the terminal, the desktop app and the page the daemon serves | hot switch (P4.6-6) |
+| Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | seeded rows; movement and collapsing work | P6-6 |
 | Editor | seeded buffer; cursor moves | P6-1, P6-4 |
 | Stats bar | seeded rows | P6-13 |

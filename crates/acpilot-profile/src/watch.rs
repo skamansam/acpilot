@@ -29,9 +29,20 @@ pub const DEBOUNCE: Duration = Duration::from_millis(200);
 /// not exist, or a platform without a usable backend. A caller that gets [`None`]
 /// has no live reload, which is the same outcome as a surface that never asked for
 /// one, so this is not an error.
+///
+/// Only the files named are changes. A directory holds other things — a log, an
+/// editor's scratch file, a second settings file — and a watcher that reported
+/// every one of them would re-read the cascade, and recolour, for something that
+/// is not the settings.
 #[must_use]
 pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>> {
-    let paths: Vec<PathBuf> = paths.into_iter().collect();
+    // Resolved before anything is compared: an event reports the path a
+    // filesystem reports, and on a platform where `/tmp` is a link to `private/tmp`
+    // that is not the path a caller asked about.
+    let targets: Vec<PathBuf> = paths
+        .into_iter()
+        .filter_map(|path| resolved(&path))
+        .collect();
     let (marks, watch_events) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::recommended_watcher(move |event| {
         // The receiver is gone only when the watcher itself is, and the watcher is
@@ -41,19 +52,22 @@ pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>>
     .ok()?;
 
     let mut watched = Vec::new();
-    arm(&mut watcher, &paths, &mut watched);
+    arm(&mut watcher, &targets, &mut watched);
     if watched.is_empty() {
         return None;
     }
 
     let (changes, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        while let Ok(Ok(_)) = watch_events.recv() {
+        while let Ok(Ok(event)) = watch_events.recv() {
+            if !touches(&targets, &event) {
+                continue;
+            }
             std::thread::sleep(DEBOUNCE);
             while watch_events.try_recv().is_ok() {}
             // Re-armed before the caller reads anything: the event that just
             // arrived may be the creation of the directory the file will be in.
-            arm(&mut watcher, &paths, &mut watched);
+            arm(&mut watcher, &targets, &mut watched);
             if changes.send(()).is_err() {
                 // Nobody is listening any more; so is the reason to watch.
                 return;
@@ -63,9 +77,53 @@ pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>>
     Some(receiver)
 }
 
+/// Whether an event is about one of the watched files rather than its neighbours.
+///
+/// Two shapes count: the file itself, and any directory that is an ancestor of it —
+/// the second is how the creation of `.acpilot` is a change to the `config.toml`
+/// that is about to be written inside it. Everything else in the same directory is
+/// somebody else's business.
+fn touches(targets: &[PathBuf], event: &notify::Event) -> bool {
+    is_a_change(event)
+        && event.paths.iter().any(|changed| {
+            targets
+                .iter()
+                .any(|target| target == changed || target.starts_with(changed))
+        })
+}
+
+/// Whether the event says the file was written, rather than looked at.
+///
+/// Reading is an event on Linux and macOS, and a caller reacts to a change by
+/// reading the file — so a watcher that counted reads would answer every read with
+/// another `Read`, forever. A close-for-write is still a change: it is how an
+/// editor's save arrives on some platforms.
+fn is_a_change(event: &notify::Event) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+
+    !matches!(
+        event.kind,
+        notify::EventKind::Access(
+            AccessKind::Read | AccessKind::Open(_) | AccessKind::Close(AccessMode::Read)
+        )
+    )
+}
+
+/// `path` with the nearest existing ancestor it has made absolute.
+///
+/// The file may not exist yet, so it cannot be canonicalised itself; the directory
+/// it would live in can, and the rest of the path is appended unchanged.
+fn resolved(path: &Path) -> Option<PathBuf> {
+    let directory = nearest_directory(path)?;
+    let base = std::fs::canonicalize(&directory).ok()?;
+    Some(base.join(path.strip_prefix(&directory).ok()?))
+}
+
 /// Watch every directory `paths` live in that is not watched yet.
 fn arm(watcher: &mut impl notify::Watcher, paths: &[PathBuf], watched: &mut Vec<PathBuf>) {
     for directory in paths.iter().filter_map(|path| nearest_directory(path)) {
+        // Watched by name, matched by file: a directory is the only thing a
+        // filesystem will watch, and `touches` is what narrows it back down.
         if watched.contains(&directory) {
             continue;
         }
@@ -129,6 +187,56 @@ mod tests {
             changes.recv_timeout(DEBOUNCE / 2),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout),
             "and the second write inside the window was folded into it"
+        );
+    }
+
+    #[test]
+    fn reading_the_settings_is_not_a_change() {
+        // The caller reads the file when it is told it changed. If a read were a
+        // change, every announcement would produce the next one — which is what
+        // watching a daemon serve `prefs` frames looked like: a stream of them,
+        // two hundred milliseconds apart, for one save that never happened again.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let settings = directory.path().join("config.toml");
+        std::fs::write(&settings, "[preferences]\ntheme = \"acpilot.paper\"\n").expect("write");
+        let changes = changes([settings.clone()]).expect("the directory is watchable");
+
+        std::fs::write(&settings, "[preferences]\ntheme = \"acpilot.paper\"\n").expect("write");
+        assert!(
+            changes.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the save is a change"
+        );
+
+        // What every caller does with the signal, then does not hear back from.
+        std::fs::read_to_string(&settings).expect("read");
+        assert_eq!(
+            changes.recv_timeout(DEBOUNCE * 3),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+            "reading the settings is not a change to them"
+        );
+    }
+
+    #[test]
+    fn a_neighbouring_file_is_not_a_change_to_the_settings() {
+        // A watched directory holds other files. If a log written next to the
+        // settings counts as a change, a daemon logging into its own config
+        // directory announces preferences on every line — which is how this was
+        // found, watching the daemon's log grow.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let settings = directory.path().join("config.toml");
+        let changes = changes([settings.clone()]).expect("the directory is watchable");
+
+        std::fs::write(directory.path().join("daemon.log"), "not the settings\n").expect("write");
+        assert_eq!(
+            changes.recv_timeout(DEBOUNCE * 3),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+            "a log beside the settings is not a settings change"
+        );
+
+        std::fs::write(&settings, "[preferences]\ntheme = \"acpilot.paper\"\n").expect("write");
+        assert!(
+            changes.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "and the settings file itself still is"
         );
     }
 

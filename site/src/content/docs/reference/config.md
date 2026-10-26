@@ -48,6 +48,7 @@ format_on_save = true
 trim_trailing_whitespace = true
 wrap = false
 theme = "acpilot.night-flight"
+# theme_follow_terminal = true      # solve the terminal's palette from the terminal itself
 diagnostics_min_severity = "warning"
 ```
 
@@ -75,6 +76,13 @@ Any theme a loaded extension provides works here. A project's
 repository can be light while everything else stays night flight. An id that no
 loaded extension provides is refused by name rather than drawn in default
 colours.
+
+`theme_follow_terminal` replaces the terminal's id with the terminal itself: the
+client asks what its background and foreground are (`OSC 11` and `OSC 10`) and
+solves a complete token set around that pair, so a black terminal and a cream one
+both get a theme that fits. The desktop app and the browser are not affected —
+neither has a terminal to ask. A terminal that will not say falls back to the
+theme named above, which is why the key is safe to turn on anywhere.
 
 Saving the file applies it. `acpilot tui` watches the user's and the project's
 settings and recolours itself when either changes, naming the theme in its status

@@ -541,6 +541,30 @@ impl<'a> ThemeRegistry<'a> {
             })
         }
     }
+
+    /// [`ThemeRegistry::complete`], plus every rule a theme can break and still be
+    /// worth drawing.
+    ///
+    /// Today that is the panel window ([`crate::contrast::PANEL_MIN`]–
+    /// [`crate::contrast::PANEL_MAX`]): a theme whose panel is 1.04:1 from the
+    /// background is a panel nobody can see, not a file that cannot be read, so it
+    /// loads and the caller says what is wrong with it. Refusing it would leave a
+    /// person with no theme at all over a shade they can fix in one line.
+    ///
+    /// # Errors
+    ///
+    /// [`ThemeRegistry::complete`]'s errors: a theme that is not there, an unknown
+    /// base, a cycle, or a token the chain never sets.
+    pub fn complete_with_warnings(
+        &self,
+        id: &str,
+    ) -> Result<(ResolvedTheme, Vec<String>), ThemeError> {
+        let theme = self.complete(id)?;
+        let warnings = crate::contrast::panel_violation(&theme)
+            .map(|violation| vec![format!("theme {}: {violation}", theme.id)])
+            .unwrap_or_default();
+        Ok((theme, warnings))
+    }
 }
 
 /// A theme after inheritance, ready to hand to a surface.

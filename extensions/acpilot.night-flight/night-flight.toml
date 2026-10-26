@@ -4,8 +4,11 @@ name = "Night flight"
 appearance = "dark"
 
 [ui]
+# `bg_panel` sits 1.17:1 from `bg`: far enough to read as a layer, inside the
+# 1.10–1.35 window the contrast check holds every theme to. The old value,
+# `#0c1424`, measured 1.06:1 — a panel you could only find by looking for it.
 bg = "#070d18"
-bg_panel = "#0c1424"
+bg_panel = "#141e33"
 text = "#e8edf6"
 text_muted = "#97a5b8"
 accent = "#f7c65c"

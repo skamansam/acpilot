@@ -22,6 +22,7 @@ pub mod contrast;
 pub mod docs;
 pub mod effective;
 pub mod error;
+pub mod follow;
 pub mod loader;
 pub mod manifest;
 pub mod preset;

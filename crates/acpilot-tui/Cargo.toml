@@ -31,9 +31,25 @@ vt100 = { workspace = true }
 serde_json = { workspace = true }
 # Watching the settings files, so `[preferences] theme_tui` applies while open.
 notify = { workspace = true }
+# Asking the terminal what its background and foreground are, so
+# `[preferences] theme_follow_terminal` has a pair to solve a palette around.
+terminal-colorsaurus = { workspace = true }
 tokio = { workspace = true }
 
+# A terminal that answers the colour query, for `tests/terminal_colours.rs`.
+# Nothing in the product runs it: the test spawns it on the slave side of a real
+# pty and plays the terminal from the master side, which is the only way the
+# `OSC 10`/`OSC 11` round-trip is exercised rather than assumed.
+[[bin]]
+name = "acpilot-terminal-colours"
+path = "tests/fixtures/colour_probe.rs"
+test = false
+doc = false
+
 [dev-dependencies]
+# The pty itself: the test needs a master to answer on and a slave to be the
+# child's terminal, and an in-process pipe is not a terminal to `isatty`.
+portable-pty = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

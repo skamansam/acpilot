@@ -76,6 +76,19 @@ pub struct Preferences {
     /// Theme for the browser UI, when it should differ from [`Preferences::theme`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_web: Option<String>,
+    /// Solve the terminal's palette from the terminal's own colours.
+    ///
+    /// On, `theme_tui` and `theme` name no theme for the terminal: the background
+    /// and foreground the terminal reports (`OSC 11`/`OSC 10`) are the pair a
+    /// complete token set is solved around, and they are what the terminal UI draws
+    /// with. A terminal that cannot report them falls back to the theme the
+    /// settings name, so the key is safe to turn on anywhere.
+    ///
+    /// The desktop app and the browser are unaffected: neither has a terminal to
+    /// ask, and a window that took its colours from the shell that launched it would
+    /// change appearance depending on where it was started from.
+    #[serde(default)]
+    pub theme_follow_terminal: bool,
     /// Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.
     pub diagnostics_min_severity: String,
 }

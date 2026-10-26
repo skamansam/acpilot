@@ -1,187 +1,26 @@
 {
-  "aa_threshold": 4.5,
   "generated_by": "cargo xtask docs-data",
   "schema_version": 1,
+  "aa_threshold": 4.5,
   "themes": [
     {
+      "id": "acpilot.night-flight",
+      "name": "Night flight",
       "appearance": "dark",
       "built_in": true,
       "extension_id": "acpilot.night-flight",
-      "id": "acpilot.night-flight",
-      "minimum": 5.39,
-      "name": "Night flight",
-      "pairs": [
-        {
-          "foreground": "text",
-          "ratio": 16.55,
-          "surface": "bg"
-        },
-        {
-          "foreground": "text_muted",
-          "ratio": 7.77,
-          "surface": "bg"
-        },
-        {
-          "foreground": "accent",
-          "ratio": 12.21,
-          "surface": "bg"
-        },
-        {
-          "foreground": "accent_high",
-          "ratio": 15.56,
-          "surface": "bg"
-        },
-        {
-          "foreground": "success",
-          "ratio": 9.4,
-          "surface": "bg"
-        },
-        {
-          "foreground": "warning",
-          "ratio": 12.21,
-          "surface": "bg"
-        },
-        {
-          "foreground": "danger",
-          "ratio": 7.7,
-          "surface": "bg"
-        },
-        {
-          "foreground": "comment",
-          "ratio": 5.7,
-          "surface": "bg"
-        },
-        {
-          "foreground": "keyword",
-          "ratio": 12.21,
-          "surface": "bg"
-        },
-        {
-          "foreground": "string",
-          "ratio": 11.3,
-          "surface": "bg"
-        },
-        {
-          "foreground": "number",
-          "ratio": 10.05,
-          "surface": "bg"
-        },
-        {
-          "foreground": "type",
-          "ratio": 10.91,
-          "surface": "bg"
-        },
-        {
-          "foreground": "function",
-          "ratio": 14.53,
-          "surface": "bg"
-        },
-        {
-          "foreground": "variable",
-          "ratio": 16.55,
-          "surface": "bg"
-        },
-        {
-          "foreground": "constant",
-          "ratio": 11.55,
-          "surface": "bg"
-        },
-        {
-          "foreground": "operator",
-          "ratio": 11.03,
-          "surface": "bg"
-        },
-        {
-          "foreground": "punctuation",
-          "ratio": 7.77,
-          "surface": "bg"
-        },
-        {
-          "foreground": "text",
-          "ratio": 15.66,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "text_muted",
-          "ratio": 7.35,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "accent",
-          "ratio": 11.56,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "accent_high",
-          "ratio": 14.73,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "success",
-          "ratio": 8.9,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "warning",
-          "ratio": 11.56,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "danger",
-          "ratio": 7.29,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "comment",
-          "ratio": 5.39,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "keyword",
-          "ratio": 11.56,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "string",
-          "ratio": 10.7,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "number",
-          "ratio": 9.51,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "type",
-          "ratio": 10.32,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "function",
-          "ratio": 13.74,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "variable",
-          "ratio": 15.66,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "constant",
-          "ratio": 10.93,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "operator",
-          "ratio": 10.44,
-          "surface": "bg_panel"
-        },
-        {
-          "foreground": "punctuation",
-          "ratio": 7.35,
-          "surface": "bg_panel"
-        }
-      ],
+      "ui": {
+        "accent": "#f7c65c",
+        "accent_high": "#ffe3a8",
+        "bg": "#070d18",
+        "bg_panel": "#141e33",
+        "border": "#24334a",
+        "danger": "#ff7a7a",
+        "success": "#59c98b",
+        "text": "#e8edf6",
+        "text_muted": "#97a5b8",
+        "warning": "#f7c65c"
+      },
       "syntax": {
         "comment": "#7d8ca3",
         "constant": "#ffb3c1",
@@ -194,198 +33,199 @@
         "type": "#8fc7ff",
         "variable": "#e8edf6"
       },
-      "ui": {
-        "accent": "#f7c65c",
-        "accent_high": "#ffe3a8",
-        "bg": "#070d18",
-        "bg_panel": "#0c1424",
-        "border": "#24334a",
-        "danger": "#ff7a7a",
-        "success": "#59c98b",
-        "text": "#e8edf6",
-        "text_muted": "#97a5b8",
-        "warning": "#f7c65c"
-      }
-    },
-    {
-      "appearance": "light",
-      "built_in": true,
-      "extension_id": "acpilot.paper",
-      "id": "acpilot.paper",
-      "minimum": 5.12,
-      "name": "Paper",
       "pairs": [
         {
           "foreground": "text",
-          "ratio": 14.75,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 16.55
         },
         {
           "foreground": "text_muted",
-          "ratio": 6.52,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 7.77
         },
         {
           "foreground": "accent",
-          "ratio": 5.53,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 12.21
         },
         {
           "foreground": "accent_high",
-          "ratio": 8.0,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 15.56
         },
         {
           "foreground": "success",
-          "ratio": 6.08,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 9.4
         },
         {
           "foreground": "warning",
-          "ratio": 7.0,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 12.21
         },
         {
           "foreground": "danger",
-          "ratio": 7.25,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 7.7
         },
         {
           "foreground": "comment",
-          "ratio": 5.56,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 5.7
         },
         {
           "foreground": "keyword",
-          "ratio": 5.53,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 12.21
         },
         {
           "foreground": "string",
-          "ratio": 6.08,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 11.3
         },
         {
           "foreground": "number",
-          "ratio": 8.13,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 10.05
         },
         {
           "foreground": "type",
-          "ratio": 7.77,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 10.91
         },
         {
           "foreground": "function",
-          "ratio": 8.08,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 14.53
         },
         {
           "foreground": "variable",
-          "ratio": 14.75,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 16.55
         },
         {
           "foreground": "constant",
-          "ratio": 8.37,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 11.55
         },
         {
           "foreground": "operator",
-          "ratio": 10.71,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 11.03
         },
         {
           "foreground": "punctuation",
-          "ratio": 6.52,
-          "surface": "bg"
+          "surface": "bg",
+          "ratio": 7.77
         },
         {
           "foreground": "text",
-          "ratio": 13.63,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 14.15
         },
         {
           "foreground": "text_muted",
-          "ratio": 6.03,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 6.64
         },
         {
           "foreground": "accent",
-          "ratio": 5.12,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 10.44
         },
         {
           "foreground": "accent_high",
-          "ratio": 7.4,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 13.3
         },
         {
           "foreground": "success",
-          "ratio": 5.62,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 8.04
         },
         {
           "foreground": "warning",
-          "ratio": 6.47,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 10.44
         },
         {
           "foreground": "danger",
-          "ratio": 6.7,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 6.58
         },
         {
           "foreground": "comment",
-          "ratio": 5.14,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 4.87
         },
         {
           "foreground": "keyword",
-          "ratio": 5.12,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 10.44
         },
         {
           "foreground": "string",
-          "ratio": 5.62,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 9.66
         },
         {
           "foreground": "number",
-          "ratio": 7.52,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 8.59
         },
         {
           "foreground": "type",
-          "ratio": 7.18,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 9.33
         },
         {
           "foreground": "function",
-          "ratio": 7.47,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 12.42
         },
         {
           "foreground": "variable",
-          "ratio": 13.63,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 14.15
         },
         {
           "foreground": "constant",
-          "ratio": 7.73,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 9.87
         },
         {
           "foreground": "operator",
-          "ratio": 9.9,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 9.43
         },
         {
           "foreground": "punctuation",
-          "ratio": 6.03,
-          "surface": "bg_panel"
+          "surface": "bg_panel",
+          "ratio": 6.64
         }
       ],
+      "minimum": 4.87,
+      "panel": 1.17
+    },
+    {
+      "id": "acpilot.paper",
+      "name": "Paper",
+      "appearance": "light",
+      "built_in": true,
+      "extension_id": "acpilot.paper",
+      "ui": {
+        "accent": "#8a5a10",
+        "accent_high": "#6b4408",
+        "bg": "#fbf7ef",
+        "bg_panel": "#ece5d5",
+        "border": "#ddd2bb",
+        "danger": "#a01f1f",
+        "success": "#1f6b3f",
+        "text": "#1a2333",
+        "text_muted": "#5f594a",
+        "warning": "#7a4a00"
+      },
       "syntax": {
         "comment": "#6b6353",
         "constant": "#8a1f3f",
@@ -398,17 +238,601 @@
         "type": "#1a4f8a",
         "variable": "#1a2333"
       },
+      "pairs": [
+        {
+          "foreground": "text",
+          "surface": "bg",
+          "ratio": 14.75
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg",
+          "ratio": 6.52
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg",
+          "ratio": 5.53
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg",
+          "ratio": 8.0
+        },
+        {
+          "foreground": "success",
+          "surface": "bg",
+          "ratio": 6.08
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg",
+          "ratio": 7.0
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg",
+          "ratio": 7.25
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg",
+          "ratio": 5.56
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg",
+          "ratio": 5.53
+        },
+        {
+          "foreground": "string",
+          "surface": "bg",
+          "ratio": 6.08
+        },
+        {
+          "foreground": "number",
+          "surface": "bg",
+          "ratio": 8.13
+        },
+        {
+          "foreground": "type",
+          "surface": "bg",
+          "ratio": 7.77
+        },
+        {
+          "foreground": "function",
+          "surface": "bg",
+          "ratio": 8.08
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg",
+          "ratio": 14.75
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg",
+          "ratio": 8.37
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg",
+          "ratio": 10.71
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg",
+          "ratio": 6.52
+        },
+        {
+          "foreground": "text",
+          "surface": "bg_panel",
+          "ratio": 12.56
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg_panel",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg_panel",
+          "ratio": 4.71
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg_panel",
+          "ratio": 6.82
+        },
+        {
+          "foreground": "success",
+          "surface": "bg_panel",
+          "ratio": 5.18
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg_panel",
+          "ratio": 5.96
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg_panel",
+          "ratio": 6.17
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg_panel",
+          "ratio": 4.73
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg_panel",
+          "ratio": 4.71
+        },
+        {
+          "foreground": "string",
+          "surface": "bg_panel",
+          "ratio": 5.18
+        },
+        {
+          "foreground": "number",
+          "surface": "bg_panel",
+          "ratio": 6.93
+        },
+        {
+          "foreground": "type",
+          "surface": "bg_panel",
+          "ratio": 6.62
+        },
+        {
+          "foreground": "function",
+          "surface": "bg_panel",
+          "ratio": 6.88
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg_panel",
+          "ratio": 12.56
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg_panel",
+          "ratio": 7.13
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg_panel",
+          "ratio": 9.12
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg_panel",
+          "ratio": 5.55
+        }
+      ],
+      "minimum": 4.71,
+      "panel": 1.17
+    }
+  ],
+  "followed": [
+    {
+      "id": "acpilot.follow-terminal",
+      "name": "Follow terminal",
+      "appearance": "dark",
+      "built_in": true,
+      "extension_id": "acpilot.follow-terminal",
       "ui": {
-        "accent": "#8a5a10",
-        "accent_high": "#6b4408",
-        "bg": "#fbf7ef",
-        "bg_panel": "#f4eee1",
-        "border": "#ddd2bb",
-        "danger": "#a01f1f",
-        "success": "#1f6b3f",
-        "text": "#1a2333",
-        "text_muted": "#5f594a",
-        "warning": "#7a4a00"
+        "accent": "#debe73",
+        "accent_high": "#ecdaaf",
+        "bg": "#000000",
+        "bg_panel": "#171717",
+        "border": "#373737",
+        "danger": "#de7373",
+        "success": "#73de9f",
+        "text": "#ffffff",
+        "text_muted": "#828282",
+        "warning": "#deaf73"
+      },
+      "syntax": {
+        "comment": "#828282",
+        "constant": "#de7396",
+        "function": "#dea573",
+        "keyword": "#debe73",
+        "number": "#c373de",
+        "operator": "#828282",
+        "punctuation": "#828282",
+        "string": "#73de93",
+        "type": "#73a8de",
+        "variable": "#ffffff"
+      },
+      "pairs": [
+        {
+          "foreground": "text",
+          "surface": "bg",
+          "ratio": 21.0
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg",
+          "ratio": 5.46
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg",
+          "ratio": 11.72
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg",
+          "ratio": 15.21
+        },
+        {
+          "foreground": "success",
+          "surface": "bg",
+          "ratio": 12.68
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg",
+          "ratio": 10.49
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg",
+          "ratio": 6.81
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg",
+          "ratio": 5.46
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg",
+          "ratio": 11.72
+        },
+        {
+          "foreground": "string",
+          "surface": "bg",
+          "ratio": 12.6
+        },
+        {
+          "foreground": "number",
+          "surface": "bg",
+          "ratio": 6.83
+        },
+        {
+          "foreground": "type",
+          "surface": "bg",
+          "ratio": 8.38
+        },
+        {
+          "foreground": "function",
+          "surface": "bg",
+          "ratio": 9.74
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg",
+          "ratio": 21.0
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg",
+          "ratio": 7.0
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg",
+          "ratio": 5.46
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg",
+          "ratio": 5.46
+        },
+        {
+          "foreground": "text",
+          "surface": "bg_panel",
+          "ratio": 17.93
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg_panel",
+          "ratio": 4.67
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg_panel",
+          "ratio": 10.0
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg_panel",
+          "ratio": 12.99
+        },
+        {
+          "foreground": "success",
+          "surface": "bg_panel",
+          "ratio": 10.82
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg_panel",
+          "ratio": 8.95
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg_panel",
+          "ratio": 5.81
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg_panel",
+          "ratio": 4.67
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg_panel",
+          "ratio": 10.0
+        },
+        {
+          "foreground": "string",
+          "surface": "bg_panel",
+          "ratio": 10.76
+        },
+        {
+          "foreground": "number",
+          "surface": "bg_panel",
+          "ratio": 5.83
+        },
+        {
+          "foreground": "type",
+          "surface": "bg_panel",
+          "ratio": 7.16
+        },
+        {
+          "foreground": "function",
+          "surface": "bg_panel",
+          "ratio": 8.31
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg_panel",
+          "ratio": 17.93
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg_panel",
+          "ratio": 5.97
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg_panel",
+          "ratio": 4.67
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg_panel",
+          "ratio": 4.67
+        }
+      ],
+      "minimum": 4.67,
+      "panel": 1.17,
+      "terminal": {
+        "label": "Black terminal, white ink",
+        "background": "#000000",
+        "foreground": "#ffffff"
+      }
+    },
+    {
+      "id": "acpilot.follow-terminal",
+      "name": "Follow terminal",
+      "appearance": "light",
+      "built_in": true,
+      "extension_id": "acpilot.follow-terminal",
+      "ui": {
+        "accent": "#7c5f1d",
+        "accent_high": "#674f18",
+        "bg": "#fdf6e3",
+        "bg_panel": "#ebe5d3",
+        "border": "#c1bcad",
+        "danger": "#a52727",
+        "success": "#1b723f",
+        "text": "#59646a",
+        "text_muted": "#5a656b",
+        "warning": "#895b20"
+      },
+      "syntax": {
+        "comment": "#5a656b",
+        "constant": "#a52751",
+        "function": "#915622",
+        "keyword": "#7c5f1d",
+        "number": "#8627a5",
+        "operator": "#5a656b",
+        "punctuation": "#5a656b",
+        "string": "#1b7235",
+        "type": "#2766a5",
+        "variable": "#59646a"
+      },
+      "pairs": [
+        {
+          "foreground": "text",
+          "surface": "bg",
+          "ratio": 5.63
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg",
+          "ratio": 5.54
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg",
+          "ratio": 7.19
+        },
+        {
+          "foreground": "success",
+          "surface": "bg",
+          "ratio": 5.52
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg",
+          "ratio": 5.44
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg",
+          "ratio": 6.67
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg",
+          "ratio": 5.54
+        },
+        {
+          "foreground": "string",
+          "surface": "bg",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "number",
+          "surface": "bg",
+          "ratio": 6.84
+        },
+        {
+          "foreground": "type",
+          "surface": "bg",
+          "ratio": 5.51
+        },
+        {
+          "foreground": "function",
+          "surface": "bg",
+          "ratio": 5.47
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg",
+          "ratio": 5.63
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg",
+          "ratio": 6.47
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg",
+          "ratio": 5.55
+        },
+        {
+          "foreground": "text",
+          "surface": "bg_panel",
+          "ratio": 4.83
+        },
+        {
+          "foreground": "text_muted",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        },
+        {
+          "foreground": "accent",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        },
+        {
+          "foreground": "accent_high",
+          "surface": "bg_panel",
+          "ratio": 6.16
+        },
+        {
+          "foreground": "success",
+          "surface": "bg_panel",
+          "ratio": 4.73
+        },
+        {
+          "foreground": "warning",
+          "surface": "bg_panel",
+          "ratio": 4.66
+        },
+        {
+          "foreground": "danger",
+          "surface": "bg_panel",
+          "ratio": 5.71
+        },
+        {
+          "foreground": "comment",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        },
+        {
+          "foreground": "keyword",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        },
+        {
+          "foreground": "string",
+          "surface": "bg_panel",
+          "ratio": 4.76
+        },
+        {
+          "foreground": "number",
+          "surface": "bg_panel",
+          "ratio": 5.86
+        },
+        {
+          "foreground": "type",
+          "surface": "bg_panel",
+          "ratio": 4.73
+        },
+        {
+          "foreground": "function",
+          "surface": "bg_panel",
+          "ratio": 4.69
+        },
+        {
+          "foreground": "variable",
+          "surface": "bg_panel",
+          "ratio": 4.83
+        },
+        {
+          "foreground": "constant",
+          "surface": "bg_panel",
+          "ratio": 5.54
+        },
+        {
+          "foreground": "operator",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        },
+        {
+          "foreground": "punctuation",
+          "surface": "bg_panel",
+          "ratio": 4.75
+        }
+      ],
+      "minimum": 4.66,
+      "panel": 1.17,
+      "terminal": {
+        "label": "Cream terminal, dark ink",
+        "background": "#fdf6e3",
+        "foreground": "#59646a"
       }
     }
   ]

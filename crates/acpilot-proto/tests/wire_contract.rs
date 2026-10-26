@@ -296,6 +296,7 @@ fn profile_documents() {
         "trim_trailing_whitespace": true,
         "wrap": false,
         "theme": "acpilot.night-flight",
+        "theme_follow_terminal": false,
         "diagnostics_min_severity": "warning"
     }));
 }

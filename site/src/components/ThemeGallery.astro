@@ -5,7 +5,28 @@
 // mock-up that can drift.
 import data from '../data/themes.json';
 
-const { themes, aa_threshold: threshold } = data;
+const { themes, followed = [], aa_threshold: threshold } = data;
+
+// Two lists, one card. The built-ins have a name and an id to show; a solved
+// palette is `acpilot.follow-terminal` every time, so its card is headed by the
+// terminal that produced it and says which pair it was solved from. That is the
+// question a reader has — "what would my terminal get?" — and the answer is a
+// palette, not an id.
+const groups = [
+  {
+    title: 'Built in',
+    note: 'The two palettes every surface falls back to. Measured, not eyeballed: the ratios are the ones the contrast gate enforces.',
+    cards: themes.map((theme) => ({ ...theme, subtitle: theme.id, terminal: null })),
+  },
+  {
+    title: 'Solved from a terminal',
+    note: 'theme_follow_terminal = true asks the terminal for its own background and foreground and solves a complete palette around them. These two were solved by that function when this page was generated, for a terminal at each end of the ramp.',
+    cards: followed.map((theme) => ({
+      ...theme,
+      subtitle: `${theme.terminal.background} on ${theme.terminal.foreground}`,
+    })),
+  },
+];
 
 const uiTokens = [
   'bg',
@@ -34,9 +55,13 @@ const syntaxTokens = [
 ] as const;
 ---
 
-<section class="theme-gallery" aria-label="Built-in themes">
+{groups.map((group) => (
+  <section class="theme-gallery" aria-label={group.title}>
+    <h2 class="gallery-title">{group.title}</h2>
+    <p class="gallery-note">{group.note}</p>
+    <div class="theme-grid">
   {
-    themes.map((theme) => (
+    group.cards.map((theme) => (
       <article
         class="theme-card"
         id={`theme-${theme.id}`}
@@ -45,8 +70,8 @@ const syntaxTokens = [
       >
         <header class="theme-head">
           <div>
-            <h3>{theme.name}</h3>
-            <p class="theme-id">{theme.id}</p>
+            <h3>{theme.terminal ? theme.terminal.label : theme.name}</h3>
+            <p class="theme-id">{theme.subtitle}</p>
           </div>
           <span class="theme-badge">{theme.appearance}</span>
         </header>
@@ -95,19 +120,37 @@ const syntaxTokens = [
         <footer class="theme-foot">
           <span>
             weak pair <strong>{(theme.minimum ?? 0).toFixed(2)}:1</strong> across {theme.pairs.length} pairs
+            {theme.panel != null && <> · panel <strong>{theme.panel.toFixed(2)}:1</strong></>}
           </span>
           <span class="theme-pass">AA {threshold.toFixed(1)}:1</span>
         </footer>
       </article>
     ))
   }
-</section>
+    </div>
+  </section>
+))}
 
 <style>
   .theme-gallery {
+    margin-block: 1.5rem 2rem;
+  }
+
+  .gallery-title {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .gallery-note {
+    margin: 0.3rem 0 1rem;
+    max-width: 46rem;
+    font-size: 0.9rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .theme-grid {
     display: grid;
     gap: 1.5rem;
-    margin-block: 1.5rem 2rem;
   }
 
   .theme-card {
@@ -317,7 +360,7 @@ const syntaxTokens = [
   }
 
   @media (min-width: 50rem) {
-    .theme-gallery {
+    .theme-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }

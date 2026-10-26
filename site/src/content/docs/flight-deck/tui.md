@@ -28,7 +28,11 @@ one pack recolours all three surfaces at once, and a project can choose a
 different one without changing anything global. Saving the settings file is the
 recolour: the client watches the user's and the project's `config.toml`, and the
 status bar names the theme it switched to, so editing `theme_tui` in one window
-is not a note to restart in another.
+is not a note to restart in another. `theme_follow_terminal = true` instead asks
+the terminal for its own background and foreground when the client starts and
+solves a palette around them, so the terminal UI can match the shell it was opened
+in rather than the other way round; a terminal that will not answer keeps the named
+theme.
 
 ## What it is built on
 

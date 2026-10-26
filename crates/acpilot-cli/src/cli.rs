@@ -419,6 +419,9 @@ fn run_tui(
     let theme_files = acpilot_tui::ThemeFiles {
         user: Some(acpilot_profile::user_config_path()),
         project: root.project().map(|project| project.config_path()),
+        // The terminal's own colours are asked for by the client, before it takes
+        // the screen: one reader of one terminal.
+        terminal: None,
     };
     match acpilot_tui::run(&running.endpoint, token.as_deref(), theme, theme_files) {
         Ok(()) => exit::SUCCESS,
@@ -446,10 +449,32 @@ fn tui_theme(settings: &Settings) -> Result<acpilot_tui::Theme, String> {
         }
         message
     })?;
-    acpilot_extensions::ThemeRegistry::new(&extensions)
-        .complete(id)
-        .map(|resolved| acpilot_tui::Theme::from_resolved(&resolved))
-        .map_err(|error| error.to_string())
+    let registry = acpilot_extensions::ThemeRegistry::new(&extensions);
+    match registry.complete_with_warnings(id) {
+        Ok((resolved, warnings)) => {
+            // A theme that loads and breaks a rule is said out loud here, which is
+            // the only place a theme is loaded by a person: the panel window is a
+            // warning, not a refusal, so the theme still draws.
+            for warning in warnings {
+                eprintln!("acpilot tui: {warning}");
+            }
+            Ok(acpilot_tui::Theme::from_resolved(&resolved))
+        }
+        // Following the terminal makes the named theme the fallback for a terminal
+        // that will not say what its colours are, so a name that is not installed
+        // is a note rather than a refused launch.
+        Err(error) if settings.preferences.theme_follow_terminal => {
+            eprintln!(
+                "acpilot tui: {error}; the terminal's own colours are followed, so this theme is \
+                 only the fallback"
+            );
+            registry
+                .complete("acpilot.night-flight")
+                .map(|resolved| acpilot_tui::Theme::from_resolved(&resolved))
+                .map_err(|error| format!("{error}, and no built-in dark theme to fall back to"))
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// The profile directory a root's settings name, when they name one.

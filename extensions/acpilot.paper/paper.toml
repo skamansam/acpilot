@@ -4,8 +4,11 @@ name = "Paper"
 appearance = "light"
 
 [ui]
+# `bg_panel` sits 1.17:1 from `bg`, inside the 1.10–1.35 window. Paper's old
+# `#f4eee1` was 1.08:1 — the same panel-invisible-on-a-bright-screen problem as
+# night flight, in the other direction.
 bg = "#fbf7ef"
-bg_panel = "#f4eee1"
+bg_panel = "#ece5d5"
 text = "#1a2333"
 text_muted = "#5f594a"
 accent = "#8a5a10"

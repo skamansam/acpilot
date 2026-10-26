@@ -78,6 +78,10 @@ eventsource-stream = "0.2"
 # tui
 ratatui = "0.30"
 crossterm = "0.29"
+# What the terminal's own background and foreground are, so `theme_follow_terminal`
+# can solve a palette around them. OSC 11/10 with the parts that are easy to get
+# wrong hand-rolled: feature detection, raw-mode restore, a timeout, tmux.
+terminal-colorsaurus = "1"
 # The screen behind a terminal pane, parsed here rather than by a widget: the pane
 # also sends keystrokes and resizes back, so it owns the attach, not just the grid.
 vt100 = "0.18"

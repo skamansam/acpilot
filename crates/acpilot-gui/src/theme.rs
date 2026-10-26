@@ -145,7 +145,7 @@ mod tests {
 
         assert_eq!(theme.ui(UiToken::Bg), 0x0007_0d18);
         assert_eq!(theme.ui(UiToken::Text), 0x00e8_edf6);
-        assert_eq!(theme.ui(UiToken::BgPanel), 0x000c_1424);
+        assert_eq!(theme.ui(UiToken::BgPanel), 0x0014_1e33);
         assert!(
             theme.is_dark(),
             "the theme says so and the window trusts it"

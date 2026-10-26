@@ -578,7 +578,13 @@ Three rules:
     keeps the last good config and raises a notice. **Done for the theme, without the event**:
     `acpilot tui` watches the user's and the project's settings and recolours itself on save, and
     the daemon resolves `theme_web` per request, so neither needs a restart. `prefs.changed` and
-    the remaining preferences are this task.
+    the remaining preferences are this task. **Also done (2026-10-25):** `theme_follow_terminal`
+    solves a complete palette from the terminal's own `OSC 11`/`10` pair instead of naming a theme
+    (`acpilot_extensions::follow`, validated by the same audit, 250 ms query at launch, the named
+    theme as the fallback), and the contrast rule grew the panel window — `bg_panel` must sit
+    between 1.10:1 and 1.35:1 of `bg`, which both built-ins were outside of (1.06:1 and 1.08:1)
+    and now are not (1.17:1 each). A theme outside the window loads and is reported rather than
+    refused.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 

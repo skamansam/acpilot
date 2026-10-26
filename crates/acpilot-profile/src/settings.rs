@@ -212,6 +212,31 @@ mod tests {
     }
 
     #[test]
+    fn following_the_terminal_is_off_unless_someone_turns_it_on() {
+        let defaults = Settings::load(None, None).expect("defaults");
+        assert!(
+            !defaults.preferences.theme_follow_terminal,
+            "a terminal's colours are not taken over unless asked"
+        );
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let project = write(
+            directory.path(),
+            "project.toml",
+            "[preferences]\ntheme_follow_terminal = true\n",
+        );
+        let settings = Settings::load(None, Some(&project)).expect("merged");
+        assert!(
+            settings.preferences.theme_follow_terminal,
+            "the project turned it on"
+        );
+        assert_eq!(
+            settings.preferences.theme, "acpilot.night-flight",
+            "and the named theme is still there to fall back to"
+        );
+    }
+
+    #[test]
     fn a_broken_file_names_itself_rather_than_running_on_a_subset() {
         let directory = tempfile::tempdir().expect("temp dir");
         let project = write(

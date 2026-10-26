@@ -24,4 +24,8 @@ theme = "acpilot.night-flight"
 # theme_tui = "acpilot.paper"
 # theme_gui = "acpilot.paper"
 # theme_web = "acpilot.paper"
+# Solve the terminal's palette from the terminal's own background and foreground
+# instead of naming one. A terminal that will not say what its colours are falls
+# back to the theme named above, so this is safe to turn on anywhere.
+theme_follow_terminal = false
 diagnostics_min_severity = "warning"

@@ -14,6 +14,8 @@
 //! and the session list once it has one, and offers About and Quit. The editor,
 //! transcript and terminal are the rest of the web phase (P11-3 – P11-5).
 
+use std::collections::BTreeMap;
+
 use acpilot_extensions::theme::{Palette, UiToken};
 
 /// The page, with `{{version}}` still in it.
@@ -44,42 +46,91 @@ pub fn page(version: &str) -> String {
 /// `--text` is a page nobody can read, and the daemon has no business shipping that.
 #[must_use]
 pub fn themed_page(version: &str, palette: &Palette) -> String {
-    let Some(vars) = variables(palette) else {
+    let Some(vars) = stylesheet(palette) else {
         return page(version);
     };
     page(version).replace(DEFAULT_VARS, &vars)
 }
 
-/// The variables the stylesheet is written against, in the page's order.
+/// The palette as the variables the page's stylesheet is written against.
 ///
-/// Kept as a string rather than a struct because it is a stylesheet fragment: the
-/// names are the contract with the CSS, and a test reads them back out.
-fn variables(palette: &Palette) -> Option<String> {
-    let token = |token: UiToken| palette.ui(token).map(|color| color.to_string());
-    let bg = token(UiToken::Bg)?;
-    let vars = format!(
-        ":root{{color-scheme:{};--bg: {};--panel: {};--border: {};--text: {};--muted: {};\
-         --accent: {};--on-accent: {};--danger: {};--ok: {}}}",
-        if palette
-            .ui(UiToken::Bg)
-            .is_some_and(|bg| bg.relative_luminance() < 0.5)
-        {
-            "dark"
-        } else {
-            "light"
-        },
-        bg,
-        token(UiToken::BgPanel)?,
-        token(UiToken::Border)?,
-        token(UiToken::Text)?,
-        token(UiToken::TextMuted)?,
-        token(UiToken::Accent)?,
-        token(UiToken::Bg)?,
-        token(UiToken::Danger)?,
-        token(UiToken::Success)?,
-    );
-    Some(vars)
+/// The same map the served page is built from, as data, so a page that is already
+/// running can be repainted without being fetched again. `None` when the palette
+/// has a hole, for the same reason [`themed_page`] leaves the page alone.
+#[must_use]
+pub fn variables(palette: &Palette) -> Option<BTreeMap<&'static str, String>> {
+    VARS.iter()
+        .map(|(name, token)| palette.ui(*token).map(|color| (*name, color.to_string())))
+        .collect()
 }
+
+/// The palette as the JSON object a live page repaints from.
+///
+/// `{"color_scheme": "dark", "vars": {"--bg": "#070d18", …}}` — the variables by
+/// name plus the one declaration a stylesheet cannot express as a variable, so the
+/// browser's own scrollbars and form controls follow the theme too.
+#[must_use]
+pub fn palette_json(palette: &Palette) -> Option<String> {
+    let vars = variables(palette)?;
+    Some(
+        serde_json::json!({
+            "color_scheme": color_scheme(palette),
+            "vars": vars,
+        })
+        .to_string(),
+    )
+}
+
+/// The page's `:root` block for a palette.
+///
+/// One declaration of each variable and one `color-scheme`: a second declaration of
+/// anything would leave the browser arbitrating between two of the page's own
+/// values.
+fn stylesheet(palette: &Palette) -> Option<String> {
+    let mut css = format!(":root{{color-scheme:{};", color_scheme(palette));
+    // In `VARS` order — the page's — so the block reads like the stylesheet it
+    // replaces, even though a map would have sorted the names.
+    for (name, token) in VARS {
+        css.push_str(&format!("{name}: {};", palette.ui(token)?));
+    }
+    css.pop();
+    css.push('}');
+    Some(css)
+}
+
+/// Which half of the light/dark divide the palette belongs to.
+///
+/// Decided from the background's luminance rather than from the theme's own
+/// `appearance`, because the two can disagree in a theme file and the page has to
+/// match the colour it is actually painted with.
+fn color_scheme(palette: &Palette) -> &'static str {
+    match palette
+        .ui(UiToken::Bg)
+        .map(|bg| bg.relative_luminance() < 0.5)
+    {
+        Some(false) => "light",
+        // A missing background is only reachable through `palette_json`'s hole
+        // check, so the default is the page's own half.
+        _ => "dark",
+    }
+}
+
+/// The tokens the page's CSS is written against, in the page's order.
+///
+/// Two tokens are mapped onto one variable: the page has no "raised background"
+/// or "accent, brighter" to put anything in, and inventing one here would be a
+/// fourth place a colour is written down.
+const VARS: [(&str, UiToken); 9] = [
+    ("--bg", UiToken::Bg),
+    ("--panel", UiToken::BgPanel),
+    ("--border", UiToken::Border),
+    ("--text", UiToken::Text),
+    ("--muted", UiToken::TextMuted),
+    ("--accent", UiToken::Accent),
+    ("--on-accent", UiToken::Bg),
+    ("--danger", UiToken::Danger),
+    ("--ok", UiToken::Success),
+];
 
 /// The page's own `:root` block, which a theme replaces.
 ///
@@ -147,6 +198,56 @@ mod tests {
             html.matches("color-scheme:").count(),
             1,
             "one declaration, so the browser has nothing to arbitrate"
+        );
+    }
+
+    #[test]
+    fn the_live_payload_is_the_same_variables_the_page_was_built_from() {
+        let palette = night_flight();
+        let payload = palette_json(&palette).expect("night flight has every token");
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
+
+        assert_eq!(parsed["color_scheme"], "dark");
+        assert_eq!(parsed["vars"]["--bg"], "#070d18");
+        assert_eq!(parsed["vars"]["--accent"], "#f7c65c");
+        assert_eq!(
+            parsed["vars"].as_object().expect("an object").len(),
+            VARS.len(),
+            "every variable, so a repaint leaves no token from the old theme"
+        );
+        // The served page and the stream must agree: a live page that repainted
+        // to something the initial HTML did not say would be a flash of a third
+        // palette on every reload.
+        let html = themed_page("0.0.1", &palette);
+        for (name, value) in parsed["vars"].as_object().expect("an object") {
+            let value = value.as_str().expect("a colour");
+            assert!(
+                html.contains(&format!("{name}: {value}")),
+                "the page says `{name}: {value}` too"
+            );
+        }
+    }
+
+    #[test]
+    fn the_light_palette_says_so_in_the_live_payload() {
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
+        let palette = acpilot_extensions::ThemeRegistry::new(&extensions)
+            .complete("acpilot.paper")
+            .expect("paper resolves")
+            .palette;
+
+        let payload = palette_json(&palette).expect("paper has every token");
+        assert!(payload.contains("\"color_scheme\":\"light\""), "{payload}");
+    }
+
+    #[test]
+    fn a_palette_with_a_hole_has_no_live_payload() {
+        let mut palette = night_flight();
+        palette.ui.remove(&UiToken::TextMuted);
+        assert_eq!(
+            palette_json(&palette),
+            None,
+            "a stream cannot repaint a page into a readable-theme-with-a-missing-colour"
         );
     }
 

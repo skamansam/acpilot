@@ -43,6 +43,51 @@ let target: HTMLDivElement;
 let fetchMock: ReturnType<typeof vi.fn>;
 let cleanups: (() => void)[];
 
+/**
+ * `EventSource`, as much of it as the page uses.
+ *
+ * happy-dom has no `EventSource`, and a real one would open a socket in a unit
+ * test. This one records the URL, lets a test push a frame, and notices `close` —
+ * which is everything the page's theme listener touches.
+ */
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+
+  readonly url: string;
+  closed = false;
+  private listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
+
+  constructor(url: string) {
+    this.url = url;
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void {
+    const forType = this.listeners.get(type) ?? [];
+    forType.push(listener);
+    this.listeners.set(type, forType);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  /** Deliver a frame of `type` with `data`, the way a daemon would. */
+  emit(type: string, data: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new MessageEvent(type, { data }));
+    }
+  }
+}
+
+function lastSource(): FakeEventSource {
+  const source = FakeEventSource.instances.at(-1);
+  if (!source) {
+    throw new Error('the page did not open a palette stream');
+  }
+  return source;
+}
+
 /** Mount the page the way `main.ts` does, and remember to take it down again. */
 function render(): void {
   const instance = mount(App, { target });
@@ -87,6 +132,11 @@ beforeEach(() => {
   document.body.append(target);
   sessionStorage.clear();
   cleanups = [];
+  // The repaint writes inline style onto the document element; a test that starts
+  // with yesterday's colours would pass for the wrong reason.
+  document.documentElement.removeAttribute('style');
+  FakeEventSource.instances = [];
+  vi.stubGlobal('EventSource', FakeEventSource);
 
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const route = String(input);
@@ -215,6 +265,53 @@ describe('a token the daemon rejects', () => {
 
     await find('input#token');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('the theme stream', () => {
+  it('recolours the page in place instead of waiting for a reload', async () => {
+    // A theme saved in the TUI or the desktop app reaches an open tab without the
+    // reload the page used to need.
+    render();
+    await find('input#token');
+    const source = lastSource();
+    // Same origin as the page, so a build served by the daemon needs no base URL
+    // and `npm run dev` proxies it.
+    expect(source.url).toBe('/app/palette/events');
+
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--bg')).toBe('');
+
+    source.emit(
+      'palette',
+      JSON.stringify({ color_scheme: 'light', vars: { '--bg': '#fbf7ef', '--accent': '#8a4b12' } }),
+    );
+
+    expect(root.style.getPropertyValue('--bg')).toBe('#fbf7ef');
+    expect(root.style.getPropertyValue('--accent')).toBe('#8a4b12');
+    expect(root.style.colorScheme).toBe('light');
+  });
+
+  it('a frame it cannot read leaves the colours alone', async () => {
+    render();
+    await find('input#token');
+    const source = lastSource();
+    const root = document.documentElement;
+
+    source.emit('palette', '{not json');
+
+    expect(root.style.getPropertyValue('--bg')).toBe('');
+  });
+
+  it('closes the stream when the page goes away', async () => {
+    render();
+    await find('input#token');
+    const source = lastSource();
+
+    await vi.waitFor(() => expect(cleanups.length).toBe(1));
+    cleanups.shift()!();
+
+    expect(source.closed).toBe(true);
   });
 });
 

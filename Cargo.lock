@@ -220,6 +220,7 @@ name = "acpilot-web"
 version = "0.1.0"
 dependencies = [
  "acpilot-extensions",
+ "serde_json",
 ]
 
 [[package]]

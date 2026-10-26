@@ -65,6 +65,18 @@ The shell is served without a token like `/docs`, because a browser cannot attac
 a header to a typed address and the page holds no data; every API call behind it
 is still guarded.
 
+The page's colours come from the same theme extension the terminal and the window
+read: `/app` inlines the web theme's palette into its `:root`, and the page then
+listens on `GET /app/palette/events` so saving a theme anywhere — the TUI, the
+desktop app, another tab — repaints an open page instead of waiting for a reload.
+That stream is one of the unauthenticated routes, alongside `/app` and `/docs`. A
+browser cannot put an `Authorization` header on an `EventSource`, and the obvious
+alternative — the token in the stream's query string — is a secret in the daemon's
+log, the browser's history and any `Referer`. It is safe to leave open because the
+frame carries exactly the variables the page was served with: no session, no file,
+nothing a token would have protected. If that ever stops being true, the route
+needs a token, not a wider exception.
+
 ```bash
 cargo run -p acpilotd -- --addr 127.0.0.1:7777
 # then open http://127.0.0.1:7777/app

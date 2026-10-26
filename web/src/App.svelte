@@ -31,6 +31,35 @@
 
   let controller: AbortController | null = null;
 
+  // The daemon pushes the web theme's colours, so saving a theme anywhere — the
+  // TUI, the desktop app, another tab — repaints this page instead of waiting for
+  // a reload. The stream is open because an `EventSource` cannot set a header; it
+  // carries the palette the page was already served with and nothing else.
+  let paletteSource: EventSource | null = null;
+
+  interface PaletteFrame {
+    color_scheme?: string;
+    vars?: Record<string, string>;
+  }
+
+  function applyPalette(event: MessageEvent<string>): void {
+    let frame: PaletteFrame;
+    try {
+      frame = JSON.parse(event.data) as PaletteFrame;
+    } catch {
+      // A frame we cannot read is a frame we ignore: the page keeps the colours
+      // it has, which are the ones its own stylesheet names.
+      return;
+    }
+    const root = document.documentElement;
+    if (frame.color_scheme) {
+      root.style.colorScheme = frame.color_scheme;
+    }
+    for (const [name, value] of Object.entries(frame.vars ?? {})) {
+      root.style.setProperty(name, value);
+    }
+  }
+
   async function load(): Promise<void> {
     if (!token) {
       return;
@@ -114,7 +143,15 @@
     if (token) {
       void load();
     }
-    return () => controller?.abort();
+    paletteSource = new EventSource('/app/palette/events');
+    paletteSource.addEventListener('palette', (event) => {
+      applyPalette(event as MessageEvent<string>);
+    });
+    return () => {
+      controller?.abort();
+      paletteSource?.close();
+      paletteSource = null;
+    };
   });
 
   // The native dialog gives Escape, focus trapping and a backdrop for free, so

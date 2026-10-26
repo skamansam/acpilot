@@ -589,8 +589,13 @@ Three rules:
     `GET /v1/events`, with the current preferences as the first frame of every connection — so a
     client that cannot see the daemon's disk (a window, a browser, anything over TCP) follows a
     save without a restart. A file that does not parse announces nothing and the last good
-    preferences stay in force. Applying a frame to the desktop window, and the preferences past
-    the theme, are what is left of this task.
+    preferences stay in force. **The browser follows it too (2026-10-26):** `/app` listens on
+    its own `palette` stream (`GET /app/palette/events`) and applies the frame's variables to its
+    `:root`, so a save repaints an open tab without a reload. That route stands outside the token
+    with `/app` and `/docs` — an `EventSource` cannot set a header, and a token in the query string
+    is a secret in a log line, a history entry and a `Referer` — which is only defensible because
+    the frame carries the palette the page already inlines and nothing else. Applying a frame to
+    the desktop window, and the preferences past the theme, are what is left of this task.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 

@@ -35,7 +35,13 @@ use axum::response::{IntoResponse, Response};
 /// The paths that answer without a token: static HTML, and the two pages a person
 /// needs before they have a token — the Swagger UI, where one gets pasted, and the
 /// web shell, which is where a browser is pointed to find out what is listening.
-const OPEN: [&str; 2] = ["/docs", "/app"];
+///
+/// `/app/palette/events` is the web shell's own repaint stream. It is open because
+/// a browser cannot attach a header to an `EventSource`, and because it carries
+/// nothing a token would protect: the palette the shell already serves inline.
+/// Anything added to that frame is a change to this list's reason, not just to the
+/// frame.
+const OPEN: [&str; 3] = ["/docs", "/app", "/app/palette/events"];
 
 /// Wrap `router` so every request needs the token in `path`.
 ///

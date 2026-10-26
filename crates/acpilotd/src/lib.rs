@@ -1080,6 +1080,71 @@ async fn web_app(State(state): State<AppState>) -> Html<String> {
     })
 }
 
+/// The web page's colours, as they change.
+///
+/// A browser repaints this page by listening here, so a theme saved from the TUI,
+/// the desktop app or another tab applies without a reload. `EventSource` cannot
+/// set a header, which is why this stream is one of the unauthenticated ones — and
+/// why it must not be given the token some other way: a secret in a query string
+/// ends up in the daemon's own logs, the browser's history and any `Referer`.
+///
+/// What it carries instead is the palette the page was already served with
+/// inline: the same names, the same colours, and nothing about any session. That
+/// is the whole reason the colours can travel without a token — the page at `/app`
+/// is public for the same reason, and this stream adds no fact to it.
+///
+/// The first frame is the palette in force right now, sent before the subscription
+/// is waited on, so a page that connects after a save lands on the current theme
+/// rather than the one its HTML was built with.
+async fn web_palette_events(State(state): State<AppState>) -> Response {
+    let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+    // Subscribed before the current answer is read, so a save landing between the
+    // two is announced rather than silently skipped.
+    let mut changes = state.subscribe_preferences();
+    if let Some(frame) = palette_frame(&state) {
+        let _ = sender.send(frame).await;
+    }
+    tokio::spawn(async move {
+        loop {
+            match changes.recv().await {
+                Ok(_) => {}
+                // A page that fell behind gets the next palette, which is the whole
+                // of the state: skipping a beat loses nothing.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+            match palette_frame(&state) {
+                // A daemon that loses its settings mid-stream sends nothing: the
+                // page keeps the last colours it had, which are still the ones its
+                // stylesheet defaults to.
+                None => {}
+                Some(frame) => {
+                    if sender.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    Sse::new(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (Ok::<_, Infallible>(frame), receiver))
+        },
+    ))
+    .into_response()
+}
+
+/// One `palette` frame: the colours the web page should be painted with now.
+fn palette_frame(state: &AppState) -> Option<Event> {
+    let palette = state.web_palette()?;
+    let data = acpilot_web::palette_json(&palette)?;
+    Some(Event::default().event("palette").data(data))
+}
+
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.
 ///
 /// The page is served only with the `docs` feature so a production build has no
@@ -1205,6 +1270,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
         .route("/app", get(web_app))
+        .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
         .merge(sessions::routes())
         .merge(terminals::routes())

@@ -442,3 +442,122 @@ async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
     let announced = until(&mut stream, "acpilot.night-flight").await;
     assert!(announced.contains("event: prefs"), "{announced}");
 }
+
+/// The body of `uri`, as text.
+async fn body_of(state: AppState, uri: &str) -> String {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf-8")
+}
+
+/// The stream the web page listens on.
+async fn palette_stream_of(state: AppState) -> axum::body::BodyDataStream {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri("/app/palette/events")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    assert_eq!(response.status(), StatusCode::OK);
+    // A page that connected to something other than a stream would sit with the
+    // theme its HTML was built with until it was reloaded, which is the bug.
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream"),
+        "the page is listening for events"
+    );
+    response.into_body().into_data_stream()
+}
+
+/// The JSON in the first `palette` frame of a stream that has just opened.
+async fn first_palette(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
+    let frame = chunk(stream).await;
+    assert!(frame.contains("event: palette"), "{frame}");
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .unwrap_or_else(|| panic!("a data line in {frame}"));
+    serde_json::from_str(data).expect("the frame is JSON")
+}
+
+#[tokio::test]
+async fn the_palette_stream_opens_with_the_colours_the_page_was_served_with() {
+    // The page applies these to its own `:root`. If the stream and the HTML ever
+    // disagreed, every load would flash one palette and settle on another.
+    let (_directory, _settings, state) = serving("acpilot.paper");
+    let html = body_of(state.clone(), "/app").await;
+    let mut stream = palette_stream_of(state).await;
+    let palette = first_palette(&mut stream).await;
+
+    assert_eq!(palette["color_scheme"], "light");
+    let bg = palette["vars"]["--bg"].as_str().expect("a background");
+    assert!(
+        html.contains(&format!("--bg: {bg}")),
+        "the served page says `--bg: {bg}` too"
+    );
+    assert!(
+        !html.contains("--bg: #0b1220"),
+        "styled with the theme, not the page's own dark palette"
+    );
+}
+
+#[tokio::test]
+async fn a_saved_theme_repaints_the_page_without_a_reload() {
+    // The point of the stream: the browser holds no token and can see no files, and
+    // saving a theme from the TUI or the desktop app has to reach it anyway.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = palette_stream_of(state).await;
+
+    let first = first_palette(&mut stream).await;
+    assert_eq!(first["color_scheme"], "light");
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("save");
+
+    let announced = first_palette(&mut stream).await;
+    assert_eq!(announced["color_scheme"], "dark");
+    assert_eq!(
+        announced["vars"]["--bg"], "#070d18",
+        "the colour the page applies, not just an announcement"
+    );
+}
+
+#[tokio::test]
+async fn a_workspace_with_no_settings_still_answers_the_stream() {
+    // A daemon nobody has saved preferences for has nothing to send, and a page
+    // left waiting on a stream that never opens is worse than one with no stream
+    // at all: the connection is the answer, the frames are the extras.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    if state.web_palette().is_some() {
+        // A machine with a global settings file has preferences; the stream is
+        // then exercised by the tests above. This one is about their absence.
+        return;
+    }
+    let _stream = palette_stream_of(state).await;
+}

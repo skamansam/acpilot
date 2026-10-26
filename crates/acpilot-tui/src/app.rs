@@ -1089,6 +1089,14 @@ pub struct App {
     pub menu_areas: MenuAreas,
     /// The colours every pane is drawn in.
     pub theme: Theme,
+    /// Whether the colours on screen are the daemon's answer.
+    ///
+    /// The daemon reads the same cascade this client does, so its `prefs` frame
+    /// and a local settings edit usually say the same thing. Where they differ,
+    /// the daemon is right: it may be reading files this client cannot see (a
+    /// remote host, another user's config), and a stale local copy must not
+    /// override it.
+    theme_from_daemon: bool,
     /// Whether the About card is up.
     pub about: bool,
     /// Whether the focused pane's keys are listed.
@@ -1197,6 +1205,7 @@ impl App {
             menu: None,
             menu_areas: MenuAreas::default(),
             theme: Theme::default(),
+            theme_from_daemon: false,
             about: false,
             which_key: false,
             files_width: FILES_WIDTH,
@@ -1301,6 +1310,19 @@ impl App {
     /// someone knows.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// Recolour, and say which theme it became.
+    ///
+    /// Said out loud because a screen that recoloured itself silently looks like a
+    /// bug to anyone who did not just edit the settings.
+    fn announce_theme(&mut self, theme: Theme) {
+        self.status = if theme.name().is_empty() {
+            "theme · terminal defaults".to_owned()
+        } else {
+            format!("theme · {}", theme.name())
+        };
+        self.set_theme(theme);
     }
 
     pub fn set_viewports(&mut self, viewports: Viewports) {
@@ -1666,15 +1688,18 @@ impl App {
             }
             Update::Status(message) => self.status = message,
             Update::Theme(theme) => {
-                // The settings changed under a running client. Say which theme it is
-                // now, because a screen that recoloured itself silently looks like a
-                // bug to anyone who did not just edit the file.
-                self.status = if theme.name().is_empty() {
-                    "theme · terminal defaults".to_owned()
-                } else {
-                    format!("theme · {}", theme.name())
-                };
-                self.set_theme(theme);
+                // A settings file this client could read itself changed. Once the
+                // daemon has said what the preferences are, this is the weaker of
+                // two answers — a local file the daemon does not read (a machine
+                // it cannot see, a stale copy) must not overwrite it.
+                if self.theme_from_daemon {
+                    return;
+                }
+                self.announce_theme(theme);
+            }
+            Update::DaemonTheme(theme) => {
+                self.theme_from_daemon = true;
+                self.announce_theme(theme);
             }
         }
     }
@@ -2875,6 +2900,41 @@ fn text_of(content: &serde_json::Value) -> Option<&str> {
 mod tests {
     use super::*;
     use acpilot_proto::session::SessionStatus;
+
+    /// A real theme, by id, so two themes differ in more than their names.
+    fn theme(id: &str) -> Theme {
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
+        let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
+            .complete(id)
+            .expect("the theme resolves");
+        Theme::from_resolved(&resolved)
+    }
+
+    #[test]
+    fn the_daemons_theme_outranks_a_settings_file_this_client_can_read() {
+        // Two sources, one screen: the daemon reads the cascade for the machine it
+        // serves, which may not be this one. A local file that disagrees is the
+        // stale copy.
+        let mut app = App::new("daemon");
+        app.apply(Update::DaemonTheme(theme("acpilot.paper")));
+        assert_eq!(app.theme.name(), "Paper");
+        assert_eq!(app.status, "theme · Paper", "and the status line says so");
+
+        app.apply(Update::Theme(theme("acpilot.night-flight")));
+        assert_eq!(
+            app.theme.name(),
+            "Paper",
+            "a local save does not override the daemon"
+        );
+    }
+
+    #[test]
+    fn before_the_daemon_speaks_a_local_save_still_recolours() {
+        // The file watcher is what a client with no daemon — the design pass — has.
+        let mut app = App::new("daemon");
+        app.apply(Update::Theme(theme("acpilot.paper")));
+        assert_eq!(app.theme.name(), "Paper");
+    }
 
     fn session(id: &str, title: &str) -> SessionSummary {
         SessionSummary {

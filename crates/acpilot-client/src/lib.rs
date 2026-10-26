@@ -26,6 +26,7 @@ pub mod terminal;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionDecision, PermissionOption, PermissionRequest};
+use acpilot_proto::profile::Preferences;
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
@@ -143,6 +144,13 @@ pub enum SessionStream {
 pub enum ProfileStream {
     /// An agent is waiting for an answer.
     Permission(PermissionRequest),
+    /// The settings a surface should now apply.
+    ///
+    /// The whole object, not a diff: it is state, so applying one is replacing
+    /// what the client had. The first frame of a connection is one of these too,
+    /// which is how a client that cannot read the daemon's files learns the
+    /// current preferences at all.
+    Preferences(Preferences),
     /// The stream is quiet but alive.
     Heartbeat,
     /// The client fell behind; refetch the pending list.
@@ -482,6 +490,16 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
                 .map(ProfileStream::Permission)
                 .map_err(|error| {
                     ClientError::Stream(format!("a permission request did not parse: {error}"))
+                })
+        }
+        "prefs" => {
+            let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
+                ClientError::Stream(format!("a prefs frame did not parse: {error}"))
+            })?;
+            serde_json::from_value(value["preferences"].clone())
+                .map(ProfileStream::Preferences)
+                .map_err(|error| {
+                    ClientError::Stream(format!("the preferences did not parse: {error}"))
                 })
         }
         "heartbeat" => Ok(ProfileStream::Heartbeat),

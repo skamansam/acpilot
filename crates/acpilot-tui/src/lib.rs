@@ -83,7 +83,12 @@ pub fn run(daemon: &str, token: Option<&str>, theme: Theme, files: ThemeFiles) -
     };
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
     let changes = updates.clone();
-    let worker = backend::spawn(daemon.to_owned(), token.map(str::to_owned), updates);
+    let worker = backend::spawn(
+        daemon.to_owned(),
+        token.map(str::to_owned),
+        files.terminal,
+        updates,
+    );
     watch_theme(files, changes);
     let mut app = App::new(daemon);
     app.set_theme(theme);
@@ -140,20 +145,34 @@ impl ThemeFiles {
 /// blank because a file was half-written when it was read.
 #[must_use]
 pub fn reload_theme(files: &ThemeFiles) -> Option<Theme> {
+    let settings = settings(files)?;
+    theme_for(&settings.preferences, files.terminal)
+}
+
+/// The theme these preferences ask this client to draw with.
+///
+/// One function for both sources: the settings a launch read off the disk, and the
+/// `prefs` frame a daemon sends. They are the same preferences, so resolving them
+/// twice would be two answers to one question — and the daemon's is the one that
+/// reaches a terminal that cannot see the daemon's files.
+#[must_use]
+pub fn theme_for(
+    preferences: &acpilot_proto::profile::Preferences,
+    terminal: Option<TerminalColours>,
+) -> Option<Theme> {
     use acpilot_proto::profile::ThemeSurface;
 
-    let settings = settings(files)?;
-    if settings.preferences.theme_follow_terminal {
+    if preferences.theme_follow_terminal {
         // No theme is named: the pair the terminal reported is solved into one. A
         // terminal that never answered leaves the theme already on screen, because
         // a settings edit is not a reason to lose the colours a person is reading.
-        let colours = files.terminal?;
+        let colours = terminal?;
         let resolved = acpilot_extensions::follow::solve(colours.background, colours.foreground)?;
         return Some(Theme::from_resolved(&resolved));
     }
     let extensions = acpilot_extensions::builtin::load_all().ok()?;
     let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
-        .complete(settings.preferences.theme_for(ThemeSurface::Tui))
+        .complete(preferences.theme_for(ThemeSurface::Tui))
         .ok()?;
     Some(Theme::from_resolved(&resolved))
 }
@@ -379,6 +398,41 @@ mod tests {
             reload_theme(&files).expect("a theme").name(),
             "Night flight",
             "the project's terminal theme, over the user's shared one"
+        );
+    }
+
+    #[test]
+    fn the_daemons_preferences_resolve_the_theme_the_files_would() {
+        // One resolver for both sources: a `prefs` frame and a `config.toml` say the
+        // same preferences, so they must name the same palette.
+        let mut preferences = acpilot_profile::settings::Settings::load(None, None)
+            .expect("the shipped defaults")
+            .preferences;
+        preferences.theme_tui = Some("acpilot.paper".to_owned());
+        assert_eq!(
+            theme_for(&preferences, None)
+                .expect("paper resolves")
+                .name(),
+            "Paper"
+        );
+    }
+
+    #[test]
+    fn a_daemon_that_follows_the_terminal_is_solved_from_the_pair_it_reported() {
+        let mut preferences = acpilot_profile::settings::Settings::load(None, None)
+            .expect("the shipped defaults")
+            .preferences;
+        preferences.theme_follow_terminal = true;
+        let colours = TerminalColours {
+            background: acpilot_extensions::Color::from_rgb(0x00, 0x00, 0x00),
+            foreground: acpilot_extensions::Color::from_rgb(0xff, 0xff, 0xff),
+        };
+        let theme = theme_for(&preferences, Some(colours)).expect("solvable");
+        assert_eq!(theme.name(), acpilot_extensions::follow::NAME);
+        assert!(theme.is_dark());
+        assert!(
+            theme_for(&preferences, None).is_none(),
+            "with no pair there is no theme, so the caller keeps what it has"
         );
     }
 

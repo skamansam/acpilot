@@ -108,6 +108,12 @@ pub enum Update {
     },
     /// The attach is over — after an exit, or because the socket went away.
     TerminalClosed,
+    /// The daemon's preferences, resolved into the theme to draw with.
+    ///
+    /// Separate from [`Update::Theme`], which is a settings file this client can
+    /// read itself: the daemon's answer is the authoritative one, so the first of
+    /// these takes over from the file watcher rather than racing it.
+    DaemonTheme(crate::Theme),
     /// A turn was accepted.
     Prompted {
         /// Session id.
@@ -141,7 +147,12 @@ impl Worker {
 }
 
 /// Start the worker for the daemon at `daemon`, with `token` when it has one.
-pub fn spawn(daemon: String, token: Option<String>, updates: UnboundedSender<Update>) -> Worker {
+pub fn spawn(
+    daemon: String,
+    token: Option<String>,
+    terminal: Option<crate::TerminalColours>,
+    updates: UnboundedSender<Update>,
+) -> Worker {
     let (requests, receiver) = tokio::sync::mpsc::unbounded_channel();
     std::thread::Builder::new()
         .name("acpilot-tui-client".to_owned())
@@ -158,7 +169,7 @@ pub fn spawn(daemon: String, token: Option<String>, updates: UnboundedSender<Upd
                     // The attach needs the token too, and the client keeps it
                     // private: the worker is the one that resolves it, so it is
                     // passed along rather than looked up again.
-                    runtime.block_on(run(client, token, receiver, updates))
+                    runtime.block_on(run(client, token, terminal, receiver, updates))
                 }
                 Err(error) => {
                     let _ = updates.send(Update::Status(format!(
@@ -191,6 +202,7 @@ struct TerminalLink {
 async fn run(
     client: Client,
     token: Option<String>,
+    terminal: Option<crate::TerminalColours>,
     mut requests: UnboundedReceiver<Request>,
     updates: UnboundedSender<Update>,
 ) {
@@ -210,11 +222,12 @@ async fn run(
     refresh(&client, &updates).await;
 
     // The profile-wide stream is what raises a permission card without the user
-    // pressing anything. It runs for the life of the TUI.
+    // pressing anything, and what says the settings changed when this client
+    // cannot see the daemon's disk itself. It runs for the life of the TUI.
     {
         let client = client.clone();
         let updates = updates.clone();
-        tokio::spawn(async move { follow_permissions(client, updates).await });
+        tokio::spawn(async move { follow_permissions(client, terminal, updates).await });
     }
 
     let mut open: Option<(String, tokio::task::JoinHandle<()>)> = None;
@@ -564,8 +577,12 @@ async fn follow_terminal(
     let _ = updates.send(Update::TerminalClosed);
 }
 
-/// Follow the daemon's permission announcements.
-async fn follow_permissions(client: Client, updates: UnboundedSender<Update>) {
+/// Follow the daemon's permission announcements and its settings.
+async fn follow_permissions(
+    client: Client,
+    terminal: Option<crate::TerminalColours>,
+    updates: UnboundedSender<Update>,
+) {
     loop {
         let frames = client.profile_events();
         tokio::pin!(frames);
@@ -577,6 +594,25 @@ async fn follow_permissions(client: Client, updates: UnboundedSender<Update>) {
                         request.session_id,
                         request.title.to_lowercase()
                     )));
+                }
+                // The stream opens with the current preferences, so a terminal
+                // that shares no filesystem with its daemon still starts with the
+                // theme the daemon would draw with, and a save arrives as the next
+                // one. A theme this build cannot resolve is said out loud rather
+                // than ignored: it is a preference, and somebody chose it.
+                Ok(ProfileStream::Preferences(preferences)) => {
+                    match crate::theme_for(&preferences, terminal) {
+                        Some(theme) => {
+                            let _ = updates.send(Update::DaemonTheme(theme));
+                        }
+                        None => {
+                            let _ = updates.send(Update::Status(
+                                "the daemon's preferences name a theme this build cannot \
+                                 resolve; keeping the colours on screen"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
                 }
                 Ok(ProfileStream::Resync) | Ok(ProfileStream::Heartbeat) => {
                     let _ = refresh_permissions(&client, &updates).await;

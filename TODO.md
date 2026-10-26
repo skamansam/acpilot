@@ -584,7 +584,13 @@ Three rules:
     theme as the fallback), and the contrast rule grew the panel window — `bg_panel` must sit
     between 1.10:1 and 1.35:1 of `bg`, which both built-ins were outside of (1.06:1 and 1.08:1)
     and now are not (1.17:1 each). A theme outside the window loads and is reported rather than
-    refused.
+    refused. **The event exists (2026-10-26):** the daemon watches the user's and the project's
+    settings (`acpilot_profile::watch`, 200 ms debounce) and announces `prefs` frames on
+    `GET /v1/events`, with the current preferences as the first frame of every connection — so a
+    client that cannot see the daemon's disk (a window, a browser, anything over TCP) follows a
+    save without a restart. A file that does not parse announces nothing and the last good
+    preferences stay in force. Applying a frame to the desktop window, and the preferences past
+    the theme, are what is left of this task.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 

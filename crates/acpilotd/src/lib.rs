@@ -19,6 +19,7 @@ use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
+use acpilot_proto::profile::Preferences;
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
 use axum::Json;
 use axum::Router;
@@ -219,6 +220,13 @@ pub struct AppState {
     ///
     /// [`Host`]: acpilot_host::Host
     agent_terminals: Arc<AgentTerminals>,
+    /// Settings saves, announced to every client on the profile-wide stream.
+    ///
+    /// A channel rather than a value: the stream is the reader, there may be none,
+    /// and a daemon whose events nobody is watching should not accumulate anything
+    /// it has to remember to drop. `AppState` always holds a sender, so the channel
+    /// is never closed while the daemon runs.
+    preference_changes: broadcast::Sender<Preferences>,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -244,6 +252,7 @@ impl Default for AppState {
             terminals: Terminals::default(),
             transcripts: None,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
+            preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
         }
     }
@@ -316,6 +325,74 @@ impl AppState {
         self
     }
 
+    /// The settings this daemon would apply right now, resolved from the cascade.
+    ///
+    /// Read rather than cached, for the same reason the palette is: a settings file
+    /// edited while the daemon runs should be the answer the next caller gets. A
+    /// daemon with no workspace, or with a file that does not parse, answers
+    /// [`None`] — which is "carry on with what you have", not an error.
+    #[must_use]
+    pub fn settings(&self) -> Option<acpilot_profile::settings::Settings> {
+        let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
+        root.settings().ok()
+    }
+
+    /// The preferences a client of this daemon would draw with, resolved now.
+    #[must_use]
+    pub fn preferences(&self) -> Option<Preferences> {
+        Some(self.settings()?.preferences)
+    }
+
+    /// Subscribe to settings saves, for whoever is serving the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_preferences(&self) -> broadcast::Receiver<Preferences> {
+        self.preference_changes.subscribe()
+    }
+
+    /// Announce the settings a person saves, for as long as the daemon runs.
+    ///
+    /// The daemon watches rather than each client because a client may not be able
+    /// to see this machine's files: a window, a browser, or anything reaching the
+    /// daemon over TCP. `GET /v1/events` carries the answer, and a client applies a
+    /// frame the same way it applies the settings it reads at launch.
+    ///
+    /// A daemon with no workspace, or whose settings no watcher can reach, still
+    /// serves the first frame of a stream from [`Self::preferences`]: the fallback
+    /// is a client that never hears about a save, not a launcher that fails.
+    pub fn watch_preferences(&self) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Ok(root) = acpilot_profile::project::Root::resolve(Some(&workspace.root)) else {
+            return;
+        };
+        // Both files the cascade reads, so a save in either is a change: a project
+        // can be light while the user's own settings stay night flight.
+        let mut paths = vec![acpilot_profile::user_config_path()];
+        if let Some(project) = root.project() {
+            paths.push(project.config_path());
+        }
+        let Some(changes) = acpilot_profile::watch::changes(paths) else {
+            tracing::warn!(
+                "settings are not being watched; clients will only see the preferences \
+                             they read at connect"
+            );
+            return;
+        };
+        let state = self.clone();
+        std::thread::spawn(move || {
+            while changes.recv().is_ok() {
+                // A file that does not parse, or names something no extension
+                // provides, answers `None`: the last good preferences stay in
+                // force and the stream says nothing rather than something wrong.
+                let Some(preferences) = state.preferences() else {
+                    continue;
+                };
+                let _ = state.preference_changes.send(preferences);
+            }
+        });
+    }
+
     /// The palette the web page is drawn with, resolved now.
     ///
     /// Read per request rather than at startup: the browser page is the one
@@ -327,8 +404,7 @@ impl AppState {
     pub fn web_palette(&self) -> Option<acpilot_extensions::Palette> {
         use acpilot_proto::profile::ThemeSurface;
 
-        let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
-        let settings = root.settings().ok()?;
+        let settings = self.settings()?;
         let extensions = acpilot_extensions::builtin::load_all().ok()?;
         let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
             .complete(settings.preferences.theme_for(ThemeSurface::Web))
@@ -657,17 +733,31 @@ struct PendingQuery {
 /// `GET /v1/events` — the profile-wide stream.
 ///
 /// The stream announces a request the moment one appears, so a UI can offer a
-/// prompt without polling `GET /v1/permissions`. It is announced here rather
-/// than on a session stream because the pending list is profile-wide: a client
-/// watching every session is exactly the client that must not miss one.
+/// prompt without polling `GET /v1/permissions`, and the preferences the moment a
+/// settings file settles, so a client that cannot see this daemon's disk — a
+/// window, a browser, anything over TCP — follows `theme` without a restart. Both
+/// are announced here rather than on a session stream because both are
+/// profile-wide: a client watching every session is exactly the client that must
+/// not miss one.
 ///
-/// Nothing is replayed. A request that arrived while the client was away is
+/// Preferences are also the stream's first frame, because they are state and not
+/// history: the daemon has one current answer, and a client that connects should
+/// be told what it is rather than learn it only when somebody edits a file.
+/// Requests are not replayed — one that arrived while a client was away is
 /// recovered by fetching the pending list, which is state; replaying old prompts
 /// would ask a person to answer something already answered (`docs/api.md`).
 async fn events(State(state): State<AppState>) -> Response {
     let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+    // Subscribed before the current answer is read, so a save landing between the
+    // two is announced rather than silently skipped.
+    let preferences = state.subscribe_preferences();
+    if let Some(current) = state.preferences() {
+        // The channel is fresh, so this cannot fail; if it somehow did, the pump
+        // below is the next thing to notice.
+        let _ = sender.send(prefs_frame(None, &current)).await;
+    }
     let requests = state.broker.as_ref().map(|broker| broker.subscribe());
-    tokio::spawn(pump(requests, sender));
+    tokio::spawn(pump(state, requests, preferences, sender));
     Sse::new(futures::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -680,47 +770,73 @@ async fn events(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
+/// One `prefs` frame: the preferences this daemon would apply right now.
+///
+/// `id` is the frame's place in the stream, so `Last-Event-ID` and a `resync` have
+/// something to name. The first frame of a connection has none: it is the answer
+/// to a question, not a change.
+fn prefs_frame(id: Option<u64>, preferences: &Preferences) -> Event {
+    let mut frame = Event::default().event("prefs");
+    if let Some(id) = id {
+        frame = frame.id(id.to_string());
+    }
+    frame.data(serde_json::json!({ "preferences": preferences }).to_string())
+}
+
 /// What the pump has to say next.
 enum Step {
     /// Time to prove the connection is still there.
     Beat,
     /// The broker announced something, or the subscription ended.
-    Announced(Result<PermissionRequest, broadcast::error::RecvError>),
+    Permission(Result<PermissionRequest, broadcast::error::RecvError>),
+    /// The settings settled, or that subscription ended.
+    Preferences(Result<Preferences, broadcast::error::RecvError>),
 }
 
-/// Turn broker announcements and a clock into SSE frames.
+/// Turn announcements and a clock into SSE frames.
 ///
 /// `requests` is `None` when the daemon has no broker: no request can ever be
-/// announced, so the stream only heartbeats instead of closing. A closing stream
-/// would make every client reconnect on the same two seconds the reconnect
+/// announced, so that half of the stream stays quiet instead of closing. A closing
+/// stream would make every client reconnect on the same two seconds the reconnect
 /// advice names, forever, for a state the daemon could simply describe as quiet.
+/// Preferences are never optional — every daemon has settings — which is why they
+/// are the half that always has something to say.
 async fn pump(
+    state: AppState,
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
+    mut preferences: broadcast::Receiver<Preferences>,
     sender: mpsc::Sender<Event>,
 ) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Announced requests only: the stream has no replay, so this number is the
-    // id of the last frame it sent, which is what a `resync` names.
+    // Announced frames only: the stream has no replay, so this number is the id of
+    // the last frame it sent, which is what a `resync` names.
     let mut seq = 0_u64;
 
     loop {
-        let step = match requests.as_mut() {
-            Some(requests) => tokio::select! {
-                _ = beat.tick() => Step::Beat,
-                announced = requests.recv() => Step::Announced(announced),
-            },
-            None => {
-                beat.tick().await;
-                Step::Beat
+        // A daemon without a broker has nothing to poll, and `pending` keeps the
+        // branch parked rather than busy.
+        let announced = async {
+            match requests.as_mut() {
+                Some(requests) => requests.recv().await,
+                None => {
+                    std::future::pending::<Result<PermissionRequest, broadcast::error::RecvError>>()
+                        .await
+                }
             }
+        };
+
+        let step = tokio::select! {
+            _ = beat.tick() => Step::Beat,
+            preferences = preferences.recv() => Step::Preferences(preferences),
+            requests = announced => Step::Permission(requests),
         };
 
         let frame = match step {
             Step::Beat => Event::default()
                 .event("heartbeat")
                 .data(serde_json::json!({ "seq": seq }).to_string()),
-            Step::Announced(Ok(request)) => {
+            Step::Permission(Ok(request)) => {
                 seq += 1;
                 Event::default()
                     .event("permission")
@@ -729,13 +845,30 @@ async fn pump(
                         serde_json::json!({ "type": "requested", "request": request }).to_string(),
                     )
             }
-            // The client fell behind the announcement channel. It cannot catch
-            // up from the stream, so it is told where it now is and refetches
-            // the pending list — the same recovery as a reconnecting client.
-            Step::Announced(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+            Step::Preferences(Ok(preferences)) => {
+                seq += 1;
+                prefs_frame(Some(seq), &preferences)
+            }
+            // The client fell behind the announcement channel. It cannot catch up
+            // from the stream, so it is told where it now is and refetches what is
+            // state: the pending list, and — for preferences, which this daemon can
+            // answer directly — the current preferences.
+            Step::Permission(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
                 .event("resync")
                 .data(serde_json::json!({ "latest_seq": seq }).to_string()),
-            Step::Announced(Err(broadcast::error::RecvError::Closed)) => break,
+            Step::Preferences(Err(broadcast::error::RecvError::Lagged(_))) => {
+                match state.preferences() {
+                    Some(current) => {
+                        seq += 1;
+                        prefs_frame(Some(seq), &current)
+                    }
+                    None => Event::default()
+                        .event("resync")
+                        .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+                }
+            }
+            Step::Permission(Err(broadcast::error::RecvError::Closed))
+            | Step::Preferences(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -907,10 +1040,10 @@ fn permissions_doc() {}
     get,
     path = "/v1/events",
     tag = "events",
-    summary = "Follow new permission requests",
+    summary = "Follow permission requests and settings changes",
     responses((
         status = 200,
-        description = "text/event-stream: `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}

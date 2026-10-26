@@ -142,10 +142,12 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
 Two streams, one shape.
 
 `GET /v1/sessions/{id}/events` is the session's stream. `GET /v1/events` is the
-profile-wide stream: `profile.*`, `daemon.*`, and `permission.requested` — the
-last because the pending list it pairs with is profile-wide, so one connection
-covers every session a UI is watching. It carries no `session` events: a browser
-watching ten sessions would otherwise pay for all of them.
+profile-wide stream: `profile.*`, `daemon.*`, `prefs`, and `permission.requested`
+— the last two because what they pair with is profile-wide: the pending list, and
+the settings every surface draws with. One connection therefore covers every
+session a UI is watching and the theme it is drawing with. It carries no
+`session` events: a browser watching ten sessions would otherwise pay for all of
+them.
 
 Every frame that carries data has an `id`, and the ids of a session stream are
 the session's monotonic `seq` (starting at 1). The stream is the source of truth
@@ -161,14 +163,19 @@ id: 42
 event: permission
 data: {"type":"requested","request":{"id":"p_07","session_id":"s_01","kind":"file_write","title":"Write src/http.rs","detail":"…","options":["allow_once","allow_always","deny"],"created_at":"…"}}
 
+id: 43
+event: prefs
+data: {"preferences":{"schema_version":1,"theme":"acpilot.night-flight","theme_web":"acpilot.paper",…}}
+
 event: heartbeat
-data: {"seq":42}
+data: {"seq":43}
 ```
 
 | `event` | `data` | Replayed? |
 | --- | --- | --- |
 | `session` | `SessionEvent` (`kind` is one of the eight below) | yes, from the session's ring, and on disk in its transcript |
 | `permission` | `{"type":"requested","request":PermissionRequest}` or `{"type":"resolved","id":…,"decision":PermissionDecision}` | `resolved` yes; `requested` live-only, on both streams |
+| `prefs` | `{"preferences": Preferences}` | the current ones, as the first frame of a connection; changes are live-only |
 | `heartbeat` | `{"seq": n}` every 15 s | no |
 | `resync` | `{"latest_seq": n}` | no |
 
@@ -197,12 +204,26 @@ while the client was away is recovered by the state fetch, and replaying old
 prompts would ask the user to answer something already resolved.
 `permission.resolved` is an event because it must be applied in order.
 
+**Preferences are state too, and they are the stream's first frame.** A client
+that connects is told what the daemon would apply instead of learning it only when
+somebody edits a file, so a window or a browser that cannot see this machine's
+`config.toml` still opens with the right theme. A save — the daemon watches the
+user's and the project's settings, debounced — arrives as another `prefs` frame,
+which is the same whole object, so applying one is replacing what you had rather
+than patching it. A file that does not parse announces nothing: the last good
+preferences stay in force, and the next save is read normally. `theme_tui` is in
+the frame as well, because the frame describes the cascade and not one surface's
+slice of it — a client picks the theme for the surface it is.
+
 `/v1/events` has no `Last-Event-ID` replay for the same reason. Its frames are
 numbered with an `id` that counts what that connection has been told, and a
 client that falls far enough behind to lose frames receives `event: resync` with
 the latest number: the recovery is to refetch the pending list, exactly as a
 reconnecting client does, rather than to expect the stream to reconstruct what it
-missed. Heartbeats run on the same 15 s clock as the session stream.
+missed. Preferences are the one exception to "no replay" — they are the current
+answer, so a client that falls behind on them is sent the current preferences
+rather than a `resync`. Heartbeats run on the same 15 s clock as the session
+stream.
 
 `WS /v1/sessions/{id}/stream` is the same session stream for a client that needs
 to send while receiving. It carries the same event names and payloads, no

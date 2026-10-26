@@ -97,6 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // And one an agent opened should be watchable: the same PTY, seen through a
     // pane a client can attach to.
     state.mirror_agent_terminals();
+    // A saved `config.toml` is the theme a client is drawing with, and a client
+    // behind a socket cannot see this machine's files: the daemon watches them and
+    // announces the new preferences on `GET /v1/events`.
+    state.watch_preferences();
 
     let target = acpilotd::resolve_target(cli.addr, cli.socket)
         .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidInput, why))?;

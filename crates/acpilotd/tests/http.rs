@@ -325,3 +325,120 @@ async fn docs_page_points_at_our_openapi_route() {
     .expect("utf-8");
     assert!(body.contains("/v1/openapi.json"));
 }
+
+/// One chunk of a `text/event-stream` body, as text.
+///
+/// The stream never ends, so a chunk that does not arrive within ten seconds means
+/// a daemon that is not saying anything — which is the failure these tests are
+/// about, and better as a named panic than a hung suite.
+async fn chunk(stream: &mut axum::body::BodyDataStream) -> String {
+    use futures::StreamExt as _;
+
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
+        .await
+        .expect("the stream says something")
+        .expect("the stream is open")
+        .expect("bytes");
+    String::from_utf8_lossy(&chunk).into_owned()
+}
+
+/// Read frames until what has arrived contains `wanted`.
+///
+/// Returns everything read, because the assertion that follows is usually about a
+/// frame *and* what was in it.
+async fn until(stream: &mut axum::body::BodyDataStream, wanted: &str) -> String {
+    let mut seen = String::new();
+    while !seen.contains(wanted) {
+        seen.push_str(&chunk(stream).await);
+    }
+    seen
+}
+
+/// A daemon serving a project whose `.acpilot/config.toml` says `theme_web` is `theme`.
+fn serving(theme: &str) -> (tempfile::TempDir, std::path::PathBuf, AppState) {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let config = directory.path().join(".acpilot");
+    std::fs::create_dir_all(&config).expect("config dir");
+    let settings = config.join("config.toml");
+    std::fs::write(
+        &settings,
+        format!("[preferences]\ntheme_web = \"{theme}\"\n"),
+    )
+    .expect("settings");
+    let state = acpilotd::state_for(None, directory.path()).expect("state");
+    (directory, settings, state)
+}
+
+async fn stream_of(state: AppState) -> axum::body::BodyDataStream {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    response.into_body().into_data_stream()
+}
+
+#[tokio::test]
+async fn the_event_stream_opens_with_the_preferences_the_daemon_would_apply() {
+    // Preferences are state, not history: a client that connects should be told
+    // what the daemon would draw with instead of waiting for a save that may never
+    // come. This is that first frame.
+    let (_directory, _settings, state) = serving("acpilot.paper");
+    let mut stream = stream_of(state).await;
+
+    let frame = chunk(&mut stream).await;
+    assert!(frame.contains("event: prefs"), "{frame}");
+    assert!(frame.contains("acpilot.paper"), "{frame}");
+}
+
+#[tokio::test]
+async fn a_saved_settings_file_reaches_a_client_over_the_event_stream() {
+    // The case the event exists for: a client that cannot see the daemon's disk.
+    // The file is saved while the stream is open, so the only way the new theme can
+    // arrive is the watcher, the announcement and the frame.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = stream_of(state).await;
+
+    let first = until(&mut stream, "acpilot.paper").await;
+    assert!(first.contains("event: prefs"), "{first}");
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("save");
+
+    let announced = until(&mut stream, "acpilot.night-flight").await;
+    assert!(announced.contains("event: prefs"), "{announced}");
+}
+
+#[tokio::test]
+async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
+    // A half-written file must not become the palette a client draws with. It
+    // resolves to nothing, so the watcher announces nothing — and the next good
+    // save still arrives, which is what a stream that died on a typo would not do.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = stream_of(state.clone()).await;
+    let first = until(&mut stream, "acpilot.paper").await;
+    assert!(first.contains("event: prefs"), "{first}");
+
+    std::fs::write(&settings, "[preferences\ntheme_web = 3\n").expect("a broken save");
+    assert!(
+        state.preferences().is_none(),
+        "a file that does not parse is not a set of preferences"
+    );
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("a good save after it");
+    let announced = until(&mut stream, "acpilot.night-flight").await;
+    assert!(announced.contains("event: prefs"), "{announced}");
+}

@@ -1,6 +1,6 @@
 import { mergeConfig } from 'vite';
 import { defineConfig } from 'vitest/config';
-import viteConfig from './vite.config';
+import viteConfig from './vite.config.ts';
 
 // The live shell test, kept apart from `vitest.config.ts` because it needs
 // something a unit run must not: a daemon built from this checkout, which it

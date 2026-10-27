@@ -11,14 +11,14 @@
     "test:live": "vitest run --config vitest.live.config.ts"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.6.5",
     "happy-dom": "^21.0.4",
-    "svelte": "^5.43.8",
-    "svelte-check": "^4.3.3",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.1",
-    "vite-plugin-singlefile": "^2.3.0",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.5",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^5.0.5"
   }
 }

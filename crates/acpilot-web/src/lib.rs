@@ -15,6 +15,7 @@
 //! transcript and terminal are the rest of the web phase (P11-3 – P11-5).
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use acpilot_extensions::theme::{AppliedTheme, UiToken};
 
@@ -43,9 +44,21 @@ pub fn page(version: &str) -> String {
 /// `--bg-panel`) rather than a mapping kept here. That is the point: a token added
 /// to [`UiToken::ALL`] is a colour the page can use with no edit to this crate, so
 /// the browser cannot be the surface that has not heard of it.
+///
+/// A page with no block to replace is served as it is, which is the only honest
+/// answer: there is nowhere to put the palette, and a page that grew a second
+/// palette would be the fourth place a colour is written down.
 #[must_use]
 pub fn themed_page(version: &str, theme: &AppliedTheme) -> String {
-    page(version).replace(DEFAULT_VARS, &stylesheet(theme))
+    let page = page(version);
+    let Some(block) = palette_block(&page) else {
+        return page;
+    };
+    let mut themed = String::with_capacity(page.len() + 128);
+    themed.push_str(&page[..block.start]);
+    themed.push_str(&stylesheet(theme));
+    themed.push_str(&page[block.end..]);
+    themed
 }
 
 /// The palette as the variables the page's stylesheet is written against.
@@ -109,13 +122,37 @@ fn color_scheme(theme: &AppliedTheme) -> &'static str {
     if theme.is_dark() { "dark" } else { "light" }
 }
 
-/// The page's own `:root` block, which a theme replaces.
+/// The span of the page's own `:root` block, ready to be replaced.
 ///
-/// Looked up rather than copied: the file is the truth, and this constant is how
-/// the replacement finds it. It is the same block `web/src/app.css` declares, and
-/// the test below fails if the two drift — a page whose `:root` kept yesterday's
-/// colours would be the palette a reload showed.
-const DEFAULT_VARS: &str = ":root{color-scheme:dark;--bg: #0b1220;--bg-panel: #131c2e;--text: #e6ecf7;--text-muted: #93a4c0;--accent: #5aa9ff;--accent-high: #8fc4ff;--border: #223049;--success: #7ee0a3;--warning: #f7c65c;--danger: #ff8a80}";
+/// Found by shape, not by matching the text `web/src/app.css` declares. That text
+/// is not what ships: the build minifies it, and Vite 8's CSS pass rewrote the
+/// block it was matched against — dropping the space after each colon and adding
+/// two helper custom properties of its own. A replacement keyed to the source's
+/// spelling then matched nothing, so every browser kept the page's own colours and
+/// only the live test noticed; the tests that compared the source with itself were
+/// still green. What the daemon needs from the page is not a spelling but the
+/// promise that it has one palette block, in its stylesheet, at the top — which is
+/// what [`tests::the_served_page_has_one_block_a_theme_replaces`] holds the built
+/// file to.
+fn palette_block(page: &str) -> Option<Range<usize>> {
+    let style = page.find("<style")?;
+    let root = style + page[style..].find(":root")?;
+    let open = root + page[root..].find('{')? + 1;
+    let mut depth = 1usize;
+    for (offset, byte) in page.as_bytes()[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(root..open + offset + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {
@@ -162,14 +199,26 @@ mod tests {
         );
     }
 
+    /// The palette block in the built page, as the daemon finds it.
+    fn own_block() -> &'static str {
+        let range = palette_block(PAGE).expect("the built page has a `:root` block");
+        &PAGE[range]
+    }
+
     #[test]
-    fn the_served_page_still_has_the_block_a_theme_replaces() {
-        // `themed_page` finds the page's palette by this literal. If `app.css`
-        // changes and this constant does not, the replacement silently does
-        // nothing and every themed page is the page's own colours.
+    fn the_served_page_has_one_block_a_theme_replaces() {
+        // One, because a theme replaces it; in the stylesheet, because a `:root`
+        // anywhere else is a string in the bundle and splicing there would corrupt
+        // the script. Two blocks would leave the browser arbitrating between them,
+        // and none is a page no theme can reach.
+        assert_eq!(
+            PAGE.matches(":root").count(),
+            1,
+            "the built page declares one `:root`, in its stylesheet"
+        );
         assert!(
-            PAGE.contains(DEFAULT_VARS),
-            "the built page's `:root` is not DEFAULT_VARS; copy the block from app.css"
+            PAGE[..palette_block(PAGE).expect("a block").start].contains("<style"),
+            "the block is the stylesheet's, not something in the script"
         );
     }
 
@@ -178,10 +227,11 @@ mod tests {
         // The derivation and the stylesheet are the same list: a token the page
         // never declares is a colour a theme sets to no effect, and a variable the
         // page declares with no token is a colour that can never be themed.
+        let block = own_block();
         for token in UiToken::ALL {
             let name = css_name(token);
             assert!(
-                DEFAULT_VARS.contains(&format!("{name}:")),
+                block.contains(&format!("{name}:")),
                 "`{name}` is a token but the page declares no such variable"
             );
         }
@@ -189,11 +239,16 @@ mod tests {
 
     #[test]
     fn a_themed_page_carries_the_token_values_not_its_own_palette() {
-        let html = themed_page("0.0.1", &night_flight());
-        assert!(html.contains("--bg: #070d18"), "the theme's background");
-        assert!(html.contains("--accent: #f7c65c"), "and its accent");
+        let theme = night_flight();
+        let html = themed_page("0.0.1", &theme);
+        let themed = stylesheet(&theme);
+        assert_eq!(
+            palette_block(&html).map(|range| &html[range]),
+            Some(themed.as_str()),
+            "the palette the page is served with is the one it is painted from"
+        );
         assert!(
-            !html.contains("--bg: #0b1220"),
+            !html.contains("--bg:#0b1220"),
             "the page's hardcoded palette is gone, not painted over"
         );
         assert_eq!(

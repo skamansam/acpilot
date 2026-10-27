@@ -1,6 +1,6 @@
 import { mergeConfig } from 'vite';
 import { configDefaults, defineConfig } from 'vitest/config';
-import viteConfig from './vite.config';
+import viteConfig from './vite.config.ts';
 
 // Tests share the build's plugins (so `.svelte` compiles the same way) and
 // differ only in where they run: happy-dom for a DOM, and an explicit include

@@ -42,6 +42,9 @@ export default defineConfig({
       pagination: true,
       sidebar: [
         { label: 'Download', link: '/download/' },
+        // The client's own screens, replayed: the one page that shows the interface
+        // rather than describing it, so it sits above the reference material.
+        { label: 'Showcase', link: '/showcase/' },
         {
           label: 'Ground school',
           items: [

@@ -1,0 +1,36 @@
+[package]
+name = "acpilot-showcase"
+description = "The frames and tables the documentation site's showcase renders, captured from the real UIs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# A build tool, not a library: it exists so `cargo xtask showcase` and the drift
+# test behind it describe the same capture.
+publish = false
+
+[dependencies]
+# The seeded world: the screens on the site are the design pass, not a mock of it.
+acpilot-demo = { workspace = true }
+# The version the desktop shell's About row reports, so the page cannot name a
+# build the tarball does not.
+acpilot-core = { workspace = true }
+# The tokens, so a capture names a token rather than a colour: the page recolours
+# a frame by asking the theme what the token is now.
+acpilot-extensions = { workspace = true }
+# The desktop shell's keymap and command table, which compile without gpui.
+acpilot-gui = { workspace = true }
+# The painter itself. Every pixel-group on the showcase page came out of
+# `acpilot_tui::ui::draw`, so a layout change is a diff in the captured frames
+# rather than a page that describes a screen nobody has seen since.
+acpilot-tui = { workspace = true }
+# The keys the capture presses are the keys the client presses: the same
+# `crossterm` event the event loop hands to `App::handle_key`.
+crossterm = { workspace = true }
+# The screen the painter draws into, with no terminal attached.
+ratatui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

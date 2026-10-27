@@ -77,6 +77,13 @@ frame carries exactly the variables the page was served with: no session, no fil
 nothing a token would have protected. If that ever stops being true, the route
 needs a token, not a wider exception.
 
+Two tests hold that page to account. `npm test` mounts the shell in a headless DOM
+against a fake stream, which is the page's own logic; `npm run test:live` builds a
+real daemon, opens the page against it, saves `theme_web` in a temporary settings
+file, and asserts the already-open page repainted — a socket, a watcher and a
+stream, with the browser as the only stand-in. CI runs both in the `web` job, so
+the repaint is a gate rather than a demonstration.
+
 ```bash
 cargo run -p acpilotd -- --addr 127.0.0.1:7777
 # then open http://127.0.0.1:7777/app

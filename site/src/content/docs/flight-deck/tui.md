@@ -9,6 +9,9 @@ The terminal UI is the primary interface, not the fallback. It is what runs over
 an SSH session, inside tmux, on a machine with no GPU, and it is the reason the
 daemon exists: close the laptop, reconnect, and the turn is still running.
 
+[The showcase](/acpilot/showcase/) replays its screens in a browser — painted by
+this crate, in any theme, including one solved from a pair of colours you pick.
+
 ## Layout
 
 ```mermaid

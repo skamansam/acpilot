@@ -7,247 +7,19 @@
 //! token, because there is nothing left to inherit from.
 
 use std::collections::BTreeMap;
-use std::fmt;
-use std::str::FromStr;
 
 use acpilot_proto::extension::ThemeAppearance;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::error::ExtensionError;
 use crate::manifest::{SCHEMA_VERSION, validate_namespaced_id};
 
-/// A colour, stored as the eight bits per channel a terminal actually has.
-///
-/// The file format is `#rrggbb` in lowercase or uppercase. No named colours, no
-/// alpha: a theme that needs translucency is asking the UI to invent a
-/// background, and the result is unreadable on somebody's terminal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Color {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-
-impl Color {
-    /// Build a colour from its channels.
-    #[must_use]
-    pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    /// The channels, in RGB order.
-    #[must_use]
-    pub const fn channels(self) -> (u8, u8, u8) {
-        (self.r, self.g, self.b)
-    }
-
-    /// WCAG relative luminance, on a 0–1 scale.
-    ///
-    /// This is the sRGB definition, including the linearisation step that people
-    /// skip when they compare channel values and conclude a pair "looks fine".
-    #[must_use]
-    pub fn relative_luminance(self) -> f64 {
-        fn linear(channel: u8) -> f64 {
-            let value = f64::from(channel) / 255.0;
-            if value <= 0.040_45 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        }
-
-        0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
-    }
-
-    /// WCAG contrast ratio between two colours, from 1.0 to 21.0.
-    #[must_use]
-    pub fn contrast_ratio(self, other: Self) -> f64 {
-        let (first, second) = (self.relative_luminance(), other.relative_luminance());
-        let (high, low) = if first >= second {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        (high + 0.05) / (low + 0.05)
-    }
-}
-
-impl fmt::Display for Color {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
-    }
-}
-
-/// Why a colour string was refused.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("expected a #rrggbb colour, got {0:?}")]
-pub struct ColorError(String);
-
-impl FromStr for Color {
-    type Err = ColorError;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let digits = text
-            .strip_prefix('#')
-            .ok_or_else(|| ColorError(text.to_owned()))?;
-        if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(ColorError(text.to_owned()));
-        }
-        let channel = |start: usize| {
-            u8::from_str_radix(&digits[start..start + 2], 16)
-                .map_err(|_| ColorError(text.to_owned()))
-        };
-        Ok(Self {
-            r: channel(0)?,
-            g: channel(2)?,
-            b: channel(4)?,
-        })
-    }
-}
-
-impl Serialize for Color {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Color {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        Self::from_str(&text).map_err(serde::de::Error::custom)
-    }
-}
-
-/// The non-syntax tokens. These are the ones a UI reads by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UiToken {
-    /// The main background.
-    Bg,
-    /// Panels, cards, and the sidebar.
-    BgPanel,
-    /// Body text.
-    Text,
-    /// Hints, line numbers, secondary labels.
-    TextMuted,
-    /// Selection, focus, the current item.
-    Accent,
-    /// A brighter accent, for the one thing that should be noticed.
-    AccentHigh,
-    /// Hairline separators and panel edges.
-    Border,
-    /// Success status.
-    Success,
-    /// Warning status.
-    Warning,
-    /// Error status and destructive actions.
-    Danger,
-}
-
-impl UiToken {
-    /// Every UI token, in display order.
-    pub const ALL: [Self; 10] = [
-        Self::Bg,
-        Self::BgPanel,
-        Self::Text,
-        Self::TextMuted,
-        Self::Accent,
-        Self::AccentHigh,
-        Self::Border,
-        Self::Success,
-        Self::Warning,
-        Self::Danger,
-    ];
-
-    /// The token's name, as written in a theme file.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Bg => "bg",
-            Self::BgPanel => "bg_panel",
-            Self::Text => "text",
-            Self::TextMuted => "text_muted",
-            Self::Accent => "accent",
-            Self::AccentHigh => "accent_high",
-            Self::Border => "border",
-            Self::Success => "success",
-            Self::Warning => "warning",
-            Self::Danger => "danger",
-        }
-    }
-}
-
-impl fmt::Display for UiToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// The syntax-highlighting tokens, shared by code blocks, diffs, and the editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SyntaxToken {
-    /// Comments, including documentation comments.
-    Comment,
-    /// Keywords and control flow.
-    Keyword,
-    /// String and character literals.
-    String,
-    /// Numeric literals.
-    Number,
-    /// Type names and traits.
-    Type,
-    /// Function and method names.
-    Function,
-    /// Variables and parameters.
-    Variable,
-    /// Constants and enum variants.
-    Constant,
-    /// Operators and punctuation that carries meaning.
-    Operator,
-    /// Brackets, commas, and other structure.
-    Punctuation,
-}
-
-impl SyntaxToken {
-    /// Every syntax token, in display order.
-    pub const ALL: [Self; 10] = [
-        Self::Comment,
-        Self::Keyword,
-        Self::String,
-        Self::Number,
-        Self::Type,
-        Self::Function,
-        Self::Variable,
-        Self::Constant,
-        Self::Operator,
-        Self::Punctuation,
-    ];
-
-    /// The token's name, as written in a theme file.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Comment => "comment",
-            Self::Keyword => "keyword",
-            Self::String => "string",
-            Self::Number => "number",
-            Self::Type => "type",
-            Self::Function => "function",
-            Self::Variable => "variable",
-            Self::Constant => "constant",
-            Self::Operator => "operator",
-            Self::Punctuation => "punctuation",
-        }
-    }
-}
-
-impl fmt::Display for SyntaxToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+// The types are `acpilot-palette`'s, and this module is where a reader of a theme
+// file expects to find them: a surface imports `acpilot_extensions::theme::Color`,
+// and the site's WebAssembly showcase imports the same type from the leaf crate.
+// One definition, two doors.
+pub use acpilot_palette::theme::{Color, ColorError, Palette, ResolvedTheme, SyntaxToken, UiToken};
 
 /// A theme file, exactly as written, before inheritance.
 ///
@@ -356,29 +128,6 @@ impl Theme {
             extension_id: extension_id.to_owned(),
             palette,
         }
-    }
-}
-
-/// A complete token set: every token has a value.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Palette {
-    /// Non-syntax tokens.
-    pub ui: BTreeMap<UiToken, Color>,
-    /// Syntax tokens.
-    pub syntax: BTreeMap<SyntaxToken, Color>,
-}
-
-impl Palette {
-    /// A UI token, if the theme resolved it.
-    #[must_use]
-    pub fn ui(&self, token: UiToken) -> Option<Color> {
-        self.ui.get(&token).copied()
-    }
-
-    /// A syntax token, if the theme resolved it.
-    #[must_use]
-    pub fn syntax(&self, token: SyntaxToken) -> Option<Color> {
-        self.syntax.get(&token).copied()
     }
 }
 
@@ -567,19 +316,283 @@ impl<'a> ThemeRegistry<'a> {
     }
 }
 
-/// A theme after inheritance, ready to hand to a surface.
+/// A palette a surface can draw with: every token checked, once.
+///
+/// The terminal, the window and the browser each turn these colours into
+/// something of their own — a terminal colour, a packed `0xRRGGBB` word, a CSS
+/// variable — but none of them decides *which* tokens exist, or what to do about
+/// a gap in the set. That is this type's job, and it is the only place it happens.
+///
+/// A token added to [`UiToken::ALL`] therefore reaches every surface without a
+/// second table to update: the window reads the tokens it draws, and the browser
+/// derives its variable names from [`UiToken::as_str`] rather than from a list of
+/// its own. There is no per-surface token list to forget.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedTheme {
-    /// Namespaced identifier.
-    pub id: String,
-    /// Display name.
-    pub name: String,
-    /// Light or dark.
-    pub appearance: ThemeAppearance,
-    /// Whether this came out of the binary rather than the store.
-    pub built_in: bool,
-    /// Extension that provided it.
-    pub extension_id: String,
-    /// The complete token set.
-    pub palette: Palette,
+pub struct AppliedTheme {
+    id: String,
+    name: String,
+    appearance: ThemeAppearance,
+    ui: BTreeMap<UiToken, Color>,
+}
+
+impl AppliedTheme {
+    /// Take a resolved theme, refusing one with a hole.
+    ///
+    /// # Errors
+    ///
+    /// [`ThemeError::MissingTokens`] when the palette left a token unset, naming
+    /// every one it left out: a surface that drew with nine of ten tokens would
+    /// paint a transparent panel in one place and a black one in another, and the
+    /// bug would look like a layout mistake.
+    pub fn new(resolved: &ResolvedTheme) -> Result<Self, ThemeError> {
+        let missing: Vec<&'static str> = UiToken::ALL
+            .iter()
+            .filter(|token| !resolved.palette.ui.contains_key(*token))
+            .map(|token| token.as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(ThemeError::MissingTokens {
+                id: resolved.id.clone(),
+                tokens: missing,
+            });
+        }
+        Ok(Self {
+            id: resolved.id.clone(),
+            name: resolved.name.clone(),
+            appearance: resolved.appearance,
+            ui: resolved.palette.ui.clone(),
+        })
+    }
+
+    /// Find a theme by id among loaded extensions and resolve its inheritance.
+    ///
+    /// The walk and the hole check are the registry's
+    /// ([`ThemeRegistry::complete`]): a pack can ship a three-line theme over one
+    /// of ours without copying ten tokens, and the terminal, the window and the
+    /// browser all accept or refuse it for the same reasons.
+    ///
+    /// # Errors
+    ///
+    /// [`ThemeRegistry::complete`]'s errors.
+    pub fn from_extensions(
+        extensions: &[crate::loader::LoadedExtension],
+        id: &str,
+    ) -> Result<Self, ThemeError> {
+        let resolved = ThemeRegistry::new(extensions).complete(id)?;
+        Self::new(&resolved)
+    }
+
+    /// The theme's namespaced id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The theme's display name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether the theme says it is light or dark.
+    ///
+    /// Use [`AppliedTheme::is_dark`] to decide how something is *painted*: a
+    /// theme file can claim one half and be the other, and the colour on screen
+    /// is the one a person sees.
+    #[must_use]
+    pub fn appearance(&self) -> ThemeAppearance {
+        self.appearance
+    }
+
+    /// Whether the theme paints a dark background.
+    ///
+    /// Decided from the background's luminance rather than from
+    /// [`AppliedTheme::appearance`], because the two can disagree in a theme file
+    /// and a browser or window has to match the colour it is actually painted
+    /// with.
+    #[must_use]
+    pub fn is_dark(&self) -> bool {
+        self.color(UiToken::Bg).relative_luminance() < 0.5
+    }
+
+    /// A UI token's colour.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: a theme is only built with every token present, which
+    /// is the only way a token could be absent. The `expect` is the proof of that
+    /// invariant rather than a runtime gamble.
+    #[must_use]
+    pub fn color(&self, token: UiToken) -> Color {
+        *self
+            .ui
+            .get(&token)
+            .expect("a theme is only built with every UI token present")
+    }
+
+    /// A UI token as `0xRRGGBB`, which is the word a GPU and `gpui` take.
+    #[must_use]
+    pub fn ui(&self, token: UiToken) -> u32 {
+        let (r, g, b) = self.color(token).channels();
+        (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::builtin;
+    use crate::loader::{Contribution, LoadedExtension};
+
+    use super::*;
+
+    fn built_ins() -> Vec<LoadedExtension> {
+        builtin::load_all().expect("the built-in extensions load")
+    }
+
+    #[test]
+    fn the_shipped_dark_theme_maps_to_the_tokens_the_tui_reads() {
+        let theme = AppliedTheme::from_extensions(&built_ins(), "acpilot.night-flight")
+            .expect("night-flight resolves");
+
+        assert_eq!(theme.ui(UiToken::Bg), 0x0007_0d18);
+        assert_eq!(theme.ui(UiToken::Text), 0x00e8_edf6);
+        assert_eq!(theme.ui(UiToken::BgPanel), 0x0014_1e33);
+        assert_eq!(theme.color(UiToken::Bg).to_string(), "#070d18");
+        assert!(
+            theme.is_dark(),
+            "the theme says so and the surface trusts it"
+        );
+        assert_eq!(theme.appearance(), ThemeAppearance::Dark);
+        assert_eq!(theme.name(), "Night flight");
+        assert_eq!(theme.id(), "acpilot.night-flight");
+    }
+
+    #[test]
+    fn the_light_theme_is_a_different_palette_not_a_filtered_one() {
+        let dark = AppliedTheme::from_extensions(&built_ins(), "acpilot.night-flight")
+            .expect("night-flight resolves");
+        let light =
+            AppliedTheme::from_extensions(&built_ins(), "acpilot.paper").expect("paper resolves");
+
+        assert!(!light.is_dark());
+        assert_ne!(dark.ui(UiToken::Bg), light.ui(UiToken::Bg));
+        assert_ne!(dark.ui(UiToken::Text), light.ui(UiToken::Text));
+    }
+
+    #[test]
+    fn a_theme_nobody_provides_is_named_in_the_error() {
+        let error = AppliedTheme::from_extensions(&built_ins(), "acpilot.no-such-theme")
+            .expect_err("an unknown theme is refused");
+        assert_eq!(
+            error,
+            ThemeError::Unknown {
+                id: "acpilot.no-such-theme".to_owned()
+            }
+        );
+        assert!(error.to_string().contains("acpilot.no-such-theme"));
+    }
+
+    #[test]
+    fn a_palette_with_a_hole_names_every_missing_token() {
+        let extensions = built_ins();
+        let theme = extensions
+            .iter()
+            .flat_map(|extension| &extension.contributions)
+            .find_map(|contribution| match contribution {
+                Contribution::Theme(theme) if theme.id == "acpilot.night-flight" => {
+                    Some(theme.as_ref())
+                }
+                _ => None,
+            })
+            .expect("the built-in theme is there");
+
+        // Build the full palette, then remove the two tokens a buggy theme is
+        // most likely to forget.
+        let mut palette = theme.resolve(None, "acpilot.night-flight", true).palette;
+        palette.ui.remove(&UiToken::Danger);
+        palette.ui.remove(&UiToken::AccentHigh);
+        let resolved = ResolvedTheme {
+            id: theme.id.clone(),
+            name: theme.name.clone(),
+            appearance: theme.appearance,
+            built_in: true,
+            extension_id: "acpilot.night-flight".to_owned(),
+            palette,
+        };
+
+        let error = AppliedTheme::new(&resolved).expect_err("a partial palette is refused");
+        match &error {
+            ThemeError::MissingTokens { tokens, .. } => {
+                assert!(tokens.contains(&"danger"), "{tokens:?}");
+                assert!(tokens.contains(&"accent_high"), "{tokens:?}");
+                assert_eq!(tokens.len(), 2, "{tokens:?}");
+            }
+            other => panic!("expected missing tokens, got {other}"),
+        }
+        assert!(error.to_string().contains("danger"));
+    }
+
+    #[test]
+    fn an_inheriting_theme_takes_the_base_and_overrides_one_token() {
+        let base = built_ins()
+            .into_iter()
+            .find(|extension| {
+                extension.contributions.iter().any(|contribution| {
+                    matches!(contribution, Contribution::Theme(theme) if theme.id == "acpilot.night-flight")
+                })
+            })
+            .expect("night-flight ships in a built-in");
+
+        let child_extension = crate::load_embedded(&[
+            (
+                "extension.toml",
+                "schema_version = 1\nid = \"acpilot.child-pack\"\nname = \"Child pack\"\nversion = \"0.1.0\"\npublisher = \"acpilot\"\ndescription = \"a theme over night-flight\"\n\n[[contributes]]\nkind = \"theme\"\npath = \"child.toml\"\n",
+            ),
+            (
+                "child.toml",
+                "schema_version = 1\nid = \"acpilot.child\"\nname = \"Child\"\nappearance = \"dark\"\nextends = \"acpilot.night-flight\"\n\n[ui]\naccent = \"#ff0000\"\n",
+            ),
+        ])
+        .expect("the child extension loads");
+
+        let extensions = vec![base, child_extension];
+        let theme = AppliedTheme::from_extensions(&extensions, "acpilot.child")
+            .expect("the child theme resolves over its base");
+
+        assert_eq!(
+            theme.ui(UiToken::Accent),
+            0x00ff_0000,
+            "the child's token wins"
+        );
+        assert_eq!(
+            theme.ui(UiToken::Bg),
+            0x0007_0d18,
+            "and everything it did not set comes from the base"
+        );
+    }
+
+    #[test]
+    fn a_theme_that_extends_something_absent_is_an_error_not_a_blank_surface() {
+        let extension = crate::load_embedded(&[
+            (
+                "extension.toml",
+                "schema_version = 1\nid = \"acpilot.orphan-pack\"\nname = \"Orphan\"\nversion = \"0.1.0\"\ndescription = \"extends a theme nobody ships\"\npublisher = \"acpilot\"\n\n[[contributes]]\nkind = \"theme\"\npath = \"orphan.toml\"\n",
+            ),
+            (
+                "orphan.toml",
+                "schema_version = 1\nid = \"acpilot.orphan\"\nname = \"Orphan\"\nappearance = \"dark\"\nextends = \"acpilot.does-not-exist\"\n\n[ui]\naccent = \"#ff0000\"\n",
+            ),
+        ])
+        .expect("the orphan extension loads");
+
+        let error = AppliedTheme::from_extensions(&[extension], "acpilot.orphan")
+            .expect_err("an absent base is refused");
+        assert_eq!(
+            error,
+            ThemeError::MissingBase {
+                id: "acpilot.does-not-exist".to_owned(),
+                required_by: "acpilot.orphan".to_owned(),
+            }
+        );
+    }
 }

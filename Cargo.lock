@@ -83,6 +83,7 @@ name = "acpilot-extensions"
 version = "0.1.0"
 dependencies = [
  "acpilot-agent",
+ "acpilot-palette",
  "acpilot-proto",
  "directories",
  "jsonschema",
@@ -157,6 +158,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpilot-palette"
+version = "0.1.0"
+dependencies = [
+ "acpilot-proto",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "acpilot-palette-wasm"
+version = "0.1.0"
+dependencies = [
+ "acpilot-palette",
+ "serde_json",
+]
+
+[[package]]
 name = "acpilot-profile"
 version = "0.1.0"
 dependencies = [
@@ -179,6 +197,21 @@ dependencies = [
  "serde",
  "serde_json",
  "utoipa",
+]
+
+[[package]]
+name = "acpilot-showcase"
+version = "0.1.0"
+dependencies = [
+ "acpilot-core",
+ "acpilot-demo",
+ "acpilot-extensions",
+ "acpilot-gui",
+ "acpilot-tui",
+ "crossterm",
+ "ratatui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -10646,6 +10679,7 @@ version = "0.1.0"
 dependencies = [
  "acpilot-agent",
  "acpilot-extensions",
+ "acpilot-showcase",
  "clap",
 ]
 

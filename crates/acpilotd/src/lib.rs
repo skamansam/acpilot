@@ -400,16 +400,21 @@ impl AppState {
     /// while the daemon runs should be the colours on the next page load instead of
     /// a reason to restart. `None` leaves the page's own palette, which is what a
     /// daemon with no workspace or no settings has always served.
+    ///
+    /// The same [`acpilot_extensions::AppliedTheme`] the window and the terminal
+    /// draw with: the browser is a surface, not a third interpretation of a theme
+    /// file.
     #[must_use]
-    pub fn web_palette(&self) -> Option<acpilot_extensions::Palette> {
+    pub fn web_palette(&self) -> Option<acpilot_extensions::AppliedTheme> {
         use acpilot_proto::profile::ThemeSurface;
 
         let settings = self.settings()?;
         let extensions = acpilot_extensions::builtin::load_all().ok()?;
-        let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
-            .complete(settings.preferences.theme_for(ThemeSurface::Web))
-            .ok()?;
-        Some(resolved.palette)
+        acpilot_extensions::AppliedTheme::from_extensions(
+            &extensions,
+            settings.preferences.theme_for(ThemeSurface::Web),
+        )
+        .ok()
     }
 
     /// Where transcripts are kept, when the daemon keeps them.
@@ -1075,7 +1080,7 @@ fn resolve_doc() {}
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
 async fn web_app(State(state): State<AppState>) -> Html<String> {
     Html(match state.web_palette() {
-        Some(palette) => acpilot_web::themed_page(acpilot_core::VERSION, &palette),
+        Some(theme) => acpilot_web::themed_page(acpilot_core::VERSION, &theme),
         None => acpilot_web::page(acpilot_core::VERSION),
     })
 }
@@ -1140,9 +1145,12 @@ async fn web_palette_events(State(state): State<AppState>) -> Response {
 
 /// One `palette` frame: the colours the web page should be painted with now.
 fn palette_frame(state: &AppState) -> Option<Event> {
-    let palette = state.web_palette()?;
-    let data = acpilot_web::palette_json(&palette)?;
-    Some(Event::default().event("palette").data(data))
+    let theme = state.web_palette()?;
+    Some(
+        Event::default()
+            .event("palette")
+            .data(acpilot_web::palette_json(&theme)),
+    )
 }
 
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.
@@ -1299,12 +1307,9 @@ mod tests {
             id: "thing".to_owned(),
             root: directory.path().to_path_buf(),
         });
-        let palette = state.web_palette().expect("a theme is named");
+        let theme = state.web_palette().expect("a theme is named");
         assert_eq!(
-            palette
-                .ui(acpilot_extensions::UiToken::Bg)
-                .expect("a background")
-                .to_string(),
+            theme.color(acpilot_extensions::UiToken::Bg).to_string(),
             "#fbf7ef",
             "paper's background, from the project's settings"
         );
@@ -1315,12 +1320,9 @@ mod tests {
             "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
         )
         .expect("project settings");
-        let palette = state.web_palette().expect("a theme is named");
+        let theme = state.web_palette().expect("a theme is named");
         assert_eq!(
-            palette
-                .ui(acpilot_extensions::UiToken::Bg)
-                .expect("a background")
-                .to_string(),
+            theme.color(acpilot_extensions::UiToken::Bg).to_string(),
             "#070d18",
             "night flight, because the file changed"
         );

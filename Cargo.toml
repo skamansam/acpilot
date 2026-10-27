@@ -19,11 +19,22 @@ acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
 acpilot-agent = { version = "0.1.0", path = "crates/acpilot-agent" }
 acpilot-profile = { version = "0.1.0", path = "crates/acpilot-profile" }
 acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
+# The colour maths, without the loader: the tokens, the contrast gate and the
+# terminal-following solver. Every surface reads them through `acpilot-extensions`;
+# the site's WebAssembly showcase imports this leaf directly, because a browser has
+# no extensions to load and no business compiling the daemon's dependency tree.
+acpilot-palette = { version = "0.1.0", path = "crates/acpilot-palette" }
 # The daemon API as a library: every UI (CLI, TUI, later the GUI and web) calls
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
 acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
+# The desktop shell's plain-data half — the keymap and the command table — which is
+# what the site's showcase shows of it. The window itself is behind the crate's
+# `gui` feature and is not something a page can read.
+acpilot-gui = { version = "0.1.0", path = "crates/acpilot-gui" }
+# The capture behind the site's showcase, and the drift test that keeps it current.
+acpilot-showcase = { version = "0.1.0", path = "crates/acpilot-showcase" }
 # The seeded world the interface is designed against. Data only, in protocol types,
 # so the terminal and the desktop app render one copy of it instead of two that
 # drift apart in the first week (P6-3, P10).

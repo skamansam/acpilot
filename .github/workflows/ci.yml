@@ -59,6 +59,10 @@ jobs:
   # the committed page is the one `web/` produces, which is what this job checks:
   # a source change without a rebuild fails here, in the pull request, rather than
   # shipping a daemon whose `/app` is older than its own repository.
+  #
+  # It is also where the live shell test runs, which is why this job has a Rust
+  # toolchain: that test spawns a real daemon, and a fake one would prove the
+  # repaint against the same mock the unit test already uses.
   web:
     name: web UI matches web/
     runs-on: ubuntu-latest
@@ -70,6 +74,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install
         working-directory: web
@@ -85,6 +95,18 @@ jobs:
       - name: Token-flow tests
         working-directory: web
         run: npm test
+
+      # The shell in a headless DOM against a daemon this checkout built: the
+      # palette stream is a real HTTP one, and the settings file the test saves is
+      # watched by the daemon rather than announced by a mock. `npm test` above
+      # excludes it (`vitest.config.ts`), because a unit run must not need a Rust
+      # build; this step is what keeps the exclusion from being a skip.
+      - name: Build the daemon the live shell test spawns
+        run: cargo build -p acpilotd
+
+      - name: Live shell test (real daemon)
+        working-directory: web
+        run: npm run test:live
 
       - name: Build into the crate that embeds it
         working-directory: web

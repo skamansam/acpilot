@@ -95,6 +95,13 @@ Run `npm run build` whenever you change anything under `web/`, and commit the
 regenerated `crates/acpilot-web/assets/index.html` in the same commit. CI's `web`
 job rebuilds it and fails with a diff if you forget.
 
+The page's theme repaint is tested against a real daemon as well as a mock:
+`npm test` mounts the shell with a fake stream, and `npm run test:live` spawns
+`acpilotd`, saves a theme, and asserts the open page repainted. It needs a
+daemon built from this checkout — `cargo build -p acpilotd` first, or point
+`ACPILOTD_BIN` at one — and is not part of `npm test`, because a unit run must
+not need a Rust build.
+
 The interface itself can be looked at without a daemon:
 
 ```bash
@@ -106,6 +113,23 @@ the seeded world in `acpilot-demo`, with every command that is not built tagged 
 the task that would build it. It reads nothing from disk, so it is the same screen on
 any machine, and it is what a layout change is reviewed on before its backend
 exists. The layout and the open questions are `docs/notes/tui-shell.md`.
+
+The site shows those same screens, and it gets them the same way:
+
+```bash
+cargo xtask showcase     # capture the frames, the shell's tables, and the wasm solver
+```
+
+`crates/acpilot-showcase` drives the demo exactly as the paragraphs above describe
+and paints each state through `ui::draw`, recording which theme token every cell
+resolved to; `site/src/components/Showcase.astro` paints those frames and applies a
+palette at draw time. The JSON it writes is committed, and a test in that crate
+compares it with a fresh capture, so touching a pane, a key or a token without
+running the task fails `cargo test` in the same way a stale schema does. The task
+also builds `crates/acpilot-palette-wasm` — the product's own palette solver,
+compiled for the browser — into `site/public/showcase/`, which is a build output
+and stays out of git. It needs the target once:
+`rustup target add wasm32-unknown-unknown`.
 
 `cargo xtask check` also runs the design phase's P0-5 probe, which is not a workspace member and
 so invisible to `cargo fmt --all` and `cargo clippy --workspace`: one command

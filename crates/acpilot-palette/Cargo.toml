@@ -1,0 +1,18 @@
+[package]
+name = "acpilot-palette"
+description = "The theme tokens, the contrast maths and the solver that follows a terminal's own colours"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# `ThemeAppearance` is a protocol type: a theme says light or dark in a file the
+# daemon and the browser both read it from, so the shared colour type uses that
+# enum rather than keeping a second one in step with it.
+acpilot-proto = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

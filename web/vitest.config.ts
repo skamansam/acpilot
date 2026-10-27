@@ -1,5 +1,5 @@
 import { mergeConfig } from 'vite';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import viteConfig from './vite.config';
 
 // Tests share the build's plugins (so `.svelte` compiles the same way) and
@@ -21,6 +21,10 @@ export default mergeConfig(
     test: {
       environment: 'happy-dom',
       include: ['src/**/*.test.ts'],
+      // `*.live.test.ts` is a test of the daemon too, and spawning one is what
+      // `npm run test:live` exists for: a unit run stays a run of things it can
+      // start by itself.
+      exclude: [...configDefaults.exclude, 'src/**/*.live.test.ts'],
       restoreMocks: true,
     },
   }),

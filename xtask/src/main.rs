@@ -71,6 +71,14 @@ enum Task {
     },
     /// Regenerate the theme data the documentation site renders.
     DocsData,
+    /// Regenerate the site's showcase: the screens the TUI paints, the desktop
+    /// shell's tables, and the WebAssembly build of the palette solver.
+    ///
+    /// The frames come from the client itself (`acpilot-showcase` drives `App` and
+    /// paints through `ui::draw`), so this is the command to run after touching a
+    /// pane, a key or a token — the drift test that runs in `cargo test` fails until
+    /// it has.
+    Showcase,
     /// Write the published `agents.toml` JSON Schema.
     Schema,
     /// Run the daemon and the web dev server together (needs a built web UI).
@@ -107,6 +115,7 @@ fn main() -> ExitCode {
             }
         }
         Task::DocsData => run_docs_data(),
+        Task::Showcase => run_showcase(),
         Task::Schema => run_schema(),
         Task::Dev => not_yet("dev", "P3 owns the daemon and P11 the web dev server"),
         Task::WebBuild => not_yet("web-build", "P11 adds the web frontend"),
@@ -572,6 +581,83 @@ fn run_docs_data() -> ExitCode {
 
     println!("wrote {}", path.display());
     ExitCode::SUCCESS
+}
+
+/// Write the showcase's data and the wasm solver the page runs.
+///
+/// Two kinds of artefact, one command: the JSON documents are captured from the
+/// running client, and the `.wasm` module is the product's solver compiled for a
+/// browser. They are regenerated together because they are shown together — a page
+/// whose frames are current but whose palette solver is not would be a demo that is
+/// half the build it claims to be.
+fn run_showcase() -> ExitCode {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+
+    for (relative, text) in acpilot_showcase::documents() {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            eprintln!("{}: {error}", parent.display());
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = fs::write(&path, &text) {
+            eprintln!("{}: {error}", path.display());
+            return ExitCode::FAILURE;
+        }
+        println!("wrote {} ({} bytes)", path.display(), text.len());
+    }
+
+    if !write_wasm(&root) {
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Build the palette solver for `wasm32-unknown-unknown` and copy it into the site.
+///
+/// Not committed: a `.wasm` binary is a build output, and the one thing worse than
+/// committing one is committing one that no longer matches its source. The docs
+/// workflow builds it the same way, so the deployed page and a local preview are the
+/// same artefact from the same command.
+fn write_wasm(root: &Path) -> bool {
+    let mut build = Command::new(env!("CARGO"));
+    build.args([
+        "build",
+        "-p",
+        "acpilot-palette-wasm",
+        "--release",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]);
+    if !run_step("wasm", build) {
+        eprintln!("    install the target with `rustup target add wasm32-unknown-unknown`");
+        return false;
+    }
+
+    let built = root.join("target/wasm32-unknown-unknown/release/acpilot_palette_wasm.wasm");
+    let published = root.join("site/public/showcase/acpilot-palette.wasm");
+    if let Some(parent) = published.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("{}: {error}", parent.display());
+        return false;
+    }
+    match fs::copy(&built, &published) {
+        Ok(bytes) => {
+            println!("wrote {} ({bytes} bytes)", published.display());
+            true
+        }
+        Err(error) => {
+            eprintln!(
+                "{}: {error} (build {} first)",
+                published.display(),
+                built.display()
+            );
+            false
+        }
+    }
 }
 
 /// Write every published JSON Schema under `site/public/schema/`.

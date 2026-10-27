@@ -1,0 +1,35 @@
+[package]
+name = "acpilot-palette-wasm"
+description = "The palette solver, compiled to WebAssembly, for the documentation site's showcase"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# An artefact, not a library: nothing in the workspace links it, and the only
+# consumers are a `<script>` on the site and the `xtask` task that copies it there.
+publish = false
+
+[lib]
+# `cdylib` only: the artefact is a `.wasm` module, and an `rlib` beside it would
+# export the same `no_mangle` symbols a second time into every test binary.
+crate-type = ["cdylib"]
+
+[dependencies]
+# The solver, the tokens and the contrast maths — the product's own crate, not a
+# port of it. A palette a reader sees in the browser is the palette the terminal
+# would draw with, because it is the same function.
+acpilot-palette = { workspace = true }
+serde_json = { workspace = true }
+
+# Not `workspace = true`, and for one reason: the workspace forbids `unsafe` code
+# outright, and a C ABI is the one place it cannot be avoided — a WebAssembly import
+# needs the symbol name a script asks for, and `#[unsafe(no_mangle)]` is the only
+# way to give one. The allowance is scoped to this crate, which contains no unsafe
+# block, no pointer arithmetic and no unchecked access; everything it exports is
+# `acpilot-palette`'s safe API.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

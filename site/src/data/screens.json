@@ -1,0 +1,7877 @@
+{
+  "generated_by": "cargo xtask showcase",
+  "schema_version": 1,
+  "columns": 120,
+  "rows": 34,
+  "scenes": [
+    {
+      "id": "design-pass",
+      "title": "The design pass",
+      "caption": "The client as it opens on the seeded world: the file tree, the buffer, the session list with its transcript, the status line and the per-provider stats.",
+      "keys": "the screen as it opens",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": " app.rs ",
+            "style": 4
+          },
+          {
+            "column": 34,
+            "text": " rust ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐│",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   1 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   2 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Cargo.toml",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   3 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// How many lines of history a pane keep",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   4 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│┌ mock · wire the terminal pane · tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   5 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Attach the TUI to a terminal an agent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.rs",
+            "style": 1
+          },
+          {
+            "column": 20,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   6 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// Whether a pane is following the progr",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "opened.",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   7 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The client already speaks the frames; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   8 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "pub enum PaneMode {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "pane needs a screen and a keyboard, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   9 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Live,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "neither belongs in the worker.",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  10 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Copy,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "[pending] Edit",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  11 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "crates/acpilot-tui/src/app.rs[completed]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  12 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Edit crates/acpilot-tui/src/app.rs",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 25,
+            "text": "││  13 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "impl TerminalPane {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "plan",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  14 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    /// Move the copy cursor, scrolling w",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  parse the screen in the app, not in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  15 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    fn copy_move(&mut self, rows: i32, co",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "worker",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  16 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        let (height, width) = self.grid_s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  map keys to bytes, Ctrl-C included",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 27,
+            "text": "  17 ",
+            "style": 11
+          },
+          {
+            "column": 32,
+            "text": "  ",
+            "style": 12
+          },
+          {
+            "column": 34,
+            "text": "        let (mut row, mut col) = self.cur",
+            "style": 13
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  tell the program the pane's size",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  18 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "        if rows < 0 && row == 0 && self.s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The pane attaches over the same socket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  19 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "            self.set_scroll(self.scroll +",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "daemon writes to, so what a person sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  20 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        } else {                         ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "and what the agent polls cannot disagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  21 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "            row = row.saturating_sub(1); ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Keys are bytes: `Ctrl-C` in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  22 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        }                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "interrupt, and leaving the pane is        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  23 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        self.cursor = (row.min(last_row),",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "`Ctrl-T`, which the title says.           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  24 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    }                                    ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Turn complete",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  25 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "3 files changed, 41 tests passing",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Prompt · Enter sends ────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "ask the agent…                            ",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘└────────────────────────────────────────────────┘",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "└──────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "prompt ",
+            "style": 8
+          },
+          {
+            "column": 33,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 42,
+            "text": "design pass · seeded · no daemon",
+            "style": 1
+          },
+          {
+            "column": 74,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "palette",
+      "title": "The command palette",
+      "caption": "One list of everything the client can do, with the chord that would have run it. A row tagged with a task is designed and not built: running it says so instead of doing nothing.",
+      "keys": "Ctrl-P",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": " app.rs ",
+            "style": 4
+          },
+          {
+            "column": 34,
+            "text": " rust ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐│",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   1 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   2 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Cargo.toml",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   3 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// How many lines of history a pane keep",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "┌ Commands · 21 ───────────────────────────────────────────────────────────────────┐",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " pane · tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 18,
+            "text": "│> ",
+            "style": 8
+          },
+          {
+            "column": 21,
+            "text": "type to filter…",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│nal an agent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "New session",
+            "style": 4
+          },
+          {
+            "column": 30,
+            "text": "  n",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Terminal pane",
+            "style": 1
+          },
+          {
+            "column": 32,
+            "text": "  ctrl-t",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " the frames; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Copy from the terminal",
+            "style": 1
+          },
+          {
+            "column": 41,
+            "text": "  f2",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " keyboard, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Refresh",
+            "style": 1
+          },
+          {
+            "column": 26,
+            "text": "  ctrl-r",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "rker.",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Show keys",
+            "style": 1
+          },
+          {
+            "column": 28,
+            "text": "  ?",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Command palette",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "  ctrl-p",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "p.rs[completed]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Answer a permission",
+            "style": 1
+          },
+          {
+            "column": 38,
+            "text": "  y",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "rc/app.rs",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Quit",
+            "style": 1
+          },
+          {
+            "column": 23,
+            "text": "  ctrl-q",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Open file…",
+            "style": 1
+          },
+          {
+            "column": 29,
+            "text": "  ctrl-o",
+            "style": 3
+          },
+          {
+            "column": 37,
+            "text": "  · P6-6",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " app, not in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Find in file",
+            "style": 1
+          },
+          {
+            "column": 31,
+            "text": "  ctrl-f",
+            "style": 3
+          },
+          {
+            "column": 39,
+            "text": "  · P6-4",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Go to line…",
+            "style": 1
+          },
+          {
+            "column": 30,
+            "text": "  ctrl-g",
+            "style": 3
+          },
+          {
+            "column": 38,
+            "text": "  · P6-4",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "-C included",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Search workspace",
+            "style": 1
+          },
+          {
+            "column": 35,
+            "text": "  ctrl-shift-f",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "  · P6-6",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "ne's size",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Go to definition",
+            "style": 1
+          },
+          {
+            "column": 35,
+            "text": "  f12",
+            "style": 3
+          },
+          {
+            "column": 40,
+            "text": "  · P7-4",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "e same socket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Review diff",
+            "style": 1
+          },
+          {
+            "column": 30,
+            "text": "  ctrl-d",
+            "style": 3
+          },
+          {
+            "column": 38,
+            "text": "  · P6-9",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " a person sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Accept this diff",
+            "style": 1
+          },
+          {
+            "column": 35,
+            "text": "  ctrl-enter",
+            "style": 3
+          },
+          {
+            "column": 47,
+            "text": "  · P6-9",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "cannot disagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Reject this diff",
+            "style": 1
+          },
+          {
+            "column": 35,
+            "text": "  ctrl-backspace",
+            "style": 3
+          },
+          {
+            "column": 51,
+            "text": "  · P6-9",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Rename symbol",
+            "style": 1
+          },
+          {
+            "column": 32,
+            "text": "  f2",
+            "style": 3
+          },
+          {
+            "column": 36,
+            "text": "  · P7-5",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "e pane is        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "Split editor",
+            "style": 1
+          },
+          {
+            "column": 31,
+            "text": "  ctrl-\\",
+            "style": 3
+          },
+          {
+            "column": 39,
+            "text": "  · P6-3",
+            "style": 6
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " says.           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "└──────────────────────────────────────────────────────────────────────────────────┘",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  25 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "3 files changed, 41 tests passing",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Prompt · Enter sends ────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "ask the agent…                            ",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘└────────────────────────────────────────────────┘",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "└──────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "prompt ",
+            "style": 8
+          },
+          {
+            "column": 33,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 42,
+            "text": "21 commands · type to filter",
+            "style": 1
+          },
+          {
+            "column": 70,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "keys",
+      "title": "The keys of the focused pane",
+      "caption": "`?` lists the chords of whichever pane has the keyboard, so the answer is about where you are rather than a wall of every key in the client.",
+      "keys": "Esc, ?",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": " app.rs ",
+            "style": 4
+          },
+          {
+            "column": 34,
+            "text": " rust ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   1 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   2 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Cargo.toml",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   3 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// How many lines of history a pane keep",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "└──────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   4 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│┌ mock · wire the terminal pane · tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   5 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Attach the TUI to a terminal an agent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.rs",
+            "style": 1
+          },
+          {
+            "column": 20,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   6 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// Whether a pane is following the progr",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "opened.",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   7 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The client already speaks the frames; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   8 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "pub enum PaneMode {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "pane needs a screen and a keyboard, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   9 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Live,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "neither belongs in the worker.",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  10 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Copy,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "[pending] Edit",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  11 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "crates/acpilot-tui/src/app.rs[completed]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  12 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Edit crates/acpilot-tui/src/app.rs",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 25,
+            "text": "││  13 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "impl TerminalPane {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "plan",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  14 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    /// Move the copy cursor, scrolling w",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  parse the screen in the app, not in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  15 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    fn copy_move(&mut self, rows: i32, co",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "worker",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  16 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        let (height, width) = self.grid_s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  map keys to bytes, Ctrl-C included",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 27,
+            "text": "  17 ",
+            "style": 11
+          },
+          {
+            "column": 32,
+            "text": "  ",
+            "style": 12
+          },
+          {
+            "column": 34,
+            "text": "        let (mut row, mut col) = self.cur",
+            "style": 13
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  tell the program the pane's size",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  18 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "        if rows < 0 && row == 0 && self.s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The pane attaches over the same socket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  19 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "            self.set_scroll(self.scroll +",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "daemon writes to, so what a person sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ sessions keys · any key closes ────────────┐",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "se {                         ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "and what the agent polls cannot disagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│j / k     ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "choose                            ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "row = row.saturating_sub(1); ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Keys are bytes: `Ctrl-C` in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│enter     ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "open                              ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "interrupt, and leaving the pane is        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│i         ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "compose                           ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": ".cursor = (row.min(last_row),",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "`Ctrl-T`, which the title says.           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│tab       ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "read the transcript               ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Turn complete",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│ctrl-←/→  ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "narrower / wider                  ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "3 files changed, 41 tests passing",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│n         ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "new session                       ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│d         ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "end session                       ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "│┌ Prompt · Enter sends ────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│c         ",
+            "style": 8
+          },
+          {
+            "column": 11,
+            "text": "cancel turn                       ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "││ask the agent…                            │",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────────────────────────┘",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "─────────────────────────────┘└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "sessions ",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 44,
+            "text": "21 commands · type to filter",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "menus",
+      "title": "The menu bar",
+      "caption": "The titles are always drawn, so the commands are discoverable without a key list. A row prints the chord that would have run it from anywhere; a row that prints nothing is a command the focused pane owns.",
+      "keys": "F9, ↓",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 9,
+            "text": " ",
+            "style": 4
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 14
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 4
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files ·",
+            "style": 3
+          },
+          {
+            "column": 9,
+            "text": "┌ File ────────────────────┐",
+            "style": 8
+          },
+          {
+            "column": 37,
+            "text": "st ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo",
+            "style": 4
+          },
+          {
+            "column": 9,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 10,
+            "text": " Command Palette…  ",
+            "style": 4
+          },
+          {
+            "column": 29,
+            "text": "ctrl-p ",
+            "style": 3
+          },
+          {
+            "column": 36,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 37,
+            "text": "pilot-tui/src/app.rs · seeded ────────┐",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crate",
+            "style": 1
+          },
+          {
+            "column": 9,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 10,
+            "text": " Refresh           ",
+            "style": 1
+          },
+          {
+            "column": 29,
+            "text": "ctrl-r ",
+            "style": 3
+          },
+          {
+            "column": 36,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 37,
+            "text": " acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acp",
+            "style": 1
+          },
+          {
+            "column": 9,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 10,
+            "text": " Quit Acpilot      ",
+            "style": 1
+          },
+          {
+            "column": 29,
+            "text": "ctrl-c ",
+            "style": 3
+          },
+          {
+            "column": 36,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       C",
+            "style": 1
+          },
+          {
+            "column": 9,
+            "text": "└──────────────────────────┘",
+            "style": 8
+          },
+          {
+            "column": 37,
+            "text": " How many lines of history a pane keep",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "└──────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   4 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│┌ mock · wire the terminal pane · tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   5 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Attach the TUI to a terminal an agent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.rs",
+            "style": 1
+          },
+          {
+            "column": 20,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   6 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// Whether a pane is following the progr",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "opened.",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   7 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The client already speaks the frames; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   8 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "pub enum PaneMode {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "pane needs a screen and a keyboard, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   9 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Live,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "neither belongs in the worker.",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  10 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    Copy,                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "[pending] Edit",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  11 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "crates/acpilot-tui/src/app.rs[completed]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││  12 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Edit crates/acpilot-tui/src/app.rs",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 25,
+            "text": "││  13 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "impl TerminalPane {                      ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "plan",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  14 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    /// Move the copy cursor, scrolling w",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  parse the screen in the app, not in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  15 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "    fn copy_move(&mut self, rows: i32, co",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "worker",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  16 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        let (height, width) = self.grid_s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  map keys to bytes, Ctrl-C included",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 27,
+            "text": "  17 ",
+            "style": 11
+          },
+          {
+            "column": 32,
+            "text": "  ",
+            "style": 12
+          },
+          {
+            "column": 34,
+            "text": "        let (mut row, mut col) = self.cur",
+            "style": 13
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "  tell the program the pane's size",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  18 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "        if rows < 0 && row == 0 && self.s",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "The pane attaches over the same socket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  19 ",
+            "style": 3
+          },
+          {
+            "column": 32,
+            "text": "M ",
+            "style": 6
+          },
+          {
+            "column": 34,
+            "text": "            self.set_scroll(self.scroll +",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "daemon writes to, so what a person sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  20 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        } else {                         ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "and what the agent polls cannot disagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  21 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "            row = row.saturating_sub(1); ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Keys are bytes: `Ctrl-C` in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  22 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        }                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "interrupt, and leaving the pane is        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  23 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        self.cursor = (row.min(last_row),",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "`Ctrl-T`, which the title says.           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  24 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    }                                    ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Turn complete",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  25 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "3 files changed, 41 tests passing",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│┌ Prompt · Enter sends ────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││ask the agent…                            │",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘└────────────────────────────────────────────────┘└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "sessions ",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 44,
+            "text": "21 commands · type to filter",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "permission",
+      "title": "A pending permission",
+      "caption": "The card is the reason this client exists: what the agent wants, the diff it would write, and the three answers. Nothing behind it takes a keystroke until it is answered.",
+      "keys": "a request arrives",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": " app.rs ",
+            "style": 4
+          },
+          {
+            "column": 34,
+            "text": " rust ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   1 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   2 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Ca",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "┌ Permission needed ───────────────────────────────────────────────────────────────────────────────┐",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "─────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ sr",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "s1 · Write crates/acpilot-tui/src/app.rs",
+            "style": 15
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ 1 000 lines of scrollback                                                                       ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "gent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ F2 copy mode                                                                                    ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ a picker when a session has several terminals                                                   ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "mes; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ te",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "d, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpi",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "@@ -8,6 +8,12 @@ pub struct TerminalPane {",
+            "style": 8
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpi",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 13,
+            "text": "    pub exit: Option<Option<i32>>,                                                              ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "    /// Following the program, or reading behind it.                                            ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│pleted]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "    pub mode: PaneMode,                                                                         ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│s",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.m",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "    /// How many lines behind the live screen the view sits.                                    ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "    pub scroll: usize,                                                                          ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "t in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 13,
+            "text": "}                                                                                               ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "@@ -126,7 +132,9 @@ impl TerminalPane {",
+            "style": 8
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "ded",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 13,
+            "text": "    fn set_scroll(&mut self, offset: usize) {                                                   ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "e",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "- ",
+            "style": 16
+          },
+          {
+            "column": 13,
+            "text": "        self.scroll = offset;                                                                   ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "ocket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "        self.scroll = offset.min(self.history());                                               ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "n sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 7
+          },
+          {
+            "column": 13,
+            "text": "        self.parser.screen_mut().set_scrollback(self.scroll);                                   ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "isagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "ll is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│y allow once · a allow always · n deny · Esc later",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 110,
+            "text": "s        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "└──────────────────────────────────────────────────────────────────────────────────────────────────┘",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│┌ Prompt · Enter sends ────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││ask the agent…                            │",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘└────────────────────────────────────────────────┘└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "sessions ",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 44,
+            "text": "21 commands · type to filter",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "terminal-picker",
+      "title": "Choosing a terminal",
+      "caption": "The session's terminals, one of them ended. A terminal belongs to the session that opened it, so the list is that session's, not the profile's.",
+      "keys": "Ctrl-T",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": " app.rs ",
+            "style": 4
+          },
+          {
+            "column": 34,
+            "text": " rust ",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "▸ wire the terminal pane",
+            "style": 4
+          },
+          {
+            "column": 101,
+            "text": "  busy",
+            "style": 5
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   1 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  flaky retry test",
+            "style": 1
+          },
+          {
+            "column": 95,
+            "text": "  idle",
+            "style": 7
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   2 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 77,
+            "text": "  review the pane API",
+            "style": 1
+          },
+          {
+            "column": 98,
+            "text": "  closed",
+            "style": 3
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Cargo.toml",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   3 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// How many lines of history a pane keep",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 76,
+            "text": "└──────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "││   4 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "│┌ mock · wire the terminal pane · tab · f3 ┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   5 ",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Attach the TUI to a terminal an agent",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.rs",
+            "style": 1
+          },
+          {
+            "column": 20,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "││   6 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "/// Whether a pane is following the progr",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "opened.",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 18,
+            "text": "┌ Terminals · 2 ───────────────────────────────────────────────────────────────────┐",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " the frames; the",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "▸ /bin/sh -c make check",
+            "style": 4
+          },
+          {
+            "column": 42,
+            "text": "  agent-terminal-1",
+            "style": 17
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " keyboard, and",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 19,
+            "text": "  /bin/sh -c cargo run -- tui · exited",
+            "style": 1
+          },
+          {
+            "column": 57,
+            "text": "  agent-terminal-2",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "rker.",
+            "style": 9
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│Enter opens · j/k choose · Esc closes",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "p.rs[completed]",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "rc/app.rs",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " app, not in the",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "-C included",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "ne's size",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "e same socket the",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": " a person sees   ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "cannot disagree. ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "└──────────────────────────────────────────────────────────────────────────────────┘",
+            "style": 8
+          },
+          {
+            "column": 102,
+            "text": "in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  22 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        }                                ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "interrupt, and leaving the pane is        ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  23 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "        self.cursor = (row.min(last_row),",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "`Ctrl-T`, which the title says.           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  24 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "    }                                    ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "Turn complete",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││  25 ",
+            "style": 3
+          },
+          {
+            "column": 34,
+            "text": "}                                        ",
+            "style": 1
+          },
+          {
+            "column": 75,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 77,
+            "text": "3 files changed, 41 tests passing",
+            "style": 10
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "│┌ Prompt · Enter sends ────────────────────┐",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "││",
+            "style": 3
+          },
+          {
+            "column": 75,
+            "text": "││ask the agent…                            │",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘└────────────────────────────────────────────────┘└──────────────────────────────────────────┘",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "sessions ",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 44,
+            "text": "2 terminals · Enter opens · Esc closes",
+            "style": 1
+          },
+          {
+            "column": 82,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "terminal",
+      "title": "A program's own screen",
+      "caption": "The pane parses a program's bytes into cells, so the colours here are the program's: the one place on this page a palette does not come from the theme.",
+      "keys": "Ctrl-T, then the attach",
+      "rows": [
+        [
+          {
+            "column": 0,
+            "text": " Acpilot ",
+            "style": 0
+          },
+          {
+            "column": 10,
+            "text": "F",
+            "style": 2
+          },
+          {
+            "column": 11,
+            "text": "ile ",
+            "style": 1
+          },
+          {
+            "column": 17,
+            "text": "V",
+            "style": 2
+          },
+          {
+            "column": 18,
+            "text": "iew ",
+            "style": 1
+          },
+          {
+            "column": 24,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 25,
+            "text": "ession ",
+            "style": 1
+          },
+          {
+            "column": 34,
+            "text": "H",
+            "style": 2
+          },
+          {
+            "column": 35,
+            "text": "elp ",
+            "style": 1
+          },
+          {
+            "column": 39,
+            "text": "   f9 menus · acpilot.night-flight ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "┌ Files · acpilot ───────┐",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "┌ /bin/sh -c make check · agent-terminal-1 · F2 copy · ctrl-t leaves ────────────────────────┐",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "▸  Cargo.toml",
+            "style": 4
+          },
+          {
+            "column": 14,
+            "text": " M",
+            "style": 5
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "$ make check                                                                                ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▾ crates",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "  cargo fmt --all -- --check                                                                ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▾ acpilot-tui",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "  cargo clippy --workspace --all-targets -- -D warnings                                     ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "       Cargo.toml",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "  cargo nextest run --workspace --no-fail-fast                                              ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▾ src",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         app.rs",
+            "style": 1
+          },
+          {
+            "column": 16,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "PASS",
+            "style": 18
+          },
+          {
+            "column": 39,
+            "text": " [   0.31s] acpilot-tui::app::yanking_a_line_puts_it_on_the_clipboard           ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         backend.rs",
+            "style": 1
+          },
+          {
+            "column": 20,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "PASS",
+            "style": 18
+          },
+          {
+            "column": 39,
+            "text": " [   0.28s] acpilot-tui::ui::copy_mode_announces_itself_in_the_pane             ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "         ui.rs",
+            "style": 1
+          },
+          {
+            "column": 15,
+            "text": " M",
+            "style": 6
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "PASS",
+            "style": 18
+          },
+          {
+            "column": 39,
+            "text": " [   0.44s] acpilotd::agent_terminals::typing_into_the_pane_reaches_the_agents_p",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "     ▸ tests",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "rocess                                                                                      ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilot-demo",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 32,
+            "text": "Summary",
+            "style": 15
+          },
+          {
+            "column": 39,
+            "text": " [   4.82s] 158 tests run: 158 passed, 0 skipped                                ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpilotd",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": " ▸ docs",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 27,
+            "text": "$ ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   README.md",
+            "style": 1
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   TODO.md",
+            "style": 1
+          },
+          {
+            "column": 11,
+            "text": " ?",
+            "style": 8
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 8
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "└────────────────────────┘",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "└────────────────────────────────────────────────────────────────────────────────────────────┘",
+            "style": 8
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● ",
+            "style": 7
+          },
+          {
+            "column": 3,
+            "text": "acpilot.night-flight ",
+            "style": 10
+          },
+          {
+            "column": 24,
+            "text": "· ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "terminal ",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "· 17:9 · ",
+            "style": 3
+          },
+          {
+            "column": 44,
+            "text": "/bin/sh -c make check attached · 525 bytes of screen",
+            "style": 1
+          },
+          {
+            "column": 96,
+            "text": "  demo · seeded ",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": " ● lmstudio · qwen2.5-coder-7b",
+            "style": 7
+          },
+          {
+            "column": 30,
+            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "style": 3
+          },
+          {
+            "column": 60,
+            "text": " ● anthropic · claude-sonnet-4",
+            "style": 7
+          },
+          {
+            "column": 90,
+            "text": " 7060 tok · $0.084 · 1380ms",
+            "style": 3
+          }
+        ]
+      ]
+    }
+  ],
+  "styles": [
+    {
+      "fg": "token:accent",
+      "bg": "default",
+      "modifiers": [
+        "bold"
+      ]
+    },
+    {
+      "fg": "default",
+      "bg": "default"
+    },
+    {
+      "fg": "default",
+      "bg": "default",
+      "modifiers": [
+        "underline"
+      ]
+    },
+    {
+      "fg": "token:text_muted",
+      "bg": "default"
+    },
+    {
+      "fg": "token:accent_high",
+      "bg": "token:bg_panel",
+      "modifiers": [
+        "bold"
+      ]
+    },
+    {
+      "fg": "token:warning",
+      "bg": "token:bg_panel",
+      "modifiers": [
+        "bold"
+      ]
+    },
+    {
+      "fg": "token:warning",
+      "bg": "default"
+    },
+    {
+      "fg": "token:success",
+      "bg": "default"
+    },
+    {
+      "fg": "token:accent",
+      "bg": "default"
+    },
+    {
+      "fg": "token:text_muted",
+      "bg": "default",
+      "modifiers": [
+        "italic"
+      ]
+    },
+    {
+      "fg": "token:accent_high",
+      "bg": "default"
+    },
+    {
+      "fg": "token:text_muted",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "token:warning",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "default",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "token:accent_high",
+      "bg": "token:bg_panel",
+      "modifiers": [
+        "bold",
+        "underline"
+      ]
+    },
+    {
+      "fg": "default",
+      "bg": "default",
+      "modifiers": [
+        "bold"
+      ]
+    },
+    {
+      "fg": "token:danger",
+      "bg": "default"
+    },
+    {
+      "fg": "token:text",
+      "bg": "default"
+    },
+    {
+      "fg": "ansi:2",
+      "bg": "default"
+    },
+    {
+      "fg": "default",
+      "bg": "default",
+      "modifiers": [
+        "reverse"
+      ]
+    }
+  ]
+}

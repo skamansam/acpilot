@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use acpilot_extensions::theme::{Palette, UiToken};
+use acpilot_extensions::theme::{AppliedTheme, UiToken};
 
 /// The page, with `{{version}}` still in it.
 pub const PAGE: &str = include_str!("../assets/index.html");
@@ -33,34 +33,30 @@ pub fn page(version: &str) -> String {
     PAGE.replace("{{version}}", version)
 }
 
-/// The page, themed with a resolved palette.
+/// The page, themed with a palette the surfaces share.
 ///
 /// The browser is the third surface reading the same theme extension, so the
 /// variables its stylesheet is written against come from the token file rather
-/// than from the colours someone typed into the page. The variables it does not
-/// have — a warning colour, a brighter accent — are mapped onto the ones it does,
-/// because a page that grew a second palette would be a fourth place a colour is
-/// written down.
+/// than from the colours someone typed into the page.
 ///
-/// A palette with holes leaves the page's own colours alone: a browser with no
-/// `--text` is a page nobody can read, and the daemon has no business shipping that.
+/// Every token is a variable, and the name is the token's (`bg_panel` is
+/// `--bg-panel`) rather than a mapping kept here. That is the point: a token added
+/// to [`UiToken::ALL`] is a colour the page can use with no edit to this crate, so
+/// the browser cannot be the surface that has not heard of it.
 #[must_use]
-pub fn themed_page(version: &str, palette: &Palette) -> String {
-    let Some(vars) = stylesheet(palette) else {
-        return page(version);
-    };
-    page(version).replace(DEFAULT_VARS, &vars)
+pub fn themed_page(version: &str, theme: &AppliedTheme) -> String {
+    page(version).replace(DEFAULT_VARS, &stylesheet(theme))
 }
 
 /// The palette as the variables the page's stylesheet is written against.
 ///
 /// The same map the served page is built from, as data, so a page that is already
-/// running can be repainted without being fetched again. `None` when the palette
-/// has a hole, for the same reason [`themed_page`] leaves the page alone.
+/// running can be repainted without being fetched again.
 #[must_use]
-pub fn variables(palette: &Palette) -> Option<BTreeMap<&'static str, String>> {
-    VARS.iter()
-        .map(|(name, token)| palette.ui(*token).map(|color| (*name, color.to_string())))
+pub fn variables(theme: &AppliedTheme) -> BTreeMap<String, String> {
+    UiToken::ALL
+        .iter()
+        .map(|token| (css_name(*token), theme.color(*token).to_string()))
         .collect()
 }
 
@@ -70,15 +66,12 @@ pub fn variables(palette: &Palette) -> Option<BTreeMap<&'static str, String>> {
 /// name plus the one declaration a stylesheet cannot express as a variable, so the
 /// browser's own scrollbars and form controls follow the theme too.
 #[must_use]
-pub fn palette_json(palette: &Palette) -> Option<String> {
-    let vars = variables(palette)?;
-    Some(
-        serde_json::json!({
-            "color_scheme": color_scheme(palette),
-            "vars": vars,
-        })
-        .to_string(),
-    )
+pub fn palette_json(theme: &AppliedTheme) -> String {
+    serde_json::json!({
+        "color_scheme": color_scheme(theme),
+        "vars": variables(theme),
+    })
+    .to_string()
 }
 
 /// The page's `:root` block for a palette.
@@ -86,61 +79,53 @@ pub fn palette_json(palette: &Palette) -> Option<String> {
 /// One declaration of each variable and one `color-scheme`: a second declaration of
 /// anything would leave the browser arbitrating between two of the page's own
 /// values.
-fn stylesheet(palette: &Palette) -> Option<String> {
-    let mut css = format!(":root{{color-scheme:{};", color_scheme(palette));
-    // In `VARS` order — the page's — so the block reads like the stylesheet it
-    // replaces, even though a map would have sorted the names.
-    for (name, token) in VARS {
-        css.push_str(&format!("{name}: {};", palette.ui(token)?));
+fn stylesheet(theme: &AppliedTheme) -> String {
+    let mut css = format!(":root{{color-scheme:{};", color_scheme(theme));
+    // In token order, which is the order `app.css` writes them in, so the block
+    // reads like the stylesheet it replaces.
+    for token in UiToken::ALL {
+        css.push_str(&format!("{}: {};", css_name(token), theme.color(token)));
     }
     css.pop();
     css.push('}');
-    Some(css)
+    css
+}
+
+/// The CSS custom property a token becomes: `bg_panel` is `--bg-panel`.
+///
+/// Derived, not listed. A hand-kept table here would be the second place a token is
+/// handled — one table per surface, one of them forgotten on the next token.
+#[must_use]
+pub fn css_name(token: UiToken) -> String {
+    format!("--{}", token.as_str().replace('_', "-"))
 }
 
 /// Which half of the light/dark divide the palette belongs to.
 ///
-/// Decided from the background's luminance rather than from the theme's own
-/// `appearance`, because the two can disagree in a theme file and the page has to
-/// match the colour it is actually painted with.
-fn color_scheme(palette: &Palette) -> &'static str {
-    match palette
-        .ui(UiToken::Bg)
-        .map(|bg| bg.relative_luminance() < 0.5)
-    {
-        Some(false) => "light",
-        // A missing background is only reachable through `palette_json`'s hole
-        // check, so the default is the page's own half.
-        _ => "dark",
-    }
+/// [`AppliedTheme::is_dark`]'s answer, which is read from the background's
+/// luminance rather than from the theme file's own `appearance`: the two can
+/// disagree, and the page has to match the colour it is actually painted with.
+fn color_scheme(theme: &AppliedTheme) -> &'static str {
+    if theme.is_dark() { "dark" } else { "light" }
 }
-
-/// The tokens the page's CSS is written against, in the page's order.
-///
-/// Two tokens are mapped onto one variable: the page has no "raised background"
-/// or "accent, brighter" to put anything in, and inventing one here would be a
-/// fourth place a colour is written down.
-const VARS: [(&str, UiToken); 9] = [
-    ("--bg", UiToken::Bg),
-    ("--panel", UiToken::BgPanel),
-    ("--border", UiToken::Border),
-    ("--text", UiToken::Text),
-    ("--muted", UiToken::TextMuted),
-    ("--accent", UiToken::Accent),
-    ("--on-accent", UiToken::Bg),
-    ("--danger", UiToken::Danger),
-    ("--ok", UiToken::Success),
-];
 
 /// The page's own `:root` block, which a theme replaces.
 ///
 /// Looked up rather than copied: the file is the truth, and this constant is how
-/// the replacement finds it.
-const DEFAULT_VARS: &str = ":root{color-scheme:dark;--bg: #0b1220;--panel: #131c2e;--border: #223049;--text: #e6ecf7;--muted: #93a4c0;--accent: #5aa9ff;--on-accent: #08101d;--danger: #ff8a80;--ok: #7ee0a3}";
+/// the replacement finds it. It is the same block `web/src/app.css` declares, and
+/// the test below fails if the two drift — a page whose `:root` kept yesterday's
+/// colours would be the palette a reload showed.
+const DEFAULT_VARS: &str = ":root{color-scheme:dark;--bg: #0b1220;--bg-panel: #131c2e;--text: #e6ecf7;--text-muted: #93a4c0;--accent: #5aa9ff;--accent-high: #8fc4ff;--border: #223049;--success: #7ee0a3;--warning: #f7c65c;--danger: #ff8a80}";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn night_flight() -> AppliedTheme {
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
+        AppliedTheme::from_extensions(&extensions, "acpilot.night-flight")
+            .expect("night flight resolves")
+    }
 
     #[test]
     fn the_page_names_the_version_it_was_served_with() {
@@ -177,12 +162,29 @@ mod tests {
         );
     }
 
-    fn night_flight() -> acpilot_extensions::Palette {
-        let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
-        acpilot_extensions::ThemeRegistry::new(&extensions)
-            .complete("acpilot.night-flight")
-            .expect("night flight resolves")
-            .palette
+    #[test]
+    fn the_served_page_still_has_the_block_a_theme_replaces() {
+        // `themed_page` finds the page's palette by this literal. If `app.css`
+        // changes and this constant does not, the replacement silently does
+        // nothing and every themed page is the page's own colours.
+        assert!(
+            PAGE.contains(DEFAULT_VARS),
+            "the built page's `:root` is not DEFAULT_VARS; copy the block from app.css"
+        );
+    }
+
+    #[test]
+    fn every_token_the_page_has_is_a_variable_it_declares() {
+        // The derivation and the stylesheet are the same list: a token the page
+        // never declares is a colour a theme sets to no effect, and a variable the
+        // page declares with no token is a colour that can never be themed.
+        for token in UiToken::ALL {
+            let name = css_name(token);
+            assert!(
+                DEFAULT_VARS.contains(&format!("{name}:")),
+                "`{name}` is a token but the page declares no such variable"
+            );
+        }
     }
 
     #[test]
@@ -203,8 +205,8 @@ mod tests {
 
     #[test]
     fn the_live_payload_is_the_same_variables_the_page_was_built_from() {
-        let palette = night_flight();
-        let payload = palette_json(&palette).expect("night flight has every token");
+        let theme = night_flight();
+        let payload = palette_json(&theme);
         let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
 
         assert_eq!(parsed["color_scheme"], "dark");
@@ -212,13 +214,13 @@ mod tests {
         assert_eq!(parsed["vars"]["--accent"], "#f7c65c");
         assert_eq!(
             parsed["vars"].as_object().expect("an object").len(),
-            VARS.len(),
-            "every variable, so a repaint leaves no token from the old theme"
+            UiToken::ALL.len(),
+            "every token, so a repaint leaves no colour from the old theme"
         );
         // The served page and the stream must agree: a live page that repainted
         // to something the initial HTML did not say would be a flash of a third
         // palette on every reload.
-        let html = themed_page("0.0.1", &palette);
+        let html = themed_page("0.0.1", &theme);
         for (name, value) in parsed["vars"].as_object().expect("an object") {
             let value = value.as_str().expect("a colour");
             assert!(
@@ -231,36 +233,11 @@ mod tests {
     #[test]
     fn the_light_palette_says_so_in_the_live_payload() {
         let extensions = acpilot_extensions::builtin::load_all().expect("the built-ins load");
-        let palette = acpilot_extensions::ThemeRegistry::new(&extensions)
-            .complete("acpilot.paper")
-            .expect("paper resolves")
-            .palette;
+        let theme =
+            AppliedTheme::from_extensions(&extensions, "acpilot.paper").expect("paper resolves");
 
-        let payload = palette_json(&palette).expect("paper has every token");
+        let payload = palette_json(&theme);
         assert!(payload.contains("\"color_scheme\":\"light\""), "{payload}");
-    }
-
-    #[test]
-    fn a_palette_with_a_hole_has_no_live_payload() {
-        let mut palette = night_flight();
-        palette.ui.remove(&UiToken::TextMuted);
-        assert_eq!(
-            palette_json(&palette),
-            None,
-            "a stream cannot repaint a page into a readable-theme-with-a-missing-colour"
-        );
-    }
-
-    #[test]
-    fn a_palette_with_a_hole_leaves_the_page_readable() {
-        let mut palette = night_flight();
-        palette.ui.remove(&acpilot_extensions::UiToken::Text);
-        let html = themed_page("0.0.1", &palette);
-        assert_eq!(
-            html,
-            page("0.0.1"),
-            "the page's own colours are the fallback"
-        );
     }
 
     #[test]

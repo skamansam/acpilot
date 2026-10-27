@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 acpilot-agent = { workspace = true }
 acpilot-extensions = { workspace = true }
+# The capture the site's showcase renders: the TUI's own frames and the desktop
+# shell's tables, from the crates that own them rather than from a transcription.
+acpilot-showcase = { workspace = true }
 clap = { workspace = true }
 
 [lints]

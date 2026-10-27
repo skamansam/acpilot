@@ -18,11 +18,9 @@
 
 pub mod activation;
 pub mod builtin;
-pub mod contrast;
 pub mod docs;
 pub mod effective;
 pub mod error;
-pub mod follow;
 pub mod loader;
 pub mod manifest;
 pub mod preset;
@@ -34,6 +32,11 @@ pub mod theme;
 pub mod theme_import;
 
 pub use acpilot_proto::extension::{ExtensionKind, ThemeAppearance};
+// The contrast gate and the terminal-following solver are `acpilot-palette`'s: a
+// surface asks for a palette and gets the same answer wherever it runs, and the
+// site's WebAssembly showcase runs those same lines in a browser tab. Re-exported
+// under the names the rest of the workspace already imports.
+pub use acpilot_palette::{contrast, follow};
 pub use activation::{Activation, ProfileExtensions, Resolution};
 pub use effective::{EffectiveRegistry, Layer, ProfileLayer, Trace};
 pub use error::ExtensionError;
@@ -45,5 +48,6 @@ pub use schema::{SCHEMA_PATH, SCHEMA_URL, json_schema, schema_json_text};
 pub use source::{AssetSource, DirSource, EmbeddedSource};
 pub use store::{ActiveSet, BlockReason, Store, StoreStatus, StoredExtension};
 pub use theme::{
-    Color, Palette, ResolvedTheme, SyntaxToken, Theme, ThemeError, ThemeRegistry, UiToken,
+    AppliedTheme, Color, Palette, ResolvedTheme, SyntaxToken, Theme, ThemeError, ThemeRegistry,
+    UiToken,
 };

@@ -21,6 +21,7 @@ use crate::app::{
     App, Dividers, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneMode, TerminalPane,
     Toast, Viewports, about_lines, menu_title,
 };
+use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
 
 /// Paint one frame.
@@ -29,7 +30,7 @@ use crate::theme::Theme;
 /// what to tell a program and what a copy cursor can walk: the pane's inner cells,
 /// not the window's, because a shell that thinks it is 80 columns wide inside a
 /// 78-column box wraps every long command.
-pub fn draw(frame: &mut Frame, app: &App) -> Viewports {
+pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     let area = frame.area();
     // A bar of chrome, the panes, then two footer rows: the status line says where
     // the keyboard is and what happened, and the stats bar says what the turn costs.
@@ -90,7 +91,7 @@ pub fn draw(frame: &mut Frame, app: &App) -> Viewports {
 /// Returns the size a program in the pane should be told, and the transcript's own
 /// when it is the pane on screen: the cells inside each, because that is what the
 /// next attach uses and what a copy cursor walks.
-fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Viewports {
+fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
     let wide = area.width >= 100;
     // The two dividers are the two widths in `app`: the tree's column and the
     // sidebar's, both clamped to what the panes beside them can spare. A layout that
@@ -414,92 +415,163 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(List::new(items).block(block), area);
 }
 
-/// The tab strip and the buffer under it.
+/// The tab strip, the buffer under it, and the box it is asking a question in.
 ///
-/// A mock in the design pass: P6-1 is the buffer and P6-4 the rendering. What is
-/// real here is the shape — a tab, a gutter with line numbers and git markers, a
-/// current line, and a cursor at the position the status line reports.
-fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
-    let [tabs, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
-    let Some(editor) = &app.editor else {
+/// The pane is a real document now (P6-4): every row here came from
+/// `acpilot_text::pane`'s viewport, which built only the lines that fit and only
+/// the cells the horizontal scroll left, and every colour came from the
+/// highlighter's tokens resolved through the theme. What this function decides is
+/// furniture — the numbers, the git markers, the current line, where the caret
+/// is — and nothing that the desktop app would have to decide again.
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+    let [strip, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let theme = app.theme.clone();
+    let demo = app.demo;
+    let focused = app.focus == Focus::Editor;
+    let Some(editor) = app.editor.as_mut() else {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Editor ")
-            .border_style(border_style(app.focus == Focus::Editor, &app.theme));
+            .border_style(border_style(focused, &theme));
         frame.render_widget(
-            Paragraph::new("no buffer is open\nthe buffer is P6-1")
-                .style(Style::default().fg(app.theme.text_muted()))
+            Paragraph::new("no buffer is open\nthe tree opens one — P6-6")
+                .style(Style::default().fg(theme.text_muted()))
                 .block(block),
             area,
         );
         return;
     };
 
-    let tab = Line::from(vec![
-        Span::styled(
-            format!(" {} ", editor.tab()),
-            Style::default()
-                .bg(app.theme.bg_panel())
-                .fg(app.theme.accent_high())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {} ", editor.language),
-            Style::default().fg(app.theme.text_muted()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(tab), tabs);
+    // A prompt replaces the tab strip rather than covering the buffer: the query
+    // is a question about the text, and the text it is about has to stay visible
+    // while it is typed.
+    match editor.prompt() {
+        Some(prompt) => {
+            let (sigil, rest) = match prompt.kind {
+                PromptKind::Find => ('/', ""),
+                PromptKind::Line => (':', "line"),
+            };
+            let hint = if rest.is_empty() {
+                String::new()
+            } else {
+                format!(" ({rest})")
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {sigil}"),
+                        Style::default()
+                            .bg(theme.bg_panel())
+                            .fg(theme.accent_high())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{}{hint}", prompt.text),
+                        Style::default().bg(theme.bg_panel()),
+                    ),
+                ])),
+                strip,
+            );
+            if focused {
+                let column = u16::try_from(2 + prompt.text.chars().count()).unwrap_or(u16::MAX);
+                frame.set_cursor_position((strip.x + column, strip.y));
+            }
+        }
+        None => {
+            let tab = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", editor.tab()),
+                    Style::default()
+                        .bg(theme.bg_panel())
+                        .fg(theme.accent_high())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {} ", editor.language()),
+                    Style::default().fg(theme.text_muted()),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(tab), strip);
+        }
+    }
 
+    let title = if editor.find().is_empty() {
+        String::new()
+    } else {
+        format!(" · /{}", editor.find().query())
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(
-            " {} · {} ",
-            editor.path,
-            if app.demo { "seeded" } else { "read-only" }
+            " {} · {}{title} ",
+            editor.path(),
+            if demo { "seeded" } else { "read-only" }
         ))
-        .border_style(border_style(app.focus == Focus::Editor, &app.theme));
+        .border_style(border_style(focused, &theme));
     let inner = block.inner(body);
-    let rows = usize::from(inner.height);
-    let lines: Vec<Line> = editor
-        .lines
-        .iter()
-        .enumerate()
-        .skip(app.editor_scroll)
-        .take(rows)
-        .map(|(index, line)| {
-            let current = index == editor.cursor.0;
-            let base = if current {
-                Style::default().bg(app.theme.bg_panel())
-            } else {
-                Style::default()
-            };
-            let marker = line
-                .status
-                .letter()
-                .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} "));
-            Line::from(vec![
-                Span::styled(
-                    format!("{:>4} ", index + 1),
-                    base.fg(app.theme.text_muted()),
-                ),
-                Span::styled(marker, base.fg(app.theme.warning())),
-                Span::styled(line.text.clone(), base),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines).block(block), body);
+    frame.render_widget(block, body);
 
-    if app.focus == Focus::Editor {
-        // Four digits, a space, the marker column, then the column itself — the
-        // gutter is a constant width so the cursor is arithmetic, not a layout
-        // pass.
-        let row = editor.cursor.0.saturating_sub(app.editor_scroll);
-        if row < rows {
-            let gutter = 5 + 2;
-            let column = u16::try_from(editor.cursor.1).unwrap_or(u16::MAX);
-            let down = u16::try_from(row).unwrap_or(u16::MAX);
-            frame.set_cursor_position((inner.x + gutter + column, inner.y + down));
+    // The pane learns its size here and answers with the cells it built for it:
+    // this is the one place a viewport is measured, so a resize cannot leave the
+    // gutter and the text disagreeing about where the text begins.
+    editor.resize(usize::from(inner.height), usize::from(inner.width));
+    let gutter = editor.gutter();
+    let current = editor.current_line();
+    let cursor = editor.cursor();
+    let painted = editor.paint();
+
+    let mut lines: Vec<Line> = Vec::with_capacity(painted.len());
+    for row in &painted {
+        let base = if row.line == current {
+            Style::default().bg(theme.bg_panel())
+        } else {
+            Style::default()
+        };
+        let marker = editor
+            .mark(row.line)
+            .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} "));
+        let mut spans = vec![
+            Span::styled(
+                format!("{:>width$} ", row.line + 1, width = gutter - 3),
+                base.fg(theme.text_muted()),
+            ),
+            Span::styled(marker, base.fg(theme.warning())),
+        ];
+        for run in &row.runs {
+            let mut style = base;
+            if let Some(token) = run.token {
+                style = style.fg(theme.syntax(token));
+            }
+            style = match run.state {
+                State::Plain => style,
+                State::Match => style.fg(theme.warning()).add_modifier(Modifier::UNDERLINED),
+                State::CurrentMatch => style.bg(theme.accent()).fg(theme.bg()),
+                State::Bracket => style.fg(theme.accent_high()).add_modifier(Modifier::BOLD),
+            };
+            spans.push(Span::styled(run.text.clone(), style));
         }
+        // The current line is a row of the pane, not a run of text: the highlight
+        // has to reach the right edge or it is a box drawn around some words.
+        let used = gutter + row.width;
+        if let Some(pad) = usize::from(inner.width).checked_sub(used)
+            && pad > 0
+        {
+            spans.push(Span::styled(" ".repeat(pad), base));
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    if focused
+        && editor.prompt().is_none()
+        && let Some((row, column)) = cursor
+    {
+        // The gutter is a constant width for the frame the pane was drawn at, so
+        // the caret is arithmetic over what the pane reported — not a second
+        // measurement of the row it is on.
+        let x = inner.x + u16::try_from(gutter).unwrap_or(0) + u16::try_from(column).unwrap_or(0);
+        let y = inner.y + u16::try_from(row).unwrap_or(0);
+        frame.set_cursor_position((x.max(inner.x), y.min(inner.bottom().saturating_sub(1))));
     }
 }
 
@@ -1146,9 +1218,12 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
         ],
         Focus::Editor => &[
             ("h j k l", "move"),
-            ("ctrl-s", "save"),
-            ("ctrl-f", "find in file"),
+            ("0 / $", "start / end of line"),
+            ("pgup / pgdn", "a page"),
+            ("/ or ctrl-f", "find in file"),
+            ("n / N", "next / previous match"),
             ("ctrl-g", "go to line"),
+            ("ctrl-s", "save"),
             ("ctrl-←/→", "narrower / wider"),
             ("i", "insert mode"),
             ("f12", "go to definition"),
@@ -1394,11 +1469,11 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn render(app: &App) -> String {
+    fn render(app: &mut App) -> String {
         render_at(app, 120, 34)
     }
 
-    fn render_at(app: &App, width: u16, height: u16) -> String {
+    fn render_at(app: &mut App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
         terminal
             .draw(|frame| {
@@ -1439,7 +1514,7 @@ mod tests {
 
     #[test]
     fn the_shell_shows_the_panes_it_promises() {
-        let text = render(&app_with_session());
+        let text = render(&mut app_with_session());
         assert!(text.contains("Sessions · 1"), "{text}");
         assert!(text.contains("wire the tui"), "{text}");
         assert!(text.contains("the daemon has the turn"), "{text}");
@@ -1451,7 +1526,7 @@ mod tests {
     fn an_empty_transcript_says_so_instead_of_being_blank() {
         let mut app = app_with_session();
         app.entries.clear();
-        assert!(render(&app).contains("no transcript yet"));
+        assert!(render(&mut app).contains("no transcript yet"));
     }
 
     #[test]
@@ -1467,7 +1542,7 @@ mod tests {
             created_at: "2026-10-24T00:00:00Z".to_owned(),
         });
         app.permission_card = true;
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("Permission needed"), "{text}");
         assert!(text.contains("Write src/main.rs"), "{text}");
         assert!(text.contains("y allow once"), "{text}");
@@ -1491,7 +1566,7 @@ mod tests {
             b"make: *** no rule\r\n".to_vec(),
         ));
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("make: *** no rule"), "{text}");
         assert!(text.contains("ctrl-t leaves"), "{text}");
         assert!(
@@ -1516,7 +1591,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalData(b"done".to_vec()));
         app.apply(crate::backend::Update::TerminalExited { code: Some(0) });
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("done"), "{text}");
         assert!(text.contains("exited"), "{text}");
     }
@@ -1541,7 +1616,7 @@ mod tests {
         app.terminal_picker = true;
         app.picker_selected = 1;
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("Terminals · 2"), "{text}");
         assert!(text.contains("/bin/sh -c make"), "{text}");
         assert!(text.contains("/bin/sh -c cargo test"), "{text}");
@@ -1560,7 +1635,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalData(b"hello\r\n".to_vec()));
         app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("hello"), "{text}");
         assert!(text.contains("copy"), "{text}");
         assert!(text.contains("v select"), "{text}");
@@ -1582,11 +1657,11 @@ mod tests {
         for character in "error".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("find error"), "the query is a line: {text}");
 
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("match 2/2"), "the newest match: {text}");
     }
 
@@ -1594,7 +1669,7 @@ mod tests {
     fn the_transcript_says_when_it_is_being_read() {
         let mut app = app_with_session();
         app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("copy"), "{text}");
         assert!(text.contains("v select"), "{text}");
         assert!(text.contains("y copy"), "{text}");
@@ -1606,7 +1681,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
         assert!(text.contains("find in what is above"), "{text}");
         assert!(text.contains("ctrl-u / ctrl-d"), "{text}");
@@ -1626,7 +1701,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
 
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
         assert!(text.contains("page back / forward"), "{text}");
         assert!(
@@ -1638,7 +1713,7 @@ mod tests {
     #[test]
     fn the_menu_bar_is_drawn_and_its_list_opens_under_the_title() {
         let mut app = app_with_session();
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("Acpilot"), "{text}");
         assert!(text.contains("View"), "{text}");
         assert!(text.contains("Session"), "{text}");
@@ -1646,7 +1721,7 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("Command Palette"), "{text}");
         assert!(text.contains("Quit Acpilot"), "{text}");
         // Every row that has a chord names it beside the label.
@@ -1658,7 +1733,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("About Acpilot"), "{text}");
         assert!(text.contains("Keys for this pane"), "{text}");
     }
@@ -1667,7 +1742,7 @@ mod tests {
     fn the_about_card_names_the_build_it_is() {
         let mut app = app_with_session();
         app.about = true;
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("About Acpilot"), "{text}");
         assert!(text.contains(acpilot_core::VERSION), "{text}");
         assert!(text.contains("MIT OR Apache-2.0"), "{text}");
@@ -1681,7 +1756,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 34)).expect("a test terminal");
         let mut drawn = None;
         terminal
-            .draw(|frame| drawn = Some(draw(frame, &app)))
+            .draw(|frame| drawn = Some(draw(frame, &mut app)))
             .expect("draw");
         let viewports = drawn.expect("a frame");
         // The tree is 26 columns wide, so its border is the 26th cell and the
@@ -1711,7 +1786,7 @@ mod tests {
         // The next frame draws the divider where the drag left it — the loop from a
         // column to a width and back has no arithmetic of its own.
         terminal
-            .draw(|frame| drawn = Some(draw(frame, &app)))
+            .draw(|frame| drawn = Some(draw(frame, &mut app)))
             .expect("draw");
         let viewports = drawn.expect("a frame");
         assert_eq!(viewports.dividers.tree, Some(39));
@@ -1732,7 +1807,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 34)).expect("a test terminal");
         let mut drawn = None;
         terminal
-            .draw(|frame| drawn = Some(draw(frame, &app)))
+            .draw(|frame| drawn = Some(draw(frame, &mut app)))
             .expect("draw");
         app.set_viewports(drawn.expect("a frame"));
 
@@ -1758,7 +1833,7 @@ mod tests {
         assert_eq!(app.handle_mouse(click(start + 1, 0)), None);
         assert!(app.menu.is_some_and(|state| state.items));
         terminal
-            .draw(|frame| drawn = Some(draw(frame, &app)))
+            .draw(|frame| drawn = Some(draw(frame, &mut app)))
             .expect("draw");
         let viewports = drawn.expect("a frame");
         app.set_viewports(viewports);
@@ -1774,26 +1849,193 @@ mod tests {
         assert_eq!(app.menu, None, "and running a row closes the list");
     }
 
+    /// A demo app drawn in the real theme, for the tests that care about colour.
+    fn demo_with_theme() -> App {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let extensions = acpilot_extensions::builtin::load_all().expect("the built-in themes load");
+        let resolved = acpilot_extensions::ThemeRegistry::new(&extensions)
+            .complete("acpilot.night-flight")
+            .expect("night flight resolves");
+        app.set_theme(crate::theme::Theme::from_resolved(&resolved));
+        app
+    }
+
+    /// Draw at a size and hand back the terminal, so a test can read cells.
+    fn drawn(app: &mut App, width: u16, height: u16) -> ratatui::Terminal<TestBackend> {
+        let mut terminal =
+            ratatui::Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, app);
+            })
+            .expect("draw");
+        terminal
+    }
+
+    /// How many cells come before a byte offset in a rendered row.
+    fn cells_to(row: &str, byte: usize) -> usize {
+        row[..byte].chars().count()
+    }
+
+    /// The rows of a rendered frame, as strings.
+    fn rows(terminal: &ratatui::Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_editor_draws_a_real_buffer_with_a_gutter_and_syntax_colour() {
+        let mut app = demo_with_theme();
+        app.focus = Focus::Editor;
+        let terminal = drawn(&mut app, 120, 34);
+        let rows = rows(&terminal);
+        let text = rows.join("\n");
+
+        // Line numbers, the marker column, and the seeded buffer's own text.
+        assert!(
+            text.contains("  4   const SCROLLBACK: usize = 10_000;"),
+            "the gutter and the fourth line: {text}"
+        );
+        assert!(
+            text.contains(" 14 M "),
+            "the seeded git marker is in its column: {text}"
+        );
+
+        // `const` is a keyword, and it is painted with the theme's keyword colour
+        // at the cell the gutter puts it in.
+        let row = rows
+            .iter()
+            .position(|row| row.contains("const SCROLLBACK"))
+            .expect("the line is on screen");
+        // A column is cells, not bytes: the frame holds border glyphs, so a
+        // `find` offset would land two cells to the right of what it found.
+        let column = cells_to(&rows[row], rows[row].find("const").expect("the keyword")) as u16;
+        let cell = &terminal.backend().buffer()[(column, row as u16)];
+        assert_eq!(cell.symbol(), "c");
+        assert_eq!(
+            cell.fg,
+            app.theme
+                .syntax(acpilot_extensions::theme::SyntaxToken::Keyword),
+            "`const` is the theme's keyword colour"
+        );
+
+        // The current line — the caret's — carries the panel background across
+        // the whole row, and the line under it does not.
+        let current = rows
+            .iter()
+            .position(|row| row.contains("let (mut row, mut"))
+            .expect("the caret's line");
+        let at = cells_to(
+            &rows[current],
+            rows[current].find("let (mut row").expect("the text"),
+        ) as u16;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(at, current as u16)].bg,
+            app.theme.bg_panel(),
+            "the caret's line is a row, not a word: {}",
+            rows[current]
+        );
+        assert_ne!(
+            buffer[(at, current as u16 + 1)].bg,
+            app.theme.bg_panel(),
+            "and the row under it is not: {}",
+            rows[current + 1]
+        );
+    }
+
+    #[test]
+    fn the_editor_scrolls_sideways_when_the_caret_leaves_the_right_edge() {
+        let mut app = demo_with_theme();
+        app.focus = Focus::Editor;
+        let before = rows(&drawn(&mut app, 100, 30)).join("\n");
+        assert!(
+            before.contains("use acpilot_proto"),
+            "the first line starts at its beginning: {before}"
+        );
+
+        // `End` on the first line puts the caret past the right edge of a narrow
+        // pane, and the window has to follow it. The whole pane scrolls — a
+        // horizontal scroll is one decision for all the rows, not one per line.
+        app.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        ));
+        app.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('1'),
+            KeyModifiers::NONE,
+        ));
+        app.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ));
+        app.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::End,
+            KeyModifiers::NONE,
+        ));
+        let after = rows(&drawn(&mut app, 100, 30)).join("\n");
+        assert!(
+            !after.contains("use acpilot_proto"),
+            "the line scrolled off the left: {after}"
+        );
+        assert!(
+            after.contains("TerminalSummary};"),
+            "and its end is on screen: {after}"
+        );
+        assert!(
+            after.contains("  1   "),
+            "the gutter did not scroll with it: {after}"
+        );
+    }
+
+    #[test]
+    fn a_find_prompt_is_drawn_in_the_tab_strip_above_the_buffer() {
+        let mut app = demo_with_theme();
+        app.focus = Focus::Editor;
+        app.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        ));
+        for character in "Pane".chars() {
+            app.handle_key(crossterm::event::KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ));
+        }
+        let text = rows(&drawn(&mut app, 120, 34)).join("\n");
+        assert!(text.contains("/Pane"), "the query is drawn: {text}");
+        assert!(
+            text.contains("· /Pane"),
+            "and the title says which search is running: {text}"
+        );
+    }
+
     #[test]
     fn the_tree_column_is_the_width_the_app_stores() {
         let mut app = App::demo(&acpilot_demo::demo());
         // The tree's top border runs from column 0 to its own width: in 26 columns
         // the right corner is the 26th cell, and a wider tree moves it.
-        let corner = |app: &App| {
+        let corner = |app: &mut App| {
             let text = render(app);
             text.lines()
                 .nth(1)
                 .and_then(|row| row.chars().position(|cell| cell == '┐'))
         };
-        assert_eq!(corner(&app), Some(25), "26 columns, corner at index 25");
+        assert_eq!(corner(&mut app), Some(25), "26 columns, corner at index 25");
         app.files_width = 40;
-        assert_eq!(corner(&app), Some(39));
+        assert_eq!(corner(&mut app), Some(39));
     }
 
     #[test]
     fn the_design_pass_draws_the_three_panels_and_the_two_footer_rows() {
-        let app = App::demo(&acpilot_demo::demo());
-        let text = render(&app);
+        let mut app = App::demo(&acpilot_demo::demo());
+        let text = render(&mut app);
 
         // Files, text, agents — the same three in every frontend.
         assert!(text.contains("Files · acpilot"), "{text}");
@@ -1816,8 +2058,8 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_drops_the_tree_before_it_squeezes_the_editor() {
-        let app = App::demo(&acpilot_demo::demo());
-        let text = render_at(&app, 80, 24);
+        let mut app = App::demo(&acpilot_demo::demo());
+        let text = render_at(&mut app, 80, 24);
         assert!(!text.contains("Files ·"), "the tree folds away: {text}");
         assert!(text.contains("Sessions · 3"), "{text}");
         assert!(text.contains("Prompt · Enter sends"), "{text}");
@@ -1830,7 +2072,7 @@ mod tests {
         for character in "diff".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("Commands · 3"), "{text}");
         assert!(text.contains("Review diff"), "{text}");
         assert!(text.contains("P6-9"), "{text}");
@@ -1844,7 +2086,7 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(text.contains("planned · P6-9"), "{text}");
         assert!(text.contains("not implemented"), "{text}");
     }
@@ -1859,7 +2101,7 @@ mod tests {
                 text: format!("line {index}"),
             });
         }
-        let text = render(&app);
+        let text = render(&mut app);
         assert!(!text.contains("line 0\n"), "{text}");
         assert!(text.contains("line 199"), "{text}");
     }

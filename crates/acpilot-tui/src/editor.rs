@@ -1,0 +1,831 @@
+//! The editor pane: a real document, its parse, and what a key does to it.
+//!
+//! The design pass drew the editor from a mock (`acpilot_demo::editor`); this is
+//! the pane behind that drawing, and the shape it draws is unchanged — a tab, a
+//! gutter with line numbers and git markers, a current line, a caret — because
+//! the mock was designed to be replaced by exactly this.
+//!
+//! What it holds is [`acpilot_text::Document`]: a rope, a caret set and an undo
+//! history, the same one the desktop app and the browser will hold. Scrolling,
+//! clipping and caret arithmetic are [`acpilot_text::pane`]'s, so this module
+//! decides only what a *key* means and what a *frame* looks like.
+//!
+//! Three separations worth keeping:
+//!
+//! - **Movement is an intent, not a byte.** [`EditorPane::move_caret`] takes rows
+//!   and columns so the Vim layer (P6-5) and the arrow keys reach the same code,
+//!   and `h j k l` here is a keymap decision, not an editor one.
+//! - **Painting answers in tokens, not colours.** A [`Run`] names a
+//!   [`SyntaxToken`] and the pane's theme turns it into a terminal colour, which
+//!   is the same rule the highlighter and the theme files already follow.
+//! - **The prompt is a mode of the pane, not of the app.** `/` and `Ctrl-G` are
+//!   the editor's, and while one is up every key is text: a find box that let `j`
+//!   through would move the caret out from under the query being typed.
+//!
+//! Insert mode, saving through the daemon and the diff review are P6-5, P7-10 and
+//! P6-9; the pane is read-only until then, and says so rather than pretending.
+
+use acpilot_demo::EditorBuffer;
+// The theme's token set, not this crate's: a run names a token and the theme
+// decides the colour, exactly as a theme file and the highlighter already agree
+// to. `acpilot-extensions` re-exports the palette's, so this is the same type
+// `Highlights` answers with.
+use acpilot_extensions::theme::SyntaxToken;
+use acpilot_text::highlight::{Grammars, Highlights, Span};
+use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, parse_position};
+use acpilot_text::{Document, LineColumn};
+
+/// Which prompt is up, and what has been typed into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptKind {
+    /// `/` — a search, applied as it is typed.
+    Find,
+    /// `Ctrl-G` — a line and column, applied on Enter.
+    Line,
+}
+
+/// The one-line box the editor takes its next question in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    /// What it is asking.
+    pub kind: PromptKind,
+    /// What has been typed.
+    pub text: String,
+    /// Where the caret was when the box opened, so `Esc` puts it back.
+    origin: LineColumn,
+}
+
+/// What a cell is painted on top of, beyond its syntax.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum State {
+    /// Nothing special.
+    #[default]
+    Plain,
+    /// Part of a search match.
+    Match,
+    /// Part of the match the caret is on.
+    CurrentMatch,
+    /// One of the two brackets under the caret.
+    Bracket,
+}
+
+/// One run of characters painted the same way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    /// The characters, tabs expanded.
+    pub text: String,
+    /// What they are, syntactically, if the grammar names them.
+    pub token: Option<SyntaxToken>,
+    /// What they are on top of that.
+    pub state: State,
+}
+
+/// One line of the buffer as it will be painted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintedRow {
+    /// The line's number in the buffer, zero-based.
+    pub line: usize,
+    /// Its runs, left to right.
+    pub runs: Vec<Run>,
+    /// How many cells the runs cover, so a pane can paint the rest of the row
+    /// with the current-line background instead of stopping at the last glyph.
+    pub width: usize,
+}
+
+/// The editor pane: one document, a viewport, and the question it is asking.
+pub struct EditorPane {
+    path: String,
+    language: String,
+    document: Document,
+    highlights: Option<Highlights>,
+    viewport: Viewport,
+    marks: Vec<Option<char>>,
+    find: Find,
+    prompt: Option<Prompt>,
+    message: String,
+    rows: Vec<Row>,
+    bracket: Option<(usize, usize)>,
+}
+
+/// A pane's debug shape: the file, the caret and the window.
+///
+/// Hand-written because a parse tree and a query cursor are not printable, and
+/// because the two lines that *are* worth printing in a bug report are the ones
+/// here.
+impl std::fmt::Debug for EditorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorPane")
+            .field("path", &self.path)
+            .field("language", &self.language)
+            .field("caret", &self.caret())
+            .field("viewport", &self.viewport)
+            .field("rows", &self.rows.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl EditorPane {
+    /// A pane over the seeded buffer, with its grammar compiled if this build
+    /// ships one.
+    ///
+    /// The seed is the demo's: the same file, the same lines, the same grep of
+    /// git markers and the same cursor the design pass was argued with. What
+    /// changed is that the text is now a rope the pane can edit, rather than
+    /// strings the pane drew.
+    #[must_use]
+    pub fn seeded(seed: &EditorBuffer, grammars: &mut Grammars) -> Self {
+        let text: Vec<&str> = seed.lines.iter().map(|line| line.text.as_str()).collect();
+        let document = Document::from_bytes(text.join("\n").as_bytes())
+            .expect("the seeded buffer is text the demo wrote");
+        let highlights = grammars.get(&seed.language).map(Highlights::new);
+        let caret = LineColumn::new(seed.cursor.0, seed.cursor.1);
+        let mut pane = Self {
+            path: seed.path.clone(),
+            language: seed.language.clone(),
+            document,
+            highlights,
+            viewport: Viewport::new(0, 0),
+            marks: seed
+                .lines
+                .iter()
+                .map(|line| line.status.letter().and_then(|l| l.chars().next()))
+                .collect(),
+            find: Find::new(),
+            prompt: None,
+            message: String::new(),
+            rows: Vec::new(),
+            bracket: None,
+        };
+        let at = pane.offset(caret);
+        pane.document.set_caret(at);
+        pane.settle();
+        pane
+    }
+
+    /// The file's path, as the title and the status line spell it.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The tab's label: the file's own name.
+    #[must_use]
+    pub fn tab(&self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    /// The language the pane highlights with, or claims to.
+    #[must_use]
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// The document itself, for reading.
+    #[must_use]
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// The search, whether or not its box is up.
+    #[must_use]
+    pub fn find(&self) -> &Find {
+        &self.find
+    }
+
+    /// The rows on screen, as the viewport last measured them.
+    #[must_use]
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    /// Where the window is on the document.
+    #[must_use]
+    pub fn viewport(&self) -> Viewport {
+        self.viewport
+    }
+
+    /// The box that is asking a question, if one is.
+    #[must_use]
+    pub fn prompt(&self) -> Option<&Prompt> {
+        self.prompt.as_ref()
+    }
+
+    /// What the last key did, said in words for the status line.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The caret, zero-based.
+    #[must_use]
+    pub fn caret(&self) -> LineColumn {
+        self.document
+            .buffer()
+            .line_column(self.document.selections().primary().head.at)
+    }
+
+    /// The caret as a person counts it: line 1, column 1.
+    #[must_use]
+    pub fn position(&self) -> (usize, usize) {
+        let caret = self.caret();
+        (caret.line + 1, caret.column + 1)
+    }
+
+    /// Where the caret is drawn, as `(row of the viewport, cell column)`, or
+    /// `None` when it is outside the window.
+    #[must_use]
+    pub fn cursor(&self) -> Option<(usize, usize)> {
+        self.viewport.caret(self.document.buffer(), self.caret())
+    }
+
+    /// The two matched brackets under the caret, when there is a pair.
+    #[must_use]
+    pub fn bracket(&self) -> Option<(usize, usize)> {
+        self.bracket
+    }
+
+    /// The git marker for a line: `M`, `A`, `?` — or nothing for a clean line.
+    #[must_use]
+    pub fn mark(&self, line: usize) -> Option<char> {
+        self.marks.get(line).copied().flatten()
+    }
+
+    /// How many cells the gutter needs: the widest line number, a space, and the
+    /// marker column.
+    #[must_use]
+    pub fn gutter(&self) -> usize {
+        let digits = self.document.buffer().line_count().to_string().len().max(3);
+        digits + 3
+    }
+
+    /// Tell the pane how much room it has.
+    ///
+    /// The text width is the pane's width minus the gutter, because the gutter is
+    /// the pane's own furniture: a long line clipped at the pane's edge rather
+    /// than at the gutter's would hide two columns behind the numbers.
+    pub fn resize(&mut self, rows: usize, cols: usize) {
+        let text = cols.saturating_sub(self.gutter()).max(1);
+        let rows = rows.max(1);
+        // Every frame calls this, and a frame that changed nothing should not
+        // rebuild forty rows of cells: the size is the only thing a resize is
+        // about, and a caret that moved has already built its own.
+        if self.viewport.rows() == rows && self.viewport.cols() == text {
+            return;
+        }
+        self.viewport.resize(rows, text);
+        self.rebuild();
+    }
+
+    /// Reparse and re-measure after the text changed.
+    pub fn settle(&mut self) {
+        if let Some(highlights) = &mut self.highlights {
+            highlights.sync(self.document.buffer());
+        }
+        self.rebuild();
+    }
+
+    /// Re-measure the window and the bracket under the caret.
+    fn rebuild(&mut self) {
+        self.viewport.reveal(self.document.buffer(), self.caret());
+        self.rows = self.viewport.visible(self.document.buffer());
+        self.bracket = bracket_at(self.document.buffer(), self.caret_offset());
+    }
+
+    /// The char offset a line and column name, clamped to the line.
+    fn offset(&self, at: LineColumn) -> usize {
+        self.document.buffer().offset(at)
+    }
+
+    /// The caret's offset in the buffer.
+    fn caret_offset(&self) -> usize {
+        self.document.selections().primary().head.at
+    }
+
+    /// Move the caret, clamped to the text, and scroll the least that shows it.
+    ///
+    /// A column past the end of the line lands at the line's end: arrows in a
+    /// terminal editor move the caret, they do not add spaces. There is no goal
+    /// column here either — remembering one across a run of Up and Down is a
+    /// property of the key sequence (P6-5), not of the caret.
+    pub fn move_caret(&mut self, rows: i32, cols: i32) {
+        let caret = self.caret();
+        let lines = self.document.buffer().line_count();
+        let line = step(caret.line, rows).min(lines.saturating_sub(1));
+        let width = self.document.buffer().line_range(line).len();
+        let column = step(caret.column, cols).min(width);
+        self.place(LineColumn::new(line, column));
+    }
+
+    /// Move a page at a time, keeping the caret's row on screen.
+    pub fn page(&mut self, down: bool) {
+        let rows = i32::try_from(self.viewport.rows().saturating_sub(1)).unwrap_or(i32::MAX);
+        self.move_caret(if down { rows } else { -rows }, 0);
+    }
+
+    /// Scroll the window without moving the caret, which is what a wheel does.
+    pub fn scroll(&mut self, lines: i32) {
+        self.viewport
+            .scroll_lines(self.document.buffer(), lines as isize);
+        self.rows = self.viewport.visible(self.document.buffer());
+    }
+
+    /// Put the caret at the start or the end of its line.
+    pub fn line_edge(&mut self, end: bool) {
+        let caret = self.caret();
+        let width = self.document.buffer().line_range(caret.line).len();
+        self.place(LineColumn::new(caret.line, if end { width } else { 0 }));
+    }
+
+    /// Put the caret somewhere and show it.
+    fn place(&mut self, at: LineColumn) {
+        let offset = self.offset(at);
+        self.document.set_caret(offset);
+        self.rebuild();
+    }
+
+    /// Open the search box, seeded with the last query.
+    pub fn search(&mut self) {
+        let text = self.find.query().to_owned();
+        self.open(PromptKind::Find, text);
+        if !self.find.is_empty() {
+            self.message = matches(&self.find);
+        }
+    }
+
+    /// Open the go-to-line box.
+    pub fn go_to_line(&mut self) {
+        self.open(PromptKind::Line, String::new());
+        self.message = "line[:column]".to_owned();
+    }
+
+    /// Open a prompt, remembering where the caret was.
+    fn open(&mut self, kind: PromptKind, text: String) {
+        self.prompt = Some(Prompt {
+            kind,
+            text,
+            origin: self.caret(),
+        });
+    }
+
+    /// Whether a prompt has the keyboard.
+    #[must_use]
+    pub fn is_prompting(&self) -> bool {
+        self.prompt.is_some()
+    }
+
+    /// Type a character into the open prompt.
+    ///
+    /// A find box searches as it is typed, which is the only version of `/` that
+    /// is worth having: the matches are on screen before Enter is pressed, so a
+    /// query that finds nothing says so while it is still being fixed.
+    pub fn prompt_insert(&mut self, character: char) {
+        let Some(prompt) = &mut self.prompt else {
+            return;
+        };
+        prompt.text.push(character);
+        if prompt.kind == PromptKind::Find {
+            let text = prompt.text.clone();
+            let from = self.caret_offset();
+            self.find.set_query(self.document.buffer(), &text, from);
+            self.jump_to_current();
+            self.message = matches(&self.find);
+        }
+    }
+
+    /// Take the last character back out of the open prompt.
+    pub fn prompt_backspace(&mut self) {
+        let Some(prompt) = &mut self.prompt else {
+            return;
+        };
+        prompt.text.pop();
+        if prompt.kind == PromptKind::Find {
+            let text = prompt.text.clone();
+            let from = self.caret_offset();
+            self.find.set_query(self.document.buffer(), &text, from);
+            self.jump_to_current();
+            self.message = matches(&self.find);
+        }
+    }
+
+    /// Run what the prompt asks for. Returns whether it was answered: `false`
+    /// means the box is still up, because what was typed was not an answer.
+    pub fn prompt_apply(&mut self) -> bool {
+        let Some(prompt) = self.prompt.take() else {
+            return true;
+        };
+        match prompt.kind {
+            PromptKind::Find => {
+                self.message = matches(&self.find);
+                true
+            }
+            PromptKind::Line => match parse_position(&prompt.text) {
+                Some(at) => {
+                    self.place(at);
+                    self.message = format!("line {}", at.line + 1);
+                    true
+                }
+                None => {
+                    // Left open on purpose: a typo is fixed in the box, not by
+                    // opening it again.
+                    self.message = format!("not a line: {}", prompt.text);
+                    self.prompt = Some(prompt);
+                    false
+                }
+            },
+        }
+    }
+
+    /// Close the prompt and undo what it did.
+    ///
+    /// `Esc` in a find box puts the caret back where it started, because a search
+    /// that was abandoned should not have moved anything — the box is a
+    /// question, and "no" is an answer.
+    pub fn prompt_cancel(&mut self) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        if prompt.kind == PromptKind::Find {
+            self.find = Find::new();
+            self.place(prompt.origin);
+        }
+        self.message.clear();
+    }
+
+    /// Step to the next or previous match of the current query.
+    pub fn step_match(&mut self, forward: bool) {
+        if self.find.is_empty() {
+            self.message = "no search — press /".to_owned();
+            return;
+        }
+        match self.find.step(forward) {
+            Some(at) => {
+                let position = self.document.buffer().line_column(at);
+                self.place(position);
+                self.message = matches(&self.find);
+            }
+            None => self.message = "no matches".to_owned(),
+        }
+    }
+
+    /// Put the caret on the current match without re-searching.
+    fn jump_to_current(&mut self) {
+        if let Some(range) = self.find.current() {
+            let position = self.document.buffer().line_column(range.start);
+            let offset = self.offset(position);
+            self.document.set_caret(offset);
+            self.rebuild();
+        }
+    }
+
+    /// The caret's line, for the current-line highlight.
+    #[must_use]
+    pub fn current_line(&self) -> usize {
+        self.caret().line
+    }
+
+    /// Paint the rows on screen.
+    ///
+    /// The parse is asked for the bytes of the visible lines only, then each cell
+    /// is given its token, its match state and its bracket state and neighbours
+    /// with the same answer are joined into one [`Run`]. A frame therefore costs
+    /// what the screen costs, not what the file costs.
+    pub fn paint(&mut self) -> Vec<PaintedRow> {
+        let Some(highlights) = &mut self.highlights else {
+            return self.plain();
+        };
+        let (first, last) = match (self.rows.first(), self.rows.last()) {
+            (Some(first), Some(last)) => (first.line, last.line),
+            _ => return Vec::new(),
+        };
+        let buffer = self.document.buffer();
+        let range = buffer.line_range(first).start..buffer.line_range(last).end;
+        let spans: Vec<Span> = highlights.spans(buffer, range).to_vec();
+        let bracket = self.bracket;
+        let find = &self.find;
+        self.rows
+            .iter()
+            .map(|row| PaintedRow {
+                line: row.line,
+                runs: runs(row, &spans, bracket, find),
+                width: row.width(),
+            })
+            .collect()
+    }
+
+    /// Every row with no token at all: a language this build has no grammar for.
+    fn plain(&self) -> Vec<PaintedRow> {
+        let bracket = self.bracket;
+        let find = &self.find;
+        self.rows
+            .iter()
+            .map(|row| PaintedRow {
+                line: row.line,
+                runs: runs(row, &[], bracket, find),
+                width: row.width(),
+            })
+            .collect()
+    }
+}
+
+/// One row's cells, joined into runs of one token and one state.
+fn runs(row: &Row, spans: &[Span], bracket: Option<(usize, usize)>, find: &Find) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::with_capacity(row.cells.len());
+    for cell in &row.cells {
+        let (token, state) = appearance(cell, spans, bracket, find);
+        match runs.last_mut() {
+            Some(run) if run.token == token && run.state == state => run.text.push(cell.ch),
+            _ => runs.push(Run {
+                text: cell.ch.to_string(),
+                token,
+                state,
+            }),
+        }
+    }
+    runs
+}
+
+/// The token and the state one cell is painted with.
+fn appearance(
+    cell: &Cell,
+    spans: &[Span],
+    bracket: Option<(usize, usize)>,
+    find: &Find,
+) -> (Option<SyntaxToken>, State) {
+    let Some(at) = cell.at else {
+        return (None, State::Plain);
+    };
+    let token = {
+        let index = spans.partition_point(|span| span.range.end <= at);
+        spans
+            .get(index)
+            .filter(|span| span.range.start <= at)
+            .map(|span| span.token)
+    };
+    let state = if bracket.is_some_and(|(open, close)| at == open || at == close) {
+        State::Bracket
+    } else {
+        match find.hit(at) {
+            Hit::Match => State::Match,
+            Hit::Current => State::CurrentMatch,
+            Hit::No => State::Plain,
+        }
+    };
+    (token, state)
+}
+
+/// How a search reads on the status line: `3/7`, or `no matches`.
+fn matches(find: &Find) -> String {
+    match (find.position(), find.matches().len()) {
+        (_, 0) => "no matches".to_owned(),
+        (Some(at), total) => format!("{at}/{total}"),
+        (None, total) => format!("{total} matches"),
+    }
+}
+
+/// `value` moved by `delta`, stopping at zero.
+fn step(value: usize, delta: i32) -> usize {
+    if delta >= 0 {
+        value.saturating_add(delta.unsigned_abs() as usize)
+    } else {
+        value.saturating_sub(delta.unsigned_abs() as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acpilot_demo::tree::GitStatus;
+
+    fn pane(lines: &[&str], cursor: (usize, usize)) -> EditorPane {
+        let seed = EditorBuffer {
+            path: "src/main.rs".to_owned(),
+            language: "rust".to_owned(),
+            lines: lines
+                .iter()
+                .enumerate()
+                .map(|(index, text)| acpilot_demo::EditorLine {
+                    text: (*text).to_owned(),
+                    status: if index == 1 {
+                        GitStatus::Modified
+                    } else {
+                        GitStatus::Clean
+                    },
+                })
+                .collect(),
+            cursor,
+        };
+        let mut grammars = Grammars::new();
+        let mut pane = EditorPane::seeded(&seed, &mut grammars);
+        pane.resize(10, 60);
+        pane
+    }
+
+    fn text(pane: &EditorPane) -> String {
+        pane.document().text()
+    }
+
+    #[test]
+    fn the_seeded_buffer_is_a_document_with_a_cursor_the_status_line_can_read() {
+        let pane = pane(&["fn main() {", "    let x = 1;", "}"], (1, 4));
+        assert_eq!(pane.tab(), "main.rs");
+        assert_eq!(pane.position(), (2, 5));
+        assert_eq!(text(&pane), "fn main() {\n    let x = 1;\n}");
+        assert_eq!(pane.mark(1), Some('M'));
+        assert_eq!(pane.mark(0), None);
+    }
+
+    #[test]
+    fn movement_stops_at_the_ends_of_the_text_and_of_the_line() {
+        let mut pane = pane(&["one", "three", "x"], (0, 0));
+        pane.move_caret(0, 99);
+        assert_eq!(pane.caret(), LineColumn::new(0, 3), "no spaces are added");
+        pane.move_caret(1, 0);
+        assert_eq!(pane.caret(), LineColumn::new(1, 3));
+        pane.move_caret(-99, -99);
+        assert_eq!(pane.caret(), LineColumn::new(0, 0));
+        pane.move_caret(99, 0);
+        assert_eq!(pane.caret().line, 2, "the last line, not past it");
+    }
+
+    #[test]
+    fn a_caret_moved_off_the_right_scrolls_the_view() {
+        let long = "x".repeat(120);
+        let mut pane = pane(&[long.as_str(), "short"], (0, 0));
+        pane.move_caret(0, 100);
+        assert!(pane.viewport().left() > 0, "the window followed the caret");
+        assert_eq!(pane.cursor().map(|(row, _)| row), Some(0));
+        assert_eq!(
+            pane.cursor().map(|(_, column)| column),
+            Some(pane.viewport().cols() - 1),
+            "the caret sits at the right edge"
+        );
+        assert_eq!(pane.position(), (1, 101));
+    }
+
+    #[test]
+    fn only_the_visible_rows_are_painted_and_the_current_line_is_known() {
+        let lines: Vec<String> = (0..100).map(|line| format!("line {line}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let pane = pane(&refs, (0, 0));
+        assert_eq!(pane.rows().len(), 10);
+        assert_eq!(pane.current_line(), 0);
+        assert_eq!(pane.rows()[3].text(), "line 3");
+    }
+
+    #[test]
+    fn scrolling_moves_the_window_without_moving_the_caret() {
+        let lines: Vec<String> = (0..50).map(|line| format!("l{line}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut pane = pane(&refs, (0, 0));
+        pane.scroll(5);
+        assert_eq!(pane.viewport().top(), 5);
+        assert_eq!(pane.caret().line, 0, "the caret stayed put");
+        assert_eq!(pane.rows()[0].text(), "l5");
+    }
+
+    #[test]
+    fn the_gutter_is_wide_enough_for_the_longest_line_number() {
+        let lines: Vec<String> = (0..1500).map(|line| format!("l{line}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let pane = pane(&refs, (0, 0));
+        assert_eq!(
+            pane.gutter(),
+            7,
+            "four digits, a space and the marker column"
+        );
+    }
+
+    #[test]
+    fn a_search_highlights_its_matches_and_steps_through_them() {
+        let mut pane = pane(&["let a = 1;", "let b = 2;", "let a = 3;"], (0, 0));
+        pane.search();
+        for character in "let".chars() {
+            pane.prompt_insert(character);
+        }
+        assert_eq!(pane.find().matches().len(), 3);
+        assert_eq!(pane.message(), "1/3");
+        assert_eq!(pane.caret(), LineColumn::new(0, 0));
+        pane.prompt_apply();
+        assert!(!pane.is_prompting());
+        pane.step_match(true);
+        assert_eq!(pane.caret().line, 1, "the caret went to the second match");
+        assert_eq!(pane.message(), "2/3");
+        pane.step_match(true);
+        pane.step_match(true);
+        assert_eq!(pane.caret().line, 0, "and wrapped");
+    }
+
+    #[test]
+    fn escapes_puts_the_caret_back_where_the_search_started() {
+        let mut pane = pane(&["one", "two", "one"], (2, 0));
+        pane.search();
+        pane.prompt_insert('t');
+        pane.prompt_insert('w');
+        assert_eq!(pane.caret().line, 1, "the caret jumped to the match");
+        pane.prompt_cancel();
+        assert_eq!(pane.caret(), LineColumn::new(2, 0));
+        assert!(pane.find().is_empty(), "the abandoned search is gone");
+    }
+
+    #[test]
+    fn go_to_line_reads_a_position_and_says_so_when_it_cannot() {
+        let lines: Vec<String> = (0..40).map(|line| format!("l{line}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut pane = pane(&refs, (0, 0));
+        pane.go_to_line();
+        for character in "30:3".chars() {
+            pane.prompt_insert(character);
+        }
+        assert!(pane.prompt_apply());
+        assert_eq!(pane.position(), (30, 3));
+        assert_eq!(pane.viewport().top(), 20, "the line is on screen");
+
+        pane.go_to_line();
+        for character in "nope".chars() {
+            pane.prompt_insert(character);
+        }
+        assert!(!pane.prompt_apply(), "the box stays open");
+        assert!(pane.is_prompting());
+        assert_eq!(pane.message(), "not a line: nope");
+    }
+
+    #[test]
+    fn the_bracket_under_the_caret_and_its_match_are_both_known() {
+        let mut pane = pane(&["fn main() {", "    a(b)", "}"], (0, 10));
+        assert_eq!(
+            pane.bracket(),
+            Some((10, 21)),
+            "the braces, from the opener"
+        );
+        pane.place(LineColumn::new(1, 7));
+        assert_eq!(pane.bracket(), Some((17, 19)), "`(b)` seen from the closer");
+        pane.place(LineColumn::new(1, 8));
+        assert_eq!(
+            pane.bracket(),
+            Some((17, 19)),
+            "the caret just past the closer is still on it"
+        );
+    }
+
+    #[test]
+    fn a_rust_buffer_is_painted_in_tokens_and_every_cell_keeps_its_character() {
+        let mut pane = pane(&["fn main() {", "    let x = 1; // hi", "}"], (0, 0));
+        let painted = pane.paint();
+        assert_eq!(painted.len(), 3);
+        let first = &painted[0];
+        assert!(
+            first
+                .runs
+                .iter()
+                .any(|run| run.text == "fn" && run.token == Some(SyntaxToken::Keyword)),
+            "{:?}",
+            first.runs
+        );
+        let joined: String = first.runs.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(joined, "fn main() {", "painting never loses a character");
+        assert!(
+            painted[1]
+                .runs
+                .iter()
+                .any(|run| run.token == Some(SyntaxToken::Comment)),
+            "{:?}",
+            painted[1].runs
+        );
+    }
+
+    #[test]
+    fn a_match_is_painted_as_a_match_and_the_current_one_apart() {
+        let mut pane = pane(&["one two", "two one"], (0, 0));
+        pane.search();
+        for character in "two".chars() {
+            pane.prompt_insert(character);
+        }
+        pane.prompt_apply();
+        let painted = pane.paint();
+        let states: Vec<State> = painted
+            .iter()
+            .flat_map(|row| row.runs.iter().map(|run| run.state))
+            .collect();
+        assert!(states.contains(&State::CurrentMatch), "{states:?}");
+        assert!(states.contains(&State::Match), "{states:?}");
+    }
+
+    #[test]
+    fn a_language_with_no_grammar_is_still_drawn() {
+        let mut grammars = Grammars::new();
+        let seed = EditorBuffer {
+            path: "Makefile".to_owned(),
+            language: "make".to_owned(),
+            lines: vec![acpilot_demo::EditorLine {
+                text: "all:\n\techo hi".to_owned(),
+                status: GitStatus::Clean,
+            }],
+            cursor: (0, 0),
+        };
+        let mut pane = EditorPane::seeded(&seed, &mut grammars);
+        pane.resize(4, 40);
+        let painted = pane.paint();
+        assert_eq!(painted.len(), 2, "the seeded line held a newline");
+        assert!(painted[0].runs.iter().all(|run| run.token.is_none()));
+    }
+}

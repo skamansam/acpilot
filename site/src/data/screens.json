@@ -134,13 +134,38 @@
           },
           {
             "column": 25,
-            "text": "││   1 ",
+            "text": "││  1 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "column": 33,
+            "text": "use",
+            "style": 7
+          },
+          {
+            "column": 36,
+            "text": " acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -155,7 +180,7 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
@@ -176,7 +201,7 @@
           },
           {
             "column": 25,
-            "text": "││   2 ",
+            "text": "││  2 ",
             "style": 3
           },
           {
@@ -213,13 +238,13 @@
           },
           {
             "column": 25,
-            "text": "││   3 ",
+            "text": "││  3 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// How many lines of history a pane keep",
-            "style": 1
+            "column": 33,
+            "text": "/// How many lines of history a pane keeps",
+            "style": 11
           },
           {
             "column": 75,
@@ -240,13 +265,43 @@
           },
           {
             "column": 25,
-            "text": "││   4 ",
+            "text": "││  4 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "column": 33,
+            "text": "const",
+            "style": 7
+          },
+          {
+            "column": 39,
+            "text": "SCROLLBACK",
+            "style": 9
+          },
+          {
+            "column": 49,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 51,
+            "text": "usize",
+            "style": 9
+          },
+          {
+            "column": 56,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 59,
+            "text": "10_000",
+            "style": 12
+          },
+          {
+            "column": 65,
+            "text": ";",
+            "style": 8
           },
           {
             "column": 75,
@@ -272,7 +327,7 @@
           },
           {
             "column": 25,
-            "text": "││   5 ",
+            "text": "││  5 ",
             "style": 3
           },
           {
@@ -283,7 +338,7 @@
           {
             "column": 77,
             "text": "Attach the TUI to a terminal an agent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -309,13 +364,13 @@
           },
           {
             "column": 25,
-            "text": "││   6 ",
+            "text": "││  6 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// Whether a pane is following the progr",
-            "style": 1
+            "column": 33,
+            "text": "/// Whether a pane is following the progra",
+            "style": 11
           },
           {
             "column": 75,
@@ -325,7 +380,7 @@
           {
             "column": 77,
             "text": "opened.",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -351,13 +406,73 @@
           },
           {
             "column": 25,
-            "text": "││   7 ",
+            "text": "││  7 ",
             "style": 3
           },
           {
+            "column": 33,
+            "text": "#",
+            "style": 14
+          },
+          {
             "column": 34,
-            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
-            "style": 1
+            "text": "[",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "derive",
+            "style": 14
+          },
+          {
+            "column": 41,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 42,
+            "text": "Debug",
+            "style": 9
+          },
+          {
+            "column": 47,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 49,
+            "text": "Clone",
+            "style": 9
+          },
+          {
+            "column": 54,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 60,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 62,
+            "text": "PartialEq",
+            "style": 9
+          },
+          {
+            "column": 71,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "Eq",
+            "style": 9
           },
           {
             "column": 75,
@@ -367,7 +482,7 @@
           {
             "column": 77,
             "text": "The client already speaks the frames; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -388,13 +503,28 @@
           },
           {
             "column": 25,
-            "text": "││   8 ",
+            "text": "││  8 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "pub enum PaneMode {                      ",
-            "style": 1
+            "column": 33,
+            "text": "pub",
+            "style": 7
+          },
+          {
+            "column": 37,
+            "text": "enum",
+            "style": 7
+          },
+          {
+            "column": 42,
+            "text": "PaneMode",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -404,7 +534,7 @@
           {
             "column": 77,
             "text": "pane needs a screen and a keyboard, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -425,13 +555,18 @@
           },
           {
             "column": 25,
-            "text": "││   9 ",
+            "text": "││  9 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Live,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Live",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -441,7 +576,7 @@
           {
             "column": 77,
             "text": "neither belongs in the worker.",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -462,13 +597,18 @@
           },
           {
             "column": 25,
-            "text": "││  10 ",
+            "text": "││ 10 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Copy,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -499,13 +639,13 @@
           },
           {
             "column": 25,
-            "text": "││  11 ",
+            "text": "││ 11 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -536,7 +676,7 @@
           },
           {
             "column": 25,
-            "text": "││  12 ",
+            "text": "││ 12 ",
             "style": 3
           },
           {
@@ -569,17 +709,27 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 25,
-            "text": "││  13 ",
+            "text": "││ 13 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "impl TerminalPane {                      ",
-            "style": 1
+            "column": 33,
+            "text": "impl",
+            "style": 7
+          },
+          {
+            "column": 38,
+            "text": "TerminalPane",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -589,7 +739,7 @@
           {
             "column": 77,
             "text": "plan",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -605,18 +755,18 @@
           },
           {
             "column": 25,
-            "text": "││  14 ",
+            "text": "││ 14 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    /// Move the copy cursor, scrolling w",
-            "style": 1
+            "column": 37,
+            "text": "/// Move the copy cursor, scrolling wh",
+            "style": 11
           },
           {
             "column": 75,
@@ -626,7 +776,7 @@
           {
             "column": 77,
             "text": "  parse the screen in the app, not in the",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -642,18 +792,73 @@
           },
           {
             "column": 25,
-            "text": "││  15 ",
+            "text": "││ 15 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    fn copy_move(&mut self, rows: i32, co",
-            "style": 1
+            "column": 37,
+            "text": "fn",
+            "style": 7
+          },
+          {
+            "column": 40,
+            "text": "copy_move",
+            "style": 14
+          },
+          {
+            "column": 49,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "&",
+            "style": 17
+          },
+          {
+            "column": 51,
+            "text": "mut",
+            "style": 7
+          },
+          {
+            "column": 55,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 59,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "rows",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 67,
+            "text": "i32",
+            "style": 9
+          },
+          {
+            "column": 70,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 72,
+            "text": "col",
+            "style": 18
           },
           {
             "column": 75,
@@ -663,7 +868,7 @@
           {
             "column": 77,
             "text": "worker",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -679,13 +884,58 @@
           },
           {
             "column": 25,
-            "text": "││  16 ",
+            "text": "││ 16 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        let (height, width) = self.grid_s",
+            "column": 41,
+            "text": "let",
+            "style": 7
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "height",
             "style": 1
+          },
+          {
+            "column": 52,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 53,
+            "text": " width",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ")",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": " = ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 67,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 68,
+            "text": "grid_si",
+            "style": 14
           },
           {
             "column": 75,
@@ -695,7 +945,7 @@
           {
             "column": 77,
             "text": "  map keys to bytes, Ctrl-C included",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -716,18 +966,88 @@
           },
           {
             "column": 27,
-            "text": "  17 ",
-            "style": 11
+            "text": " 17 ",
+            "style": 19
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "  ",
-            "style": 12
+            "style": 20
           },
           {
-            "column": 34,
-            "text": "        let (mut row, mut col) = self.cur",
-            "style": 13
+            "column": 33,
+            "text": "        ",
+            "style": 21
+          },
+          {
+            "column": 41,
+            "text": "let",
+            "style": 22
+          },
+          {
+            "column": 44,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 23
+          },
+          {
+            "column": 46,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 49,
+            "text": " row",
+            "style": 21
+          },
+          {
+            "column": 53,
+            "text": ",",
+            "style": 23
+          },
+          {
+            "column": 54,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 55,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 58,
+            "text": " col",
+            "style": 21
+          },
+          {
+            "column": 62,
+            "text": ")",
+            "style": 23
+          },
+          {
+            "column": 63,
+            "text": " = ",
+            "style": 21
+          },
+          {
+            "column": 66,
+            "text": "self",
+            "style": 24
+          },
+          {
+            "column": 70,
+            "text": ".",
+            "style": 23
+          },
+          {
+            "column": 71,
+            "text": "curs",
+            "style": 24
           },
           {
             "column": 75,
@@ -737,7 +1057,7 @@
           {
             "column": 77,
             "text": "  tell the program the pane's size",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -753,18 +1073,58 @@
           },
           {
             "column": 25,
-            "text": "││  18 ",
+            "text": "││ 18 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "        if rows < 0 && row == 0 && self.s",
+            "column": 41,
+            "text": "if",
+            "style": 7
+          },
+          {
+            "column": 43,
+            "text": " rows < ",
             "style": 1
+          },
+          {
+            "column": 51,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 52,
+            "text": " && row == ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 64,
+            "text": " && ",
+            "style": 1
+          },
+          {
+            "column": 68,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "sc",
+            "style": 18
           },
           {
             "column": 75,
@@ -790,17 +1150,52 @@
           },
           {
             "column": 25,
-            "text": "││  19 ",
+            "text": "││ 19 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "            self.set_scroll(self.scroll +",
+            "column": 45,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 49,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "set_scroll",
+            "style": 14
+          },
+          {
+            "column": 60,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 66,
+            "text": "scroll",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": " + ",
             "style": 1
           },
           {
@@ -827,13 +1222,23 @@
           },
           {
             "column": 25,
-            "text": "││  20 ",
+            "text": "││ 20 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        } else {                         ",
-            "style": 1
+            "column": 41,
+            "text": "}",
+            "style": 8
+          },
+          {
+            "column": 43,
+            "text": "else",
+            "style": 7
+          },
+          {
+            "column": 48,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -859,13 +1264,38 @@
           },
           {
             "column": 25,
-            "text": "││  21 ",
+            "text": "││ 21 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "            row = row.saturating_sub(1); ",
+            "column": 33,
+            "text": "            row = row",
             "style": 1
+          },
+          {
+            "column": 54,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 55,
+            "text": "saturating_sub",
+            "style": 14
+          },
+          {
+            "column": 69,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 70,
+            "text": "1",
+            "style": 12
+          },
+          {
+            "column": 71,
+            "text": ");",
+            "style": 8
           },
           {
             "column": 75,
@@ -891,13 +1321,13 @@
           },
           {
             "column": 25,
-            "text": "││  22 ",
+            "text": "││ 22 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        }                                ",
-            "style": 1
+            "column": 41,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -923,13 +1353,63 @@
           },
           {
             "column": 25,
-            "text": "││  23 ",
+            "text": "││ 23 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        self.cursor = (row.min(last_row),",
+            "column": 41,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 45,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "cursor",
+            "style": 18
+          },
+          {
+            "column": 52,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 55,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "row",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": "min",
+            "style": 14
+          },
+          {
+            "column": 63,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 64,
+            "text": "last_row",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "),",
+            "style": 8
           },
           {
             "column": 75,
@@ -955,13 +1435,13 @@
           },
           {
             "column": 25,
-            "text": "││  24 ",
+            "text": "││ 24 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    }                                    ",
-            "style": 1
+            "column": 37,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -971,7 +1451,7 @@
           {
             "column": 77,
             "text": "Turn complete",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -987,13 +1467,13 @@
           },
           {
             "column": 25,
-            "text": "││  25 ",
+            "text": "││ 25 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -1003,7 +1483,7 @@
           {
             "column": 77,
             "text": "3 files changed, 41 tests passing",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -1047,7 +1527,7 @@
           {
             "column": 76,
             "text": "┌ Prompt · Enter sends ────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -1069,7 +1549,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -1079,7 +1559,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -1091,19 +1571,19 @@
           {
             "column": 76,
             "text": "└──────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -1113,7 +1593,7 @@
           {
             "column": 26,
             "text": "prompt ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 33,
@@ -1135,7 +1615,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -1145,7 +1625,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -1285,13 +1765,38 @@
           },
           {
             "column": 25,
-            "text": "││   1 ",
+            "text": "││  1 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "column": 33,
+            "text": "use",
+            "style": 7
+          },
+          {
+            "column": 36,
+            "text": " acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -1306,7 +1811,7 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
@@ -1327,7 +1832,7 @@
           },
           {
             "column": 25,
-            "text": "││   2 ",
+            "text": "││  2 ",
             "style": 3
           },
           {
@@ -1364,13 +1869,13 @@
           },
           {
             "column": 25,
-            "text": "││   3 ",
+            "text": "││  3 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// How many lines of history a pane keep",
-            "style": 1
+            "column": 33,
+            "text": "/// How many lines of history a pane keeps",
+            "style": 11
           },
           {
             "column": 75,
@@ -1392,7 +1897,7 @@
           {
             "column": 18,
             "text": "┌ Commands · 21 ───────────────────────────────────────────────────────────────────┐",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -1419,7 +1924,7 @@
           {
             "column": 18,
             "text": "│> ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 21,
@@ -1429,7 +1934,7 @@
           {
             "column": 101,
             "text": "│nal an agent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -1451,7 +1956,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1466,7 +1971,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -1493,7 +1998,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1508,12 +2013,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": " the frames; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -1535,7 +2040,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1550,12 +2055,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": " keyboard, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -1577,7 +2082,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1592,12 +2097,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "rker.",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -1619,7 +2124,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1634,7 +2139,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -1656,7 +2161,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1671,7 +2176,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -1698,7 +2203,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1713,7 +2218,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -1740,27 +2245,27 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
-            "text": "Quit",
+            "text": "Find in file",
             "style": 1
           },
           {
-            "column": 23,
-            "text": "  ctrl-q",
+            "column": 31,
+            "text": "  ctrl-f",
             "style": 3
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -1777,7 +2282,76 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
+          },
+          {
+            "column": 19,
+            "text": "Go to line…",
+            "style": 1
+          },
+          {
+            "column": 30,
+            "text": "  ctrl-g",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 102,
+            "text": " app, not in the",
+            "style": 16
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 19,
+            "text": "Quit",
+            "style": 1
+          },
+          {
+            "column": 23,
+            "text": "  ctrl-q",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 13
           },
           {
             "column": 19,
@@ -1797,91 +2371,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
-          },
-          {
-            "column": 102,
-            "text": " app, not in the",
-            "style": 10
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 18,
-            "text": "│",
-            "style": 8
-          },
-          {
-            "column": 19,
-            "text": "Find in file",
-            "style": 1
-          },
-          {
-            "column": 31,
-            "text": "  ctrl-f",
-            "style": 3
-          },
-          {
-            "column": 39,
-            "text": "  · P6-4",
-            "style": 6
-          },
-          {
-            "column": 101,
-            "text": "│",
-            "style": 8
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 18,
-            "text": "│",
-            "style": 8
-          },
-          {
-            "column": 19,
-            "text": "Go to line…",
-            "style": 1
-          },
-          {
-            "column": 30,
-            "text": "  ctrl-g",
-            "style": 3
-          },
-          {
-            "column": 38,
-            "text": "  · P6-4",
-            "style": 6
-          },
-          {
-            "column": 101,
-            "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "-C included",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -1898,7 +2393,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1918,12 +2413,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "ne's size",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -1940,7 +2435,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -1960,7 +2455,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -1982,7 +2477,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -2002,7 +2497,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -2024,7 +2519,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -2044,7 +2539,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -2066,7 +2561,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -2086,7 +2581,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -2108,7 +2603,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -2128,7 +2623,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -2150,7 +2645,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -2170,7 +2665,7 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -2192,7 +2687,7 @@
           {
             "column": 18,
             "text": "└──────────────────────────────────────────────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -2208,13 +2703,13 @@
           },
           {
             "column": 25,
-            "text": "││  25 ",
+            "text": "││ 25 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -2224,7 +2719,7 @@
           {
             "column": 77,
             "text": "3 files changed, 41 tests passing",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -2268,7 +2763,7 @@
           {
             "column": 76,
             "text": "┌ Prompt · Enter sends ────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2290,7 +2785,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -2300,7 +2795,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2312,19 +2807,19 @@
           {
             "column": 76,
             "text": "└──────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -2334,7 +2829,7 @@
           {
             "column": 26,
             "text": "prompt ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 33,
@@ -2356,7 +2851,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -2366,7 +2861,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -2453,7 +2948,7 @@
           {
             "column": 76,
             "text": "┌ Sessions · 3 ────────────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2480,7 +2975,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -2495,7 +2990,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2511,13 +3006,38 @@
           },
           {
             "column": 25,
-            "text": "││   1 ",
+            "text": "││  1 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "column": 33,
+            "text": "use",
+            "style": 7
+          },
+          {
+            "column": 36,
+            "text": " acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -2527,7 +3047,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -2537,12 +3057,12 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2558,7 +3078,7 @@
           },
           {
             "column": 25,
-            "text": "││   2 ",
+            "text": "││  2 ",
             "style": 3
           },
           {
@@ -2569,7 +3089,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -2584,7 +3104,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2600,13 +3120,13 @@
           },
           {
             "column": 25,
-            "text": "││   3 ",
+            "text": "││  3 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// How many lines of history a pane keep",
-            "style": 1
+            "column": 33,
+            "text": "/// How many lines of history a pane keeps",
+            "style": 11
           },
           {
             "column": 75,
@@ -2616,7 +3136,7 @@
           {
             "column": 76,
             "text": "└──────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -2632,13 +3152,43 @@
           },
           {
             "column": 25,
-            "text": "││   4 ",
+            "text": "││  4 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "column": 33,
+            "text": "const",
+            "style": 7
+          },
+          {
+            "column": 39,
+            "text": "SCROLLBACK",
+            "style": 9
+          },
+          {
+            "column": 49,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 51,
+            "text": "usize",
+            "style": 9
+          },
+          {
+            "column": 56,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 59,
+            "text": "10_000",
+            "style": 12
+          },
+          {
+            "column": 65,
+            "text": ";",
+            "style": 8
           },
           {
             "column": 75,
@@ -2664,7 +3214,7 @@
           },
           {
             "column": 25,
-            "text": "││   5 ",
+            "text": "││  5 ",
             "style": 3
           },
           {
@@ -2675,7 +3225,7 @@
           {
             "column": 77,
             "text": "Attach the TUI to a terminal an agent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -2701,13 +3251,13 @@
           },
           {
             "column": 25,
-            "text": "││   6 ",
+            "text": "││  6 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// Whether a pane is following the progr",
-            "style": 1
+            "column": 33,
+            "text": "/// Whether a pane is following the progra",
+            "style": 11
           },
           {
             "column": 75,
@@ -2717,7 +3267,7 @@
           {
             "column": 77,
             "text": "opened.",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -2743,13 +3293,73 @@
           },
           {
             "column": 25,
-            "text": "││   7 ",
+            "text": "││  7 ",
             "style": 3
           },
           {
+            "column": 33,
+            "text": "#",
+            "style": 14
+          },
+          {
             "column": 34,
-            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
-            "style": 1
+            "text": "[",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "derive",
+            "style": 14
+          },
+          {
+            "column": 41,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 42,
+            "text": "Debug",
+            "style": 9
+          },
+          {
+            "column": 47,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 49,
+            "text": "Clone",
+            "style": 9
+          },
+          {
+            "column": 54,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 60,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 62,
+            "text": "PartialEq",
+            "style": 9
+          },
+          {
+            "column": 71,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "Eq",
+            "style": 9
           },
           {
             "column": 75,
@@ -2759,7 +3369,7 @@
           {
             "column": 77,
             "text": "The client already speaks the frames; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -2780,13 +3390,28 @@
           },
           {
             "column": 25,
-            "text": "││   8 ",
+            "text": "││  8 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "pub enum PaneMode {                      ",
-            "style": 1
+            "column": 33,
+            "text": "pub",
+            "style": 7
+          },
+          {
+            "column": 37,
+            "text": "enum",
+            "style": 7
+          },
+          {
+            "column": 42,
+            "text": "PaneMode",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -2796,7 +3421,7 @@
           {
             "column": 77,
             "text": "pane needs a screen and a keyboard, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -2817,13 +3442,18 @@
           },
           {
             "column": 25,
-            "text": "││   9 ",
+            "text": "││  9 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Live,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Live",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -2833,7 +3463,7 @@
           {
             "column": 77,
             "text": "neither belongs in the worker.",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -2854,13 +3484,18 @@
           },
           {
             "column": 25,
-            "text": "││  10 ",
+            "text": "││ 10 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Copy,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -2891,13 +3526,13 @@
           },
           {
             "column": 25,
-            "text": "││  11 ",
+            "text": "││ 11 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -2928,7 +3563,7 @@
           },
           {
             "column": 25,
-            "text": "││  12 ",
+            "text": "││ 12 ",
             "style": 3
           },
           {
@@ -2961,17 +3596,27 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 25,
-            "text": "││  13 ",
+            "text": "││ 13 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "impl TerminalPane {                      ",
-            "style": 1
+            "column": 33,
+            "text": "impl",
+            "style": 7
+          },
+          {
+            "column": 38,
+            "text": "TerminalPane",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -2981,7 +3626,7 @@
           {
             "column": 77,
             "text": "plan",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -2997,18 +3642,18 @@
           },
           {
             "column": 25,
-            "text": "││  14 ",
+            "text": "││ 14 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    /// Move the copy cursor, scrolling w",
-            "style": 1
+            "column": 37,
+            "text": "/// Move the copy cursor, scrolling wh",
+            "style": 11
           },
           {
             "column": 75,
@@ -3018,7 +3663,7 @@
           {
             "column": 77,
             "text": "  parse the screen in the app, not in the",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3034,18 +3679,73 @@
           },
           {
             "column": 25,
-            "text": "││  15 ",
+            "text": "││ 15 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    fn copy_move(&mut self, rows: i32, co",
-            "style": 1
+            "column": 37,
+            "text": "fn",
+            "style": 7
+          },
+          {
+            "column": 40,
+            "text": "copy_move",
+            "style": 14
+          },
+          {
+            "column": 49,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "&",
+            "style": 17
+          },
+          {
+            "column": 51,
+            "text": "mut",
+            "style": 7
+          },
+          {
+            "column": 55,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 59,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "rows",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 67,
+            "text": "i32",
+            "style": 9
+          },
+          {
+            "column": 70,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 72,
+            "text": "col",
+            "style": 18
           },
           {
             "column": 75,
@@ -3055,7 +3755,7 @@
           {
             "column": 77,
             "text": "worker",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3071,13 +3771,58 @@
           },
           {
             "column": 25,
-            "text": "││  16 ",
+            "text": "││ 16 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        let (height, width) = self.grid_s",
+            "column": 41,
+            "text": "let",
+            "style": 7
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "height",
             "style": 1
+          },
+          {
+            "column": 52,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 53,
+            "text": " width",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ")",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": " = ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 67,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 68,
+            "text": "grid_si",
+            "style": 14
           },
           {
             "column": 75,
@@ -3087,7 +3832,7 @@
           {
             "column": 77,
             "text": "  map keys to bytes, Ctrl-C included",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3108,18 +3853,88 @@
           },
           {
             "column": 27,
-            "text": "  17 ",
-            "style": 11
+            "text": " 17 ",
+            "style": 19
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "  ",
-            "style": 12
+            "style": 20
           },
           {
-            "column": 34,
-            "text": "        let (mut row, mut col) = self.cur",
-            "style": 13
+            "column": 33,
+            "text": "        ",
+            "style": 21
+          },
+          {
+            "column": 41,
+            "text": "let",
+            "style": 22
+          },
+          {
+            "column": 44,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 23
+          },
+          {
+            "column": 46,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 49,
+            "text": " row",
+            "style": 21
+          },
+          {
+            "column": 53,
+            "text": ",",
+            "style": 23
+          },
+          {
+            "column": 54,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 55,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 58,
+            "text": " col",
+            "style": 21
+          },
+          {
+            "column": 62,
+            "text": ")",
+            "style": 23
+          },
+          {
+            "column": 63,
+            "text": " = ",
+            "style": 21
+          },
+          {
+            "column": 66,
+            "text": "self",
+            "style": 24
+          },
+          {
+            "column": 70,
+            "text": ".",
+            "style": 23
+          },
+          {
+            "column": 71,
+            "text": "curs",
+            "style": 24
           },
           {
             "column": 75,
@@ -3129,7 +3944,7 @@
           {
             "column": 77,
             "text": "  tell the program the pane's size",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3145,18 +3960,58 @@
           },
           {
             "column": 25,
-            "text": "││  18 ",
+            "text": "││ 18 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "        if rows < 0 && row == 0 && self.s",
+            "column": 41,
+            "text": "if",
+            "style": 7
+          },
+          {
+            "column": 43,
+            "text": " rows < ",
             "style": 1
+          },
+          {
+            "column": 51,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 52,
+            "text": " && row == ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 64,
+            "text": " && ",
+            "style": 1
+          },
+          {
+            "column": 68,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "sc",
+            "style": 18
           },
           {
             "column": 75,
@@ -3182,17 +4037,52 @@
           },
           {
             "column": 25,
-            "text": "││  19 ",
+            "text": "││ 19 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "            self.set_scroll(self.scroll +",
+            "column": 45,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 49,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "set_scroll",
+            "style": 14
+          },
+          {
+            "column": 60,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 66,
+            "text": "scroll",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": " + ",
             "style": 1
           },
           {
@@ -3215,12 +4105,17 @@
           {
             "column": 0,
             "text": "┌ sessions keys · any key closes ────────────┐",
-            "style": 8
+            "style": 13
           },
           {
             "column": 46,
-            "text": "se {                         ",
-            "style": 1
+            "text": "e",
+            "style": 7
+          },
+          {
+            "column": 48,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -3242,7 +4137,7 @@
           {
             "column": 0,
             "text": "│j / k     ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3252,12 +4147,37 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 46,
-            "text": "row = row.saturating_sub(1); ",
+            "text": "ow = row",
             "style": 1
+          },
+          {
+            "column": 54,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 55,
+            "text": "saturating_sub",
+            "style": 14
+          },
+          {
+            "column": 69,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 70,
+            "text": "1",
+            "style": 12
+          },
+          {
+            "column": 71,
+            "text": ");",
+            "style": 8
           },
           {
             "column": 75,
@@ -3279,7 +4199,7 @@
           {
             "column": 0,
             "text": "│enter     ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3289,7 +4209,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3311,7 +4231,7 @@
           {
             "column": 0,
             "text": "│i         ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3321,12 +4241,52 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 46,
-            "text": ".cursor = (row.min(last_row),",
+            "text": "cursor",
+            "style": 18
+          },
+          {
+            "column": 52,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 55,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "row",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": "min",
+            "style": 14
+          },
+          {
+            "column": 63,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 64,
+            "text": "last_row",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "),",
+            "style": 8
           },
           {
             "column": 75,
@@ -3348,7 +4308,7 @@
           {
             "column": 0,
             "text": "│tab       ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3358,7 +4318,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3368,7 +4328,7 @@
           {
             "column": 77,
             "text": "Turn complete",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3380,7 +4340,7 @@
           {
             "column": 0,
             "text": "│ctrl-←/→  ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3390,7 +4350,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3400,7 +4360,7 @@
           {
             "column": 77,
             "text": "3 files changed, 41 tests passing",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -3412,7 +4372,7 @@
           {
             "column": 0,
             "text": "│n         ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3422,7 +4382,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3434,7 +4394,7 @@
           {
             "column": 0,
             "text": "│d         ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3444,7 +4404,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3456,7 +4416,7 @@
           {
             "column": 0,
             "text": "│c         ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 11,
@@ -3466,7 +4426,7 @@
           {
             "column": 45,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3478,7 +4438,7 @@
           {
             "column": 0,
             "text": "└────────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           },
           {
             "column": 46,
@@ -3490,12 +4450,12 @@
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -3505,7 +4465,7 @@
           {
             "column": 26,
             "text": "sessions ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
@@ -3527,7 +4487,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -3537,7 +4497,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -3567,7 +4527,7 @@
           {
             "column": 10,
             "text": "F",
-            "style": 14
+            "style": 25
           },
           {
             "column": 11,
@@ -3619,7 +4579,7 @@
           {
             "column": 9,
             "text": "┌ File ────────────────────┐",
-            "style": 8
+            "style": 13
           },
           {
             "column": 37,
@@ -3629,7 +4589,7 @@
           {
             "column": 76,
             "text": "┌ Sessions · 3 ────────────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -3646,7 +4606,7 @@
           {
             "column": 9,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 10,
@@ -3661,7 +4621,7 @@
           {
             "column": 36,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 37,
@@ -3671,7 +4631,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -3686,7 +4646,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -3703,7 +4663,7 @@
           {
             "column": 9,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 10,
@@ -3718,12 +4678,32 @@
           {
             "column": 36,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 37,
-            "text": " acpilot_proto::terminal::{TerminalSiz",
+            "text": "acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -3733,7 +4713,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -3743,12 +4723,12 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -3765,7 +4745,7 @@
           {
             "column": 9,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 10,
@@ -3780,7 +4760,7 @@
           {
             "column": 36,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 75,
@@ -3790,7 +4770,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -3805,7 +4785,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -3822,12 +4802,12 @@
           {
             "column": 9,
             "text": "└──────────────────────────┘",
-            "style": 8
+            "style": 13
           },
           {
             "column": 37,
-            "text": " How many lines of history a pane keep",
-            "style": 1
+            "text": "How many lines of history a pane keeps",
+            "style": 11
           },
           {
             "column": 75,
@@ -3837,7 +4817,7 @@
           {
             "column": 76,
             "text": "└──────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -3853,13 +4833,43 @@
           },
           {
             "column": 25,
-            "text": "││   4 ",
+            "text": "││  4 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "column": 33,
+            "text": "const",
+            "style": 7
+          },
+          {
+            "column": 39,
+            "text": "SCROLLBACK",
+            "style": 9
+          },
+          {
+            "column": 49,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 51,
+            "text": "usize",
+            "style": 9
+          },
+          {
+            "column": 56,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 59,
+            "text": "10_000",
+            "style": 12
+          },
+          {
+            "column": 65,
+            "text": ";",
+            "style": 8
           },
           {
             "column": 75,
@@ -3885,7 +4895,7 @@
           },
           {
             "column": 25,
-            "text": "││   5 ",
+            "text": "││  5 ",
             "style": 3
           },
           {
@@ -3896,7 +4906,7 @@
           {
             "column": 77,
             "text": "Attach the TUI to a terminal an agent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -3922,13 +4932,13 @@
           },
           {
             "column": 25,
-            "text": "││   6 ",
+            "text": "││  6 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// Whether a pane is following the progr",
-            "style": 1
+            "column": 33,
+            "text": "/// Whether a pane is following the progra",
+            "style": 11
           },
           {
             "column": 75,
@@ -3938,7 +4948,7 @@
           {
             "column": 77,
             "text": "opened.",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -3964,13 +4974,73 @@
           },
           {
             "column": 25,
-            "text": "││   7 ",
+            "text": "││  7 ",
             "style": 3
           },
           {
+            "column": 33,
+            "text": "#",
+            "style": 14
+          },
+          {
             "column": 34,
-            "text": "#[derive(Debug, Clone, Copy, PartialEq, E",
-            "style": 1
+            "text": "[",
+            "style": 8
+          },
+          {
+            "column": 35,
+            "text": "derive",
+            "style": 14
+          },
+          {
+            "column": 41,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 42,
+            "text": "Debug",
+            "style": 9
+          },
+          {
+            "column": 47,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 49,
+            "text": "Clone",
+            "style": 9
+          },
+          {
+            "column": 54,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 60,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 62,
+            "text": "PartialEq",
+            "style": 9
+          },
+          {
+            "column": 71,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "Eq",
+            "style": 9
           },
           {
             "column": 75,
@@ -3980,7 +5050,7 @@
           {
             "column": 77,
             "text": "The client already speaks the frames; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -4001,13 +5071,28 @@
           },
           {
             "column": 25,
-            "text": "││   8 ",
+            "text": "││  8 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "pub enum PaneMode {                      ",
-            "style": 1
+            "column": 33,
+            "text": "pub",
+            "style": 7
+          },
+          {
+            "column": 37,
+            "text": "enum",
+            "style": 7
+          },
+          {
+            "column": 42,
+            "text": "PaneMode",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -4017,7 +5102,7 @@
           {
             "column": 77,
             "text": "pane needs a screen and a keyboard, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -4038,13 +5123,18 @@
           },
           {
             "column": 25,
-            "text": "││   9 ",
+            "text": "││  9 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Live,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Live",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -4054,7 +5144,7 @@
           {
             "column": 77,
             "text": "neither belongs in the worker.",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -4075,13 +5165,18 @@
           },
           {
             "column": 25,
-            "text": "││  10 ",
+            "text": "││ 10 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    Copy,                                ",
-            "style": 1
+            "column": 37,
+            "text": "Copy",
+            "style": 9
+          },
+          {
+            "column": 41,
+            "text": ",",
+            "style": 8
           },
           {
             "column": 75,
@@ -4112,13 +5207,13 @@
           },
           {
             "column": 25,
-            "text": "││  11 ",
+            "text": "││ 11 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -4149,7 +5244,7 @@
           },
           {
             "column": 25,
-            "text": "││  12 ",
+            "text": "││ 12 ",
             "style": 3
           },
           {
@@ -4182,17 +5277,27 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 25,
-            "text": "││  13 ",
+            "text": "││ 13 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "impl TerminalPane {                      ",
-            "style": 1
+            "column": 33,
+            "text": "impl",
+            "style": 7
+          },
+          {
+            "column": 38,
+            "text": "TerminalPane",
+            "style": 9
+          },
+          {
+            "column": 51,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -4202,7 +5307,7 @@
           {
             "column": 77,
             "text": "plan",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4218,18 +5323,18 @@
           },
           {
             "column": 25,
-            "text": "││  14 ",
+            "text": "││ 14 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    /// Move the copy cursor, scrolling w",
-            "style": 1
+            "column": 37,
+            "text": "/// Move the copy cursor, scrolling wh",
+            "style": 11
           },
           {
             "column": 75,
@@ -4239,7 +5344,7 @@
           {
             "column": 77,
             "text": "  parse the screen in the app, not in the",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4255,18 +5360,73 @@
           },
           {
             "column": 25,
-            "text": "││  15 ",
+            "text": "││ 15 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "    fn copy_move(&mut self, rows: i32, co",
-            "style": 1
+            "column": 37,
+            "text": "fn",
+            "style": 7
+          },
+          {
+            "column": 40,
+            "text": "copy_move",
+            "style": 14
+          },
+          {
+            "column": 49,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "&",
+            "style": 17
+          },
+          {
+            "column": 51,
+            "text": "mut",
+            "style": 7
+          },
+          {
+            "column": 55,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 59,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "rows",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 67,
+            "text": "i32",
+            "style": 9
+          },
+          {
+            "column": 70,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 72,
+            "text": "col",
+            "style": 18
           },
           {
             "column": 75,
@@ -4276,7 +5436,7 @@
           {
             "column": 77,
             "text": "worker",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4292,13 +5452,58 @@
           },
           {
             "column": 25,
-            "text": "││  16 ",
+            "text": "││ 16 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        let (height, width) = self.grid_s",
+            "column": 41,
+            "text": "let",
+            "style": 7
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "height",
             "style": 1
+          },
+          {
+            "column": 52,
+            "text": ",",
+            "style": 8
+          },
+          {
+            "column": 53,
+            "text": " width",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ")",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": " = ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 67,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 68,
+            "text": "grid_si",
+            "style": 14
           },
           {
             "column": 75,
@@ -4308,7 +5513,7 @@
           {
             "column": 77,
             "text": "  map keys to bytes, Ctrl-C included",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4329,18 +5534,88 @@
           },
           {
             "column": 27,
-            "text": "  17 ",
-            "style": 11
+            "text": " 17 ",
+            "style": 19
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "  ",
-            "style": 12
+            "style": 20
           },
           {
-            "column": 34,
-            "text": "        let (mut row, mut col) = self.cur",
-            "style": 13
+            "column": 33,
+            "text": "        ",
+            "style": 21
+          },
+          {
+            "column": 41,
+            "text": "let",
+            "style": 22
+          },
+          {
+            "column": 44,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 45,
+            "text": "(",
+            "style": 23
+          },
+          {
+            "column": 46,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 49,
+            "text": " row",
+            "style": 21
+          },
+          {
+            "column": 53,
+            "text": ",",
+            "style": 23
+          },
+          {
+            "column": 54,
+            "text": " ",
+            "style": 21
+          },
+          {
+            "column": 55,
+            "text": "mut",
+            "style": 22
+          },
+          {
+            "column": 58,
+            "text": " col",
+            "style": 21
+          },
+          {
+            "column": 62,
+            "text": ")",
+            "style": 23
+          },
+          {
+            "column": 63,
+            "text": " = ",
+            "style": 21
+          },
+          {
+            "column": 66,
+            "text": "self",
+            "style": 24
+          },
+          {
+            "column": 70,
+            "text": ".",
+            "style": 23
+          },
+          {
+            "column": 71,
+            "text": "curs",
+            "style": 24
           },
           {
             "column": 75,
@@ -4350,7 +5625,7 @@
           {
             "column": 77,
             "text": "  tell the program the pane's size",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4366,18 +5641,58 @@
           },
           {
             "column": 25,
-            "text": "││  18 ",
+            "text": "││ 18 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "        if rows < 0 && row == 0 && self.s",
+            "column": 41,
+            "text": "if",
+            "style": 7
+          },
+          {
+            "column": 43,
+            "text": " rows < ",
             "style": 1
+          },
+          {
+            "column": 51,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 52,
+            "text": " && row == ",
+            "style": 1
+          },
+          {
+            "column": 63,
+            "text": "0",
+            "style": 12
+          },
+          {
+            "column": 64,
+            "text": " && ",
+            "style": 1
+          },
+          {
+            "column": 68,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 73,
+            "text": "sc",
+            "style": 18
           },
           {
             "column": 75,
@@ -4403,17 +5718,52 @@
           },
           {
             "column": 25,
-            "text": "││  19 ",
+            "text": "││ 19 ",
             "style": 3
           },
           {
-            "column": 32,
+            "column": 31,
             "text": "M ",
             "style": 6
           },
           {
-            "column": 34,
-            "text": "            self.set_scroll(self.scroll +",
+            "column": 45,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 49,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 50,
+            "text": "set_scroll",
+            "style": 14
+          },
+          {
+            "column": 60,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 61,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 65,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 66,
+            "text": "scroll",
+            "style": 18
+          },
+          {
+            "column": 72,
+            "text": " + ",
             "style": 1
           },
           {
@@ -4440,13 +5790,23 @@
           },
           {
             "column": 25,
-            "text": "││  20 ",
+            "text": "││ 20 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        } else {                         ",
-            "style": 1
+            "column": 41,
+            "text": "}",
+            "style": 8
+          },
+          {
+            "column": 43,
+            "text": "else",
+            "style": 7
+          },
+          {
+            "column": 48,
+            "text": "{",
+            "style": 8
           },
           {
             "column": 75,
@@ -4472,13 +5832,38 @@
           },
           {
             "column": 25,
-            "text": "││  21 ",
+            "text": "││ 21 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "            row = row.saturating_sub(1); ",
+            "column": 33,
+            "text": "            row = row",
             "style": 1
+          },
+          {
+            "column": 54,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 55,
+            "text": "saturating_sub",
+            "style": 14
+          },
+          {
+            "column": 69,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 70,
+            "text": "1",
+            "style": 12
+          },
+          {
+            "column": 71,
+            "text": ");",
+            "style": 8
           },
           {
             "column": 75,
@@ -4504,13 +5889,13 @@
           },
           {
             "column": 25,
-            "text": "││  22 ",
+            "text": "││ 22 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        }                                ",
-            "style": 1
+            "column": 41,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -4536,13 +5921,63 @@
           },
           {
             "column": 25,
-            "text": "││  23 ",
+            "text": "││ 23 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        self.cursor = (row.min(last_row),",
+            "column": 41,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 45,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "cursor",
+            "style": 18
+          },
+          {
+            "column": 52,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 55,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "row",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": "min",
+            "style": 14
+          },
+          {
+            "column": 63,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 64,
+            "text": "last_row",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "),",
+            "style": 8
           },
           {
             "column": 75,
@@ -4568,13 +6003,13 @@
           },
           {
             "column": 25,
-            "text": "││  24 ",
+            "text": "││ 24 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    }                                    ",
-            "style": 1
+            "column": 37,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -4584,7 +6019,7 @@
           {
             "column": 77,
             "text": "Turn complete",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4600,13 +6035,13 @@
           },
           {
             "column": 25,
-            "text": "││  25 ",
+            "text": "││ 25 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -4616,7 +6051,7 @@
           {
             "column": 77,
             "text": "3 files changed, 41 tests passing",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -4686,12 +6121,12 @@
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -4701,7 +6136,7 @@
           {
             "column": 26,
             "text": "sessions ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
@@ -4723,7 +6158,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -4733,7 +6168,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -4820,7 +6255,7 @@
           {
             "column": 76,
             "text": "┌ Sessions · 3 ────────────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -4847,7 +6282,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -4862,7 +6297,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -4878,13 +6313,38 @@
           },
           {
             "column": 25,
-            "text": "││   1 ",
+            "text": "││  1 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "column": 33,
+            "text": "use",
+            "style": 7
+          },
+          {
+            "column": 36,
+            "text": " acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -4894,7 +6354,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -4904,12 +6364,12 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -4925,7 +6385,7 @@
           },
           {
             "column": 25,
-            "text": "││   2 ",
+            "text": "││  2 ",
             "style": 3
           },
           {
@@ -4936,7 +6396,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -4951,7 +6411,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -4973,7 +6433,7 @@
           {
             "column": 110,
             "text": "─────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -4995,7 +6455,7 @@
           {
             "column": 11,
             "text": "s1 · Write crates/acpilot-tui/src/app.rs",
-            "style": 15
+            "style": 26
           },
           {
             "column": 109,
@@ -5032,7 +6492,7 @@
           {
             "column": 110,
             "text": "gent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -5091,7 +6551,7 @@
           {
             "column": 110,
             "text": "mes; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -5123,7 +6583,7 @@
           {
             "column": 110,
             "text": "d, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -5150,7 +6610,7 @@
           {
             "column": 11,
             "text": "@@ -8,6 +8,12 @@ pub struct TerminalPane {",
-            "style": 8
+            "style": 13
           },
           {
             "column": 109,
@@ -5214,7 +6674,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5251,7 +6711,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5288,7 +6748,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5320,7 +6780,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5335,7 +6795,7 @@
           {
             "column": 110,
             "text": "t in the",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -5384,7 +6844,7 @@
           {
             "column": 11,
             "text": "@@ -126,7 +132,9 @@ impl TerminalPane {",
-            "style": 8
+            "style": 13
           },
           {
             "column": 109,
@@ -5394,7 +6854,7 @@
           {
             "column": 110,
             "text": "ded",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -5426,7 +6886,7 @@
           {
             "column": 110,
             "text": "e",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -5448,7 +6908,7 @@
           {
             "column": 11,
             "text": "- ",
-            "style": 16
+            "style": 27
           },
           {
             "column": 13,
@@ -5485,7 +6945,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5522,7 +6982,7 @@
           {
             "column": 11,
             "text": "+ ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 13,
@@ -5722,12 +7182,12 @@
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -5737,7 +7197,7 @@
           {
             "column": 26,
             "text": "sessions ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
@@ -5759,7 +7219,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -5769,7 +7229,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -5856,7 +7316,7 @@
           {
             "column": 76,
             "text": "┌ Sessions · 3 ────────────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -5883,7 +7343,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -5898,7 +7358,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -5914,13 +7374,38 @@
           },
           {
             "column": 25,
-            "text": "││   1 ",
+            "text": "││  1 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "use acpilot_proto::terminal::{TerminalSiz",
+            "column": 33,
+            "text": "use",
+            "style": 7
+          },
+          {
+            "column": 36,
+            "text": " acpilot_proto",
             "style": 1
+          },
+          {
+            "column": 50,
+            "text": "::",
+            "style": 8
+          },
+          {
+            "column": 52,
+            "text": "terminal",
+            "style": 1
+          },
+          {
+            "column": 60,
+            "text": "::{",
+            "style": 8
+          },
+          {
+            "column": 63,
+            "text": "TerminalSize",
+            "style": 9
           },
           {
             "column": 75,
@@ -5930,7 +7415,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -5940,12 +7425,12 @@
           {
             "column": 95,
             "text": "  idle",
-            "style": 7
+            "style": 10
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -5961,7 +7446,7 @@
           },
           {
             "column": 25,
-            "text": "││   2 ",
+            "text": "││  2 ",
             "style": 3
           },
           {
@@ -5972,7 +7457,7 @@
           {
             "column": 76,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 77,
@@ -5987,7 +7472,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -6003,13 +7488,13 @@
           },
           {
             "column": 25,
-            "text": "││   3 ",
+            "text": "││  3 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// How many lines of history a pane keep",
-            "style": 1
+            "column": 33,
+            "text": "/// How many lines of history a pane keeps",
+            "style": 11
           },
           {
             "column": 75,
@@ -6019,7 +7504,7 @@
           {
             "column": 76,
             "text": "└──────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -6035,13 +7520,43 @@
           },
           {
             "column": 25,
-            "text": "││   4 ",
+            "text": "││  4 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "const SCROLLBACK: usize = 10_000;        ",
+            "column": 33,
+            "text": "const",
+            "style": 7
+          },
+          {
+            "column": 39,
+            "text": "SCROLLBACK",
+            "style": 9
+          },
+          {
+            "column": 49,
+            "text": ":",
+            "style": 8
+          },
+          {
+            "column": 51,
+            "text": "usize",
+            "style": 9
+          },
+          {
+            "column": 56,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 59,
+            "text": "10_000",
+            "style": 12
+          },
+          {
+            "column": 65,
+            "text": ";",
+            "style": 8
           },
           {
             "column": 75,
@@ -6067,7 +7582,7 @@
           },
           {
             "column": 25,
-            "text": "││   5 ",
+            "text": "││  5 ",
             "style": 3
           },
           {
@@ -6078,7 +7593,7 @@
           {
             "column": 77,
             "text": "Attach the TUI to a terminal an agent",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -6104,13 +7619,13 @@
           },
           {
             "column": 25,
-            "text": "││   6 ",
+            "text": "││  6 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "/// Whether a pane is following the progr",
-            "style": 1
+            "column": 33,
+            "text": "/// Whether a pane is following the progra",
+            "style": 11
           },
           {
             "column": 75,
@@ -6120,7 +7635,7 @@
           {
             "column": 77,
             "text": "opened.",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -6147,12 +7662,12 @@
           {
             "column": 18,
             "text": "┌ Terminals · 2 ───────────────────────────────────────────────────────────────────┐",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": " the frames; the",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -6174,7 +7689,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -6184,17 +7699,17 @@
           {
             "column": 42,
             "text": "  agent-terminal-1",
-            "style": 17
+            "style": 28
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": " keyboard, and",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -6216,7 +7731,7 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 19,
@@ -6231,12 +7746,12 @@
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "rker.",
-            "style": 9
+            "style": 15
           },
           {
             "column": 119,
@@ -6258,12 +7773,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -6285,12 +7800,12 @@
           {
             "column": 18,
             "text": "│Enter opens · j/k choose · Esc closes",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6317,12 +7832,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6349,17 +7864,17 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -6376,17 +7891,17 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": " app, not in the",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -6403,12 +7918,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
@@ -6425,17 +7940,17 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "-C included",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -6452,17 +7967,17 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
             "text": "ne's size",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -6479,12 +7994,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6506,12 +8021,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6533,12 +8048,12 @@
           {
             "column": 18,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 101,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6560,7 +8075,7 @@
           {
             "column": 18,
             "text": "└──────────────────────────────────────────────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           },
           {
             "column": 102,
@@ -6581,13 +8096,13 @@
           },
           {
             "column": 25,
-            "text": "││  22 ",
+            "text": "││ 22 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        }                                ",
-            "style": 1
+            "column": 41,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -6613,13 +8128,63 @@
           },
           {
             "column": 25,
-            "text": "││  23 ",
+            "text": "││ 23 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "        self.cursor = (row.min(last_row),",
+            "column": 41,
+            "text": "self",
+            "style": 18
+          },
+          {
+            "column": 45,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 46,
+            "text": "cursor",
+            "style": 18
+          },
+          {
+            "column": 52,
+            "text": " = ",
             "style": 1
+          },
+          {
+            "column": 55,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 56,
+            "text": "row",
+            "style": 1
+          },
+          {
+            "column": 59,
+            "text": ".",
+            "style": 8
+          },
+          {
+            "column": 60,
+            "text": "min",
+            "style": 14
+          },
+          {
+            "column": 63,
+            "text": "(",
+            "style": 8
+          },
+          {
+            "column": 64,
+            "text": "last_row",
+            "style": 1
+          },
+          {
+            "column": 72,
+            "text": "),",
+            "style": 8
           },
           {
             "column": 75,
@@ -6645,13 +8210,13 @@
           },
           {
             "column": 25,
-            "text": "││  24 ",
+            "text": "││ 24 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "    }                                    ",
-            "style": 1
+            "column": 37,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -6661,7 +8226,7 @@
           {
             "column": 77,
             "text": "Turn complete",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -6677,13 +8242,13 @@
           },
           {
             "column": 25,
-            "text": "││  25 ",
+            "text": "││ 25 ",
             "style": 3
           },
           {
-            "column": 34,
-            "text": "}                                        ",
-            "style": 1
+            "column": 33,
+            "text": "}",
+            "style": 8
           },
           {
             "column": 75,
@@ -6693,7 +8258,7 @@
           {
             "column": 77,
             "text": "3 files changed, 41 tests passing",
-            "style": 10
+            "style": 16
           },
           {
             "column": 119,
@@ -6763,12 +8328,12 @@
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -6778,7 +8343,7 @@
           {
             "column": 26,
             "text": "sessions ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
@@ -6800,7 +8365,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -6810,7 +8375,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -6887,7 +8452,7 @@
           {
             "column": 26,
             "text": "┌ /bin/sh -c make check · agent-terminal-1 · F2 copy · ctrl-t leaves ────────────────────────┐",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -6914,7 +8479,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -6924,7 +8489,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -6946,7 +8511,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -6956,7 +8521,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -6978,7 +8543,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -6988,7 +8553,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7010,7 +8575,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -7020,7 +8585,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7042,12 +8607,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7074,12 +8639,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
             "text": "PASS",
-            "style": 18
+            "style": 29
           },
           {
             "column": 39,
@@ -7089,7 +8654,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7116,12 +8681,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
             "text": "PASS",
-            "style": 18
+            "style": 29
           },
           {
             "column": 39,
@@ -7131,7 +8696,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7158,12 +8723,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
             "text": "PASS",
-            "style": 18
+            "style": 29
           },
           {
             "column": 39,
@@ -7173,7 +8738,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7195,7 +8760,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -7205,7 +8770,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7227,12 +8792,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 32,
             "text": "Summary",
-            "style": 15
+            "style": 26
           },
           {
             "column": 39,
@@ -7242,7 +8807,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7264,12 +8829,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7291,7 +8856,7 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 27,
@@ -7301,7 +8866,7 @@
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7323,12 +8888,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7345,7 +8910,7 @@
           {
             "column": 11,
             "text": " ?",
-            "style": 8
+            "style": 13
           },
           {
             "column": 25,
@@ -7355,12 +8920,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7377,12 +8942,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7399,12 +8964,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7421,12 +8986,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7443,12 +9008,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7465,12 +9030,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7487,12 +9052,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7509,12 +9074,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7531,12 +9096,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7553,12 +9118,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7575,12 +9140,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7597,12 +9162,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7619,12 +9184,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7641,12 +9206,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7663,12 +9228,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7685,12 +9250,12 @@
           {
             "column": 26,
             "text": "│",
-            "style": 8
+            "style": 13
           },
           {
             "column": 119,
             "text": "│",
-            "style": 8
+            "style": 13
           }
         ],
         [
@@ -7702,19 +9267,19 @@
           {
             "column": 26,
             "text": "└────────────────────────────────────────────────────────────────────────────────────────────┘",
-            "style": 8
+            "style": 13
           }
         ],
         [
           {
             "column": 0,
             "text": " ● ",
-            "style": 7
+            "style": 10
           },
           {
             "column": 3,
             "text": "acpilot.night-flight ",
-            "style": 10
+            "style": 16
           },
           {
             "column": 24,
@@ -7724,7 +9289,7 @@
           {
             "column": 26,
             "text": "terminal ",
-            "style": 8
+            "style": 13
           },
           {
             "column": 35,
@@ -7746,7 +9311,7 @@
           {
             "column": 0,
             "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 7
+            "style": 10
           },
           {
             "column": 30,
@@ -7756,7 +9321,7 @@
           {
             "column": 60,
             "text": " ● anthropic · claude-sonnet-4",
-            "style": 7
+            "style": 10
           },
           {
             "column": 90,
@@ -7809,11 +9374,35 @@
       "bg": "default"
     },
     {
+      "fg": "token:keyword",
+      "bg": "default"
+    },
+    {
+      "fg": "token:punctuation",
+      "bg": "default"
+    },
+    {
+      "fg": "token:type",
+      "bg": "default"
+    },
+    {
       "fg": "token:success",
       "bg": "default"
     },
     {
+      "fg": "token:comment",
+      "bg": "default"
+    },
+    {
+      "fg": "token:constant",
+      "bg": "default"
+    },
+    {
       "fg": "token:accent",
+      "bg": "default"
+    },
+    {
+      "fg": "token:function",
       "bg": "default"
     },
     {
@@ -7828,6 +9417,14 @@
       "bg": "default"
     },
     {
+      "fg": "token:operator",
+      "bg": "default"
+    },
+    {
+      "fg": "token:variable",
+      "bg": "default"
+    },
+    {
       "fg": "token:text_muted",
       "bg": "token:bg_panel"
     },
@@ -7837,6 +9434,18 @@
     },
     {
       "fg": "default",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "token:keyword",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "token:punctuation",
+      "bg": "token:bg_panel"
+    },
+    {
+      "fg": "token:variable",
       "bg": "token:bg_panel"
     },
     {

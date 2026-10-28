@@ -237,6 +237,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
+ "unicode-width",
 ]
 
 [[package]]
@@ -249,6 +250,7 @@ dependencies = [
  "acpilot-extensions",
  "acpilot-profile",
  "acpilot-proto",
+ "acpilot-text",
  "crossterm",
  "futures",
  "portable-pty",

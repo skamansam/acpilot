@@ -20,6 +20,11 @@ acpilot-extensions = { workspace = true }
 # CLI resolved at launch, so an edit is a recolour rather than a restart.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The text model behind the editor pane: one rope, one caret set, one undo
+# history, shared with the desktop app and the browser so "Ctrl-Z" cannot mean
+# three things in three frontends. The pane's scrolling and clipping live in
+# `acpilot-text::pane` for the same reason.
+acpilot-text = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 ratatui = { workspace = true }

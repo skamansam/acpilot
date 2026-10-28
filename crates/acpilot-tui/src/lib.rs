@@ -4,8 +4,9 @@
 //! sessions, sends prompts and answers permission requests over the same HTTP and
 //! SSE API a browser or the GUI uses. The modules are the responsibilities, in
 //! order: [`backend`] talks to the daemon, [`app`] holds state and maps keys to
-//! requests, [`ui`] paints, and [`clipboard`] is the one escape a pane writes for
-//! itself — OSC 52, because the clipboard belongs to the terminal, not to us.
+//! requests, [`editor`] owns the document the editor pane draws, [`ui`] paints,
+//! and [`clipboard`] is the one escape a pane writes for itself — OSC 52, because
+//! the clipboard belongs to the terminal, not to us.
 //!
 //! # Two sources, one interface
 //!
@@ -17,10 +18,12 @@
 pub mod app;
 pub mod backend;
 pub mod clipboard;
+pub mod editor;
 pub mod theme;
 pub mod ui;
 
 pub use app::App;
+pub use editor::EditorPane;
 pub use theme::Theme;
 
 use std::io;
@@ -286,9 +289,12 @@ fn event_loop(
         // `draw` reads the layout and hands back the panes' inner sizes, so a
         // program and the screen agree on the width, and a copy cursor and the
         // transcript agree on how many lines it can scroll — without the loop
-        // repeating the layout arithmetic.
+        // repeating the layout arithmetic. It takes the app mutably because the
+        // editor pane measures itself against the cells it was given and paints
+        // from the parse the measurement asked for; every other pane still only
+        // reads.
         let viewports = std::cell::Cell::new(None);
-        terminal.draw(|frame| viewports.set(Some(ui::draw(frame, &app))))?;
+        terminal.draw(|frame| viewports.set(Some(ui::draw(frame, &mut app))))?;
         if let Some(viewports) = viewports.get() {
             app.set_viewports(viewports);
             if app.terminal.is_some() {

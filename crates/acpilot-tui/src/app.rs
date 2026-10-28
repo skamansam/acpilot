@@ -5,15 +5,17 @@
 //! keystroke turns into. Keeping that boundary sharp is what lets the same app
 //! state be driven by a test with no daemon and no terminal.
 
-use acpilot_demo::{Command, CommandAction, Diff, EditorBuffer, FileNode, Integration, Run};
+use acpilot_demo::{Command, CommandAction, Diff, FileNode, Integration, Run};
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::session::SessionSummary;
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
+use acpilot_text::highlight::Grammars;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::backend::{Request, Update};
+use crate::editor::EditorPane;
 use crate::theme::Theme;
 
 /// Which pane has the keyboard.
@@ -1075,10 +1077,18 @@ pub struct App {
     pub files: Vec<FileNode>,
     /// Which row of the tree is selected.
     pub file_selected: usize,
-    /// The buffer the editor pane draws, when a file is open.
-    pub editor: Option<EditorBuffer>,
-    /// First line of the buffer on screen.
-    pub editor_scroll: usize,
+    /// The editor pane's document, when a file is open.
+    ///
+    /// A real [`acpilot_text::Document`] rather than a mock: the rope, the caret
+    /// set and the undo history the desktop app and the browser will edit
+    /// through, with the pane's viewport arithmetic on top of it (P6-4).
+    pub editor: Option<EditorPane>,
+    /// The grammars this session has compiled, one per language.
+    ///
+    /// Held by the app rather than by a pane: compiling a tree-sitter query is
+    /// the expensive half of highlighting, and a second editor tab on a `.rs`
+    /// file should reuse the first one's.
+    pub grammars: Grammars,
     /// The diff review, when one is up.
     pub diff: Option<Diff>,
     /// The palette, when it is up.
@@ -1199,7 +1209,7 @@ impl App {
             files: Vec::new(),
             file_selected: 0,
             editor: None,
-            editor_scroll: 0,
+            grammars: Grammars::new(),
             diff: None,
             palette: None,
             menu: None,
@@ -1260,7 +1270,7 @@ impl App {
             .map(|fixture| fixture.summary.clone())
             .collect();
         app.files = demo.files.clone();
-        app.editor = Some(demo.editor.clone());
+        app.editor = Some(EditorPane::seeded(&demo.editor, &mut app.grammars));
         app.diff = Some(demo.diff.clone());
         app.integrations = demo.integrations.clone();
         app.terminals = demo.terminals.clone();
@@ -1972,6 +1982,14 @@ impl App {
             return None;
         }
 
+        // An editor prompt takes every key while it is up, `?` and `Tab` included:
+        // a find box that opened the key list on a question mark would be a box
+        // nothing could be typed into.
+        if self.focus == Focus::Editor && self.editor.as_ref().is_some_and(EditorPane::is_prompting)
+        {
+            return self.editor_key(key);
+        }
+
         // Global from here down: the pane cycle and the key list. Everything else
         // belongs to the pane that has the keyboard. `?` is a question mark in the
         // composer, though — it is the one pane whose keys are text.
@@ -2039,7 +2057,7 @@ impl App {
                     self.set_expanded(expanded);
                 } else {
                     let label = node.label().to_owned();
-                    self.planned("P6-1", format!("open {label} in the editor"));
+                    self.planned("P6-6", format!("open {label} in the editor"));
                 }
             }
             KeyCode::Char('/') => self.planned("P6-6", "fuzzy file open"),
@@ -2057,42 +2075,68 @@ impl App {
         }
     }
 
-    /// The mock editor's keys: the cursor moves, and anything that would need a
-    /// real buffer says which task would give it one.
+    /// The editor's keys, over the document the pane holds.
+    ///
+    /// A prompt takes every key while it is up, because a find box is text and
+    /// nothing else; `Enter` ends it and `Esc` takes back what it did. The rest is
+    /// the pane's: movement with no goal column (that is a key sequence's
+    /// business, P6-5), `/` and `Ctrl-F` for a search that runs as it is typed,
+    /// `Ctrl-G` for a line, `n`/`N` to walk the matches.
+    ///
+    /// What is not here is not here on purpose: there is nothing to edit until
+    /// insert mode (P6-5), and a save goes through the daemon's files API rather
+    /// than writing the file from a UI (P7-10 serialises writes per file).
     fn editor_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(editor) = self.editor.as_mut() else {
-            self.planned("P6-1", "an editor buffer");
+            self.planned("P6-6", "opening a file from the tree");
             return None;
         };
-        let lines = editor.lines.len().max(1);
-        let (line, col) = editor.cursor;
+        if editor.is_prompting() {
+            match key.code {
+                KeyCode::Esc => editor.prompt_cancel(),
+                KeyCode::Enter => {
+                    editor.prompt_apply();
+                }
+                KeyCode::Backspace => editor.prompt_backspace(),
+                KeyCode::Char(character) if !control => editor.prompt_insert(character),
+                _ => {}
+            }
+            let message = editor.message().to_owned();
+            self.status = message;
+            return None;
+        }
+
+        let mut planned: Option<(&'static str, &'static str)> = None;
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                editor.cursor = (line.saturating_sub(1), col);
+            KeyCode::Up | KeyCode::Char('k') => editor.move_caret(-1, 0),
+            KeyCode::Down | KeyCode::Char('j') => editor.move_caret(1, 0),
+            KeyCode::Left | KeyCode::Char('h') => editor.move_caret(0, -1),
+            KeyCode::Right | KeyCode::Char('l') => editor.move_caret(0, 1),
+            KeyCode::Home | KeyCode::Char('0') => editor.line_edge(false),
+            KeyCode::End | KeyCode::Char('$') => editor.line_edge(true),
+            KeyCode::PageUp => editor.page(false),
+            KeyCode::PageDown => editor.page(true),
+            // `/` is the search a terminal editor has always had; `Ctrl-F` is the
+            // same box for the people who learned it somewhere else.
+            KeyCode::Char('/') => editor.search(),
+            KeyCode::Char('f') if control => editor.search(),
+            KeyCode::Char('g') if control => editor.go_to_line(),
+            KeyCode::Char('n') => editor.step_match(true),
+            KeyCode::Char('N') => editor.step_match(false),
+            KeyCode::Char('s') if control => {
+                planned = Some(("P7-10", "saving through the daemon"));
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                editor.cursor = ((line + 1).min(lines - 1), col);
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                editor.cursor = (line, col.saturating_sub(1));
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                let width = editor.lines[line.min(lines - 1)].text.chars().count();
-                editor.cursor = (line, (col + 1).min(width));
-            }
-            KeyCode::PageUp => {
-                self.editor_scroll = self.editor_scroll.saturating_sub(10);
-            }
-            KeyCode::PageDown => {
-                self.editor_scroll = (self.editor_scroll + 10).min(lines - 1);
-            }
-            KeyCode::Char('s') if control => self.planned("P6-1", "saving needs a real buffer"),
-            KeyCode::Char('f') if control => self.planned("P6-4", "find in file"),
-            KeyCode::Char('g') if control => self.planned("P6-4", "go to line"),
-            KeyCode::Char('i') => self.planned("P6-5", "insert mode"),
-            KeyCode::F(12) => self.planned("P7-4", "go to definition"),
+            KeyCode::Char('i') => planned = Some(("P6-5", "insert mode")),
+            KeyCode::F(12) => planned = Some(("P7-4", "go to definition")),
             _ => {}
+        }
+        let message = editor.message().to_owned();
+        if !message.is_empty() {
+            self.status = message;
+        }
+        if let Some((task, feature)) = planned {
+            self.planned(task, feature);
         }
         None
     }
@@ -2544,6 +2588,28 @@ impl App {
                     self.notice("nothing is waiting for an answer");
                 } else {
                     self.permission_card = true;
+                }
+                None
+            }
+            Run::Find => {
+                self.set_focus(Focus::Editor);
+                match &mut self.editor {
+                    Some(editor) => {
+                        editor.search();
+                        self.status = editor.message().to_owned();
+                    }
+                    None => self.planned("P6-6", "opening a file from the tree"),
+                }
+                None
+            }
+            Run::GoToLine => {
+                self.set_focus(Focus::Editor);
+                match &mut self.editor {
+                    Some(editor) => {
+                        editor.go_to_line();
+                        self.status = editor.message().to_owned();
+                    }
+                    None => self.planned("P6-6", "opening a file from the tree"),
                 }
                 None
             }
@@ -3220,28 +3286,80 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.files[1].expanded, !before);
 
-        // A file needs a buffer, which is P6-1.
+        // A file needs the tree to read the filesystem, which is P6-6.
         app.file_selected = 0;
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P6-1"));
+        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P6-6"));
     }
 
     #[test]
-    fn the_editor_moves_its_cursor_and_saving_names_the_buffer() {
+    fn the_editor_moves_its_caret_and_saving_names_the_task_that_would_write() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.files = acpilot_demo::tree::files();
-        app.editor = Some(acpilot_demo::editor::buffer());
+        app.editor = Some(EditorPane::seeded(
+            &acpilot_demo::editor::buffer(),
+            &mut app.grammars,
+        ));
         app.focus = Focus::Editor;
 
-        let start = app.editor.as_ref().expect("a buffer").cursor;
+        let start = app.editor.as_ref().expect("a buffer").position();
         app.handle_key(key(KeyCode::Char('l')));
-        assert_eq!(app.editor.as_ref().expect("a buffer").cursor.1, start.1 + 1);
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").position(),
+            (start.0, start.1 + 1)
+        );
         app.handle_key(key(KeyCode::Char('j')));
-        assert_eq!(app.editor.as_ref().expect("a buffer").cursor.0, start.0 + 1);
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").position(),
+            (start.0 + 1, start.1 + 1)
+        );
 
+        // A save goes through the daemon's files API; a UI that wrote the file
+        // itself would be the second writer the daemon cannot serialise.
         let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
         app.handle_key(save);
-        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P6-1"));
+        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P7-10"));
+    }
+
+    #[test]
+    fn a_find_box_takes_every_key_and_the_status_line_says_what_it_found() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('/')));
+        assert!(
+            app.editor.as_ref().expect("a buffer").is_prompting(),
+            "/ opens the box"
+        );
+
+        // `?` is the key list everywhere else, and a character in a find box.
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(!app.which_key, "the key list must not open over the box");
+        app.which_key = false;
+        app.handle_key(key(KeyCode::Char('p')));
+        let query = app
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.prompt())
+            .map(|prompt| prompt.text.clone());
+        assert_eq!(query.as_deref(), Some("?p"));
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.editor.as_ref().expect("a buffer").is_prompting());
+        assert_eq!(app.status, "no matches", "{:?}", app.status);
+    }
+
+    #[test]
+    fn go_to_line_moves_the_caret_and_scrolls_it_into_view() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        for character in "18:5".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.position(), (18, 5));
+        assert_eq!(app.status, "line 18");
     }
 
     #[test]

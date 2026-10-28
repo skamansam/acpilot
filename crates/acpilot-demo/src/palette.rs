@@ -22,6 +22,10 @@ pub enum Run {
     Palette,
     /// Show the permission card for whatever is waiting.
     Permission,
+    /// Search the open buffer, from the editor it belongs to.
+    Find,
+    /// Go to a line and column of the open buffer.
+    GoToLine,
     /// Leave.
     Quit,
 }
@@ -86,10 +90,13 @@ pub fn commands() -> Vec<Command> {
         run("Show keys", "?", Run::WhichKey),
         run("Command palette", "ctrl-p", Run::Palette),
         run("Answer a permission", "y", Run::Permission),
+        // The editor's two boxes are the editor's: the row moves the keyboard
+        // there and opens the one it names, so the palette cannot drift from the
+        // keys that do the same thing.
+        run("Find in file", "ctrl-f", Run::Find),
+        run("Go to line…", "ctrl-g", Run::GoToLine),
         run("Quit", "ctrl-q", Run::Quit),
         planned("Open file…", "ctrl-o", "P6-6"),
-        planned("Find in file", "ctrl-f", "P6-4"),
-        planned("Go to line…", "ctrl-g", "P6-4"),
         planned("Search workspace", "ctrl-shift-f", "P6-6"),
         planned("Go to definition", "f12", "P7-4"),
         planned("Review diff", "ctrl-d", "P6-9"),

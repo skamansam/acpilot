@@ -24,6 +24,11 @@ acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
 # the site's WebAssembly showcase imports this leaf directly, because a browser has
 # no extensions to load and no business compiling the daemon's dependency tree.
 acpilot-palette = { version = "0.1.0", path = "crates/acpilot-palette" }
+# The text model every editor pane edits through — rope, selections, edits,
+# highlighting and the viewport arithmetic. A leaf on purpose: no HTTP, no
+# `ratatui`, no `gpui`, so the terminal, the window and the browser share one
+# answer to what a keystroke means.
+acpilot-text = { version = "0.1.0", path = "crates/acpilot-text" }
 # The daemon API as a library: every UI (CLI, TUI, later the GUI and web) calls
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.
@@ -108,6 +113,9 @@ gpui = "=0.2.2"
 
 # editor
 ropey = "1.6"
+# Cells, not characters: the pane measures a tab and a wide glyph the way the
+# terminal will draw them.
+unicode-width = "0.2"
 tree-sitter = "0.27"
 tree-sitter-highlight = "0.27"
 # The grammars compiled into the editor. A missing language falls back to plain

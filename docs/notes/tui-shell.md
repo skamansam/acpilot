@@ -65,7 +65,10 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
   a walk. It folds away below 100 columns rather than squeezing the editor.
 - **Text** is a tab strip and the buffer, with a gutter for line numbers and git
   markers, the current line highlighted, and the cursor at the position the status
-  line reports.
+  line reports. The buffer is a real document (P6-4): the rows are built from the
+  viewport, so only the lines that fit and only the cells the horizontal scroll
+  left are drawn, and their colours are the highlighter's tokens resolved through
+  the theme.
 - **Agents** is the session list, the transcript and the composer, in that order:
   what you can open, what it said, what you want to say.
 - The **status line** is connection, profile, focused pane, cursor, last message,
@@ -87,7 +90,7 @@ permission card, the toast.
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | seeded rows; movement and collapsing work | P6-6 |
-| Editor | seeded buffer; cursor moves | P6-1, P6-4 |
+| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
 | Stats bar | seeded rows | P6-13 |
 
 ## Keys
@@ -98,7 +101,7 @@ permission card, the toast.
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` fuzzy open |
-| editor | `h`/`j`/`k`/`l` cursor · `Ctrl-S` save · `Ctrl-F` find · `Ctrl-G` line · `i` insert · `F12` definition |
+| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `Ctrl-S` save · `i` insert · `F12` definition |
 | sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel |
 | prompt | `Enter` send · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · `Ctrl-T` leave |

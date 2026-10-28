@@ -31,14 +31,19 @@
 //!
 //! Highlighting is here too ([`highlight`]), because a pane asks one question —
 //! "what colour is the part of this buffer I can see" — and the answer has to
-//! come from the same rope and the same parse. What is not here yet is diffing
-//! (the editor phase's task P6-9), which is why `imara-diff` is not a dependency.
+//! come from the same rope and the same parse. [`pane`] is the other half of that
+//! question: which rows are on screen at all, what survived the horizontal
+//! scroll, where the caret lands in cells, and what `/` found — the arithmetic
+//! the terminal, the window and the browser would otherwise each get wrong
+//! differently. What is not here yet is diffing (the editor phase's task P6-9),
+//! which is why `imara-diff` is not a dependency.
 
 pub mod buffer;
 pub mod document;
 pub mod edit;
 pub mod highlight;
 pub mod history;
+pub mod pane;
 pub mod selection;
 
 pub use buffer::{Buffer, LineColumn, LineEnding, TextError, is_word};
@@ -46,4 +51,7 @@ pub use document::Document;
 pub use edit::{Edit, IndentMode, IndentStyle, Replacement};
 pub use highlight::{Grammar, Grammars, Highlights, Span, token_for};
 pub use history::{Change, Flavour, GROUP_WINDOW, History};
+pub use pane::{
+    Cell, Find, Hit, Row, TAB_WIDTH, Viewport, bracket_at, caret_cells, parse_position,
+};
 pub use selection::{Cursor, Motion, Selection, Selections};

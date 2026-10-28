@@ -1,10 +1,10 @@
-//! The editor pane's contents, and the diff review that hangs off it.
+//! The editor pane's seed, and the diff review that hangs off it.
 //!
-//! A mock, on purpose: P6-1 is the buffer (rope, undo, selections) and P6-4 the
-//! rendering. What is fixed here is the *shape* a real buffer has to deliver — a
-//! path, a language, numbered lines with a per-line git marker, and a cursor — so
-//! the pane can be designed, argued about and then wired to the real thing without
-//! redrawing it.
+//! The lines are the world the design is argued with; the *buffer* is real. Since
+//! P6-4 the TUI's editor pane builds an `acpilot_text::Document` from these lines,
+//! parses it with the language's grammar and draws the result, so what is fixed
+//! here is only what a file has before it is read: a path, a language, lines with
+//! a per-line git marker, and a cursor. Reading a real file is P6-6.
 
 use crate::tree::GitStatus;
 

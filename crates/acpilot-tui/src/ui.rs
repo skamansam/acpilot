@@ -18,8 +18,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{
-    App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneMode,
-    TerminalPane, Toast, Viewports, about_lines, menu_title,
+    App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneArea,
+    PaneMode, TerminalPane, Toast, Viewports, about_lines, menu_title,
 };
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
@@ -129,9 +129,10 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
     };
 
     let mut editor_area = None;
+    let mut terminal_area = None;
     let transcript = match &app.terminal {
         Some(pane) => {
-            draw_terminal(frame, pane, rest, &app.theme);
+            terminal_area = Some(draw_terminal(frame, pane, rest, &app.theme));
             // The transcript is behind the terminal, so there is no viewport for a
             // copy cursor to walk.
             None
@@ -152,6 +153,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         // this in once the list knows where it landed.
         menu: MenuAreas::default(),
         editor: editor_area,
+        terminal_area,
     }
 }
 
@@ -579,10 +581,12 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
     // The pane is the only thing that knows where its text begins, so it says,
     // rather than the mouse repeating the border and the gutter arithmetic.
     Some(EditorArea {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: inner.height,
+        pane: PaneArea {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: inner.height,
+        },
         gutter: u16::try_from(gutter).unwrap_or(u16::MAX),
     })
 }
@@ -616,7 +620,7 @@ fn inner_size(area: Rect) -> TerminalSize {
     }
 }
 
-fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &Theme) {
+fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &Theme) -> PaneArea {
     // The title is the pane's own legend: which program, and every key that gets
     // out of it. Copy mode shows how far back the view is, because a scrolled
     // terminal otherwise looks exactly like a program that stopped printing.
@@ -640,6 +644,13 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
                 history = pane.history()
             ),
         },
+        // Scrolled back without entering copy mode: the pane has to say so, or it
+        // looks exactly like a program that stopped printing.
+        PaneMode::Live if pane.reader.view.scroll > 0 => format!(
+            "behind {}/{history} · any key returns · ctrl-t leaves",
+            pane.reader.view.scroll,
+            history = pane.history()
+        ),
         PaneMode::Live if pane.alive => "F2 copy · ctrl-t leaves".to_owned(),
         PaneMode::Live => "exited · F2 copy · ctrl-t leaves".to_owned(),
     };
@@ -659,6 +670,15 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
         .map(|row| terminal_line(pane, row, inner.width, theme))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
+
+    // The pane says where its grid landed, so the wheel does not have to guess at
+    // the border it was drawn with.
+    PaneArea {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
+    }
 }
 
 /// One screen row as styled spans.
@@ -1585,6 +1605,32 @@ mod tests {
             !text.contains("no transcript yet"),
             "the terminal replaces the transcript while it is open: {text}"
         );
+    }
+
+    #[test]
+    fn a_terminal_scrolled_back_says_so_rather_than_looking_stuck() {
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 8 });
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: acpilot_proto::terminal::TerminalSummary {
+                id: "agent-terminal-1".to_owned(),
+                session_id: "s1".to_owned(),
+                size: TerminalSize { cols: 60, rows: 8 },
+                alive: true,
+                command: "/bin/sh -c make".to_owned(),
+            },
+            replay_bytes: 0,
+        });
+        let printed: String = (0..20).map(|line| format!("line {line}\r\n")).collect();
+        app.apply(crate::backend::Update::TerminalData(printed.into_bytes()));
+        app.terminal.as_mut().expect("a pane").wheel(3);
+
+        // The title is the only thing that tells a scrolled pane from a program
+        // that stopped printing, so it has to say both where you are and how to
+        // come back.
+        let text = render(&mut app);
+        assert!(text.contains("behind 3/"), "{text}");
+        assert!(text.contains("any key returns"), "{text}");
     }
 
     #[test]

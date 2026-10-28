@@ -858,6 +858,37 @@ impl TerminalPane {
         self.set_scroll(0);
     }
 
+    /// Scroll the view a wheel's worth, which is what a terminal emulator does.
+    ///
+    /// Positive is older output. The copy cursor stays where it is: a wheel is not
+    /// a motion key, and a selection must not move under a hand that is only
+    /// reading. The offset is the one the view, the yank and the find all read, so
+    /// what is scrolled is what would be copied, and it clamps at the oldest line
+    /// rather than scrolling into blank rows.
+    pub fn wheel(&mut self, lines: i32) {
+        let scroll = if lines >= 0 {
+            self.reader
+                .view
+                .scroll
+                .saturating_add(lines.unsigned_abs() as usize)
+        } else {
+            self.reader
+                .view
+                .scroll
+                .saturating_sub(lines.unsigned_abs() as usize)
+        };
+        self.set_scroll(scroll);
+    }
+
+    /// Back to the newest line, which is where answering a program puts the view.
+    ///
+    /// Reading behind a program is not a mode here, so the first keystroke is also
+    /// the one that ends it: a command typed into a scrolled pane would otherwise
+    /// print its answer out of sight.
+    pub fn follow(&mut self) {
+        self.set_scroll(0);
+    }
+
     /// The text under the selection, or the cursor's line when nothing is
     /// selected.
     ///
@@ -975,23 +1006,47 @@ pub enum Divider {
     Sidebar,
 }
 
-/// Where the editor pane was drawn, in cells, for the mouse.
+/// Where a pane was drawn, in cells, for the mouse.
 ///
-/// The box is the pane's inner cells, border excluded, and `gutter` is how many
-/// of them are numbers and markers. A click in the text is a caret; a wheel
-/// anywhere in the box scrolls, because a wheel is pointed at a pane rather than
-/// aimed at a character. `x` and `y` are absolute, so the pane does not repeat the
-/// layout arithmetic to find itself.
+/// The box is the pane's inner cells, border excluded, in the window's coordinates.
+/// The drawing code hands it back rather than the mouse repeating the layout
+/// arithmetic: a pane's cell and the window's cell are one subtraction apart, and a
+/// second copy of that subtraction is a bug waiting for the first split.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EditorArea {
+pub struct PaneArea {
     /// The first cell inside the border.
     pub x: u16,
     /// The first row inside the border.
     pub y: u16,
-    /// How many cells wide, gutter included.
+    /// How many cells wide.
     pub width: u16,
     /// How many lines fit.
     pub height: u16,
+}
+
+impl PaneArea {
+    /// Whether a cell is inside the pane.
+    #[must_use]
+    pub fn holds(&self, column: u16, row: u16) -> bool {
+        column >= self.x
+            && column < self.x.saturating_add(self.width)
+            && row >= self.y
+            && row < self.y.saturating_add(self.height)
+            && self.width > 0
+            && self.height > 0
+    }
+}
+
+/// Where the editor's text was drawn, in cells, for the mouse.
+///
+/// `pane` is the box and `gutter` is how many of its cells are numbers and markers:
+/// a click in the text is a caret, and a click on the numbers is the pane's
+/// furniture. A wheel anywhere in the box scrolls, because a wheel is pointed at a
+/// pane rather than aimed at a character.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EditorArea {
+    /// The pane's inner cells.
+    pub pane: PaneArea,
     /// The columns the numbers and markers take before the text.
     pub gutter: u16,
 }
@@ -1000,23 +1055,15 @@ impl EditorArea {
     /// Whether a cell is inside the text — the part a click can put a caret in.
     #[must_use]
     pub fn is_text(&self, column: u16, row: u16) -> bool {
-        column >= self.x.saturating_add(self.gutter)
-            && column < self.x.saturating_add(self.width)
-            && self.is_row(row)
-            && self.width > self.gutter
+        self.pane.holds(column, row)
+            && self.pane.width > self.gutter
+            && column >= self.pane.x.saturating_add(self.gutter)
     }
 
-    /// Whether a cell is anywhere in the pane, the gutter and the padding included.
+    /// Whether a cell is anywhere in the pane, the gutter included.
     #[must_use]
     pub fn holds(&self, column: u16, row: u16) -> bool {
-        column >= self.x
-            && column < self.x.saturating_add(self.width)
-            && self.is_row(row)
-            && self.width > 0
-    }
-
-    fn is_row(&self, row: u16) -> bool {
-        self.height > 0 && row >= self.y && row < self.y.saturating_add(self.height)
+        self.pane.holds(column, row)
     }
 }
 
@@ -1113,6 +1160,11 @@ pub struct Viewports {
     pub menu: MenuAreas,
     /// Where the editor's text was drawn, when the pane was on screen.
     pub editor: Option<EditorArea>,
+    /// Where the terminal pane was drawn, when one is up.
+    ///
+    /// Not to be confused with `terminal`, which is the grid the program was told
+    /// it has: this is where that grid landed on the window.
+    pub terminal_area: Option<PaneArea>,
 }
 
 /// Everything the terminal draws, plus the state the keys act on.
@@ -1235,6 +1287,8 @@ pub struct App {
     pub clipboard: Option<String>,
     /// Where the editor's text was last drawn, for the mouse.
     pub editor_area: Option<EditorArea>,
+    /// Where the terminal pane was last drawn, for the mouse.
+    pub terminal_area: Option<PaneArea>,
     /// Where the dividers were last drawn, for the mouse.
     pub dividers: Dividers,
     /// Which divider the mouse is holding, if any.
@@ -1298,6 +1352,7 @@ impl App {
             picker_selected: 0,
             clipboard: None,
             editor_area: None,
+            terminal_area: None,
             dividers: Dividers::default(),
             drag: None,
             pane_size: None,
@@ -1401,6 +1456,7 @@ impl App {
         self.dividers = viewports.dividers;
         self.menu_areas = viewports.menu;
         self.editor_area = viewports.editor;
+        self.terminal_area = viewports.terminal_area;
         if let Some(size) = viewports.transcript {
             self.transcript_size = Some(size);
             let grid = (size.rows.max(1), size.cols.max(1));
@@ -1963,6 +2019,12 @@ impl App {
                 self.notice("ctrl-t leaves the terminal before the transcript");
                 return None;
             }
+            // Answering a program puts the view back at the newest line: a shell
+            // whose prompt is about to print below the fold should not be typed
+            // into while the screen shows yesterday's output.
+            if let Some(pane) = &mut self.terminal {
+                pane.follow();
+            }
             return terminal_bytes(key).map(Request::TerminalWrite);
         }
 
@@ -2259,9 +2321,37 @@ impl App {
         self.set_focus(Focus::Editor);
         if let Some(editor) = self.editor.as_mut() {
             editor.click(
-                usize::from(row - area.y),
-                usize::from(column - area.x - area.gutter),
+                usize::from(row - area.pane.y),
+                usize::from(column - area.pane.x - area.gutter),
             );
+        }
+        true
+    }
+
+    /// Scroll the pane under the wheel: `up` is towards the start of what it shows.
+    ///
+    /// A wheel is pointed rather than aimed, so it moves no caret, no copy cursor
+    /// and no focus — it scrolls whatever it is over, and it does not have to be
+    /// over the pane holding the keyboard. The editor and the terminal are the two
+    /// panes with something to scroll; over anything else it is a no-op rather than
+    /// a guess.
+    fn scroll_under_pointer(&mut self, column: u16, row: u16, up: i32) {
+        if self.scroll_editor(column, row, -up) {
+            return;
+        }
+        self.scroll_terminal(column, row, up);
+    }
+
+    /// Scroll the terminal under the wheel, without taking the keyboard.
+    fn scroll_terminal(&mut self, column: u16, row: u16, up: i32) -> bool {
+        let Some(area) = self.terminal_area else {
+            return false;
+        };
+        if !area.holds(column, row) {
+            return false;
+        }
+        if let Some(pane) = self.terminal.as_mut() {
+            pane.wheel(up);
         }
         true
     }
@@ -2476,11 +2566,11 @@ impl App {
             // The wheel scrolls the pane under the pointer and nothing else: it is
             // a thing you point at, so it does not have to be focused first.
             MouseEventKind::ScrollUp => {
-                self.scroll_editor(event.column, event.row, -WHEEL_LINES);
+                self.scroll_under_pointer(event.column, event.row, WHEEL_LINES);
                 None
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_editor(event.column, event.row, WHEEL_LINES);
+                self.scroll_under_pointer(event.column, event.row, -WHEEL_LINES);
                 None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -3636,6 +3726,7 @@ mod tests {
             },
             menu: MenuAreas { row: 0, list },
             editor: None,
+            terminal_area: None,
         });
     }
 
@@ -3812,6 +3903,7 @@ mod tests {
             },
             menu: MenuAreas::default(),
             editor: None,
+            terminal_area: None,
         });
 
         // The divider is one cell, so the grab is a cell either side of it.
@@ -3852,6 +3944,7 @@ mod tests {
             },
             menu: MenuAreas::default(),
             editor: None,
+            terminal_area: None,
         });
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 25));
         app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0));
@@ -3905,12 +3998,15 @@ mod tests {
             },
             menu: MenuAreas::default(),
             editor: Some(EditorArea {
-                x: 25,
-                y: 2,
-                width: 60,
-                height: 20,
+                pane: PaneArea {
+                    x: 25,
+                    y: 2,
+                    width: 60,
+                    height: 20,
+                },
                 gutter: 5,
             }),
+            terminal_area: None,
         });
         app
     }
@@ -3966,6 +4062,68 @@ mod tests {
         // A wheel somewhere else is somebody else's.
         app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, 10, 10));
         assert_eq!(app.editor.as_ref().expect("a buffer").viewport().top(), 0);
+    }
+
+    #[test]
+    fn the_wheel_reads_back_through_the_terminal_and_a_key_returns_to_live() {
+        let mut app = with_terminal();
+        let printed: String = (0..60).map(|line| format!("line {line}\r\n")).collect();
+        app.apply(Update::TerminalData(printed.into_bytes()));
+        app.set_viewports(Viewports {
+            terminal: TerminalSize {
+                cols: 100,
+                rows: 30,
+            },
+            transcript: None,
+            dividers: Dividers::default(),
+            menu: MenuAreas::default(),
+            editor: None,
+            terminal_area: Some(PaneArea {
+                x: 1,
+                y: 2,
+                width: 98,
+                height: 30,
+            }),
+        });
+        assert!(
+            app.terminal.as_ref().expect("a pane").history() > 0,
+            "the program printed more than a screen"
+        );
+
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 10));
+        let scrolled = app.terminal.as_ref().expect("a pane").reader.view.scroll;
+        assert!(scrolled > 0, "the wheel went back");
+        assert_eq!(app.focus, Focus::Terminal, "and kept the keyboard it had");
+
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, 40, 10));
+        assert_eq!(
+            app.terminal.as_ref().expect("a pane").reader.view.scroll,
+            0,
+            "a notch down comes back to the live screen"
+        );
+
+        // Read back, then answer the program: the prompt is about to print below
+        // the fold, so the view returns to the newest line.
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 10));
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 10));
+        assert!(
+            app.terminal.as_ref().expect("a pane").reader.view.scroll > 0,
+            "two notches of history"
+        );
+        let write = app.handle_key(key(KeyCode::Char('x')));
+        assert!(
+            matches!(write, Some(Request::TerminalWrite(_))),
+            "the key still goes to the program"
+        );
+        assert_eq!(
+            app.terminal.as_ref().expect("a pane").reader.view.scroll,
+            0,
+            "typing is answering the program, not reading behind it"
+        );
+
+        // A wheel above the pane is not the terminal's.
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 0));
+        assert_eq!(app.terminal.as_ref().expect("a pane").reader.view.scroll, 0);
     }
 
     #[test]
@@ -4441,6 +4599,7 @@ mod tests {
             dividers: Dividers::default(),
             menu: MenuAreas::default(),
             editor: None,
+            terminal_area: None,
         });
         app
     }
@@ -4670,6 +4829,7 @@ mod tests {
             dividers: Dividers::default(),
             menu: MenuAreas::default(),
             editor: None,
+            terminal_area: None,
         });
         assert_eq!(app.transcript.view.cursor, (4, 0));
     }

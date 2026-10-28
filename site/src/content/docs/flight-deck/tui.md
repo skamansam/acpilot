@@ -97,7 +97,10 @@ person reading them wants rather than the widths a constant guessed. The editor
 answers the pointer where a pointer is quicker than a key: a click on the text puts
 the caret on the cell it landed on and gives the pane the keyboard, and the wheel
 scrolls the buffer under it three lines at a time without moving the caret — a pane
-you point at does not have to be focused first. The gutter beside the numbers is
+you point at does not have to be focused first. The wheel does the same to a
+terminal: it reads back through the scrollback, the title says `behind n/history`
+while it is scrolled, and the next keystroke returns it to the newest line, because
+the answer to a command belongs below the fold you were reading. The gutter beside the numbers is
 git's: its markers are parsed from the same patch the permission card shows, so the
 `~` next to a line and the hunk in the review are one edit, not two lists.
 

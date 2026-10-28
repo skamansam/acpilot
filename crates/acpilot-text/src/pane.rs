@@ -370,6 +370,26 @@ pub fn caret_cells(buffer: &Buffer, caret: LineColumn, tab_width: usize) -> usiz
     column
 }
 
+/// The character column a cell on a line names: where a click puts a caret.
+///
+/// The inverse of [`caret_cells`], and the reason a click can trust its column: a
+/// cell inside a tab or inside a wide character lands on that character's left
+/// edge, and a cell past the end of the line is the end of the line. A click is
+/// always a cell — never a character — because that is what a terminal reports.
+#[must_use]
+pub fn column_at(buffer: &Buffer, line: usize, cell: usize, tab_width: usize) -> usize {
+    let text = buffer.slice(buffer.line_range(line));
+    let mut column = 0;
+    for (index, character) in text.chars().enumerate() {
+        let width = cells_of(character, column, tab_width);
+        if column + width > cell {
+            return index;
+        }
+        column += width;
+    }
+    text.chars().count()
+}
+
 /// The position a go-to-line box names, zero-based.
 ///
 /// Accepts what people type into one: `12`, ` 12 `, `12:5`, `12,5` and `12 5`,
@@ -761,6 +781,35 @@ mod tests {
     }
 
     #[test]
+    fn a_clicked_cell_lands_on_the_character_under_it() {
+        let buffer = Buffer::from_text("\tabc\n日本x\n");
+        // A tab is four cells; a click anywhere inside it is the character before it.
+        assert_eq!(column_at(&buffer, 0, 0, TAB_WIDTH), 0);
+        assert_eq!(column_at(&buffer, 0, 3, TAB_WIDTH), 0);
+        assert_eq!(column_at(&buffer, 0, 4, TAB_WIDTH), 1, "`a`");
+        assert_eq!(column_at(&buffer, 0, 99, TAB_WIDTH), 4, "past the end");
+        // Two wide characters, so cell 3 is the `x`.
+        assert_eq!(column_at(&buffer, 1, 0, TAB_WIDTH), 0);
+        assert_eq!(column_at(&buffer, 1, 1, TAB_WIDTH), 0, "both cells of `日`");
+        assert_eq!(
+            column_at(&buffer, 1, 2, TAB_WIDTH),
+            1,
+            "the first cell of `本`"
+        );
+        assert_eq!(
+            column_at(&buffer, 1, 3, TAB_WIDTH),
+            1,
+            "its second cell too"
+        );
+        assert_eq!(column_at(&buffer, 1, 4, TAB_WIDTH), 2, "`x`");
+        assert_eq!(
+            column_at(&buffer, 99, 0, TAB_WIDTH),
+            0,
+            "a line that is not there"
+        );
+    }
+
+    #[test]
     fn a_go_to_line_box_reads_what_people_type() {
         assert_eq!(parse_position("12"), Some(LineColumn::new(11, 0)));
         assert_eq!(parse_position(" 12 "), Some(LineColumn::new(11, 0)));
@@ -903,6 +952,29 @@ mod tests {
             let line = line.min(buffer.line_count().saturating_sub(1));
             let caret = LineColumn::new(line, column);
             prop_assert!(viewport.caret(&buffer, caret).is_some());
+        }
+
+        /// A click lands where it was aimed: the character it names starts at or
+        /// before the cell, and the one after it starts past it. This is the
+        /// property that makes the caret appear under the pointer in a file with
+        /// tabs and wide glyphs in it.
+        #[test]
+        fn a_click_and_the_caret_agree_about_where_a_cell_is(
+            text in "[\t あ😀aé\n]{0,80}",
+            cell in 0usize..40,
+        ) {
+            let buffer = Buffer::from_text(&text);
+            for line in 0..buffer.line_count() {
+                let column = column_at(&buffer, line, cell, TAB_WIDTH);
+                let length = buffer.line_range(line).len();
+                prop_assert!(column <= length);
+                prop_assert!(caret_cells(&buffer, LineColumn::new(line, column), TAB_WIDTH) <= cell);
+                if column < length {
+                    prop_assert!(
+                        caret_cells(&buffer, LineColumn::new(line, column + 1), TAB_WIDTH) > cell
+                    );
+                }
+            }
         }
 
         /// Every character of a visible row names the buffer character it came

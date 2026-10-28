@@ -26,13 +26,14 @@
 //! P6-9; the pane is read-only until then, and says so rather than pretending.
 
 use acpilot_demo::EditorBuffer;
+use acpilot_git::{LineChange, LineChanges};
 // The theme's token set, not this crate's: a run names a token and the theme
 // decides the colour, exactly as a theme file and the highlighter already agree
 // to. `acpilot-extensions` re-exports the palette's, so this is the same type
 // `Highlights` answers with.
 use acpilot_extensions::theme::SyntaxToken;
 use acpilot_text::highlight::{Grammars, Highlights, Span};
-use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, parse_position};
+use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
 use acpilot_text::{Document, LineColumn};
 
 /// Which prompt is up, and what has been typed into it.
@@ -99,7 +100,7 @@ pub struct EditorPane {
     document: Document,
     highlights: Option<Highlights>,
     viewport: Viewport,
-    marks: Vec<Option<char>>,
+    marks: LineChanges,
     find: Find,
     prompt: Option<Prompt>,
     message: String,
@@ -128,13 +129,14 @@ impl EditorPane {
     /// A pane over the seeded buffer, with its grammar compiled if this build
     /// ships one.
     ///
-    /// The seed is the demo's: the same file, the same lines, the same grep of
-    /// git markers and the same cursor the design pass was argued with. What
-    /// changed is that the text is now a rope the pane can edit, rather than
-    /// strings the pane drew.
+    /// The seed is the demo's: the same file, the same lines and the same cursor
+    /// the design pass was argued with. What changed is that the text is now a
+    /// rope the pane can edit rather than strings the pane drew, and that the
+    /// gutter's markers are passed in — they are git's answer about a diff, not
+    /// the buffer's opinion about itself.
     #[must_use]
-    pub fn seeded(seed: &EditorBuffer, grammars: &mut Grammars) -> Self {
-        let text: Vec<&str> = seed.lines.iter().map(|line| line.text.as_str()).collect();
+    pub fn seeded(seed: &EditorBuffer, marks: LineChanges, grammars: &mut Grammars) -> Self {
+        let text: Vec<&str> = seed.lines.iter().map(String::as_str).collect();
         let document = Document::from_bytes(text.join("\n").as_bytes())
             .expect("the seeded buffer is text the demo wrote");
         let highlights = grammars.get(&seed.language).map(Highlights::new);
@@ -145,11 +147,7 @@ impl EditorPane {
             document,
             highlights,
             viewport: Viewport::new(0, 0),
-            marks: seed
-                .lines
-                .iter()
-                .map(|line| line.status.letter().and_then(|l| l.chars().next()))
-                .collect(),
+            marks,
             find: Find::new(),
             prompt: None,
             message: String::new(),
@@ -244,10 +242,25 @@ impl EditorPane {
         self.bracket
     }
 
-    /// The git marker for a line: `M`, `A`, `?` — or nothing for a clean line.
+    /// The git marker for a line, or nothing for one that did not change.
+    ///
+    /// The letters are the gutter's, not git's: `+` for a line that is new, `~`
+    /// for one that replaced something, `-` for the line above a gap. A single
+    /// letter per column, because the gutter is one cell wide and a word would
+    /// push the text out from under the numbers.
     #[must_use]
     pub fn mark(&self, line: usize) -> Option<char> {
-        self.marks.get(line).copied().flatten()
+        self.marks.get(line).map(|change| match change {
+            LineChange::Added => '+',
+            LineChange::Modified => '~',
+            LineChange::Deleted => '-',
+        })
+    }
+
+    /// What git says changed about this file, for the title and tests.
+    #[must_use]
+    pub fn changes(&self) -> &LineChanges {
+        &self.marks
     }
 
     /// How many cells the gutter needs: the widest line number, a space, and the
@@ -327,6 +340,34 @@ impl EditorPane {
         self.viewport
             .scroll_lines(self.document.buffer(), lines as isize);
         self.rows = self.viewport.visible(self.document.buffer());
+    }
+
+    /// Put the caret where a click landed.
+    ///
+    /// `row` and `cell` are in the pane's own coordinates — the lines the viewport
+    /// is showing and the cells the text was drawn in — because the border and the
+    /// gutter are the pane's furniture and a caret placed from the window's
+    /// coordinates is off by both. The column is the character under the cell, so
+    /// a click inside a tab or a wide glyph lands on its left edge.
+    ///
+    /// Ignored while a prompt is up: the box has the keyboard, and a click that
+    /// moved the caret out from under the query being typed would be a pane
+    /// arguing with itself.
+    pub fn click(&mut self, row: usize, cell: usize) {
+        if self.prompt.is_some() {
+            return;
+        }
+        let lines = self.document.buffer().line_count();
+        let line = (self.viewport.top() + row).min(lines.saturating_sub(1));
+        let cell = self.viewport.left() + cell;
+        let column = column_at(
+            self.document.buffer(),
+            line,
+            cell,
+            self.viewport.tab_width(),
+        );
+        self.place(LineColumn::new(line, column));
+        self.message.clear();
     }
 
     /// Put the caret at the start or the end of its line.
@@ -594,28 +635,21 @@ fn step(value: usize, delta: i32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acpilot_demo::tree::GitStatus;
+    use acpilot_git::line_changes;
+
+    /// A patch that replaces line 2 of the test file, which is the line the
+    /// helper's gutter has to mark: the marks are the diff's, not the buffer's.
+    const PATCH: &str = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -2,1 +2,1 @@\n-old\n+new\n";
 
     fn pane(lines: &[&str], cursor: (usize, usize)) -> EditorPane {
         let seed = EditorBuffer {
             path: "src/main.rs".to_owned(),
             language: "rust".to_owned(),
-            lines: lines
-                .iter()
-                .enumerate()
-                .map(|(index, text)| acpilot_demo::EditorLine {
-                    text: (*text).to_owned(),
-                    status: if index == 1 {
-                        GitStatus::Modified
-                    } else {
-                        GitStatus::Clean
-                    },
-                })
-                .collect(),
+            lines: lines.iter().map(|text| (*text).to_owned()).collect(),
             cursor,
         };
         let mut grammars = Grammars::new();
-        let mut pane = EditorPane::seeded(&seed, &mut grammars);
+        let mut pane = EditorPane::seeded(&seed, line_changes(PATCH, "src/main.rs"), &mut grammars);
         pane.resize(10, 60);
         pane
     }
@@ -630,8 +664,25 @@ mod tests {
         assert_eq!(pane.tab(), "main.rs");
         assert_eq!(pane.position(), (2, 5));
         assert_eq!(text(&pane), "fn main() {\n    let x = 1;\n}");
-        assert_eq!(pane.mark(1), Some('M'));
+        assert_eq!(pane.mark(1), Some('~'), "the line the patch replaced");
         assert_eq!(pane.mark(0), None);
+    }
+
+    #[test]
+    fn the_gutter_marks_are_gits_answer_about_the_diff() {
+        // A patch that adds two lines and removes one, read for the file it names:
+        // one removal paired with one addition is a change, the addition left
+        // over is new, and the file the patch is about is the only one it answers
+        // for.
+        let patch =
+            "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,3 @@\n one\n-two\n+TWO\n+three\n";
+        let marks = line_changes(patch, "src/main.rs");
+        assert_eq!(marks.get(1), Some(LineChange::Modified), "{marks:?}");
+        assert_eq!(marks.get(2), Some(LineChange::Added), "{marks:?}");
+        assert!(
+            line_changes(patch, "src/other.rs").is_empty(),
+            "a patch says which file it is about"
+        );
     }
 
     #[test]
@@ -681,6 +732,37 @@ mod tests {
         assert_eq!(pane.viewport().top(), 5);
         assert_eq!(pane.caret().line, 0, "the caret stayed put");
         assert_eq!(pane.rows()[0].text(), "l5");
+    }
+
+    #[test]
+    fn a_click_puts_the_caret_on_the_cell_it_landed_on() {
+        let mut pane = pane(&["\tlet x = 1;", "short"], (0, 0));
+        // A cell inside the tab is the tab's own character, so the caret lands on
+        // its left edge: a click is a cell and a caret is a character.
+        pane.click(0, 2);
+        assert_eq!(pane.caret(), LineColumn::new(0, 0));
+        pane.click(0, 4);
+        assert_eq!(pane.caret(), LineColumn::new(0, 1), "the `l` of `let`");
+        // Past the end of a line is the end of the line, and a row past the last
+        // line is the last line: a click is never a panic.
+        pane.click(1, 40);
+        assert_eq!(pane.caret(), LineColumn::new(1, 5));
+        pane.click(99, 0);
+        assert_eq!(pane.caret(), LineColumn::new(1, 0));
+    }
+
+    #[test]
+    fn a_click_is_a_cell_of_the_text_not_of_the_pane() {
+        // The pane is scrolled right, so the cells it was given start at the
+        // column the window does — a click placed from the window's own column
+        // would put the caret two cells left of the glyph under the pointer.
+        let long = "0123456789".repeat(12);
+        let mut pane = pane(&[long.as_str(), "short"], (0, 0));
+        pane.move_caret(0, 100);
+        let left = pane.viewport().left();
+        assert!(left > 0, "the caret scrolled the window");
+        pane.click(0, 2);
+        assert_eq!(pane.caret(), LineColumn::new(0, left + 2));
     }
 
     #[test]
@@ -816,13 +898,10 @@ mod tests {
         let seed = EditorBuffer {
             path: "Makefile".to_owned(),
             language: "make".to_owned(),
-            lines: vec![acpilot_demo::EditorLine {
-                text: "all:\n\techo hi".to_owned(),
-                status: GitStatus::Clean,
-            }],
+            lines: vec!["all:\n\techo hi".to_owned()],
             cursor: (0, 0),
         };
-        let mut pane = EditorPane::seeded(&seed, &mut grammars);
+        let mut pane = EditorPane::seeded(&seed, LineChanges::default(), &mut grammars);
         pane.resize(4, 40);
         let painted = pane.paint();
         assert_eq!(painted.len(), 2, "the seeded line held a newline");

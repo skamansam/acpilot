@@ -13,6 +13,10 @@ acpilot-client = { workspace = true }
 # The design pass's seeded world. Shared with the desktop app (P10) so both draw
 # the same sessions, tree and transcript, and so a layout decision is one decision.
 acpilot-demo = { workspace = true }
+# Where the gutter's markers come from. The editor does not decide which lines
+# changed — git does, from the same diff the permission card shows — so the marks
+# and the review cannot disagree about what the agent touched.
+acpilot-git = { workspace = true }
 # The theme tokens the three surfaces share: the terminal is one of them, so it
 # reads the same token file rather than keeping a private palette.
 acpilot-extensions = { workspace = true }

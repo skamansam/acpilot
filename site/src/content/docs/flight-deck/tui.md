@@ -93,7 +93,13 @@ the mouse — click a title, slide along the bar to another, click a row to run 
 while a shell still gets `Alt` and a letter as the two bytes it has always meant.
 `Ctrl-Left` and `Ctrl-Right` move the two dividers, and a mouse drag on either one
 does the same thing, so the tree, the editor and the sidebar are the widths the
-person reading them wants rather than the widths a constant guessed.
+person reading them wants rather than the widths a constant guessed. The editor
+answers the pointer where a pointer is quicker than a key: a click on the text puts
+the caret on the cell it landed on and gives the pane the keyboard, and the wheel
+scrolls the buffer under it three lines at a time without moving the caret — a pane
+you point at does not have to be focused first. The gutter beside the numbers is
+git's: its markers are parsed from the same patch the permission card shows, so the
+`~` next to a line and the hunk in the review are one edit, not two lists.
 
 `acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
 sidebar, command palette, which-key hints and the stats bar — with no daemon and

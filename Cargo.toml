@@ -40,6 +40,9 @@ acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
 acpilot-gui = { version = "0.1.0", path = "crates/acpilot-gui" }
 # The capture behind the site's showcase, and the drift test that keeps it current.
 acpilot-showcase = { version = "0.1.0", path = "crates/acpilot-showcase" }
+# Git state for the editor's gutter and the commit writer: the user's own `git`,
+# so filters, worktrees and submodules mean what they mean on the command line.
+acpilot-git = { version = "0.1.0", path = "crates/acpilot-git" }
 # The seeded world the interface is designed against. Data only, in protocol types,
 # so the terminal and the desktop app render one copy of it instead of two that
 # drift apart in the first week (P6-3, P10).

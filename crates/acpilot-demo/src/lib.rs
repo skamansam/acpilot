@@ -32,7 +32,7 @@ pub mod palette;
 pub mod stats;
 pub mod tree;
 
-pub use editor::{Diff, DiffKind, DiffLine, EditorBuffer, EditorLine, Hunk};
+pub use editor::{Diff, DiffKind, DiffLine, EditorBuffer, Hunk};
 pub use palette::{Command, CommandAction, Run};
 pub use stats::Integration;
 pub use tree::{FileNode, GitStatus};

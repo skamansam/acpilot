@@ -248,6 +248,7 @@ dependencies = [
  "acpilot-core",
  "acpilot-demo",
  "acpilot-extensions",
+ "acpilot-git",
  "acpilot-profile",
  "acpilot-proto",
  "acpilot-text",

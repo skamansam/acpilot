@@ -126,6 +126,167 @@ pub struct Diff {
     pub files: Vec<DiffFile>,
 }
 
+/// What one line of a file is, compared with the revision it was diffed against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineChange {
+    /// The line is new.
+    Added,
+    /// The line replaced one or more lines that were removed: a removal and an
+    /// addition at the same place, which is what a person calls a change.
+    Modified,
+    /// Nothing changed on this line, but something was removed at it. The marker
+    /// sits on the line *above* the gap, because a gutter has to put it
+    /// somewhere and a line that no longer exists cannot hold one.
+    Deleted,
+}
+
+/// The lines of one file that differ from the revision, as a gutter needs them.
+///
+/// Keyed by the line number in the file as it is **now**, zero-based, so a pane
+/// can ask once per row it draws. A file git does not track has no line changes —
+/// the whole file is new, and [`Repo::status`] already says `Untracked`; a caller
+/// that wants a gutter for one marks the file, not every line of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineChanges {
+    marks: std::collections::BTreeMap<usize, LineChange>,
+}
+
+impl LineChanges {
+    /// What changed on a line, if anything.
+    #[must_use]
+    pub fn get(&self, line: usize) -> Option<LineChange> {
+        self.marks.get(&line).copied()
+    }
+
+    /// The changed lines, in order.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, LineChange)> + '_ {
+        self.marks.iter().map(|(line, change)| (*line, *change))
+    }
+
+    /// How many lines changed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.marks.len()
+    }
+
+    /// Whether the file is unchanged.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.marks.is_empty()
+    }
+}
+
+impl FromIterator<(usize, LineChange)> for LineChanges {
+    fn from_iter<I: IntoIterator<Item = (usize, LineChange)>>(lines: I) -> Self {
+        let mut marks = std::collections::BTreeMap::new();
+        for (line, change) in lines {
+            // A line that was both removed and added is a change; a deletion on
+            // the seam of an addition is the addition's business.
+            marks
+                .entry(line)
+                .and_modify(|existing| {
+                    if *existing == LineChange::Deleted {
+                        *existing = change;
+                    }
+                })
+                .or_insert(change);
+        }
+        Self { marks }
+    }
+}
+
+/// The line changes in a patch, for one path.
+///
+/// The patch is unified diff text — what `git diff` prints, or what a permission
+/// card is about to show — parsed for its hunk headers and its `+`/`-` runs.
+/// Only the hunks whose file header is `path` are read, so a patch over the whole
+/// working tree answers for one file; a patch with no file header at all (a bare
+/// hunk) is taken to be that file's.
+///
+/// A removal followed by an addition at the same place is one [`LineChange::Modified`],
+/// because a gutter that shows `-` then `+` for a line somebody edited says the
+/// file lost a line it still has.
+#[must_use]
+pub fn line_changes(patch: &str, path: &str) -> LineChanges {
+    let named = patch.lines().any(|line| line.starts_with("+++ "));
+    // A bare hunk with no file header is the caller's file; anything else has to
+    // say which file it is before its hunks count.
+    let mut target = !named;
+    let mut new_line = 0usize;
+    let mut removed = 0usize;
+    let mut seam = 0usize;
+    let mut marks: Vec<(usize, LineChange)> = Vec::new();
+
+    for line in patch.lines() {
+        if let Some(header) = line.strip_prefix("+++ ") {
+            // `b/<path>`, or `/dev/null` for a deletion.
+            let file = header.split('\t').next().unwrap_or(header);
+            target = !named || file.strip_prefix("b/") == Some(path);
+            if !target {
+                // Whatever the previous file left unfinished is not this file's.
+                removed = 0;
+            }
+            continue;
+        }
+        if line.starts_with("--- ") {
+            continue;
+        }
+        if line.starts_with("@@") {
+            if target {
+                flush(&mut marks, &mut removed, seam);
+                new_line = hunk_start(line).unwrap_or(0);
+                seam = new_line;
+            }
+            continue;
+        }
+        if !target {
+            continue;
+        }
+        match line.chars().next() {
+            Some('+') => {
+                // An addition this close to a removal is the other half of it.
+                let change = if removed > 0 {
+                    removed -= 1;
+                    LineChange::Modified
+                } else {
+                    LineChange::Added
+                };
+                marks.push((new_line, change));
+                new_line += 1;
+            }
+            Some('-') => {
+                removed += 1;
+                seam = new_line;
+            }
+            Some(' ') => {
+                flush(&mut marks, &mut removed, seam);
+                new_line += 1;
+            }
+            // A `\ No newline at end of file` marker, a `diff --git` line, an
+            // index line: nothing that moves a line number.
+            _ => {}
+        }
+    }
+    flush(&mut marks, &mut removed, seam);
+    marks.into_iter().collect()
+}
+
+/// Record the removals a run left unpaired, on the line above where they sat.
+fn flush(marks: &mut Vec<(usize, LineChange)>, removed: &mut usize, seam: usize) {
+    if *removed > 0 {
+        marks.push((seam.saturating_sub(1), LineChange::Deleted));
+        *removed = 0;
+    }
+}
+
+/// The zero-based first line of the new file a hunk header names.
+fn hunk_start(header: &str) -> Option<usize> {
+    // `@@ -8,6 +8,12 @@ optional section heading`
+    let plus = header.split_once('+')?.1;
+    let start = plus.split([',', ' ']).next()?.parse::<usize>().ok()?;
+    Some(start.saturating_sub(1))
+}
+
 /// One path in the working tree, tracked or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeEntry {
@@ -270,6 +431,34 @@ impl Repo {
             patch: self.diff_patch(scope)?,
             files: self.diff_files(scope)?,
         })
+    }
+
+    /// The lines of one file that differ from `HEAD`, for a gutter.
+    ///
+    /// `path` is relative to the repository root. Zero context lines and the
+    /// whole change staged and unstaged together: the gutter shows what the file
+    /// looks like now against what was committed, not one half of the edit.
+    ///
+    /// An untracked file answers with no changes — [`Self::status`] says why, and
+    /// a whole file git has never seen has no line diff to draw.
+    pub fn line_changes(&self, path: &str) -> Result<LineChanges, GitError> {
+        let mut args = vec![
+            "diff".to_owned(),
+            "--no-color".to_owned(),
+            "--no-ext-diff".to_owned(),
+            "--unified=0".to_owned(),
+        ];
+        // Without a commit there is nothing to compare a working tree against, so
+        // the index is the baseline: what is not yet committed is new.
+        if self.has_head()? {
+            args.push("HEAD".to_owned());
+        } else {
+            args.push("--cached".to_owned());
+        }
+        args.push("--".to_owned());
+        args.push(path.to_owned());
+        let patch = String::from_utf8_lossy(&self.run_owned(args)?).into_owned();
+        Ok(line_changes(&patch, path))
     }
 
     /// Every path in the working tree, tracked or untracked, sorted.
@@ -901,5 +1090,102 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("main"));
         assert_eq!(status.ahead, 1);
         assert_eq!(status.behind, 0);
+    }
+
+    /// A patch as `git diff` writes one, for the parser's own tests.
+    fn patch(path: &str, hunk: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{hunk}")
+    }
+
+    #[test]
+    fn a_patch_marks_the_lines_it_adds_and_the_lines_it_changes() {
+        let patch = patch(
+            "app.rs",
+            "@@ -1,4 +1,6 @@\n line one\n-old two\n+new two\n+extra\n line three\n line four\n",
+        );
+        let changes = line_changes(&patch, "app.rs");
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(
+            changes.get(1),
+            Some(LineChange::Modified),
+            "a removal and an addition at one place is one change"
+        );
+        assert_eq!(changes.get(2), Some(LineChange::Added));
+        assert_eq!(changes.get(0), None);
+        assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn a_removal_with_nothing_added_marks_the_line_above_the_gap() {
+        let patch = patch("app.rs", "@@ -2,3 +2,2 @@\n line two\n-gone\n line four\n");
+        let changes = line_changes(&patch, "app.rs");
+        assert_eq!(changes.get(1), Some(LineChange::Deleted), "the seam");
+        assert_eq!(changes.len(), 1, "{changes:?}");
+    }
+
+    #[test]
+    fn only_the_file_asked_about_is_read() {
+        let both = format!(
+            "{}{}",
+            patch("one.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            patch("two.rs", "@@ -1,1 +3,2 @@\n c\n+d\n"),
+        );
+        let one = line_changes(&both, "one.rs");
+        assert_eq!(one.get(1), Some(LineChange::Added));
+        assert_eq!(one.len(), 1, "the other file's hunk is not ours");
+        let two = line_changes(&both, "two.rs");
+        assert_eq!(two.get(3), Some(LineChange::Added), "its own line numbers");
+        assert!(line_changes(&both, "three.rs").is_empty());
+    }
+
+    #[test]
+    fn a_bare_hunk_is_taken_to_be_the_file_asked_about() {
+        let changes = line_changes("@@ -1,1 +5,2 @@\n a\n+b\n", "whatever.rs");
+        assert_eq!(
+            changes.get(5),
+            Some(LineChange::Added),
+            "a patch with no file header has one file"
+        );
+    }
+
+    #[test]
+    fn the_gutter_reads_the_lines_the_working_tree_changed() {
+        let fixture = Fixture::new("lines");
+        fixture.write("app.rs", "one\ntwo\nthree\nfour\n");
+        fixture.commit("init");
+
+        fixture.write("app.rs", "one\ntwo changed\nthree\nafter\nfour\n");
+        let changes = fixture.repo().line_changes("app.rs").expect("changes");
+        assert_eq!(changes.get(1), Some(LineChange::Modified), "{changes:?}");
+        assert_eq!(changes.get(3), Some(LineChange::Added), "{changes:?}");
+        assert_eq!(changes.get(0), None);
+
+        // The staged half counts too: the gutter shows the file against HEAD, not
+        // against whichever half of the edit git is holding.
+        fixture.git(&["add", "app.rs"]);
+        let staged = fixture.repo().line_changes("app.rs").expect("changes");
+        assert_eq!(staged, changes);
+
+        // A file git has never seen has no line diff, and says so by being empty.
+        fixture.write("new.rs", "a\nb\n");
+        assert!(
+            fixture
+                .repo()
+                .line_changes("new.rs")
+                .expect("changes")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn before_the_first_commit_the_index_is_the_baseline() {
+        let fixture = Fixture::new("no-head");
+        fixture.write("app.rs", "one\ntwo\n");
+        fixture.git(&["add", "app.rs"]);
+
+        let changes = fixture.repo().line_changes("app.rs").expect("changes");
+        assert_eq!(changes.get(0), Some(LineChange::Added));
+        assert_eq!(changes.get(1), Some(LineChange::Added));
+        assert_eq!(changes.len(), 2, "{changes:?}");
     }
 }

@@ -18,8 +18,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{
-    App, Dividers, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneMode, TerminalPane,
-    Toast, Viewports, about_lines, menu_title,
+    App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneMode,
+    TerminalPane, Toast, Viewports, about_lines, menu_title,
 };
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
@@ -128,6 +128,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         right: area.right(),
     };
 
+    let mut editor_area = None;
     let transcript = match &app.terminal {
         Some(pane) => {
             draw_terminal(frame, pane, rest, &app.theme);
@@ -138,7 +139,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         None => {
             let [editor, agents] =
                 Layout::horizontal([Constraint::Min(20), Constraint::Length(sidebar)]).areas(rest);
-            draw_editor(frame, app, editor);
+            editor_area = draw_editor(frame, app, editor);
             Some(draw_agents(frame, app, agents))
         }
     };
@@ -150,6 +151,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         // The bar is drawn before the body, and the list after it: `draw` fills
         // this in once the list knows where it landed.
         menu: MenuAreas::default(),
+        editor: editor_area,
     }
 }
 
@@ -423,7 +425,7 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
 /// highlighter's tokens resolved through the theme. What this function decides is
 /// furniture — the numbers, the git markers, the current line, where the caret
 /// is — and nothing that the desktop app would have to decide again.
-fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorArea> {
     let [strip, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     let theme = app.theme.clone();
     let demo = app.demo;
@@ -439,7 +441,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                 .block(block),
             area,
         );
-        return;
+        return None;
     };
 
     // A prompt replaces the tab strip rather than covering the buffer: the query
@@ -573,6 +575,16 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         let y = inner.y + u16::try_from(row).unwrap_or(0);
         frame.set_cursor_position((x.max(inner.x), y.min(inner.bottom().saturating_sub(1))));
     }
+
+    // The pane is the only thing that knows where its text begins, so it says,
+    // rather than the mouse repeating the border and the gutter arithmetic.
+    Some(EditorArea {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
+        gutter: u16::try_from(gutter).unwrap_or(u16::MAX),
+    })
 }
 
 /// The agent sidebar: sessions over a transcript over a composer.
@@ -1902,9 +1914,16 @@ mod tests {
             text.contains("  4   const SCROLLBACK: usize = 10_000;"),
             "the gutter and the fourth line: {text}"
         );
+        // The marker is git's answer about the diff, in the column beside the
+        // number: the first hunk adds four lines at line 8 of the new file, so
+        // the ninth line on screen is the first one marked.
         assert!(
-            text.contains(" 14 M "),
-            "the seeded git marker is in its column: {text}"
+            text.contains("  9 +     Live,"),
+            "the diff's marker is in its column: {text}"
+        );
+        assert!(
+            !text.contains(" 14 ~") && !text.contains(" 14 +"),
+            "a line the diff does not touch has no marker: {text}"
         );
 
         // `const` is a keyword, and it is painted with the theme's keyword colour

@@ -559,6 +559,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 37,
             "text": "Live",
             "style": 9
@@ -599,6 +604,11 @@
             "column": 25,
             "text": "││ 10 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 37,
@@ -643,6 +653,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 33,
             "text": "}",
             "style": 8
@@ -678,6 +693,11 @@
             "column": 25,
             "text": "││ 12 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 75,
@@ -759,11 +779,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 37,
             "text": "/// Move the copy cursor, scrolling wh",
             "style": 11
@@ -794,11 +809,6 @@
             "column": 25,
             "text": "││ 15 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 37,
@@ -1077,11 +1087,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 41,
             "text": "if",
             "style": 7
@@ -1152,11 +1157,6 @@
             "column": 25,
             "text": "││ 19 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 45,
@@ -3446,6 +3446,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 37,
             "text": "Live",
             "style": 9
@@ -3486,6 +3491,11 @@
             "column": 25,
             "text": "││ 10 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 37,
@@ -3530,6 +3540,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 33,
             "text": "}",
             "style": 8
@@ -3565,6 +3580,11 @@
             "column": 25,
             "text": "││ 12 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 75,
@@ -3646,11 +3666,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 37,
             "text": "/// Move the copy cursor, scrolling wh",
             "style": 11
@@ -3681,11 +3696,6 @@
             "column": 25,
             "text": "││ 15 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 37,
@@ -3964,11 +3974,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 41,
             "text": "if",
             "style": 7
@@ -4039,11 +4044,6 @@
             "column": 25,
             "text": "││ 19 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 45,
@@ -5127,6 +5127,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 37,
             "text": "Live",
             "style": 9
@@ -5167,6 +5172,11 @@
             "column": 25,
             "text": "││ 10 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 37,
@@ -5211,6 +5221,11 @@
             "style": 3
           },
           {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
+          },
+          {
             "column": 33,
             "text": "}",
             "style": 8
@@ -5246,6 +5261,11 @@
             "column": 25,
             "text": "││ 12 ",
             "style": 3
+          },
+          {
+            "column": 31,
+            "text": "+ ",
+            "style": 6
           },
           {
             "column": 75,
@@ -5327,11 +5347,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 37,
             "text": "/// Move the copy cursor, scrolling wh",
             "style": 11
@@ -5362,11 +5377,6 @@
             "column": 25,
             "text": "││ 15 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 37,
@@ -5645,11 +5655,6 @@
             "style": 3
           },
           {
-            "column": 31,
-            "text": "M ",
-            "style": 6
-          },
-          {
             "column": 41,
             "text": "if",
             "style": 7
@@ -5720,11 +5725,6 @@
             "column": 25,
             "text": "││ 19 ",
             "style": 3
-          },
-          {
-            "column": 31,
-            "text": "M ",
-            "style": 6
           },
           {
             "column": 45,

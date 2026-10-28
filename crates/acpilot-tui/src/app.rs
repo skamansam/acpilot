@@ -942,6 +942,13 @@ impl TerminalPane {
     }
 }
 
+/// How many lines one notch of the wheel scrolls.
+///
+/// Three, which is what a terminal gives a page-down key in some of them and what
+/// a person expects from a notch: one line at a time reads as a wheel that is
+/// broken, a page at a time as one that jumped.
+const WHEEL_LINES: i32 = 3;
+
 /// The columns the two dividers are drawn at.
 ///
 /// A drag has to become a width, and a width is measured from the body's edges — so
@@ -966,6 +973,51 @@ pub enum Divider {
     Tree,
     /// Between the editor and the sidebar.
     Sidebar,
+}
+
+/// Where the editor pane was drawn, in cells, for the mouse.
+///
+/// The box is the pane's inner cells, border excluded, and `gutter` is how many
+/// of them are numbers and markers. A click in the text is a caret; a wheel
+/// anywhere in the box scrolls, because a wheel is pointed at a pane rather than
+/// aimed at a character. `x` and `y` are absolute, so the pane does not repeat the
+/// layout arithmetic to find itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EditorArea {
+    /// The first cell inside the border.
+    pub x: u16,
+    /// The first row inside the border.
+    pub y: u16,
+    /// How many cells wide, gutter included.
+    pub width: u16,
+    /// How many lines fit.
+    pub height: u16,
+    /// The columns the numbers and markers take before the text.
+    pub gutter: u16,
+}
+
+impl EditorArea {
+    /// Whether a cell is inside the text — the part a click can put a caret in.
+    #[must_use]
+    pub fn is_text(&self, column: u16, row: u16) -> bool {
+        column >= self.x.saturating_add(self.gutter)
+            && column < self.x.saturating_add(self.width)
+            && self.is_row(row)
+            && self.width > self.gutter
+    }
+
+    /// Whether a cell is anywhere in the pane, the gutter and the padding included.
+    #[must_use]
+    pub fn holds(&self, column: u16, row: u16) -> bool {
+        column >= self.x
+            && column < self.x.saturating_add(self.width)
+            && self.is_row(row)
+            && self.width > 0
+    }
+
+    fn is_row(&self, row: u16) -> bool {
+        self.height > 0 && row >= self.y && row < self.y.saturating_add(self.height)
+    }
 }
 
 /// Where the open menu's list was drawn, in cells, for the mouse.
@@ -1059,6 +1111,8 @@ pub struct Viewports {
     pub dividers: Dividers,
     /// Where the menu bar and its open list were drawn.
     pub menu: MenuAreas,
+    /// Where the editor's text was drawn, when the pane was on screen.
+    pub editor: Option<EditorArea>,
 }
 
 /// Everything the terminal draws, plus the state the keys act on.
@@ -1179,6 +1233,8 @@ pub struct App {
     /// The app cannot write it: OSC 52 is an escape for the terminal a person is
     /// looking at, and only the event loop owns that stream.
     pub clipboard: Option<String>,
+    /// Where the editor's text was last drawn, for the mouse.
+    pub editor_area: Option<EditorArea>,
     /// Where the dividers were last drawn, for the mouse.
     pub dividers: Dividers,
     /// Which divider the mouse is holding, if any.
@@ -1241,6 +1297,7 @@ impl App {
             terminal_picker: false,
             picker_selected: 0,
             clipboard: None,
+            editor_area: None,
             dividers: Dividers::default(),
             drag: None,
             pane_size: None,
@@ -1270,7 +1327,11 @@ impl App {
             .map(|fixture| fixture.summary.clone())
             .collect();
         app.files = demo.files.clone();
-        app.editor = Some(EditorPane::seeded(&demo.editor, &mut app.grammars));
+        // The gutter's markers are git's answer about the diff the permission
+        // card is showing, not a list of line numbers the fixture also keeps:
+        // the review and the marks are then the same edit, parsed once.
+        let marks = acpilot_git::line_changes(&demo.diff.patch(), &demo.editor.path);
+        app.editor = Some(EditorPane::seeded(&demo.editor, marks, &mut app.grammars));
         app.diff = Some(demo.diff.clone());
         app.integrations = demo.integrations.clone();
         app.terminals = demo.terminals.clone();
@@ -1339,6 +1400,7 @@ impl App {
         self.set_pane_size(viewports.terminal);
         self.dividers = viewports.dividers;
         self.menu_areas = viewports.menu;
+        self.editor_area = viewports.editor;
         if let Some(size) = viewports.transcript {
             self.transcript_size = Some(size);
             let grid = (size.rows.max(1), size.cols.max(1));
@@ -2181,6 +2243,43 @@ impl App {
         None
     }
 
+    /// Put the caret where a click in the editor's text landed.
+    ///
+    /// A click is a focus move as well as a caret: a pane you can click into is one
+    /// you expect to be typing in. The numbers and the frame are not text, so a
+    /// click on them is not a caret — it falls through to the divider drag, which
+    /// is what a click on a pane's edge is for.
+    fn click_editor(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self.editor_area else {
+            return false;
+        };
+        if !area.is_text(column, row) {
+            return false;
+        }
+        self.set_focus(Focus::Editor);
+        if let Some(editor) = self.editor.as_mut() {
+            editor.click(
+                usize::from(row - area.y),
+                usize::from(column - area.x - area.gutter),
+            );
+        }
+        true
+    }
+
+    /// Scroll the editor under the wheel, without moving the caret.
+    fn scroll_editor(&mut self, column: u16, row: u16, lines: i32) -> bool {
+        let Some(area) = self.editor_area else {
+            return false;
+        };
+        if !area.holds(column, row) {
+            return false;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.scroll(lines);
+        }
+        true
+    }
+
     /// The composer's keys.
     fn prompt_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -2368,7 +2467,20 @@ impl App {
                 if let Some(request) = self.click_menu(event.column, event.row) {
                     return request;
                 }
+                if self.click_editor(event.column, event.row) {
+                    return None;
+                }
                 self.drag = self.divider_at(event.column);
+                None
+            }
+            // The wheel scrolls the pane under the pointer and nothing else: it is
+            // a thing you point at, so it does not have to be focused first.
+            MouseEventKind::ScrollUp => {
+                self.scroll_editor(event.column, event.row, -WHEEL_LINES);
+                None
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_editor(event.column, event.row, WHEEL_LINES);
                 None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -3296,8 +3408,12 @@ mod tests {
     fn the_editor_moves_its_caret_and_saving_names_the_task_that_would_write() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.files = acpilot_demo::tree::files();
+        // The gutter's markers are git's, so a test buffer has the marks a patch
+        // gives it: nothing here, which is a file that did not change.
+        let seed = acpilot_demo::editor::buffer();
         app.editor = Some(EditorPane::seeded(
-            &acpilot_demo::editor::buffer(),
+            &seed,
+            acpilot_git::line_changes(&acpilot_demo::editor::diff().patch(), &seed.path),
             &mut app.grammars,
         ));
         app.focus = Focus::Editor;
@@ -3519,6 +3635,7 @@ mod tests {
                 right: 120,
             },
             menu: MenuAreas { row: 0, list },
+            editor: None,
         });
     }
 
@@ -3694,6 +3811,7 @@ mod tests {
                 right: 140,
             },
             menu: MenuAreas::default(),
+            editor: None,
         });
 
         // The divider is one cell, so the grab is a cell either side of it.
@@ -3733,6 +3851,7 @@ mod tests {
                 right: 140,
             },
             menu: MenuAreas::default(),
+            editor: None,
         });
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 25));
         app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0));
@@ -3758,6 +3877,95 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         }
         assert_eq!(app.files_width, 16);
+    }
+
+    /// An app with the editor on screen where the layout would draw it: a border,
+    /// a five-column gutter, and twenty rows of text after both.
+    fn with_editor() -> App {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let seed = acpilot_demo::editor::buffer();
+        let mut editor = EditorPane::seeded(
+            &seed,
+            acpilot_git::line_changes(&acpilot_demo::editor::diff().patch(), &seed.path),
+            &mut app.grammars,
+        );
+        editor.resize(20, 55);
+        app.editor = Some(editor);
+        app.set_viewports(Viewports {
+            terminal: TerminalSize {
+                cols: 140,
+                rows: 40,
+            },
+            transcript: None,
+            dividers: Dividers {
+                tree: Some(25),
+                sidebar: Some(95),
+                left: 0,
+                right: 140,
+            },
+            menu: MenuAreas::default(),
+            editor: Some(EditorArea {
+                x: 25,
+                y: 2,
+                width: 60,
+                height: 20,
+                gutter: 5,
+            }),
+        });
+        app
+    }
+
+    #[test]
+    fn a_click_in_the_text_puts_the_caret_there_and_takes_the_keyboard() {
+        let mut app = with_editor();
+        app.focus = Focus::Sessions;
+
+        // The text starts at the pane's first cell plus its gutter, so column 32
+        // is the third cell of the fourth line on screen.
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 32, 5));
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").position(),
+            (4, 3),
+            "the cell under the pointer, counted from one"
+        );
+        assert_eq!(app.focus, Focus::Editor, "a click into a pane focuses it");
+        assert!(app.drag.is_none(), "the pane is not its own divider");
+    }
+
+    #[test]
+    fn a_click_on_the_numbers_is_not_a_caret() {
+        let mut app = with_editor();
+        let before = app.editor.as_ref().expect("a buffer").position();
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 27, 5));
+        assert_eq!(app.editor.as_ref().expect("a buffer").position(), before);
+        assert_eq!(app.focus, Focus::Sessions, "the gutter is furniture");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_editor_without_moving_the_caret() {
+        let mut app = with_editor();
+        let caret = app.editor.as_ref().expect("a buffer").position();
+
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, 40, 10));
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").viewport().top(),
+            usize::try_from(WHEEL_LINES).expect("three lines"),
+            "a notch is a few lines, not one and not a page"
+        );
+
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 10));
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.viewport().top(), 0);
+        assert_eq!(editor.position(), caret, "the caret stayed where it was");
+        assert_eq!(
+            app.focus,
+            Focus::Sessions,
+            "a wheel is pointed, not aimed: it does not take the keyboard"
+        );
+
+        // A wheel somewhere else is somebody else's.
+        app.handle_mouse(mouse_at(MouseEventKind::ScrollDown, 10, 10));
+        assert_eq!(app.editor.as_ref().expect("a buffer").viewport().top(), 0);
     }
 
     #[test]
@@ -4232,6 +4440,7 @@ mod tests {
             transcript: Some(TerminalSize { cols: 40, rows: 10 }),
             dividers: Dividers::default(),
             menu: MenuAreas::default(),
+            editor: None,
         });
         app
     }
@@ -4460,6 +4669,7 @@ mod tests {
             transcript: Some(TerminalSize { cols: 40, rows: 5 }),
             dividers: Dividers::default(),
             menu: MenuAreas::default(),
+            editor: None,
         });
         assert_eq!(app.transcript.view.cursor, (4, 0));
     }

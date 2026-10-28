@@ -90,7 +90,7 @@ permission card, the toast.
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | seeded rows; movement and collapsing work | P6-6 |
-| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
+| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret and a wheel that scrolls the view. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
 | Stats bar | seeded rows | P6-13 |
 
 ## Keys
@@ -101,7 +101,7 @@ permission card, the toast.
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` fuzzy open |
-| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `Ctrl-S` save · `i` insert · `F12` definition |
+| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `Ctrl-S` save · `i` insert · `F12` definition · click puts the caret · wheel scrolls the view |
 | sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel |
 | prompt | `Enter` send · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · `Ctrl-T` leave |
@@ -119,11 +119,22 @@ A find is case-insensitive until the query grows a capital, which is the behavio
 The transcript's copy mode answers to the same rule, so one `/` means one thing in
 both panes.
 
-Mouse reporting is on. The mouse does two things: it drags a divider, because the
-borders between files, text and agents are where a person reaches for one, and it
-uses the menu bar, because a row of labels is a target a pointer can see and hit.
-Both have a keyboard path that is not the fallback but the first one — a trackpad is
-not available over SSH, and the key is what gets pressed on a bad connection.
+Mouse reporting is on. The mouse does three things: it drags a divider, because the
+borders between files, text and agents are where a person reaches for one; it uses
+the menu bar, because a row of labels is a target a pointer can see and hit; and in
+the editor it puts the caret where a click landed and scrolls the buffer under the
+wheel, because a click is the fastest way to a caret and a wheel is a motion no key
+has. A click on the numbers is furniture, not text: it falls through to the divider
+drag it looks like. The wheel is pointed rather than aimed — it scrolls the pane
+under the pointer without taking the keyboard, and without moving the caret, which
+is what makes reading a file with a trackpad the same file when you let go. Every
+one of these has a keyboard path that is not the fallback but the first one — a
+trackpad is not available over SSH, and the key is what gets pressed on a bad
+connection.
+
+The gutter's markers are git's answer, not the buffer's: `acpilot-git` parses the
+same patch the permission card shows, so the `~` beside a line and the hunk in the
+review cannot disagree about what the agent did.
 
 ## When a feature is not built
 

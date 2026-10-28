@@ -7,6 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The rope under every edit path. 1.6.x on purpose: 2.0.0-beta.1 exists and the
+# rope is the last thing in this workspace to take a pre-release (README §5.3).
+ropey = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
 
 [lints]
 workspace = true

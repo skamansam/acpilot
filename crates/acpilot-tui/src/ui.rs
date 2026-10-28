@@ -1497,7 +1497,9 @@ mod tests {
     use crate::app::Entry;
     use acpilot_proto::permission::{PermissionKind, PermissionOption};
     use acpilot_proto::session::SessionSummary;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1631,6 +1633,81 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("behind 3/"), "{text}");
         assert!(text.contains("any key returns"), "{text}");
+    }
+
+    /// The drawn cells, for a test that is about a style rather than a character.
+    ///
+    /// The drawn viewports are handed back to the app the way the event loop hands
+    /// them back: a click counts against the cells the frame actually got, and a
+    /// test that skipped that step would be clicking a layout nobody was given.
+    fn cells(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
+        let mut viewports = None;
+        terminal
+            .draw(|frame| {
+                viewports = Some(draw(frame, app));
+            })
+            .expect("draw");
+        if let Some(viewports) = viewports {
+            app.set_viewports(viewports);
+        }
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_selection_dragged_over_the_terminal_is_drawn_reversed() {
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 8 });
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: acpilot_proto::terminal::TerminalSummary {
+                id: "agent-terminal-1".to_owned(),
+                session_id: "s1".to_owned(),
+                size: TerminalSize { cols: 60, rows: 8 },
+                alive: true,
+                command: "/bin/sh -c make".to_owned(),
+            },
+            replay_bytes: 0,
+        });
+        app.apply(crate::backend::Update::TerminalData(
+            b"hello world\r\n".to_vec(),
+        ));
+
+        // The pane's own corner comes from the drawing, so the drag is aimed at the
+        // cells a person can see rather than at arithmetic copied from the layout —
+        // which means one frame has to be drawn before there is anything to click.
+        let _ = cells(&mut app, 120, 34);
+        let area = app.terminal_area.expect("the pane was drawn");
+        let down = |column, row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(down(area.x, area.y));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: area.x + 4,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: area.x + 4,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.terminal.as_ref().expect("a pane").has_selection());
+
+        let drawn = cells(&mut app, 120, 34);
+        for (offset, selected) in [(0, true), (3, true), (5, false)] {
+            let cell = &drawn[(area.x + offset, area.y)];
+            assert_eq!(
+                cell.modifier.contains(Modifier::REVERSED),
+                selected,
+                "cell {offset} of the row ({:?})",
+                cell.symbol()
+            );
+        }
     }
 
     #[test]

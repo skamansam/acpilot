@@ -104,7 +104,7 @@ permission card, the toast.
 | editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `Ctrl-S` save · `i` insert · `F12` definition · click puts the caret · wheel scrolls the view |
 | sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel |
 | prompt | `Enter` send · `Esc` back to the list |
-| terminal | any key is a byte · `F2` copy mode · `Ctrl-T` leave |
+| terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
 
 `Tab` never lands in the terminal: a shell wants the byte. The pane is entered and
@@ -130,9 +130,21 @@ old output would print its answer out of sight, and a title that says how far ba
 the view is keeps a scrolled pane from looking like a program that stopped printing. A click on the numbers is furniture, not text: it falls through to the divider
 drag it looks like. The wheel is pointed rather than aimed — it scrolls the pane
 under the pointer without taking the keyboard, and without moving the caret, which
-is what makes reading a file with a trackpad the same file when you let go. Every
-one of these has a keyboard path that is not the fallback but the first one — a
-trackpad is not available over SSH, and the key is what gets pressed on a bad
+is what makes reading a file with a trackpad the same file when you let go.
+
+A drag across the terminal's output selects it. The press enters copy mode with the
+anchor on the cell it landed on, because a pointer has no key to press first and a
+person dragging across a shell's output means the output; letting go keeps the
+selection and the status line names the two keys that finish it (`y` copies, `Esc`
+leaves). A press that selected one cell or none ends the copy mode it began,
+because copy mode is the one state where a keystroke goes nowhere near the program
+and a person who clicked a shell and went back to typing must not be typing at a
+pane that quietly stopped listening. A drag that leaves the pane selects to the
+edge it left by rather than dropping the gesture, and a query being typed owns the
+keyboard, so a click does not move the selection out from under it.
+
+Every one of these has a keyboard path that is not the fallback but the first one —
+a trackpad is not available over SSH, and the key is what gets pressed on a bad
 connection.
 
 The gutter's markers are git's answer, not the buffer's: `acpilot-git` parses the

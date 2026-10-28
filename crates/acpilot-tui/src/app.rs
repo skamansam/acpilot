@@ -826,6 +826,64 @@ impl TerminalPane {
         self.apply_scroll();
     }
 
+    /// Start a selection at the cell under the pointer, entering copy mode.
+    ///
+    /// A pointer has no key to press first, so the press is also what enters copy
+    /// mode: a person dragging across a shell's output means the output, not the
+    /// program. The view stays where it is — a click on a scrolled pane selects
+    /// the cells it landed on, not the live ones behind them — and the anchor and
+    /// the cursor are the same cell until the pointer moves, which is what lets a
+    /// plain click be told from a drag.
+    pub fn select_at(&mut self, cell: (u16, u16)) {
+        let cell = self.cell_between(cell);
+        let scroll = self.reader.view.scroll;
+        self.mode = PaneMode::Copy;
+        self.reader = Reader::new(cell);
+        self.reader.view.scroll = scroll;
+        self.reader.view.anchor = Some(cell);
+        self.apply_scroll();
+    }
+
+    /// Grow the selection to the cell under the pointer.
+    ///
+    /// A pointer that has left the pane still extends the selection, to the edge
+    /// it left by: a drag that overshoots is a person marking everything to the
+    /// end of the screen, not one giving up. The view does not scroll — a drag
+    /// that scrolled at the edges would be a drag that changed what its own
+    /// earlier cells meant, which is the one thing a selection must not do.
+    pub fn extend_to(&mut self, cell: (u16, u16)) {
+        if self.reader.view.anchor.is_none() {
+            return;
+        }
+        self.reader.view.cursor = self.cell_between(cell);
+    }
+
+    /// Whether the pane is holding a selection, rather than a bare cursor.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        self.reader
+            .view
+            .selection()
+            .is_some_and(|(start, end)| start != end)
+    }
+
+    /// How many lines the selection covers, counting both ends.
+    #[must_use]
+    pub fn selected_lines(&self) -> usize {
+        self.reader.view.selection().map_or(0, |(start, end)| {
+            usize::from(end.0.saturating_sub(start.0)) + 1
+        })
+    }
+
+    /// A cell `vt100` would answer, clamped to the grid it is drawing.
+    fn cell_between(&self, (row, col): (u16, u16)) -> (u16, u16) {
+        let (rows, cols) = self.grid_size();
+        (
+            row.min(rows.saturating_sub(1)),
+            col.min(cols.saturating_sub(1)),
+        )
+    }
+
     /// Back to following the program.
     pub fn end_copy(&mut self) {
         self.mode = PaneMode::Live;
@@ -1004,6 +1062,20 @@ pub enum Divider {
     Tree,
     /// Between the editor and the sidebar.
     Sidebar,
+}
+
+/// What the left button is holding, between pressing it and letting go.
+///
+/// Two gestures, because a pointer is better at two things a key cannot do: aim at
+/// a width, and mark a run of cells. Which one a press began is decided once, at
+/// the press, so a drag that wanders off the thing it started on keeps doing what
+/// it was doing rather than turning into the other gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drag {
+    /// A divider, being moved.
+    Divider(Divider),
+    /// The terminal pane's selection, being grown.
+    Terminal,
 }
 
 /// Where a pane was drawn, in cells, for the mouse.
@@ -1291,8 +1363,8 @@ pub struct App {
     pub terminal_area: Option<PaneArea>,
     /// Where the dividers were last drawn, for the mouse.
     pub dividers: Dividers,
-    /// Which divider the mouse is holding, if any.
-    pub drag: Option<Divider>,
+    /// What the mouse is holding, if it is holding anything.
+    pub drag: Option<Drag>,
     /// The size the terminal pane was last drawn at.
     ///
     /// The event loop tells the app every frame and the program only when this
@@ -2544,13 +2616,13 @@ impl App {
         );
     }
 
-    /// What a mouse event means: a menu, or a drag on a divider.
+    /// What a mouse event means: a menu, a divider, or a selection.
     ///
-    /// Those are the two things a pointer is better at than a key: a menu bar with a
-    /// list is a target a person can see and hit, and a width has no key that can aim.
-    /// A click on a pane is still not a focus change — every command in this interface
-    /// has a key, and a mouse that could move the keyboard would be a second way to
-    /// get lost.
+    /// Those are the three things a pointer is better at than a key: a menu bar with
+    /// a list is a target a person can see and hit, a width has no key that can aim,
+    /// and a run of cells is one drag rather than eighty motions. Every one of them
+    /// is also a key: the mouse is a second way to do what the keyboard already
+    /// does, and never the only way.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Option<Request> {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -2560,7 +2632,11 @@ impl App {
                 if self.click_editor(event.column, event.row) {
                     return None;
                 }
-                self.drag = self.divider_at(event.column);
+                if self.click_terminal(event.column, event.row) {
+                    self.drag = Some(Drag::Terminal);
+                    return None;
+                }
+                self.drag = self.divider_at(event.column).map(Drag::Divider);
                 None
             }
             // The wheel scrolls the pane under the pointer and nothing else: it is
@@ -2574,8 +2650,10 @@ impl App {
                 None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(divider) = self.drag {
-                    self.drag_to(divider, event.column);
+                match self.drag {
+                    Some(Drag::Divider(divider)) => self.drag_to(divider, event.column),
+                    Some(Drag::Terminal) => self.drag_terminal(event.column, event.row),
+                    None => {}
                 }
                 None
             }
@@ -2587,11 +2665,80 @@ impl App {
                 None
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.drag == Some(Drag::Terminal) {
+                    self.release_terminal();
+                }
                 self.drag = None;
                 None
             }
             _ => None,
         }
+    }
+
+    /// Begin the terminal's selection where a click landed.
+    ///
+    /// A click in a shell's output means the output, so the pane enters copy mode
+    /// with a selection anchored on the cell under the pointer and lets a drag grow
+    /// it. Nothing is taken that was not already taken — a terminal that is up has
+    /// the keyboard — and nothing is copied yet: a selection is marked first and
+    /// yanked when the person says so, which is the same contract `v` has.
+    ///
+    /// A query being typed owns the keyboard, so a click does not move the
+    /// selection out from under it.
+    fn click_terminal(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self.terminal_area else {
+            return false;
+        };
+        if !area.holds(column, row) {
+            return false;
+        }
+        let Some(pane) = self.terminal.as_mut() else {
+            return false;
+        };
+        if pane.reader.typing.is_some() {
+            return false;
+        }
+        pane.select_at((row - area.y, column - area.x));
+        true
+    }
+
+    /// Grow the terminal's selection to where the pointer is.
+    ///
+    /// Counted from the pane's own corner, and clamped to it: a drag that left the
+    /// pane selects to the edge it left by rather than dropping the gesture.
+    fn drag_terminal(&mut self, column: u16, row: u16) {
+        let Some(area) = self.terminal_area else {
+            return;
+        };
+        let Some(pane) = self.terminal.as_mut() else {
+            return;
+        };
+        pane.extend_to((
+            row.saturating_sub(area.y)
+                .min(area.height.saturating_sub(1)),
+            column
+                .saturating_sub(area.x)
+                .min(area.width.saturating_sub(1)),
+        ));
+    }
+
+    /// What letting go of the button does: keep a selection, or give the keys back.
+    ///
+    /// A click that selected nothing must not leave the pane in copy mode. Copy mode
+    /// is the state in which a keystroke goes nowhere near the program, and a person
+    /// who clicked a shell and went back to typing would be typing at a pane that had
+    /// quietly stopped listening — so a click that marked one cell or none ends what
+    /// it began. A real selection stays, and the status line says how to take it.
+    fn release_terminal(&mut self) {
+        let Some(pane) = self.terminal.as_mut() else {
+            return;
+        };
+        if !pane.has_selection() {
+            pane.end_copy();
+            return;
+        }
+        let lines = pane.selected_lines();
+        self.status = format!("selected {lines} line(s) · y copies · Esc leaves");
     }
 
     /// A click on the bar or the open list, answered.
@@ -3908,7 +4055,7 @@ mod tests {
 
         // The divider is one cell, so the grab is a cell either side of it.
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 26));
-        assert_eq!(app.drag, Some(Divider::Tree));
+        assert_eq!(app.drag, Some(Drag::Divider(Divider::Tree)));
         app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 39));
         assert_eq!(app.files_width, 40, "40 cells, so the border is at 39");
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 39));
@@ -3916,7 +4063,7 @@ mod tests {
 
         // The sidebar is measured from the body's right edge.
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 95));
-        assert_eq!(app.drag, Some(Divider::Sidebar));
+        assert_eq!(app.drag, Some(Drag::Divider(Divider::Sidebar)));
         app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 60));
         assert_eq!(app.sidebar_width, 80, "140 - 60, clamped to the widest");
 
@@ -4124,6 +4271,119 @@ mod tests {
         // A wheel above the pane is not the terminal's.
         app.handle_mouse(mouse_at(MouseEventKind::ScrollUp, 40, 0));
         assert_eq!(app.terminal.as_ref().expect("a pane").reader.view.scroll, 0);
+    }
+
+    /// A terminal drawn inside a 140×30 window, from column 1 and row 2.
+    ///
+    /// The area is what the mouse counts against, and the drawing is the only thing
+    /// that knows it, so a test that clicks a pane has to say where it was drawn.
+    fn drawn_terminal() -> App {
+        let mut app = with_terminal();
+        app.set_viewports(Viewports {
+            terminal: TerminalSize {
+                cols: 100,
+                rows: 30,
+            },
+            transcript: None,
+            dividers: Dividers::default(),
+            menu: MenuAreas::default(),
+            editor: None,
+            terminal_area: Some(PaneArea {
+                x: 1,
+                y: 2,
+                width: 98,
+                height: 30,
+            }),
+        });
+        app
+    }
+
+    #[test]
+    fn a_drag_across_the_terminal_selects_the_run_and_y_copies_it() {
+        let mut app = drawn_terminal();
+        app.apply(Update::TerminalData(
+            b"hello world\r\nsecond line\r\n".to_vec(),
+        ));
+
+        // The press is also what enters copy mode, because a pointer has no key to
+        // press first, and the anchor is the cell it landed on.
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 2));
+        assert_eq!(app.drag, Some(Drag::Terminal));
+        assert_eq!(app.terminal.as_ref().expect("a pane").mode, PaneMode::Copy);
+
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 6, 2));
+        app.handle_mouse(mouse_at(MouseEventKind::Up(MouseButton::Left), 6, 2));
+        assert!(app.drag.is_none(), "letting go lets go");
+        assert!(app.terminal.as_ref().expect("a pane").has_selection());
+        assert!(app.status.contains("selected 1 line"), "{}", app.status);
+        assert!(
+            app.clipboard.is_none(),
+            "a selection is marked first; `y` is what takes it"
+        );
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('y'))), None);
+        assert_eq!(app.clipboard.as_deref(), Some("hello"));
+        assert_eq!(
+            app.terminal.as_ref().expect("a pane").mode,
+            PaneMode::Live,
+            "a yank leaves the pane following the program"
+        );
+    }
+
+    #[test]
+    fn a_drag_that_leaves_the_pane_selects_to_the_edge_it_left_by() {
+        let mut app = drawn_terminal();
+        app.apply(Update::TerminalData(b"hello world\r\n".to_vec()));
+
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 2));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 200, 2));
+        app.handle_mouse(mouse_at(MouseEventKind::Up(MouseButton::Left), 200, 2));
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            app.clipboard.as_deref(),
+            Some("hello world"),
+            "a pointer past the pane marks everything to its edge"
+        );
+    }
+
+    #[test]
+    fn a_click_that_selects_nothing_gives_the_keys_back_to_the_program() {
+        let mut app = drawn_terminal();
+        app.apply(Update::TerminalData(b"hello\r\n".to_vec()));
+        let before = app.status.clone();
+
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 20, 4));
+        app.handle_mouse(mouse_at(MouseEventKind::Up(MouseButton::Left), 20, 4));
+        assert_eq!(
+            app.terminal.as_ref().expect("a pane").mode,
+            PaneMode::Live,
+            "copy mode is where bytes go nowhere, so a click must not leave it here"
+        );
+        assert!(!app.terminal.as_ref().expect("a pane").has_selection());
+        assert_eq!(app.status, before, "a click that did nothing says nothing");
+        assert!(
+            matches!(
+                app.handle_key(key(KeyCode::Char('q'))),
+                Some(Request::TerminalWrite(_))
+            ),
+            "and the next key is the program's again"
+        );
+
+        // A query being typed owns the keyboard: a click does not move the
+        // selection out from under the line being typed.
+        app.handle_key(key(KeyCode::F(2)));
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 2));
+        assert!(app.drag.is_none(), "the click was not the pane's");
+        assert!(
+            app.terminal
+                .as_ref()
+                .expect("a pane")
+                .reader
+                .typing
+                .is_some(),
+            "the query is still open"
+        );
     }
 
     #[test]

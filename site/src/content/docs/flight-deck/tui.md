@@ -100,7 +100,11 @@ scrolls the buffer under it three lines at a time without moving the caret — a
 you point at does not have to be focused first. The wheel does the same to a
 terminal: it reads back through the scrollback, the title says `behind n/history`
 while it is scrolled, and the next keystroke returns it to the newest line, because
-the answer to a command belongs below the fold you were reading. The gutter beside the numbers is
+the answer to a command belongs below the fold you were reading. Dragging across
+the output selects the run it covered and leaves the pane in copy mode with the
+selection marked, so `y` takes it over OSC 52 and `Esc` gives the keys back — and a
+click that selected nothing leaves again, because copy mode is the one state where
+a keystroke goes nowhere near the program. The gutter beside the numbers is
 git's: its markers are parsed from the same patch the permission card shows, so the
 `~` next to a line and the hunk in the review are one edit, not two lists.
 

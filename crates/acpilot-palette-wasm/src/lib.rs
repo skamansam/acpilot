@@ -130,9 +130,20 @@ mod tests {
     use super::*;
     use acpilot_palette::theme::{SyntaxToken, UiToken};
 
+    /// One test at a time, because the answer lives in one buffer.
+    ///
+    /// `LAST` is a static for the whole crate — a page reads through `out_ptr` and
+    /// a length, and one page means one document — so two tests that solve and then
+    /// read it can interleave and see each other's answer. Nothing about the solve
+    /// is shared; the buffer is, so the solve and the read are held together.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
     /// Call [`solve`] the way a page does: `0` is "no answer", anything else is the
     /// length of the document in the buffer.
     fn solved(background: u32, foreground: u32) -> Option<Value> {
+        let _guard = ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if solve(background, foreground) == 0 {
             return None;
         }

@@ -29,18 +29,21 @@
 //!   same path ([`Edit`] → [`Change`] → [`History`]), so no operation can be the
 //!   one that forgot how to be undone.
 //!
-//! What is not here yet: syntax highlighting and diffs (language-intelligence
-//! phase (P7) and the editor phase's task P6-9), which is why `tree-sitter` and
-//! `imara-diff` are not dependencies.
+//! Highlighting is here too ([`highlight`]), because a pane asks one question —
+//! "what colour is the part of this buffer I can see" — and the answer has to
+//! come from the same rope and the same parse. What is not here yet is diffing
+//! (the editor phase's task P6-9), which is why `imara-diff` is not a dependency.
 
 pub mod buffer;
 pub mod document;
 pub mod edit;
+pub mod highlight;
 pub mod history;
 pub mod selection;
 
 pub use buffer::{Buffer, LineColumn, LineEnding, TextError, is_word};
 pub use document::Document;
 pub use edit::{Edit, IndentMode, IndentStyle, Replacement};
+pub use highlight::{Grammar, Grammars, Highlights, Span, token_for};
 pub use history::{Change, Flavour, GROUP_WINDOW, History};
 pub use selection::{Cursor, Motion, Selection, Selections};

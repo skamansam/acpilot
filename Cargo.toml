@@ -110,6 +110,13 @@ gpui = "=0.2.2"
 ropey = "1.6"
 tree-sitter = "0.27"
 tree-sitter-highlight = "0.27"
+# The grammars compiled into the editor. A missing language falls back to plain
+# text rather than to nothing, and more arrive as extensions (P4.6-8), which is
+# why the registry takes a grammar rather than owning a fixed list.
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-toml-ng = "0.7"
 imara-diff = "0.2"
 similar = "3"
 ignore = "0.4"

@@ -63,7 +63,10 @@ gets you the first hour and costs you the second year.
   minimalism; it is what makes the TUI usable on a bad connection.
 - **No blocking calls in the render loop.** Everything is a channel message.
 - **60 fps or it is a bug.** The budget is 16 ms p95 from keystroke to paint, the
-  same as the desktop app, measured in CI.
+  same as the desktop app. `examples/frame.rs` measures the drawing at 200×60: half
+  a millisecond a frame on average and 0.8 ms at p95, over five hundred frames, in a
+  release build. That is a floor rather than the whole path — a keystroke also waits
+  for the loop's poll — and a CI gate on it is not there yet.
 - **Same keymap data as the desktop and browser.** One `keymap.toml`, three
   consumers.
 
@@ -97,14 +100,21 @@ person reading them wants rather than the widths a constant guessed. The editor
 answers the pointer where a pointer is quicker than a key: a click on the text puts
 the caret on the cell it landed on and gives the pane the keyboard, and the wheel
 scrolls the buffer under it three lines at a time without moving the caret — a pane
-you point at does not have to be focused first. The wheel does the same to a
-terminal: it reads back through the scrollback, the title says `behind n/history`
-while it is scrolled, and the next keystroke returns it to the newest line, because
-the answer to a command belongs below the fold you were reading. Dragging across
-the output selects the run it covered and leaves the pane in copy mode with the
-selection marked, so `y` takes it over OSC 52 and `Esc` gives the keys back — and a
-click that selected nothing leaves again, because copy mode is the one state where
-a keystroke goes nowhere near the program. The gutter beside the numbers is
+you point at does not have to be focused first. Dragging across the text selects the
+run it covered, and `y` copies it over OSC 52; the editor copies the buffer's own
+slice of the range, so a tab or a wide glyph comes across once, and `Esc` clears the
+selection without moving the caret. A click on a row of the tree, or of the session
+list, focuses that pane on the row it hit — and the session list opens that session,
+because a list is a column of targets. The wheel does the same to a terminal: it
+reads back through the scrollback, the title says `behind n/history` while it is
+scrolled, and the next keystroke returns it to the newest line, because the answer
+to a command belongs below the fold you were reading. Dragging across the output
+selects the run it covered and leaves the pane in copy mode with the selection
+marked, so `y` takes it over OSC 52 and `Esc` gives the keys back — and a click that
+selected nothing leaves again, because copy mode is the one state where a keystroke
+goes nowhere near the program. Mouse reporting costs the terminal its own
+drag-to-select, so `acpilot tui --no-mouse` turns it off and the terminal keeps that
+gesture; every action the pointer has is also a key. The gutter beside the numbers is
 git's: its markers are parsed from the same patch the permission card shows, so the
 `~` next to a line and the hunk in the review are one edit, not two lists.
 

@@ -108,9 +108,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
     } else {
         (None, area)
     };
-    if let Some(files) = files {
-        draw_files(frame, app, files);
-    }
+    let files_area = files.map(|files| draw_files(frame, app, files));
     let sidebar = app
         .sidebar_width
         .min(if wide { 80 } else { 34 })
@@ -130,6 +128,7 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
 
     let mut editor_area = None;
     let mut terminal_area = None;
+    let mut sessions_area = None;
     let transcript = match &app.terminal {
         Some(pane) => {
             terminal_area = Some(draw_terminal(frame, pane, rest, &app.theme));
@@ -141,7 +140,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
             let [editor, agents] =
                 Layout::horizontal([Constraint::Min(20), Constraint::Length(sidebar)]).areas(rest);
             editor_area = draw_editor(frame, app, editor);
-            Some(draw_agents(frame, app, agents))
+            let (transcript, sessions) = draw_agents(frame, app, agents);
+            sessions_area = Some(sessions);
+            Some(transcript)
         }
     };
 
@@ -153,6 +154,8 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         // this in once the list knows where it landed.
         menu: MenuAreas::default(),
         editor: editor_area,
+        files: files_area,
+        sessions: sessions_area,
         terminal_area,
     }
 }
@@ -363,7 +366,7 @@ fn draw_about(frame: &mut Frame, app: &App, area: Rect) {
 /// Rows are flat: `depth` is drawn as indentation, not walked to. What a real
 /// tree has to deliver is exactly this list, which is why the pane can be designed
 /// before P6-6 reads a disk.
-fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     // The tree's own name, not the path: the column is 26 cells and a home
     // directory with the workspace in it is longer than the pane that holds it.
     let title = match app.workspace.rsplit('/').next() {
@@ -374,6 +377,9 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(title)
         .border_style(border_style(app.focus == Focus::Files, &app.theme));
+    // The rows start inside the border, and the mouse is told so: a click on the
+    // frame is a click on the frame, not on the first file.
+    let inner = block.inner(area);
 
     if app.files.is_empty() {
         frame.render_widget(
@@ -382,7 +388,7 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
                 .block(block),
             area,
         );
-        return;
+        return pane_area(inner);
     }
 
     let items: Vec<ListItem> = app
@@ -417,6 +423,17 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     frame.render_widget(List::new(items).block(block), area);
+    pane_area(inner)
+}
+
+/// A rectangle as the mouse measures it: the cells inside a pane's border.
+fn pane_area(inner: Rect) -> PaneArea {
+    PaneArea {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
+    }
 }
 
 /// The tab strip, the buffer under it, and the box it is asking a question in.
@@ -551,6 +568,10 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
                 State::Match => style.fg(theme.warning()).add_modifier(Modifier::UNDERLINED),
                 State::CurrentMatch => style.bg(theme.accent()).fg(theme.bg()),
                 State::Bracket => style.fg(theme.accent_high()).add_modifier(Modifier::BOLD),
+                // A drag's selection is reversed rather than tinted, the same mark
+                // the terminal's copy mode uses: it has to read as marked on every
+                // theme, including one whose accent is close to its background.
+                State::Selected => style.add_modifier(Modifier::REVERSED),
             };
             spans.push(Span::styled(run.text.clone(), style));
         }
@@ -595,7 +616,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
 ///
 /// Returns the transcript's cells, because that is the viewport a copy cursor
 /// walks and nothing outside this function measures it.
-fn draw_agents(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
+fn draw_agents(frame: &mut Frame, app: &App, area: Rect) -> (TerminalSize, PaneArea) {
     let list = u16::try_from(app.sessions.len())
         .unwrap_or(u16::MAX)
         .saturating_add(2)
@@ -606,10 +627,10 @@ fn draw_agents(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
         Constraint::Length(3),
     ])
     .areas(area);
-    draw_sessions(frame, app, sessions);
+    let sessions = draw_sessions(frame, app, sessions);
     let size = draw_transcript(frame, app, transcript);
     draw_composer(frame, app, composer);
-    size
+    (size, sessions)
 }
 
 /// The cells inside a bordered pane.
@@ -770,7 +791,7 @@ fn colour(colour: vt100::Color) -> Option<Color> {
     }
 }
 
-fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     let title = format!(" Sessions · {} ", app.sessions.len());
     let items: Vec<ListItem> = app
         .sessions
@@ -802,6 +823,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(title)
         .border_style(border_style(app.focus == Focus::Sessions, &app.theme));
+    let inner = block.inner(area);
     if items.is_empty() {
         frame.render_widget(
             Paragraph::new("no sessions · n starts one")
@@ -812,6 +834,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         frame.render_widget(List::new(items).block(block), area);
     }
+    pane_area(inner)
 }
 
 /// The transcript, and the cells it was drawn in.
@@ -1701,6 +1724,39 @@ mod tests {
         let drawn = cells(&mut app, 120, 34);
         for (offset, selected) in [(0, true), (3, true), (5, false)] {
             let cell = &drawn[(area.x + offset, area.y)];
+            assert_eq!(
+                cell.modifier.contains(Modifier::REVERSED),
+                selected,
+                "cell {offset} of the row ({:?})",
+                cell.symbol()
+            );
+        }
+    }
+
+    #[test]
+    fn a_selection_dragged_over_the_editor_is_drawn_reversed() {
+        let mut app = demo_with_theme();
+        app.focus = Focus::Editor;
+        // The pane measures itself against the cells a frame gives it, so one frame
+        // has to be drawn before there is a box to aim a drag at.
+        let _ = cells(&mut app, 120, 34);
+        let area = app.editor_area.expect("the pane was drawn");
+        let text = area.pane.x + area.gutter;
+        let row = area.pane.y + 3;
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), text + 2));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), text + 6));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), text + 6));
+        assert!(app.editor.as_ref().expect("a buffer").has_selection());
+
+        let drawn = cells(&mut app, 120, 34);
+        for (offset, selected) in [(1, false), (2, true), (5, true), (6, false)] {
+            let cell = &drawn[(text + offset, row)];
             assert_eq!(
                 cell.modifier.contains(Modifier::REVERSED),
                 selected,

@@ -113,6 +113,15 @@ pub enum Command {
         /// it is the same world the desktop app draws when it gets its shell.
         #[arg(long)]
         demo: bool,
+        /// Do not ask the terminal to report the mouse.
+        ///
+        /// Mouse reporting is on by default, and it costs the terminal's own
+        /// click-drag selection: most terminals keep it on Shift-drag, but not all.
+        /// With this flag the terminal keeps its selection, and the TUI is driven by
+        /// keys alone — every mouse action has a key, so nothing is lost but the
+        /// pointer.
+        #[arg(long)]
+        no_mouse: bool,
     },
 }
 
@@ -276,7 +285,17 @@ pub fn run(cli: Cli) -> u8 {
             workspace,
             token,
             demo,
-        }) => run_tui(path, api_url, no_spawn, profile, workspace, token, demo),
+            no_mouse,
+        }) => run_tui(TuiFlags {
+            path,
+            api_url,
+            no_spawn,
+            profile,
+            workspace,
+            token,
+            demo,
+            mouse: !no_mouse,
+        }),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -290,21 +309,47 @@ pub fn run(cli: Cli) -> u8 {
     }
 }
 
+/// What `acpilot tui` was asked for.
+///
+/// A struct rather than seven arguments: one of them is about the daemon, one is
+/// about the design pass and one is about the terminal, and a positional list of
+/// booleans is where `demo` and `no_spawn` get swapped by the next person.
+struct TuiFlags {
+    /// The project to open.
+    path: Option<PathBuf>,
+    /// The daemon's endpoint, when it is not the default.
+    api_url: Option<String>,
+    /// Fail instead of starting a daemon.
+    no_spawn: bool,
+    /// The profile to serve.
+    profile: Option<PathBuf>,
+    /// The workspace root the spawned daemon serves.
+    workspace: Option<PathBuf>,
+    /// The bearer token a TCP daemon requires.
+    token: Option<String>,
+    /// Draw the seeded world instead of asking a daemon.
+    demo: bool,
+    /// Ask the terminal to report the mouse.
+    mouse: bool,
+}
+
 /// Open the TUI, starting the daemon if this is the first client (ADR 0004).
 ///
-/// The flags are the daemon's, not the TUI's: they only matter on the spawn
-/// path. A daemon that is already running was started with its own, and
-/// pretending otherwise would show one project's sessions under another's name —
-/// so a mismatch is refused rather than ignored.
-fn run_tui(
-    path: Option<PathBuf>,
-    api_url: Option<String>,
-    no_spawn: bool,
-    profile: Option<PathBuf>,
-    workspace: Option<PathBuf>,
-    token: Option<String>,
-    demo: bool,
-) -> u8 {
+/// The daemon's flags are here because they only matter on the spawn path. A
+/// daemon that is already running was started with its own, and pretending
+/// otherwise would show one project's sessions under another's name — so a
+/// mismatch is refused rather than ignored.
+fn run_tui(flags: TuiFlags) -> u8 {
+    let TuiFlags {
+        path,
+        api_url,
+        no_spawn,
+        profile,
+        workspace,
+        token,
+        demo,
+        mouse,
+    } = flags;
     // The design pass comes first, before anything is resolved: it has no daemon
     // to start, no project to find and no profile to read, and a flag that still
     // touched the disk would be a flag that fails on a machine with neither.
@@ -324,7 +369,7 @@ fn run_tui(
                 return exit::FAILURE;
             }
         };
-        return match acpilot_tui::run_demo(acpilot_demo::demo(), theme) {
+        return match acpilot_tui::run_demo(acpilot_demo::demo(), theme, mouse) {
             Ok(()) => exit::SUCCESS,
             Err(error) => {
                 eprintln!("acpilot tui: {error}");
@@ -423,7 +468,13 @@ fn run_tui(
         // the screen: one reader of one terminal.
         terminal: None,
     };
-    match acpilot_tui::run(&running.endpoint, token.as_deref(), theme, theme_files) {
+    match acpilot_tui::run(
+        &running.endpoint,
+        token.as_deref(),
+        theme,
+        theme_files,
+        mouse,
+    ) {
         Ok(()) => exit::SUCCESS,
         Err(error) => {
             eprintln!("acpilot tui: {error}");

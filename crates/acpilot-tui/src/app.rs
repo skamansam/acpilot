@@ -1076,6 +1076,8 @@ pub enum Drag {
     Divider(Divider),
     /// The terminal pane's selection, being grown.
     Terminal,
+    /// The editor pane's selection, being grown.
+    Editor,
 }
 
 /// Where a pane was drawn, in cells, for the mouse.
@@ -1232,6 +1234,13 @@ pub struct Viewports {
     pub menu: MenuAreas,
     /// Where the editor's text was drawn, when the pane was on screen.
     pub editor: Option<EditorArea>,
+    /// Where the files tree's rows were drawn, when the tree was on screen.
+    ///
+    /// The box inside the border: a click on a row is that row, and the border is
+    /// not a row.
+    pub files: Option<PaneArea>,
+    /// Where the session list's rows were drawn, when it was on screen.
+    pub sessions: Option<PaneArea>,
     /// Where the terminal pane was drawn, when one is up.
     ///
     /// Not to be confused with `terminal`, which is the grid the program was told
@@ -1359,6 +1368,10 @@ pub struct App {
     pub clipboard: Option<String>,
     /// Where the editor's text was last drawn, for the mouse.
     pub editor_area: Option<EditorArea>,
+    /// Where the files tree's rows were last drawn, for the mouse.
+    pub files_area: Option<PaneArea>,
+    /// Where the session list's rows were last drawn, for the mouse.
+    pub sessions_area: Option<PaneArea>,
     /// Where the terminal pane was last drawn, for the mouse.
     pub terminal_area: Option<PaneArea>,
     /// Where the dividers were last drawn, for the mouse.
@@ -1424,6 +1437,8 @@ impl App {
             picker_selected: 0,
             clipboard: None,
             editor_area: None,
+            files_area: None,
+            sessions_area: None,
             terminal_area: None,
             dividers: Dividers::default(),
             drag: None,
@@ -1528,6 +1543,8 @@ impl App {
         self.dividers = viewports.dividers;
         self.menu_areas = viewports.menu;
         self.editor_area = viewports.editor;
+        self.files_area = viewports.files;
+        self.sessions_area = viewports.sessions;
         self.terminal_area = viewports.terminal_area;
         if let Some(size) = viewports.transcript {
             self.transcript_size = Some(size);
@@ -2320,6 +2337,15 @@ impl App {
             KeyCode::Char('g') if control => editor.go_to_line(),
             KeyCode::Char('n') => editor.step_match(true),
             KeyCode::Char('N') => editor.step_match(false),
+            // A selection is marked first and copied second, the same contract the
+            // terminal's copy mode keeps: a gesture that only moved a pointer does not
+            // put anything on a clipboard.
+            KeyCode::Char('y') => {
+                if let Some(text) = editor.yank() {
+                    self.clipboard = Some(text);
+                }
+            }
+            KeyCode::Esc => editor.clear_selection(),
             KeyCode::Char('s') if control => {
                 planned = Some(("P7-10", "saving through the daemon"));
             }
@@ -2377,13 +2403,13 @@ impl App {
         None
     }
 
-    /// Put the caret where a click in the editor's text landed.
+    /// Put the caret where a click in the editor's text landed, and anchor a drag.
     ///
     /// A click is a focus move as well as a caret: a pane you can click into is one
     /// you expect to be typing in. The numbers and the frame are not text, so a
     /// click on them is not a caret — it falls through to the divider drag, which
     /// is what a click on a pane's edge is for.
-    fn click_editor(&mut self, column: u16, row: u16) -> bool {
+    fn press_editor(&mut self, column: u16, row: u16) -> bool {
         let Some(area) = self.editor_area else {
             return false;
         };
@@ -2398,6 +2424,97 @@ impl App {
             );
         }
         true
+    }
+
+    /// Grow the editor's selection to where the pointer is.
+    ///
+    /// Counted from the pane's corner and clamped to it, the same way the terminal's
+    /// is: a drag that left the pane selects to the edge it left by rather than
+    /// dropping the gesture. The gutter is not text, so the cell the pointer is on
+    /// is the cell of the text, which starts after the numbers.
+    fn drag_editor(&mut self, column: u16, row: u16) {
+        let Some(area) = self.editor_area else {
+            return;
+        };
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        editor.extend_to(
+            usize::from(
+                row.saturating_sub(area.pane.y)
+                    .min(area.pane.height.saturating_sub(1)),
+            ),
+            usize::from(
+                column
+                    .saturating_sub(area.pane.x.saturating_add(area.gutter))
+                    .min(
+                        area.pane
+                            .width
+                            .saturating_sub(area.gutter)
+                            .saturating_sub(1),
+                    ),
+            ),
+        );
+    }
+
+    /// What letting go in the editor does: keep a selection, or leave a bare caret.
+    ///
+    /// A click that selected nothing leaves the caret where it was put and says
+    /// nothing, because that is all a click is. A real selection stays highlighted
+    /// and the status line names the two keys that finish it — nothing goes to the
+    /// clipboard until the person says `y`, the same contract the terminal's copy
+    /// mode keeps.
+    fn release_editor(&mut self) {
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        if !editor.has_selection() {
+            editor.clear_selection();
+            return;
+        }
+        let lines = editor.selected_lines();
+        self.status = format!("selected {lines} line(s) · y copies · Esc clears");
+    }
+
+    /// Focus the tree, on the row a click landed on.
+    ///
+    /// The tree is a list of one cell per row and a click is that row: the marker and
+    /// the indentation are drawn inside the row, so the row the pointer is over is the
+    /// row it means. A click past the last file is still the pane's — it takes the
+    /// keyboard and moves nothing.
+    fn click_files(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self.files_area else {
+            return false;
+        };
+        if !area.holds(column, row) {
+            return false;
+        }
+        self.set_focus(Focus::Files);
+        let index = usize::from(row.saturating_sub(area.y));
+        if index < self.files.len() {
+            self.file_selected = index;
+        }
+        true
+    }
+
+    /// Focus the session list, on the session a click landed on, and open it.
+    ///
+    /// [`None`] means the click was not the list's. A click that lands inside the
+    /// pane but past the last session takes the keyboard and opens nothing: the list
+    /// is a list of sessions, not a grid, and the empty rows under it are not one.
+    fn click_sessions(&mut self, column: u16, row: u16) -> Option<Option<Request>> {
+        let area = self.sessions_area?;
+        if !area.holds(column, row) {
+            return None;
+        }
+        self.set_focus(Focus::Sessions);
+        let index = usize::from(row.saturating_sub(area.y));
+        if index >= self.sessions.len() {
+            return Some(None);
+        }
+        self.selected = index;
+        self.chose = true;
+        Some(self.open_selected())
     }
 
     /// Scroll the pane under the wheel: `up` is towards the start of what it shows.
@@ -2629,14 +2746,28 @@ impl App {
                 if let Some(request) = self.click_menu(event.column, event.row) {
                     return request;
                 }
-                if self.click_editor(event.column, event.row) {
+                if self.press_editor(event.column, event.row) {
+                    self.drag = Some(Drag::Editor);
                     return None;
                 }
                 if self.click_terminal(event.column, event.row) {
                     self.drag = Some(Drag::Terminal);
                     return None;
                 }
-                self.drag = self.divider_at(event.column).map(Drag::Divider);
+                // A divider is a cell and a half wide, so it is looked for before
+                // the panes beside it: a click on the tree's inner edge is still a
+                // grab, which is what makes them easy to hit.
+                if let Some(divider) = self.divider_at(event.column) {
+                    self.drag = Some(Drag::Divider(divider));
+                    return None;
+                }
+                if self.click_files(event.column, event.row) {
+                    return None;
+                }
+                if let Some(request) = self.click_sessions(event.column, event.row) {
+                    return request;
+                }
+                self.drag = None;
                 None
             }
             // The wheel scrolls the pane under the pointer and nothing else: it is
@@ -2653,6 +2784,7 @@ impl App {
                 match self.drag {
                     Some(Drag::Divider(divider)) => self.drag_to(divider, event.column),
                     Some(Drag::Terminal) => self.drag_terminal(event.column, event.row),
+                    Some(Drag::Editor) => self.drag_editor(event.column, event.row),
                     None => {}
                 }
                 None
@@ -2665,8 +2797,10 @@ impl App {
                 None
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if self.drag == Some(Drag::Terminal) {
-                    self.release_terminal();
+                match self.drag {
+                    Some(Drag::Terminal) => self.release_terminal(),
+                    Some(Drag::Editor) => self.release_editor(),
+                    _ => {}
                 }
                 self.drag = None;
                 None
@@ -3860,6 +3994,8 @@ mod tests {
     /// The bar is the top row, and a list of `rows` hangs under the first title.
     fn with_menu_areas(app: &mut App, list: Option<MenuList>) {
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 120,
                 rows: 34,
@@ -4037,6 +4173,8 @@ mod tests {
     fn a_dragged_divider_is_a_width() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 140,
                 rows: 30,
@@ -4078,6 +4216,8 @@ mod tests {
     fn a_drag_cannot_make_a_pane_unusable() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 140,
                 rows: 30,
@@ -4132,6 +4272,8 @@ mod tests {
         editor.resize(20, 55);
         app.editor = Some(editor);
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 140,
                 rows: 40,
@@ -4172,7 +4314,149 @@ mod tests {
             "the cell under the pointer, counted from one"
         );
         assert_eq!(app.focus, Focus::Editor, "a click into a pane focuses it");
-        assert!(app.drag.is_none(), "the pane is not its own divider");
+        assert_eq!(
+            app.drag,
+            Some(Drag::Editor),
+            "the press is the anchor a drag grows from"
+        );
+    }
+
+    #[test]
+    fn a_drag_in_the_editor_selects_and_y_copies_it() {
+        let mut app = with_editor();
+        app.focus = Focus::Sessions;
+
+        // The text starts at column 30, so a drag from the first cell of the fifth
+        // screen row to the fourth cell of the row under it covers two lines — the
+        // blank line above them is why the drag does not start one row higher.
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 30, 4));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 34, 5));
+        app.handle_mouse(mouse_at(MouseEventKind::Up(MouseButton::Left), 34, 5));
+        assert!(app.drag.is_none(), "letting go lets go");
+
+        let editor = app.editor.as_ref().expect("a buffer");
+        let selection = editor.selection().expect("a run of characters");
+        let expected = editor.document().buffer().slice(selection);
+        assert!(!expected.is_empty());
+        assert!(app.status.contains("selected 2 line"), "{}", app.status);
+        assert!(
+            app.clipboard.is_none(),
+            "a selection is marked first; `y` is what takes it"
+        );
+
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(app.clipboard.as_deref(), Some(expected.as_str()));
+        assert_eq!(app.status, "copied 2 line(s)");
+        assert!(
+            !app.editor.as_ref().expect("a buffer").has_selection(),
+            "the copy ends the selection"
+        );
+    }
+
+    #[test]
+    fn a_click_in_the_editor_that_selected_nothing_leaves_a_bare_caret() {
+        let mut app = with_editor();
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 32, 5));
+        app.handle_mouse(mouse_at(MouseEventKind::Up(MouseButton::Left), 32, 5));
+        assert!(
+            !app.editor.as_ref().expect("a buffer").has_selection(),
+            "one cell is a click, not a run"
+        );
+        assert!(app.clipboard.is_none());
+        assert_eq!(app.focus, Focus::Editor, "and it is still a focus move");
+    }
+
+    #[test]
+    fn a_drag_leaving_the_editor_selects_to_the_edge_it_left_by() {
+        let mut app = with_editor();
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 30, 2));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 200, 200));
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert!(editor.has_selection(), "the gesture is not dropped");
+        assert_eq!(
+            Some(editor.caret().line),
+            editor.rows().last().map(|row| row.line),
+            "the head stopped at the last row the pane shows"
+        );
+    }
+
+    /// An app with the tree and the session list where the layout would draw them.
+    ///
+    /// The boxes are the cells inside their borders, which is what the mouse counts
+    /// against: the drawing is the only thing that knows them, so a test that clicks
+    /// a pane has to say where it was drawn.
+    fn with_panes() -> App {
+        let demo = acpilot_demo::demo();
+        let mut app = App::demo(&demo);
+        app.set_viewports(Viewports {
+            files: Some(PaneArea {
+                x: 1,
+                y: 2,
+                width: 24,
+                height: 20,
+            }),
+            sessions: Some(PaneArea {
+                x: 96,
+                y: 2,
+                width: 42,
+                height: 5,
+            }),
+            terminal: TerminalSize {
+                cols: 100,
+                rows: 30,
+            },
+            transcript: None,
+            dividers: Dividers {
+                tree: Some(25),
+                sidebar: Some(95),
+                left: 0,
+                right: 140,
+            },
+            menu: MenuAreas::default(),
+            editor: None,
+            terminal_area: None,
+        });
+        app
+    }
+
+    #[test]
+    fn a_click_in_the_tree_selects_that_row_and_takes_the_keyboard() {
+        let mut app = with_panes();
+        app.focus = Focus::Sessions;
+        assert!(app.files.len() > 2, "the demo seeds a tree");
+
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 5, 4));
+        assert_eq!(app.focus, Focus::Files);
+        assert_eq!(app.file_selected, 2, "the third row of the box");
+        assert!(app.drag.is_none(), "a click in a pane is not a drag");
+
+        // Inside the pane but past the last file: the keyboard moves, nothing else.
+        app.file_selected = 1;
+        let below = u16::try_from(app.files.len() + 2).expect("a small tree");
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 5, below));
+        assert_eq!(app.focus, Focus::Files);
+        assert_eq!(app.file_selected, 1, "the empty rows are not files");
+    }
+
+    #[test]
+    fn a_click_in_the_session_list_opens_that_session() {
+        let mut app = with_panes();
+        assert!(app.sessions.len() > 1, "the demo seeds sessions");
+
+        let request = app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 100, 3));
+        assert_eq!(app.selected, 1, "the second row of the box");
+        assert_eq!(app.focus, Focus::Sessions);
+        assert!(
+            matches!(&request, Some(Request::Select(id)) if id == "s2"),
+            "a click on a session asks the worker for that session: {request:?}"
+        );
+
+        // A click on the empty rows under the last session moves the keyboard and
+        // no session: the list is a list, not a grid.
+        app.selected = 1;
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 100, 5));
+        assert_eq!(app.focus, Focus::Sessions);
+        assert_eq!(app.selected, 1, "the empty rows are not sessions");
     }
 
     #[test]
@@ -4217,6 +4501,8 @@ mod tests {
         let printed: String = (0..60).map(|line| format!("line {line}\r\n")).collect();
         app.apply(Update::TerminalData(printed.into_bytes()));
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 100,
                 rows: 30,
@@ -4280,6 +4566,8 @@ mod tests {
     fn drawn_terminal() -> App {
         let mut app = with_terminal();
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 100,
                 rows: 30,
@@ -4851,6 +5139,8 @@ mod tests {
             })
             .collect();
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 100,
                 rows: 30,
@@ -5081,6 +5371,8 @@ mod tests {
         let mut app = transcript_app();
         app.handle_key(key(KeyCode::F(3)));
         app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
             terminal: TerminalSize {
                 cols: 100,
                 rows: 30,

@@ -61,10 +61,21 @@ const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 /// from the terminal itself, and a terminal that will not answer leaves the
 /// caller's theme on screen.
 ///
+/// `mouse` says whether the terminal's mouse reporting is turned on. Off is a real
+/// setting rather than a debug switch: mouse reporting costs the terminal's own
+/// click-drag selection, which some people would rather keep than have a menu bar
+/// answer a pointer.
+///
 /// The terminal is restored on the way out, including when a draw fails: a TUI
 /// that leaves the cursor hidden and the screen in raw mode is worse than the
 /// crash that caused it.
-pub fn run(daemon: &str, token: Option<&str>, theme: Theme, files: ThemeFiles) -> io::Result<()> {
+pub fn run(
+    daemon: &str,
+    token: Option<&str>,
+    theme: Theme,
+    files: ThemeFiles,
+    mouse: bool,
+) -> io::Result<()> {
     // Asked before the screen is taken over and before the loop owns the terminal's
     // input: from then on, nothing in this process can read a reply but the event
     // reader, so a second query is not a thing that can be added later.
@@ -95,7 +106,7 @@ pub fn run(daemon: &str, token: Option<&str>, theme: Theme, files: ThemeFiles) -
     watch_theme(files, changes);
     let mut app = App::new(daemon);
     app.set_theme(theme);
-    drive(app, worker, inbox)
+    drive(app, worker, inbox, mouse)
 }
 
 /// The settings files a running client re-reads when they change.
@@ -245,28 +256,39 @@ fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Up
 /// No daemon is contacted and nothing is read from disk, so the screen is the same
 /// on any machine — which is what makes it something to point at in a review. The
 /// desktop app draws the same world when it gets its shell (P10).
-pub fn run_demo(demo: acpilot_demo::Demo, theme: Theme) -> io::Result<()> {
+pub fn run_demo(demo: acpilot_demo::Demo, theme: Theme, mouse: bool) -> io::Result<()> {
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
     let worker = backend::spawn_demo(demo.clone(), updates);
     let mut app = App::demo(&demo);
     app.set_theme(theme);
-    drive(app, worker, inbox)
+    drive(app, worker, inbox, mouse)
 }
 
 /// Put the terminal in and out of raw mode around the loop.
 ///
-/// Mouse reporting is turned on for the same span, because the menu bar and the two
-/// dividers take the pointer. That costs the terminal's own click-drag selection: most terminals keep
-/// it on Shift-drag, and copy mode is the built-in answer.
-fn drive(app: App, worker: Worker, mut inbox: UnboundedReceiver<Update>) -> io::Result<()> {
+/// Mouse reporting is turned on for the same span, when it is wanted, because the
+/// menu bar, the panes and the two dividers take the pointer. That costs the
+/// terminal's own click-drag selection: most terminals keep it on Shift-drag, and
+/// copy mode is the built-in answer — and `--no-mouse` is there for someone who
+/// would rather have the terminal's.
+fn drive(
+    app: App,
+    worker: Worker,
+    mut inbox: UnboundedReceiver<Update>,
+    mouse: bool,
+) -> io::Result<()> {
     let mut terminal = ratatui::try_init()?;
     // A terminal that will not report the mouse is still a terminal: the keys and
     // the divider chords work, so a refused escape is not a reason to fail a launch.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    if mouse {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    }
     let result = event_loop(&mut terminal, app, worker, &mut inbox);
     // Reportings off before the screen is restored, so a failed session does not
     // leave the shell receiving mouse events it never asked for.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    if mouse {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }

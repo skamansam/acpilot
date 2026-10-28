@@ -90,7 +90,7 @@ permission card, the toast.
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | seeded rows; movement and collapsing work | P6-6 |
-| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret and a wheel that scrolls the view. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
+| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
 | Stats bar | seeded rows | P6-13 |
 
 ## Keys
@@ -100,9 +100,9 @@ permission card, the toast.
 | anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means |
-| files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` fuzzy open |
-| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `Ctrl-S` save · `i` insert · `F12` definition · click puts the caret · wheel scrolls the view |
-| sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel |
+| files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` fuzzy open · a click focuses the tree on that row |
+| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `y` copy the selection · `Esc` clear it · `Ctrl-S` save · `i` insert · `F12` definition · click puts the caret · drag selects · wheel scrolls the view |
+| sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel · a click focuses the list on that session and opens it |
 | prompt | `Enter` send · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
@@ -143,9 +143,46 @@ pane that quietly stopped listening. A drag that leaves the pane selects to the
 edge it left by rather than dropping the gesture, and a query being typed owns the
 keyboard, so a click does not move the selection out from under it.
 
+The editor answers a drag the same way, with one difference that matters: it yanks
+text, not cells. The selection is the `Document`'s own — an anchor and a head in
+character offsets — so what `y` copies is the buffer's slice of that range, tabs and
+wide glyphs included exactly once, and an edit or a motion collapses it because a
+selection that survived an edit would be a range pointing at text that moved. It is
+painted reversed, the mark the terminal's copy mode already uses, so no theme can
+hide it behind an accent colour. A click in the tree or the session list is also a
+focus move and a choice: the tree selects the row under the pointer, and the session
+list opens the session under it, because a list is a column of targets rather than a
+pane you click to get into.
+
+Mouse reporting costs the terminal's own click-drag selection, so `--no-mouse` turns
+it off and leaves the terminal's selection alone: every mouse action here has a key,
+and `Ctrl-←`/`Ctrl-→`, `F2` copy mode and a click's caret are reachable without a
+pointer. What the flag does not do is pretend: with no reporting there are no mouse
+events to ignore, so the panes simply never hear about a pointer.
+
 Every one of these has a keyboard path that is not the fallback but the first one —
 a trackpad is not available over SSH, and the key is what gets pressed on a bad
 connection.
+
+## The frame budget
+
+`crates/acpilot-tui/examples/frame.rs` draws the demo world — tree, editor with its
+own parse, session list, transcript, composer, both footer rows — into a
+`TestBackend` at a size given on the command line, hands each frame's viewports back
+the way the event loop does, and prints the mean, p95 and worst of the frames after
+ten warm-up ones:
+
+```bash
+cargo run --release -p acpilot-tui --example frame -- 200 60 500
+```
+
+At 200×60, which is the size P6-12 budgets for: **mean 0.48 ms, p95 0.73–0.76 ms,
+worst 2.7–3.5 ms** across runs — under a fifth of the 16.7 ms a 60 fps frame has, and
+that is before a tty is written to. A debug build of the same run is 9.2 ms mean and
+14.9 ms worst, which is worth knowing twice: unoptimised code is nineteen times
+slower, and it is still inside the budget. What this measures is the drawing — the
+layout, the cells, every styled span — and not the daemon, the event poll or the
+OSC 52 write; those are the loop's, and the loop's cost at rest is the 120 ms tick.
 
 The gutter's markers are git's answer, not the buffer's: `acpilot-git` parses the
 same patch the permission card shows, so the `~` beside a line and the hunk in the

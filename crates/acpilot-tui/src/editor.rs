@@ -34,7 +34,8 @@ use acpilot_git::{LineChange, LineChanges};
 use acpilot_extensions::theme::SyntaxToken;
 use acpilot_text::highlight::{Grammars, Highlights, Span};
 use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
-use acpilot_text::{Document, LineColumn};
+use acpilot_text::{Document, LineColumn, Selection, Selections};
+use std::ops::Range;
 
 /// Which prompt is up, and what has been typed into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +69,8 @@ pub enum State {
     CurrentMatch,
     /// One of the two brackets under the caret.
     Bracket,
+    /// Covered by a selection a drag made.
+    Selected,
 }
 
 /// One run of characters painted the same way.
@@ -106,6 +109,12 @@ pub struct EditorPane {
     message: String,
     rows: Vec<Row>,
     bracket: Option<(usize, usize)>,
+    /// Where a drag started, while one is in progress.
+    ///
+    /// Held as an offset rather than as a `Selection` because the selection itself
+    /// lives in the document, where an edit would move it: the anchor is the one end
+    /// that must not move, and the caret is the other.
+    anchor: Option<usize>,
 }
 
 /// A pane's debug shape: the file, the caret and the window.
@@ -153,6 +162,7 @@ impl EditorPane {
             message: String::new(),
             rows: Vec::new(),
             bracket: None,
+            anchor: None,
         };
         let at = pane.offset(caret);
         pane.document.set_caret(at);
@@ -342,13 +352,17 @@ impl EditorPane {
         self.rows = self.viewport.visible(self.document.buffer());
     }
 
-    /// Put the caret where a click landed.
+    /// Put the caret where a click landed, and anchor a selection there.
     ///
     /// `row` and `cell` are in the pane's own coordinates — the lines the viewport
     /// is showing and the cells the text was drawn in — because the border and the
     /// gutter are the pane's furniture and a caret placed from the window's
     /// coordinates is off by both. The column is the character under the cell, so
     /// a click inside a tab or a wide glyph lands on its left edge.
+    ///
+    /// A press is also the anchor a drag grows from, so the selection this starts is
+    /// empty until the pointer moves: a click that selected nothing leaves no
+    /// highlight behind, and a drag that wandered off resume where it began.
     ///
     /// Ignored while a prompt is up: the box has the keyboard, and a click that
     /// moved the caret out from under the query being typed would be a pane
@@ -357,6 +371,96 @@ impl EditorPane {
         if self.prompt.is_some() {
             return;
         }
+        let at = self.offset_at(row, cell);
+        self.anchor = Some(at);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(at, at)], 0));
+        self.rebuild();
+        self.message.clear();
+    }
+
+    /// Grow the selection to the cell under the pointer.
+    ///
+    /// The head follows the pointer and the anchor stays where the press put it, so
+    /// a drag can go back and forth over the same line and the selection follows it
+    /// rather than accumulating. A drag that has left the pane is clamped to the edge
+    /// it left by, which is what a pointer that has gone somewhere else should do.
+    pub fn extend_to(&mut self, row: usize, cell: usize) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        let at = self.offset_at(row, cell);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, at)], 0));
+        self.rebuild();
+    }
+
+    /// The characters a drag selected, or nothing when it selected none.
+    #[must_use]
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let range = self.document.selections().primary().range();
+        (!range.is_empty()).then_some(range)
+    }
+
+    /// Whether a drag is holding a run of characters.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        self.selection().is_some()
+    }
+
+    /// How many lines the selection touches, counting both ends.
+    #[must_use]
+    pub fn selected_lines(&self) -> usize {
+        let Some(range) = self.selection() else {
+            return 0;
+        };
+        let buffer = self.document.buffer();
+        let start = buffer.line_column(range.start).line;
+        let mut end = buffer.line_column(range.end).line;
+        // A selection that stops at the very start of a line does not touch that
+        // line: the newline before it is the last character selected, and a newline
+        // belongs to the line above it.
+        if end > start && buffer.line_range(end).start == range.end {
+            end -= 1;
+        }
+        end - start + 1
+    }
+
+    /// Take the selection off the screen, leaving the caret where the head was.
+    pub fn clear_selection(&mut self) {
+        if self.anchor.take().is_none() && self.selection().is_none() {
+            return;
+        }
+        let head = self.caret_offset();
+        self.document.set_caret(head);
+        self.rebuild();
+        self.message.clear();
+    }
+
+    /// Copy what a drag selected, and say how much went.
+    ///
+    /// The text is the buffer's own slice, so the characters copied are the ones the
+    /// frame painted — no cell arithmetic, no reconstruction from tabs and widths.
+    /// The selection is dropped afterwards: what was copied is on the clipboard, and
+    /// a highlight that stays after the copy is a pane still asking a question.
+    pub fn yank(&mut self) -> Option<String> {
+        let range = self.selection()?;
+        let text = self.document.buffer().slice(range);
+        let lines = self.selected_lines();
+        self.anchor = None;
+        let head = self.caret_offset();
+        self.document.set_caret(head);
+        self.rebuild();
+        self.message = format!("copied {lines} line(s)");
+        Some(text)
+    }
+
+    /// The character offset a pane cell names.
+    ///
+    /// One place, because a click and a drag land by the same arithmetic: the row is
+    /// counted from the top of the window, and the cell from the left of the text
+    /// (the horizontal scroll is the viewport's, not the pane's).
+    fn offset_at(&self, row: usize, cell: usize) -> usize {
         let lines = self.document.buffer().line_count();
         let line = (self.viewport.top() + row).min(lines.saturating_sub(1));
         let cell = self.viewport.left() + cell;
@@ -366,8 +470,7 @@ impl EditorPane {
             cell,
             self.viewport.tab_width(),
         );
-        self.place(LineColumn::new(line, column));
-        self.message.clear();
+        self.offset(LineColumn::new(line, column))
     }
 
     /// Put the caret at the start or the end of its line.
@@ -378,8 +481,12 @@ impl EditorPane {
     }
 
     /// Put the caret somewhere and show it.
+    ///
+    /// A motion collapses a selection rather than extending it: dragging is how this
+    /// pane selects, and Shift-extension is the keymap layer's to add (P6-5).
     fn place(&mut self, at: LineColumn) {
         let offset = self.offset(at);
+        self.anchor = None;
         self.document.set_caret(offset);
         self.rebuild();
     }
@@ -543,11 +650,12 @@ impl EditorPane {
         let spans: Vec<Span> = highlights.spans(buffer, range).to_vec();
         let bracket = self.bracket;
         let find = &self.find;
+        let selection = self.selection();
         self.rows
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &spans, bracket, find),
+                runs: runs(row, &spans, bracket, find, selection.as_ref()),
                 width: row.width(),
             })
             .collect()
@@ -557,11 +665,12 @@ impl EditorPane {
     fn plain(&self) -> Vec<PaintedRow> {
         let bracket = self.bracket;
         let find = &self.find;
+        let selection = self.selection();
         self.rows
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &[], bracket, find),
+                runs: runs(row, &[], bracket, find, selection.as_ref()),
                 width: row.width(),
             })
             .collect()
@@ -569,10 +678,16 @@ impl EditorPane {
 }
 
 /// One row's cells, joined into runs of one token and one state.
-fn runs(row: &Row, spans: &[Span], bracket: Option<(usize, usize)>, find: &Find) -> Vec<Run> {
+fn runs(
+    row: &Row,
+    spans: &[Span],
+    bracket: Option<(usize, usize)>,
+    find: &Find,
+    selection: Option<&Range<usize>>,
+) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::with_capacity(row.cells.len());
     for cell in &row.cells {
-        let (token, state) = appearance(cell, spans, bracket, find);
+        let (token, state) = appearance(cell, spans, bracket, find, selection);
         match runs.last_mut() {
             Some(run) if run.token == token && run.state == state => run.text.push(cell.ch),
             _ => runs.push(Run {
@@ -591,7 +706,11 @@ fn appearance(
     spans: &[Span],
     bracket: Option<(usize, usize)>,
     find: &Find,
+    selection: Option<&Range<usize>>,
 ) -> (Option<SyntaxToken>, State) {
+    // A blank past the end of a line belongs to no character, so it cannot be part
+    // of a selection: dragging over the end of a line copies the line's text, which
+    // is what a selection means.
     let Some(at) = cell.at else {
         return (None, State::Plain);
     };
@@ -602,7 +721,9 @@ fn appearance(
             .filter(|span| span.range.start <= at)
             .map(|span| span.token)
     };
-    let state = if bracket.is_some_and(|(open, close)| at == open || at == close) {
+    let state = if selection.is_some_and(|range| range.contains(&at)) {
+        State::Selected
+    } else if bracket.is_some_and(|(open, close)| at == open || at == close) {
         State::Bracket
     } else {
         match find.hit(at) {
@@ -763,6 +884,97 @@ mod tests {
         assert!(left > 0, "the caret scrolled the window");
         pane.click(0, 2);
         assert_eq!(pane.caret(), LineColumn::new(0, left + 2));
+    }
+
+    #[test]
+    fn a_drag_selects_the_run_it_covered_and_y_takes_it() {
+        let mut pane = pane(&["one two", "three"], (0, 0));
+        pane.click(0, 0);
+        pane.extend_to(0, 3);
+        assert_eq!(pane.selection(), Some(0..3), "one word, no newline");
+        assert_eq!(pane.selected_lines(), 1);
+
+        let copied = pane.yank().expect("a selection to copy");
+        assert_eq!(copied, "one");
+        assert!(!pane.has_selection(), "the copy is the end of the question");
+        assert_eq!(pane.message(), "copied 1 line(s)");
+        assert_eq!(pane.caret(), LineColumn::new(0, 3), "the caret is the head");
+    }
+
+    #[test]
+    fn a_selection_across_lines_copies_both_of_them() {
+        let mut pane = pane(&["one two", "three"], (0, 0));
+        pane.click(0, 4);
+        pane.extend_to(1, 2);
+        assert_eq!(pane.selection(), Some(4..10));
+        assert_eq!(pane.selected_lines(), 2);
+        assert_eq!(pane.yank().as_deref(), Some("two\nth"));
+        assert_eq!(pane.message(), "copied 2 line(s)");
+    }
+
+    #[test]
+    fn a_selection_that_stops_at_a_line_start_does_not_count_that_line() {
+        let mut pane = pane(&["one", "two", "three"], (0, 0));
+        pane.click(0, 0);
+        // The end of the first line is the start of the second, and the newline
+        // between them is the last character selected.
+        pane.extend_to(1, 0);
+        assert_eq!(pane.selected_lines(), 1);
+        assert_eq!(pane.yank().as_deref(), Some("one\n"));
+    }
+
+    #[test]
+    fn a_drag_back_up_keeps_the_anchor_and_the_selection_shrinks() {
+        // A pointer that goes back over what it just selected deselects it, which is
+        // the difference between a selection and a smear.
+        let mut pane = pane(&["abcdef"], (0, 0));
+        pane.click(0, 4);
+        pane.extend_to(0, 1);
+        assert_eq!(pane.selection(), Some(1..4));
+        assert_eq!(pane.yank().as_deref(), Some("bcd"));
+    }
+
+    #[test]
+    fn a_click_that_selected_nothing_leaves_no_selection() {
+        let mut pane = pane(&["one two"], (0, 0));
+        pane.click(0, 2);
+        assert!(!pane.has_selection(), "a press is not a selection yet");
+        pane.clear_selection();
+        assert_eq!(pane.caret(), LineColumn::new(0, 2), "and the caret stays");
+    }
+
+    #[test]
+    fn a_drag_past_the_end_of_the_pane_selects_to_the_edge() {
+        let mut pane = pane(&["one", "two", "three"], (0, 0));
+        pane.click(0, 0);
+        pane.extend_to(9, 99);
+        assert_eq!(
+            pane.selection(),
+            Some(0..13),
+            "the last line's text is the edge"
+        );
+        assert!(pane.cursor().is_some(), "and the head is on screen");
+    }
+
+    #[test]
+    fn a_selected_cell_is_painted_as_selected() {
+        let mut pane = pane(&["let x = 1;", "more"], (0, 0));
+        pane.click(0, 0);
+        pane.extend_to(0, 2);
+        let painted = pane.paint();
+        let first = &painted[0];
+        let states: Vec<State> = first.runs.iter().map(|run| run.state).collect();
+        assert_eq!(states.first(), Some(&State::Selected), "{states:?}");
+        assert!(
+            states.contains(&State::Plain),
+            "only the selection is marked: {states:?}"
+        );
+        let joined: String = first.runs.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(joined, "let x = 1;", "painting never loses a character");
+        assert!(
+            painted[1].runs.iter().all(|run| run.state == State::Plain),
+            "the line after the selection is untouched"
+        );
     }
 
     #[test]

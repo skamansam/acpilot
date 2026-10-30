@@ -40,9 +40,14 @@ is why the health check passes `--unix-socket`; on Windows the daemon listens on
 exception, so that there is somewhere to paste the token: open it, paste, and it
 fetches the contract and sends the header on every call.
 
-Pass `--no-spawn` when you are running the daemon yourself, under a debugger or
-with `RUST_LOG` set: the spawn path captures its output in
-`$XDG_RUNTIME_DIR/acpilot/daemon-*.log` instead of your terminal.
+`acpilot tui` needs no daemon at all: when `GET /v1/health` goes unanswered it runs
+the daemon's own core in the same process (P6-11), on a loopback port the operating
+system picks, with a token generated for that process — nothing is spawned, nothing is
+written, and the sessions end with the window. A daemon that *is* running is always
+attached to first, which is how sessions outlive the client. Pass `--no-spawn` when you
+are running the daemon yourself, under a debugger or with `RUST_LOG` set: the flag now
+means "attach or fail", so your `acpilotd` is the one that serves the window and its
+output is wherever you started it.
 
 Every command in both blocks is a program rather than a shell builtin, so
 the only difference between them is the HTTP client's name — nothing here

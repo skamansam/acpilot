@@ -81,8 +81,8 @@ client of the same API as everything else, so the editor phase (P6) grows this
 window rather than a second engine.
 
 ```bash
-$ acpilot tui                       # the first client starts the daemon
-$ acpilot tui --no-spawn            # fail instead: tests, CI, a service manager
+$ acpilot tui                       # attach to a daemon, or host the core in this process
+$ acpilot tui --no-spawn            # attach or fail: tests, CI, a service manager
 $ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
 $ acpilot tui --no-mouse            # the terminal keeps its own drag-to-select
 ```

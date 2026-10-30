@@ -72,6 +72,17 @@ The order, for `acpilot tui`, `acpilot gui`, and eventually every command:
 depend on `PATH`: the client looks for `acpilotd` next to its own executable and
 reports the exact path it tried when it cannot find it.
 
+> **Amended 2026-10-29 (P6-11).** Step 3 no longer runs for `acpilot tui`. When the
+> probe goes unanswered, the daemon's own core runs inside the client's process —
+> same router, same auth, on a loopback port the OS picks, with a token generated for
+> that process — so the command needs no `acpilotd` and starts nothing. A daemon that
+> answers is still attached to first, which is what keeps sessions outliving the
+> window, and `--no-spawn` still means "do not start one" (now including this one).
+> An endpoint named with `--api-url` is never stood in for: the embedded listener
+> cannot occupy an address the caller chose. Spawning remains as library code with no
+> product caller until the desktop window or a `daemon start` verb says what it is
+> for; see `TODO.md` P6-11.
+
 ### 3. Unix socket by default; TCP loopback is opt-in and authenticated
 
 This settles D4: **HTTP over a unix socket, one protocol everywhere**. A second

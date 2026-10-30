@@ -56,11 +56,15 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// Open the terminal UI against a running daemon.
+    /// Open the terminal UI against a running daemon, or run one here.
     ///
     /// The TUI is a client, not a second engine: it opens sessions, sends
     /// prompts and answers permissions over the same API the CLI and the GUI
-    /// use, so nothing it does can drift from what the daemon records.
+    /// use, so nothing it does can drift from what the daemon records. When no
+    /// daemon answers, the daemon's own core runs inside this process (P6-11), so
+    /// the command needs nothing installed and nothing started — with the trade
+    /// that the sessions it opens end with the window. A daemon that is running
+    /// is always attached to first, and its sessions outlive every client.
     Tui {
         /// A directory, or a file inside one. Defaults to this directory.
         ///
@@ -78,22 +82,22 @@ pub enum Command {
         /// Windows), which is where `acpilotd` listens when given no flags.
         #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
         api_url: Option<String>,
-        /// Fail if no daemon is running instead of starting one.
+        /// Fail if no daemon is running instead of running one in this process.
         ///
         /// For tests, CI and anyone debugging a startup problem: the error is
-        /// more useful than a daemon this client started out of sight.
+        /// more useful than a daemon this client started without being asked.
         #[arg(long)]
         no_spawn: bool,
-        /// Profile directory the spawned daemon serves.
+        /// Profile directory the daemon serves.
         ///
-        /// Only used when this command has to start the daemon; a daemon that is
+        /// Only used when this command runs the daemon itself; a daemon that is
         /// already running keeps the profile it was started with, and naming a
         /// different one here is an error rather than a silent mismatch. Without
         /// it, the profile named by the project's settings is used, so the usual
         /// launch names no profile at all.
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
-        /// Workspace root the spawned daemon serves. Defaults to this directory.
+        /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
         /// Bearer token for a daemon on a TCP endpoint.
@@ -333,12 +337,13 @@ struct TuiFlags {
     mouse: bool,
 }
 
-/// Open the TUI, starting the daemon if this is the first client (ADR 0004).
+/// Open the TUI, attaching to a daemon if one is running and hosting one if not
+/// (P6-11).
 ///
-/// The daemon's flags are here because they only matter on the spawn path. A
-/// daemon that is already running was started with its own, and pretending
-/// otherwise would show one project's sessions under another's name — so a
-/// mismatch is refused rather than ignored.
+/// The daemon's flags are here because they only matter on the launch path this
+/// command owns. A daemon that is already running was started with its own, and
+/// pretending otherwise would show one project's sessions under another's name —
+/// so a mismatch is refused rather than ignored.
 fn run_tui(flags: TuiFlags) -> u8 {
     let TuiFlags {
         path,
@@ -416,20 +421,22 @@ fn run_tui(flags: TuiFlags) -> u8 {
         },
     };
     let implied = profile.is_some();
-    let mut daemon_args = vec!["--workspace".to_owned(), workspace.display().to_string()];
-    if let Some(profile) = &profile {
-        daemon_args.push("--profile".to_owned());
-        daemon_args.push(profile.display().to_string());
-    }
 
     let token = token.or_else(local_token);
     let options = acpilot_client::daemon::Options {
         endpoint: api_url,
         no_spawn,
         token: token.clone(),
-        daemon_args,
+        // Unused here: this path never spawns a process — when no daemon answers,
+        // the core below runs in this one. The field belongs to `ensure`, which is
+        // what starts `acpilotd` for a caller that wants a separate process.
+        daemon_args: Vec::new(),
     };
-    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+    let in_process = InProcess {
+        profile: profile.clone(),
+        workspace: workspace.clone(),
+    };
+    let running = match acpilot_client::daemon::ensure_or_embed_blocking(&options, &in_process) {
         Ok(running) => running,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
@@ -437,7 +444,10 @@ fn run_tui(flags: TuiFlags) -> u8 {
         }
     };
 
-    if !running.spawned() {
+    // Only a daemon someone else is holding can disagree about the profile or the
+    // workspace: one this command started — in a process before, in this one now —
+    // was given both just above.
+    if running.attached() {
         if implied {
             eprintln!(
                 "acpilot tui: a daemon is already running at {}; it serves the profile it was \
@@ -468,6 +478,9 @@ fn run_tui(flags: TuiFlags) -> u8 {
         // the screen: one reader of one terminal.
         terminal: None,
     };
+    // The token the launch settled on, which for an embedded daemon is the one it
+    // generated — the caller could not have had it before the launch.
+    let token = running.token().map(str::to_owned);
     match acpilot_tui::run(
         &running.endpoint,
         token.as_deref(),
@@ -480,6 +493,46 @@ fn run_tui(flags: TuiFlags) -> u8 {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
         }
+    }
+}
+
+/// The daemon this binary can run without a process (P6-11).
+///
+/// `acpilotd --profile DIR --workspace DIR` is the same launch written as flags;
+/// this carries the two directories that launch would have passed, so embedded mode
+/// serves exactly what a daemon started for this command would have served. It is a
+/// value rather than a closure because the state is built only when nothing
+/// answered — a run against a real daemon must not read a profile twice.
+struct InProcess {
+    /// The profile the daemon would have been told to serve.
+    profile: Option<PathBuf>,
+    /// The workspace root it would have been given.
+    workspace: PathBuf,
+}
+
+impl acpilot_client::daemon::Embedded for InProcess {
+    fn start(
+        &self,
+    ) -> Result<acpilot_client::daemon::Started, acpilot_client::daemon::ConnectError> {
+        use acpilot_client::daemon::{ConnectError, Started};
+
+        // The same startup the `acpilotd` binary runs, down to the terminal reaper:
+        // a daemon that forgot one of them would behave differently depending on
+        // who started it, which is the fork this task exists to prevent.
+        let state = acpilotd::startup(self.profile.as_deref(), &self.workspace).map_err(|why| {
+            ConnectError::Embedded {
+                why: why.to_string(),
+            }
+        })?;
+        let listener =
+            acpilotd::embedded::Embedded::start(state).map_err(|why| ConnectError::Embedded {
+                why: why.to_string(),
+            })?;
+        Ok(Started::new(
+            listener.endpoint().to_owned(),
+            listener.token().to_owned(),
+            listener,
+        ))
     }
 }
 

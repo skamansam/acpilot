@@ -53,14 +53,36 @@ const OPEN: [&str; 3] = ["/docs", "/app", "/app/palette/events"];
 /// is already shut.
 pub fn protect(router: Router, path: impl Into<PathBuf>) -> Router {
     router.layer(middleware::from_fn_with_state(
-        Arc::new(path.into()),
+        Arc::new(Expected::File(path.into())),
         require,
     ))
 }
 
+/// Wrap `router` so every request needs `token`, held in memory.
+///
+/// For a listener that is not a service: the embedded daemon (P6-11) generates
+/// its token in the process that embedded it, so there is no file to read and
+/// nothing to rotate — the listener ends when that process does. Which paths stay
+/// open, and what a refusal looks like, are the same middleware's answers.
+pub fn protect_with_token(router: Router, token: String) -> Router {
+    router.layer(middleware::from_fn_with_state(
+        Arc::new(Expected::Token(token)),
+        require,
+    ))
+}
+
+/// Where a request's answer to "may I" comes from.
+#[derive(Debug)]
+enum Expected {
+    /// A file, read per request so a rotation needs no restart.
+    File(PathBuf),
+    /// The secret this process generated, for a listener that outlives nothing.
+    Token(String),
+}
+
 /// Reject a request that does not carry the token.
 async fn require(
-    State(path): State<Arc<PathBuf>>,
+    State(expected): State<Arc<Expected>>,
     request: Request,
     next: Next,
 ) -> Result<Response, Response> {
@@ -78,11 +100,14 @@ async fn require(
         .map(|(_, token)| token.trim());
     // A file that cannot be read is "no token", not "any token": a daemon whose
     // runtime directory was removed under it must refuse rather than accept.
-    let expected = tokio::fs::read_to_string(&*path)
-        .await
-        .ok()
-        .map(|text| text.trim().to_owned())
-        .filter(|token| !token.is_empty());
+    let expected = match &*expected {
+        Expected::File(path) => tokio::fs::read_to_string(path)
+            .await
+            .ok()
+            .map(|text| text.trim().to_owned())
+            .filter(|token| !token.is_empty()),
+        Expected::Token(token) => Some(token.clone()),
+    };
     match (presented, expected) {
         (Some(presented), Some(expected)) if acpilot_host::token::same(presented, &expected) => {
             Ok(next.run(request).await)

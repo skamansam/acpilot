@@ -76,6 +76,12 @@ pub enum Origin {
         /// The daemon's process id, for a log line or a status message.
         pid: u32,
     },
+    /// This client is serving it from its own process (P6-11).
+    ///
+    /// No process id, because there is no second process: the sessions this
+    /// daemon holds end with the client that embedded it, which is the trade
+    /// embedded mode makes for needing nothing installed.
+    Embedded,
 }
 
 /// What to connect to, and whether starting it is allowed.
@@ -113,6 +119,12 @@ pub struct Running {
     pub workspace: Option<String>,
     /// Whether this call started the daemon.
     pub origin: Origin,
+    /// The token the endpoint requires — see [`Self::token`].
+    token: Option<String>,
+    /// The in-process listener, when this launch started one: dropping the
+    /// connection stops it, because nothing else is keeping it up. Held, never
+    /// read — the handle's only job is to live and then stop.
+    _embedded: Option<Started>,
 }
 
 impl Running {
@@ -121,14 +133,102 @@ impl Running {
     pub fn spawned(&self) -> bool {
         matches!(self.origin, Origin::Spawned { .. })
     }
+
+    /// Whether this launch found a daemon already running and attached to it.
+    ///
+    /// The distinction a caller needs before it complains about what the daemon
+    /// serves: one this client started, or one it runs itself, serves what it was
+    /// asked for, while an existing one keeps the arguments it had.
+    #[must_use]
+    pub fn attached(&self) -> bool {
+        matches!(self.origin, Origin::Existing)
+    }
+
+    /// Whether this client hosts the daemon as well as talking to it (P6-11).
+    #[must_use]
+    pub fn embedded(&self) -> bool {
+        matches!(self.origin, Origin::Embedded)
+    }
+
+    /// The token the endpoint requires.
+    ///
+    /// Not always the one the caller passed: an embedded listener generates its
+    /// own, and a caller that had to know it could not have embedded at all.
+    #[must_use]
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+}
+
+/// A daemon started inside the client's own process (P6-11).
+///
+/// The trait is the whole of the difference between the two launches: [`ensure`]
+/// attaches to a daemon or spawns one, and [`ensure_or_embed`] runs the core the
+/// caller already linked. Both answer with a [`Running`] holding the same
+/// [`Client`], built from the same wire types, so nothing after a launch can tell
+/// which one it got — which is what keeps embedded mode from becoming a second
+/// client with its own bugs.
+pub trait Embedded: Send + Sync {
+    /// Start the daemon and say where it listens.
+    ///
+    /// Called only when nothing answered at the endpoint and the caller allowed a
+    /// daemon to be started. The listener is expected to be bound by the time this
+    /// returns: the caller connects immediately, and a readiness wait here would
+    /// be a second one for a daemon in the same process.
+    ///
+    /// # Errors
+    ///
+    /// The state could not be built or the listener could not be bound; the
+    /// message is what a person would have read from `acpilotd` on the same file.
+    fn start(&self) -> Result<Started, ConnectError>;
+}
+
+/// An embedded daemon that is up: where it listens, and what keeps it up.
+pub struct Started {
+    /// The URL it listens on, as the listener reported it.
+    pub endpoint: String,
+    /// The token every request to that endpoint must carry.
+    pub token: String,
+    /// The listener itself; dropped with the connection, which stops it.
+    _keep_alive: Box<dyn std::any::Any + Send>,
+}
+
+impl Started {
+    /// Wrap a listener that is already serving.
+    ///
+    /// `keep_alive` is the host's own handle, whatever it is: this crate cannot
+    /// know how a listener stops, only that it must live as long as the client's
+    /// connection does.
+    #[must_use]
+    pub fn new(
+        endpoint: impl Into<String>,
+        token: impl Into<String>,
+        keep_alive: impl std::any::Any + Send,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            token: token.into(),
+            _keep_alive: Box::new(keep_alive),
+        }
+    }
+}
+
+impl std::fmt::Debug for Started {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Started")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a daemon could not be reached or started.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
-    /// Nothing is listening and spawning was not allowed.
+    /// Nothing is listening and `--no-spawn` forbade starting one, in a process
+    /// or in this one.
     #[error(
-        "no daemon at {endpoint} and spawning is disabled; start `acpilotd` yourself or drop --no-spawn"
+        "no daemon at {endpoint} and --no-spawn was given; start `acpilotd` yourself or drop it"
     )]
     NotRunning {
         /// The endpoint that was probed.
@@ -155,6 +255,25 @@ pub enum ConnectError {
         daemon: String,
         /// This build's version.
         client: String,
+    },
+
+    /// The endpoint was named and nothing answers there, so there is nothing to
+    /// embed: an embedded daemon listens where the operating system chose, and
+    /// connecting somewhere the caller did not ask for is worse than failing.
+    #[error(
+        "no daemon at {endpoint}; the endpoint was named, so this client will not run one \
+         in its own process — start `acpilotd` there, or drop --api-url to let it"
+    )]
+    NamedDown {
+        /// The endpoint that was probed.
+        endpoint: String,
+    },
+
+    /// An embedded daemon could not be started.
+    #[error("cannot start a daemon in this process: {why}")]
+    Embedded {
+        /// What the host said, in its own words.
+        why: String,
     },
 
     /// The daemon executable could not be found.
@@ -230,6 +349,8 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
                 version: health.version,
                 workspace: health.workspace,
                 origin: Origin::Existing,
+                token: options.token.clone(),
+                _embedded: None,
             });
         }
         // Refused is not "not running": starting a second daemon would leave the
@@ -268,6 +389,8 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
                         version: health.version,
                         workspace: health.workspace,
                         origin: Origin::Existing,
+                        token: options.token.clone(),
+                        _embedded: None,
                     });
                 }
                 Probe::Refused => return Err(refused(&endpoint)),
@@ -290,6 +413,128 @@ pub async fn ensure(options: &Options) -> Result<Running, ConnectError> {
             Some(child) => Origin::Spawned { pid: child.id() },
             None => Origin::Existing,
         },
+        token: options.token.clone(),
+        _embedded: None,
+    })
+}
+
+/// Connect to the daemon, running the core in this process when nothing answers.
+///
+/// P6-11's embedded mode: `acpilot tui` on a machine with no daemon is a client,
+/// not a failure and not a process it started out of sight. The rules that decide
+/// are the ones [`ensure`] already had, minus the spawn:
+///
+/// * a daemon that answers is attached to, whatever this caller would have run;
+/// * a token refusal is reported, not retried against a second listener;
+/// * `--no-spawn` still means "start nothing", now including this process;
+/// * an endpoint that was *named* is never stood in for. An embedded listener
+///   takes the port the operating system gives it, so embedding under
+///   `--api-url` would connect somewhere other than what the person typed.
+///
+/// # Errors
+///
+/// See [`ConnectError`], plus [`ConnectError::Embedded`] when the host's listener
+/// could not start.
+pub async fn ensure_or_embed(
+    options: &Options,
+    embedded: &dyn Embedded,
+) -> Result<Running, ConnectError> {
+    let environment = std::env::var(ENV_ENDPOINT).ok();
+    let endpoint = resolve_endpoint(options.endpoint.as_deref(), environment.as_deref());
+    let named = options.endpoint.is_some() || environment.is_some();
+    ensure_or_embed_at(options, endpoint, named, embedded).await
+}
+
+/// [`ensure_or_embed`] with the endpoint already resolved.
+///
+/// Separate so the decision — attach, refuse, or stand in for the default — is
+/// testable without touching the process environment, which is global state and
+/// not safe to set in parallel tests. `named` is whether a person or an
+/// environment variable chose the endpoint, which is what forbids standing in.
+async fn ensure_or_embed_at(
+    options: &Options,
+    endpoint: String,
+    named: bool,
+    embedded: &dyn Embedded,
+) -> Result<Running, ConnectError> {
+    let client = match &options.token {
+        Some(token) => Client::with_token(&endpoint, token),
+        None => Client::new(&endpoint),
+    };
+
+    match probe(&client).await {
+        Probe::Up(health) => {
+            check_version(&endpoint, &health.version)?;
+            return Ok(Running {
+                client,
+                endpoint,
+                version: health.version,
+                workspace: health.workspace,
+                origin: Origin::Existing,
+                token: options.token.clone(),
+                _embedded: None,
+            });
+        }
+        Probe::Refused => return Err(refused(&endpoint)),
+        Probe::Down => {}
+    }
+
+    if options.no_spawn {
+        return Err(ConnectError::NotRunning { endpoint });
+    }
+    if named {
+        return Err(ConnectError::NamedDown { endpoint });
+    }
+
+    // Nothing answered, and nothing was named: the daemon is this process.
+    let started = embedded.start()?;
+    let client = Client::with_token(&started.endpoint, &started.token);
+    let health = wait_embedded(&client, &started.endpoint).await?;
+    check_version(&started.endpoint, &health.version)?;
+    Ok(Running {
+        client,
+        endpoint: started.endpoint.clone(),
+        version: health.version,
+        workspace: health.workspace,
+        origin: Origin::Embedded,
+        token: Some(started.token.clone()),
+        _embedded: Some(started),
+    })
+}
+
+/// [`ensure_or_embed`] for a caller that is not async, such as the CLI's argument
+/// dispatch.
+///
+/// # Errors
+///
+/// The same failures as [`ensure_or_embed`], plus a runtime that could not be
+/// built.
+pub fn ensure_or_embed_blocking(
+    options: &Options,
+    embedded: &dyn Embedded,
+) -> Result<Running, ConnectError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| ConnectError::Runtime(error.to_string()))?;
+    runtime.block_on(ensure_or_embed(options, embedded))
+}
+
+/// Wait for an embedded listener to answer `/v1/health`.
+///
+/// The listener is bound before the host returned, so the first call is expected to
+/// succeed. The loop covers the moment between a task being spawned and its first
+/// poll, which is not a failure and must not be reported as one.
+async fn wait_embedded(client: &Client, endpoint: &str) -> Result<crate::Health, ConnectError> {
+    let attempts = (READY.as_millis() / POLL.as_millis()).max(1);
+    for _ in 0..attempts {
+        match client.health().await {
+            Ok(health) => return Ok(health),
+            Err(_) => tokio::time::sleep(POLL).await,
+        }
+    }
+    Err(ConnectError::Embedded {
+        why: format!("{endpoint} did not answer within {READY:?}"),
     })
 }
 
@@ -638,6 +883,147 @@ mod tests {
         assert!(!is_stale(&path));
         drop(lock);
         assert!(!path.exists(), "the lock removes itself");
+    }
+
+    /// A port that was free a moment ago: bound and dropped, so nothing is
+    /// listening on it. The same trick the spawn test uses, so neither guesses a
+    /// number.
+    fn nothing_listening() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = listener.local_addr().expect("an address");
+        drop(listener);
+        format!("http://{address}")
+    }
+
+    /// A host that refuses to start, so a test can assert it was never asked.
+    struct Never(std::sync::atomic::AtomicUsize);
+
+    impl Never {
+        fn new() -> Self {
+            Self(std::sync::atomic::AtomicUsize::new(0))
+        }
+
+        fn calls(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl Embedded for Never {
+        fn start(&self) -> Result<Started, ConnectError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(ConnectError::Embedded {
+                why: "this test has no core to run".to_owned(),
+            })
+        }
+    }
+
+    /// A core that is already serving the one route a launch asks about.
+    struct Serving {
+        endpoint: String,
+        token: String,
+    }
+
+    impl Embedded for Serving {
+        fn start(&self) -> Result<Started, ConnectError> {
+            Ok(Started::new(self.endpoint.clone(), self.token.clone(), ()))
+        }
+    }
+
+    async fn serving() -> Serving {
+        use axum::routing::get;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let address = listener.local_addr().expect("an address");
+        let app = axum::Router::new().route(
+            "/v1/health",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "ok": true,
+                    "service": "acpilotd",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "api": "/v1",
+                    "workspace": "a-workspace",
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Serving {
+            endpoint: format!("http://{address}"),
+            token: "a-generated-token".to_owned(),
+        }
+    }
+
+    fn options() -> Options {
+        Options {
+            endpoint: None,
+            no_spawn: false,
+            token: None,
+            daemon_args: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn nothing_running_means_the_daemon_runs_in_this_process() {
+        let host = serving().await;
+        let running = ensure_or_embed_at(&options(), nothing_listening(), false, &host)
+            .await
+            .expect("the embedded core answers");
+
+        assert!(running.embedded());
+        assert!(!running.attached());
+        assert!(!running.spawned());
+        // The listener's endpoint and its generated token, not the process's
+        // default endpoint: the caller could not have known either beforehand.
+        assert_eq!(running.endpoint, host.endpoint);
+        assert_eq!(running.token(), Some("a-generated-token"));
+        assert_eq!(running.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_answers_is_attached_to_and_nothing_stands_in() {
+        // This is the whole point of attaching first: an embedded daemon's
+        // sessions end with the window, so a running one is always the better
+        // answer.
+        let live = serving().await;
+        let host = Never::new();
+        let running = ensure_or_embed_at(&options(), live.endpoint.clone(), false, &host)
+            .await
+            .expect("attached");
+
+        assert!(running.attached());
+        assert!(!running.embedded());
+        assert_eq!(host.calls(), 0, "a core was started over a running daemon");
+    }
+
+    #[tokio::test]
+    async fn a_named_endpoint_that_is_down_is_not_stood_in_for() {
+        // An embedded listener takes the port the OS picks, so standing in for an
+        // endpoint somebody named would connect somewhere other than the address
+        // they typed.
+        let host = Never::new();
+        let error = ensure_or_embed_at(&options(), nothing_listening(), true, &host)
+            .await
+            .expect_err("nothing is listening");
+        assert!(matches!(error, ConnectError::NamedDown { .. }), "{error}");
+        assert_eq!(host.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn no_spawn_still_means_nothing_is_started_here_either() {
+        let host = Never::new();
+        let options = Options {
+            no_spawn: true,
+            ..options()
+        };
+        let error = ensure_or_embed_at(&options, nothing_listening(), false, &host)
+            .await
+            .expect_err("nothing is listening");
+        assert!(matches!(error, ConnectError::NotRunning { .. }), "{error}");
+        assert_eq!(host.calls(), 0);
     }
 
     #[tokio::test]

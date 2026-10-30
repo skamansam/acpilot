@@ -90,11 +90,15 @@ Acpilot is a **daemon plus thin clients**. The daemon (`acpilotd`) owns the cont
 plane: workspaces, hosts, sessions, agent processes, permissions, terminals, language
 servers, profiles, and history. Clients never talk to an agent directly.
 
-Any client starts the daemon on demand (ADR 0004): it probes `GET /v1/health`, and if
-nothing answers it spawns `acpilotd` detached, behind a lock so two windows cannot start
-two daemons. One process per user serves every project — workspaces live inside it, not
-in separate instances — and `--no-spawn` turns the behaviour off for tests and service
-managers.
+A client finds the daemon before it does anything else: it probes `GET /v1/health`, and
+a daemon that answers is attached to. One process per user serves every project —
+workspaces live inside it, not in separate instances — and its sessions outlive the
+windows that opened them.
+
+When nothing answers, `acpilot tui` runs that same core inside its own process (P6-11):
+the command needs nothing installed, started or written, and the sessions it opens end
+with the window. Run `acpilotd` (or a service manager) when they should not. `--no-spawn`
+means "attach to a running daemon or fail", which is what tests and CI want.
 
 ```
    acpilot (CLI)  ─┐

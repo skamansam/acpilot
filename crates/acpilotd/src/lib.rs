@@ -35,6 +35,9 @@ use utoipa::OpenApi as _;
 
 mod auth;
 mod files;
+// The in-process listener: the same router, served by a client instead of a
+// process (P6-11).
+pub mod embedded;
 mod platform;
 mod sessions;
 mod terminals;
@@ -591,6 +594,41 @@ pub fn state_for(
         Some(directory) => state_for_profile(directory, workspace),
         None => Ok(AppState::new().with_workspace(workspace_at(workspace)?)),
     }
+}
+
+/// The state a launch serves, with the background work a daemon is.
+///
+/// One function for the binary and for embedded mode, because the parts after the
+/// state are not optional: the terminal reaper ends the processes an agent opened
+/// and never released, the mirror makes an agent's terminal watchable, and the
+/// settings watch is how a client behind a socket sees a theme saved on this
+/// machine. A second launch path that remembered only some of them would be a
+/// daemon that behaves differently depending on who started it — which is exactly
+/// what P6-11's single code path is for.
+///
+/// # Errors
+///
+/// The profile or the workspace could not be read (see [`state_for`]).
+pub fn startup(
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+) -> Result<AppState, StateError> {
+    let state = state_for(profile, workspace)
+        // Conversations outlive the process that streamed them, which is the point
+        // of a transcript: a client that reconnects after a restart can read what
+        // happened. Where that lives is the data directory, not the socket's.
+        .map(|state| state.with_transcripts(transcript_dir()))?;
+    // A terminal is a process; one an agent opened and never released has to end
+    // on its own, because `terminal/release` is optional in ACP.
+    state.reap_terminals_on_a_timer();
+    // And one an agent opened should be watchable: the same PTY, seen through a
+    // pane a client can attach to.
+    state.mirror_agent_terminals();
+    // A saved `config.toml` is the theme a client is drawing with, and a client
+    // behind a socket cannot see this machine's files: the daemon watches them and
+    // announces the new preferences on `GET /v1/events`.
+    state.watch_preferences();
+    Ok(state)
 }
 
 /// Where the daemon keeps the transcripts of its sessions.

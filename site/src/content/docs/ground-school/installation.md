@@ -60,9 +60,11 @@ installing `acpilot` without `acpilotd` gives you a client with nothing to talk 
 
 ## Run what exists today
 
-The terminal UI starts the daemon itself, so this is one command rather than a
-terminal and a flag. `cargo build` above built `acpilotd` next to `acpilot`, which
-is where the client looks for it.
+The terminal UI needs no daemon: when nothing answers `GET /v1/health`, it runs the
+daemon's own core inside its own process (P6-11), so this is one command rather than a
+terminal and a flag. That mode's sessions end when you quit. Run `acpilotd` yourself —
+`cargo build` above built it next to `acpilot` — when they should outlive the window;
+the client always attaches to a daemon that is running.
 
 ```bash
 cargo run -p acpilot-cli -- tui
@@ -100,8 +102,9 @@ cannot attach a header to a typed address, and that page is where the token gets
 pasted. It asks for one in a field, fetches the contract with it, and sends it on
 every "Try it out" call. The daemon logs the token's path when it binds a port.
 
-A daemon started by the client is detached from the terminal, and `--no-spawn`
-turns the behaviour off when something else should own the process.
+`--no-spawn` means "attach to a running daemon or fail", which is what a test, CI job
+or service manager wants; without it, an unanswered probe is a daemon hosted in the
+client's process rather than an error.
 
 <Aside type="note" title="Why the docs page is behind a feature">
 Swagger UI pulls its assets from a CDN. That is fine on a developer machine and

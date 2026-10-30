@@ -41,6 +41,10 @@ acpilot-text = { version = "0.1.0", path = "crates/acpilot-text" }
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
+# The engine, as a library: the socket and TCP listeners a release runs, and the
+# in-process one `acpilot tui` runs when no daemon answers (P6-11). It is what the
+# client talks to, not a thing the client reimplements.
+acpilotd = { version = "0.1.0", path = "crates/acpilotd" }
 acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
 # The desktop shell's plain-data half — the keymap and the command table — which is
 # what the site's showcase shows of it. The window itself is behind the crate's

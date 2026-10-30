@@ -76,6 +76,8 @@ name = "acpilot-demo"
 version = "0.1.0"
 dependencies = [
  "acpilot-proto",
+ "acpilot-stats",
+ "jiff",
  "serde_json",
 ]
 
@@ -112,6 +114,7 @@ dependencies = [
  "acpilot-extensions",
  "acpilot-profile",
  "acpilot-proto",
+ "acpilot-stats",
  "anyhow",
  "clap",
  "futures",
@@ -225,6 +228,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpilot-stats"
+version = "0.1.0"
+dependencies = [
+ "acpilot-core",
+ "acpilot-proto",
+ "jiff",
+ "serde",
+]
+
+[[package]]
 name = "acpilot-text"
 version = "0.1.0"
 dependencies = [
@@ -252,6 +265,7 @@ dependencies = [
  "acpilot-git",
  "acpilot-profile",
  "acpilot-proto",
+ "acpilot-stats",
  "acpilot-text",
  "crossterm",
  "futures",
@@ -285,6 +299,7 @@ dependencies = [
  "acpilot-host",
  "acpilot-profile",
  "acpilot-proto",
+ "acpilot-stats",
  "acpilot-web",
  "agent-client-protocol",
  "axum",

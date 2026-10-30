@@ -22,9 +22,11 @@ GET /v1/events                  # text/event-stream: preferences, permission.req
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
+GET /v1/stats                   # one row per integration: context usage, credits, and where each came from
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs; asks for the token
 GET /app                        # the web shell: build version, About, quit; no token
+GET /app/stats                  # the shell's stats bar, measured by the daemon; needs the token
 ```
 
 `GET /v1/health` also reports the workspace the daemon was started with

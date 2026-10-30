@@ -1,4 +1,5 @@
-//! The window's line to the daemon, for the one thing it needs today: the theme.
+//! The window's line to the daemon: the theme it draws with, and the integration
+//! stats its footer bar shows.
 //!
 //! The desktop app is a client of the same API as the terminal and the browser,
 //! and the preferences it draws with are the daemon's answer rather than the
@@ -16,11 +17,21 @@
 //! and workspace it serves, which is P10-4's decision; until then a window with no
 //! daemon behind it simply keeps the theme it was launched with.
 
+use std::time::Duration;
+
 use acpilot_extensions::loader::LoadedExtension;
 use acpilot_extensions::theme::ThemeError;
 use acpilot_proto::profile::{Preferences, ThemeSurface};
+use acpilot_stats::Row;
 
 use crate::theme::GuiTheme;
+
+/// How often the window asks what its integrations cost.
+///
+/// The same clock the terminal's bar runs on: a context window and a balance move
+/// over a turn, not over a keystroke — and every row carries the moment it was
+/// observed, so a fast clock would buy nothing but requests.
+pub const STATS_POLL: Duration = Duration::from_secs(15);
 
 /// Where the daemon is, when the caller did not say.
 ///
@@ -45,6 +56,47 @@ pub fn theme_for(
     extensions: &[LoadedExtension],
 ) -> Result<GuiTheme, ThemeError> {
     GuiTheme::from_extensions(extensions, preferences.theme_for(ThemeSurface::Gui))
+}
+
+/// Follow the daemon's integration stats, calling `sink` with every answer.
+///
+/// A thread of its own, for the same reason the settings subscription has one: a
+/// request is a wait, and the window's executor has to stay free to draw. Unlike
+/// the settings stream this keeps asking after a failure — a daemon restarted under
+/// a running window is ordinary, and a bar that went blank for the rest of the
+/// session would be a worse answer than a stale one. The first failure is printed
+/// once per outage, because a message every [`STATS_POLL`] is not a status line.
+///
+/// A failed request never reaches `sink`: the rows already on screen stay there,
+/// exactly as the terminal's bar keeps them.
+pub fn follow_stats(endpoint: String, sink: impl Fn(Vec<Row>) + Send + 'static) {
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        runtime.block_on(async move {
+            let client = acpilot_client::Client::new(endpoint);
+            let mut said_so = false;
+            loop {
+                match client.stats().await {
+                    Ok(stats) => {
+                        said_so = false;
+                        sink(acpilot_stats::rows_now(&stats));
+                    }
+                    Err(error) => {
+                        if !said_so {
+                            eprintln!("acpilot-gui: not following the daemon's stats: {error}");
+                            said_so = true;
+                        }
+                    }
+                }
+                tokio::time::sleep(STATS_POLL).await;
+            }
+        });
+    });
 }
 
 /// Follow the daemon's settings, calling `sink` with every theme it names.

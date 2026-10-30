@@ -1024,61 +1024,205 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The stats bar: what the profile's integrations are costing while the turn runs.
+/// The stats bar: one segment per integration, in the daemon's order.
+///
+/// The rows arrive already measured — `acpilot_stats::Row`, the same value the
+/// desktop app and the page draw — so this function is cells and colours, not
+/// arithmetic. A window nobody reported is a track with no fill rather than a bar
+/// that happens to look comfortable, and a reading that went quiet is named as old
+/// rather than drawn as current.
+///
+/// `F4` swaps every number for the source behind it: a bar has no room for
+/// provenance, and provenance is the difference between a measurement and a guess.
 fn draw_stats(frame: &mut Frame, app: &App, area: Rect) {
+    let dim = Style::default().fg(app.theme.text_muted());
     if app.integrations.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                " stats · P6-13 ",
-                Style::default().fg(app.theme.text_muted()),
-            )),
+            Paragraph::new(Span::styled(" stats · no integrations ", dim)),
             area,
         );
         return;
     }
-    let narrow = area.width < 110;
+    // The bar shrinks before it drops a row: a row that vanished because a window
+    // narrowed is a row a person cannot check, and listing quiet integrations is
+    // only worth doing if the list is stable. Even the last level can run out of
+    // room, so whatever still does not fit is counted rather than silently gone.
+    let width = usize::from(area.width);
+    let room = [Room::Full, Room::Figures, Room::Tracks]
+        .into_iter()
+        .find(|room| bar_width(&app.integrations, app, *room) <= width)
+        .unwrap_or(Room::Tracks);
     let mut spans = Vec::new();
+    let mut used = 0usize;
+    let mut drawn = 0usize;
     for (index, row) in app.integrations.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(
-                " │ ",
-                Style::default().fg(app.theme.text_muted()),
-            ));
+        let segment = stats_segment(row, app, room);
+        let segment_width: usize = segment.iter().map(Span::width).sum();
+        // Even the last level can overflow — twenty integrations on an eighty-column
+        // terminal — so a segment is drawn whole or not at all: half a label reads as
+        // a different integration. The count at the end says how many did not fit,
+        // because a bar that quietly hides a provider is worse than a short one.
+        if index > 0 && used + SEPARATOR_WIDTH + segment_width > width {
+            break;
         }
-        let name = if narrow {
-            format!(" {} {}", if row.healthy { "●" } else { "○" }, row.provider)
-        } else {
-            format!(
-                " {} {} · {}",
-                if row.healthy { "●" } else { "○" },
-                row.provider,
-                row.model
-            )
-        };
-        spans.push(Span::styled(
-            name,
-            Style::default().fg(if row.healthy {
-                app.theme.success()
-            } else {
-                app.theme.danger()
-            }),
-        ));
-        let numbers = if narrow {
-            format!(" {} tok · ${:.3}", row.tokens(), row.cost_usd)
-        } else {
-            format!(
-                " {} tok · ${:.3} · {}ms",
-                row.tokens(),
-                row.cost_usd,
-                row.latency_ms
-            )
-        };
-        spans.push(Span::styled(
-            numbers,
-            Style::default().fg(app.theme.text_muted()),
-        ));
+        if index > 0 {
+            spans.push(Span::styled(" │ ", dim));
+            used += SEPARATOR_WIDTH;
+        }
+        used += segment_width;
+        drawn += 1;
+        spans.extend(segment);
+    }
+    let hidden = app.integrations.len() - drawn;
+    if hidden > 0 {
+        spans.push(Span::styled(format!(" │ +{hidden} "), dim));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// How much of a row the bar has room for.
+///
+/// Three levels rather than a fixed width per integration: a track and a label are
+/// what identify a row, the figures are what make it useful, and the credit sentence
+/// is the first thing to go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Room {
+    /// Names, both tracks, and both sentences.
+    Full,
+    /// Names, both tracks, context figures; credits as a track alone.
+    Figures,
+    /// Names and tracks.
+    Tracks,
+}
+
+/// The width `" │ "` takes, so the bar's budget and what it draws agree.
+const SEPARATOR_WIDTH: usize = 3;
+
+/// How wide the whole bar would be at a level, so a level can be chosen before
+/// anything is drawn.
+fn bar_width(rows: &[acpilot_stats::Row], app: &App, room: Room) -> usize {
+    rows.iter()
+        .map(|row| {
+            stats_segment(row, app, room)
+                .iter()
+                .map(Span::width)
+                .sum::<usize>()
+        })
+        .sum::<usize>()
+        + SEPARATOR_WIDTH * rows.len().saturating_sub(1)
+}
+
+/// One integration's cells: a name, a context track, and a credit track.
+///
+/// A row with nothing reported says so instead of drawing two empty tracks, which
+/// would be read as two zeros.
+fn stats_segment(row: &acpilot_stats::Row, app: &App, room: Room) -> Vec<Span<'static>> {
+    use acpilot_proto::stats::IntegrationKind;
+
+    let dim = Style::default().fg(app.theme.text_muted());
+    let glyph = match row.kind {
+        IntegrationKind::Provider => "◇",
+        IntegrationKind::Agent => "◆",
+    };
+    // A stale reading is the label's colour, not a warning row: the number is still
+    // the last one somebody reported, and saying when is enough to read it right.
+    let label = if row.stale {
+        Style::default()
+            .fg(app.theme.text_muted())
+            .add_modifier(Modifier::ITALIC)
+    } else {
+        Style::default().fg(app.theme.text())
+    };
+    let mut spans = vec![
+        Span::styled(format!(" {glyph} "), dim),
+        Span::styled(row.label.clone(), label),
+    ];
+    if row.stale {
+        spans.push(Span::styled(" (old)", dim));
+    }
+
+    if app.stats_sources {
+        spans.push(Span::styled(format!(" · {} ", row.sources()), dim));
+        return spans;
+    }
+
+    if row.is_quiet() {
+        spans.push(Span::styled(" · nothing reported", dim));
+        return spans;
+    }
+    if let Some(context) = &row.context {
+        spans.push(Span::raw(" "));
+        spans.extend(track_spans(context, app, room != Room::Tracks));
+    }
+    if let Some(credits) = &row.credits {
+        spans.push(Span::styled("  cr ", dim));
+        spans.extend(track_spans(credits, app, room == Room::Full));
+    }
+    spans
+}
+
+/// How many cells a track gets. Wide enough to see a half from a third, short
+/// enough that two integrations and a credit bar fit side by side.
+const TRACK_CELLS: usize = 8;
+
+/// One measured quantity: the track, then the figures, then how they were got.
+///
+/// The colour is the source, not the level: green is "the server said so", amber is
+/// "this client counted", and the theme's accent is "a plan stated it". A bar that
+/// coloured by fullness instead would paint an estimate as a fact.
+fn track_spans(track: &acpilot_stats::Track, app: &App, sentence: bool) -> Vec<Span<'static>> {
+    use acpilot_proto::stats::StatSource;
+
+    let colour = match track.source {
+        StatSource::Server => app.theme.success(),
+        StatSource::Configured => app.theme.accent(),
+        StatSource::Estimated => app.theme.warning(),
+        StatSource::Unknown => app.theme.text_muted(),
+    };
+    let dim = Style::default().fg(app.theme.text_muted());
+    let mut spans = Vec::new();
+    match track.fill {
+        Some(fill) => {
+            // `f32` to a cell count: a 0.02 fill is one cell rather than none, because
+            // a bar that says "nothing" while a turn is running is a bar nobody
+            // believes.
+            let filled = (fill * TRACK_CELLS as f32).round() as usize;
+            let filled = filled.clamp(usize::from(fill > 0.0), TRACK_CELLS);
+            spans.push(Span::styled(
+                "█".repeat(filled),
+                Style::default().fg(colour),
+            ));
+            spans.push(Span::styled(
+                "░".repeat(TRACK_CELLS - filled),
+                Style::default().fg(app.theme.border()),
+            ));
+        }
+        // An unknown denominator: a dashed track, never a full or an empty one. The
+        // dash is the shape a person already reads as "no value".
+        None => spans.push(Span::styled(
+            "╌".repeat(TRACK_CELLS),
+            Style::default().fg(app.theme.text_muted()),
+        )),
+    }
+    if !sentence {
+        return spans;
+    }
+    // `~` is the second half of "estimated": the colour says it too, for a terminal
+    // that has no amber, and the mark survives a screenshot.
+    let text = if track.source == StatSource::Estimated {
+        format!(" ~{}", track.text)
+    } else {
+        format!(" {}", track.text)
+    };
+    spans.push(Span::styled(
+        text,
+        if track.source == StatSource::Unknown {
+            dim
+        } else {
+            Style::default().fg(app.theme.text())
+        },
+    ));
+    spans
 }
 
 /// The command palette: every command, and the task behind each one that is not
@@ -1308,10 +1452,12 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-t", "terminal pane"),
             ("tab", "read the transcript"),
             ("ctrl-p", "commands"),
+            ("f4", "where the stats came from"),
         ],
         Focus::Terminal => &[
             ("ctrl-t", "leave the pane"),
             ("f2", "copy mode"),
+            ("f4", "where the stats came from"),
             ("ctrl-c", "interrupt the program"),
         ],
     }
@@ -2251,6 +2397,112 @@ mod tests {
         assert!(
             text.contains("17:9"),
             "the status line reports the cursor: {text}"
+        );
+    }
+
+    #[test]
+    fn the_stats_bar_draws_a_track_and_a_figure_per_integration() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let text = render_at(&mut app, 200, 34);
+
+        assert!(text.contains("◇ lmstudio"), "{text}");
+        assert!(text.contains("18.4k / 32.8k"), "{text}");
+        assert!(text.contains("8.40 / 20.00 USD"), "{text}");
+        assert!(
+            text.contains("◆ Claude Code"),
+            "an agent is a row beside the providers: {text}"
+        );
+        assert!(
+            text.contains("(old)"),
+            "a quiet reading says it is old rather than looking current: {text}"
+        );
+        assert!(
+            text.contains("4.50 credits left"),
+            "a balance with no ceiling is still a number: {text}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_window_is_a_dashed_track_not_a_full_one() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let text = render_at(&mut app, 200, 34);
+        assert!(
+            text.contains("╌╌╌╌╌╌╌╌"),
+            "the estimate has no denominator to fill against: {text}"
+        );
+        assert!(
+            text.contains("~41.0k / ?"),
+            "and the number it does have is marked as an estimate: {text}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_bar_shrinks_its_segments_before_it_drops_a_row() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        // 160 columns is room for the four seeded rows with their tracks and no
+        // sentences: the shrink is the first answer, so no row disappears.
+        let text = render_at(&mut app, 160, 34);
+        for label in ["lmstudio", "anthropic", "Claude Code", "openrouter"] {
+            assert!(
+                text.contains(label),
+                "{label} is still a row at 160 columns: {text}"
+            );
+        }
+        assert!(
+            !text.contains("18.4k / 32.8k"),
+            "the figures are what the narrow bar gave up: {text}"
+        );
+    }
+
+    #[test]
+    fn a_bar_that_cannot_fit_every_row_says_how_many_it_hid() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let text = render_at(&mut app, 80, 34);
+        assert!(
+            text.contains("+2") || text.contains("+1") || text.contains("+3"),
+            "a provider nobody can see is worse than a short bar: {text}"
+        );
+        assert!(
+            !text.contains("openrouter"),
+            "and the count is what stands in for it: {text}"
+        );
+    }
+
+    #[test]
+    fn a_quiet_integration_says_it_reported_nothing() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.integrations = vec![acpilot_stats::Row {
+            id: "quiet".to_owned(),
+            kind: acpilot_proto::stats::IntegrationKind::Provider,
+            label: "quiet".to_owned(),
+            context: None,
+            credits: None,
+            updated_at: "2026-10-30T12:00:00Z".to_owned(),
+            stale: false,
+        }];
+        let text = render_at(&mut app, 200, 34);
+        assert!(
+            text.contains("quiet · nothing reported"),
+            "an empty row is not two empty tracks, which read as two zeros: {text}"
+        );
+    }
+
+    #[test]
+    fn the_sources_are_one_key_away() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
+        let text = render_at(&mut app, 200, 34);
+        assert!(
+            text.contains("context server · credits —"),
+            "a bar's provenance, named: {text}"
+        );
+        assert!(
+            text.contains("context estimated"),
+            "an estimate says it is one: {text}"
+        );
+        assert!(
+            !text.contains("18.4k / 32.8k"),
+            "the sources replace the figures rather than crowding them: {text}"
         );
     }
 

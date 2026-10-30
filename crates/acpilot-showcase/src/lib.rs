@@ -507,6 +507,7 @@ fn action_name(action: acpilot_gui::keymap::Action) -> &'static str {
         Action::PaletteDismiss => "PaletteDismiss",
         Action::NextProfile => "NextProfile",
         Action::PreviousProfile => "PreviousProfile",
+        Action::ToggleStatsSources => "ToggleStatsSources",
         Action::Quit => "Quit",
     }
 }

@@ -235,6 +235,15 @@ impl Client {
         self.get("/v1/sessions").await
     }
 
+    /// `GET /v1/stats`.
+    ///
+    /// The contract's rows, not a drawn bar: `acpilot-stats` turns them into tracks,
+    /// and that crate is a client-side dependency on purpose — the daemon reports
+    /// figures and every surface measures them the same way.
+    pub async fn stats(&self) -> Result<Vec<acpilot_proto::stats::IntegrationStats>, ClientError> {
+        self.get("/v1/stats").await
+    }
+
     /// `GET /v1/terminals?session=`.
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger

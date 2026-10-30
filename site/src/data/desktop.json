@@ -38,6 +38,14 @@
       ]
     },
     {
+      "keys": "f4",
+      "action": "ToggleStatsSources",
+      "description": "Where the stats came from",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
       "keys": "down",
       "action": "PaletteDown",
       "description": "Next command",
@@ -74,6 +82,10 @@
     {
       "label": "About Acpilot",
       "detail": "Version 0.1.0"
+    },
+    {
+      "label": "Where the stats came from",
+      "detail": "Each figure's source, instead of its numbers"
     },
     {
       "label": "Quit Acpilot",

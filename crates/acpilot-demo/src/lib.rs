@@ -24,6 +24,7 @@ use acpilot_proto::agent::{AgentStatus, AgentSummary, AgentTransport};
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionKind, PermissionOption, PermissionRequest};
 use acpilot_proto::session::{SessionStatus, SessionSummary};
+use acpilot_proto::stats::IntegrationStats;
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use serde_json::json;
 
@@ -34,7 +35,7 @@ pub mod tree;
 
 pub use editor::{Diff, DiffKind, DiffLine, EditorBuffer, Hunk};
 pub use palette::{Command, CommandAction, Run};
-pub use stats::Integration;
+
 pub use tree::{FileNode, GitStatus};
 
 /// One session and the transcript it replays.
@@ -76,8 +77,8 @@ pub struct Demo {
     pub permission: PermissionRequest,
     /// The session's terminals, one of them ended.
     pub terminals: Vec<TerminalSummary>,
-    /// What the stats bar counts.
-    pub integrations: Vec<Integration>,
+    /// What the stats bar draws, in the contract's own shape.
+    pub integrations: Vec<IntegrationStats>,
     /// Every command the palette offers, tagged with the task that would build it.
     pub commands: Vec<Command>,
     /// The bytes the seeded terminal replays: a real screen, with colour, because a
@@ -99,7 +100,7 @@ pub fn demo() -> Demo {
         diff: editor::diff(),
         permission: permission(),
         terminals: terminals(),
-        integrations: stats::integrations(),
+        integrations: stats::integrations(jiff::Timestamp::now()),
         commands: palette::commands(),
         terminal_screen: terminal_screen(),
     }

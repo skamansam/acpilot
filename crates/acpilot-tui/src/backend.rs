@@ -18,6 +18,7 @@ use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::session::{CreateSessionRequest, SessionSummary};
+use acpilot_proto::stats::IntegrationStats;
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -31,6 +32,13 @@ const POLL: Duration = Duration::from_secs(1);
 
 /// How long to wait before reopening a stream that failed.
 const RECONNECT: Duration = Duration::from_secs(2);
+
+/// How long the stats bar waits before asking again.
+///
+/// Slower than the session poll on purpose: a context window and a balance move
+/// over a turn, not over a keystroke, and a row that arrives already knowing how
+/// old it is (`updated_at`) needs no faster clock to be honest.
+const STATS_POLL: Duration = Duration::from_secs(15);
 
 /// What the UI asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +87,8 @@ pub enum Update {
     },
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
+    /// The integrations the bar draws, as the daemon reported them.
+    Stats(Vec<IntegrationStats>),
     /// The session list.
     Sessions(Vec<SessionSummary>),
     /// A session was opened; its transcript starts empty.
@@ -236,6 +246,8 @@ async fn run(
     let mut terminal: Option<TerminalLink> = None;
     let mut poll = tokio::time::interval(POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut stats = tokio::time::interval(STATS_POLL);
+    stats.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -252,6 +264,7 @@ async fn run(
                     refresh_terminals(&client, id, &updates).await;
                 }
             }
+            _ = stats.tick() => refresh_stats(&client, &updates).await,
             request = requests.recv() => match request {
                 None | Some(Request::Quit) => {
                     if let Some((_, task)) = open.take() {
@@ -426,6 +439,7 @@ async fn refresh(client: &Client, updates: &UnboundedSender<Update>) {
     }
     refresh_sessions(client, updates).await;
     refresh_permissions(client, updates).await;
+    refresh_stats(client, updates).await;
 }
 
 async fn refresh_sessions(client: &Client, updates: &UnboundedSender<Update>) {
@@ -448,6 +462,22 @@ async fn refresh_terminals(client: &Client, session: &str, updates: &UnboundedSe
     match client.terminals(Some(session)).await {
         Ok(terminals) => {
             let _ = updates.send(Update::Terminals(terminals));
+        }
+        Err(error) => {
+            let _ = updates.send(Update::Status(describe(&error)));
+        }
+    }
+}
+
+/// Read the integrations the stats bar draws.
+///
+/// A daemon that answers with no rows is a daemon with no roster, which the bar
+/// says; a request that fails leaves the last rows on screen rather than blanking a
+/// bar a person is reading — the status line already reports the failure.
+async fn refresh_stats(client: &Client, updates: &UnboundedSender<Update>) {
+    match client.stats().await {
+        Ok(stats) => {
+            let _ = updates.send(Update::Stats(stats));
         }
         Err(error) => {
             let _ = updates.send(Update::Status(describe(&error)));

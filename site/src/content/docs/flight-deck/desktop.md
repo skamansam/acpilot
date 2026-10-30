@@ -128,6 +128,16 @@ serves. Panes and the editor are P10-3, and owning sessions over that connection
 is P10-4. The `gui` feature is off by default, so `cargo test` still compiles no
 graphics stack.
 
+The footer carries the stats bar: one row per provider and agent, a context track and
+a credit track, laid out from the same `acpilot_stats` value the terminal and the
+page draw — so the window cannot disagree with either about what `18.4k / 32.8k`
+means, or paint an estimate as a measurement. A figure nobody reported is drawn as a
+hairline rather than a full or an empty strip, and a reading that went quiet says
+`old`. `F4`, or **Where the stats came from** in the palette, shows what each figure
+was measured by instead of what it is. The window asks the daemon for these every
+fifteen seconds; with no daemon behind it the bar says so rather than failing a
+launch over a footer.
+
 A launch names a path rather than a profile: `acpilot-gui` opens the project you
 are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile
 comes from those project settings. `--profile <dir>` remains for the case a path

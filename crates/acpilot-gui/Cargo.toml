@@ -50,6 +50,10 @@ acpilot-profile = { workspace = true }
 # The preferences the launch reads: which theme this surface draws with is a
 # protocol type, shared with the daemon's settings cascade.
 acpilot-proto = { workspace = true }
+# The stats bar's rows: the fill ratio, the sentence and the source come from the
+# same crate the terminal and the page read, so the window cannot disagree with
+# either about what `18.4k / 32.8k` means.
+acpilot-stats = { workspace = true }
 # `open_window` hands gpui's error back rather than panicking: a window that
 # cannot be created is a launch to report, not a process to abort.
 anyhow = { workspace = true }

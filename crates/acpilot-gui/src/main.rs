@@ -27,6 +27,7 @@ use acpilot_gui::platform::{self, Claim};
 use acpilot_gui::profiles;
 use acpilot_gui::theme::GuiTheme;
 use acpilot_gui::{Shell, daemon};
+use acpilot_stats::Row;
 use clap::Parser;
 use futures::StreamExt as _;
 use gpui::{App, Application, Entity};
@@ -101,6 +102,48 @@ fn recolour_on_settings(
     .detach();
 }
 
+/// Push the daemon's stats at every open window when a new answer arrives.
+///
+/// The same shape as `recolour_on_settings`: a poll on the app's own timer, because
+/// the receiver is a blocking channel filled by a plain thread. The newest answer
+/// wins inside one tick — the rows are a snapshot, so an older one is not news.
+fn measure_on_stats(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<Vec<Row>>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let mut latest: Option<Vec<Row>> = None;
+            while let Ok(rows) = changed.try_recv() {
+                latest = Some(rows);
+            }
+            let Some(rows) = latest else {
+                continue;
+            };
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                let rows = rows.clone();
+                // The app is shutting down when this fails, which is the one reason
+                // to stop asking.
+                if cx
+                    .update(|cx| shell.update(cx, |shell, cx| shell.set_stats(rows, cx)))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -154,6 +197,14 @@ fn main() -> ExitCode {
         let _ = settings.send(theme);
     });
 
+    // The stats bar is a second, slower question to the same daemon: the roster and
+    // what each integration costs. A window with no daemon behind it keeps an empty
+    // bar that says so, rather than failing a launch over a footer.
+    let (stats, stats_changed) = std::sync::mpsc::channel::<Vec<Row>>();
+    daemon::follow_stats(daemon::endpoint(), move |rows| {
+        let _ = stats.send(rows);
+    });
+
     // The claim is taken before the runtime starts, so a launch that is only
     // handing over never pays for a renderer. It is also taken after the profiles
     // and theme are validated: a second instance with a typo in `--profile`
@@ -186,6 +237,7 @@ fn main() -> ExitCode {
             .unwrap_or_else(PoisonError::into_inner)
             .push(opened);
         recolour_on_settings(cx, Arc::clone(&shells), changed);
+        measure_on_stats(cx, Arc::clone(&shells), stats_changed);
 
         let Some(mut requests) = requests else {
             return;

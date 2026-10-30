@@ -220,6 +220,77 @@ async fn agents_are_served_from_the_registry_with_their_availability() {
     );
 }
 
+#[tokio::test]
+async fn stats_without_a_profile_is_an_empty_list_not_an_error() {
+    let (status, body) = get("/v1/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn stats_are_one_row_per_agent_with_nothing_invented() {
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n\
+         [[agents]]\nid = \"absent\"\ntransport = \"acp-stdio\"\n\
+         command = \"acpilot-no-such-program-anywhere\"\n"
+    );
+    let state = agents_state(&manifest);
+
+    let (status, body) = get_from(router_with(state), "/v1/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("a list");
+    assert_eq!(rows.len(), 2, "a quiet integration keeps its row");
+    assert_eq!(rows[0]["id"], "present");
+    assert_eq!(rows[0]["label"], "Present");
+    assert_eq!(rows[0]["kind"], "agent");
+    // Neither agent has been given a conversation and nothing reads a balance, so
+    // there is no context or credit reading to send. A bar built from an invented
+    // `0` would report a full, empty or measured-wrong track instead of asking.
+    assert!(rows[0].get("context").is_none(), "{rows:?}");
+    assert!(rows[0].get("credits").is_none(), "{rows:?}");
+    rows[0]["updated_at"]
+        .as_str()
+        .expect("a timestamp")
+        .parse::<jiff::Timestamp>()
+        .expect("RFC 3339, because a clock a client cannot read is no use");
+}
+
+#[tokio::test]
+async fn the_page_is_handed_the_same_rows_already_measured() {
+    // A browser cannot link `acpilot-stats`, so the daemon measures for it. The
+    // fields are the ones the page draws; the arithmetic is not in the page.
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n"
+    );
+    let state = agents_state(&manifest);
+
+    let (status, body) = get_from(router_with(state), "/app/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("a list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["label"], "Present");
+    assert_eq!(rows[0]["stale"], false);
+    assert!(
+        rows[0].get("context").is_none(),
+        "a roster row has no track to draw"
+    );
+}
+
+#[tokio::test]
+async fn the_document_names_the_stats_route() {
+    let (_, body) = get("/v1/openapi.json").await;
+    assert_eq!(
+        body["paths"]["/v1/stats"]["get"]["responses"]["200"]["description"],
+        "One row per integration, including the quiet ones"
+    );
+}
+
 /// The router under a real listener, not `oneshot`.
 ///
 /// `oneshot` proves the handler; this proves the server, the bind, and the HTTP

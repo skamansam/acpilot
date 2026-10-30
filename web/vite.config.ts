@@ -26,6 +26,9 @@ export default defineConfig({
     // `cargo run -p acpilotd -- --addr 127.0.0.1:7777`; same-origin in a build.
     proxy: {
       '/v1': 'http://127.0.0.1:7777',
+      // The page's own surface: the stats bar's measured rows and the palette
+      // stream. Without this the dev page asks itself for both and gets a 404.
+      '/app': 'http://127.0.0.1:7777',
     },
   },
 });

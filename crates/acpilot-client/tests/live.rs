@@ -49,6 +49,18 @@ fn stub() -> Router {
             axum::routing::get(|| async { axum::Json(serde_json::json!([])) }),
         )
         .route(
+            "/v1/stats",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!([{
+                    "id": "lmstudio",
+                    "kind": "provider",
+                    "label": "lmstudio",
+                    "context": { "used_tokens": 16384, "window_tokens": 32768, "source": "server" },
+                    "updated_at": "2026-10-30T12:00:00Z"
+                }]))
+            }),
+        )
+        .route(
             "/v1/sessions/s404",
             axum::routing::get(|| async {
                 (
@@ -128,6 +140,19 @@ async fn health_and_the_session_list_round_trip() {
     assert_eq!(health.service, "acpilotd");
     assert_eq!(client.sessions().await.expect("sessions"), Vec::new());
     assert!(client.agents().await.is_ok());
+}
+
+#[tokio::test]
+async fn the_stats_bar_round_trips_a_row_without_its_absent_figures() {
+    let client = Client::new(serve(stub()).await);
+    let stats = client.stats().await.expect("stats");
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].label, "lmstudio");
+    let context = stats[0].context.expect("a context reading");
+    assert_eq!(context.used_tokens, 16_384);
+    assert_eq!(context.window_tokens, Some(32_768));
+    // No credit bar was sent, so there is none: a missing figure is not a zero.
+    assert!(stats[0].credits.is_none());
 }
 
 #[tokio::test]

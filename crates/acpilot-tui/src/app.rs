@@ -5,12 +5,13 @@
 //! keystroke turns into. Keeping that boundary sharp is what lets the same app
 //! state be driven by a test with no daemon and no terminal.
 
-use acpilot_demo::{Command, CommandAction, Diff, FileNode, Integration, Run};
+use acpilot_demo::{Command, CommandAction, Diff, FileNode, Run};
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::session::SessionSummary;
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
+use acpilot_stats::Row;
 use acpilot_text::highlight::Grammars;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1348,8 +1349,14 @@ pub struct App {
     pub sidebar_width: u16,
     /// The notice the last planned action raised.
     pub toast: Option<Toast>,
-    /// The stats bar's rows.
-    pub integrations: Vec<Integration>,
+    /// The stats bar's rows, measured for drawing.
+    ///
+    /// `acpilot_stats::Row` rather than the wire type: the ratio and the words are
+    /// computed once, for every surface, and a keypress must not be able to change
+    /// what the bar says.
+    pub integrations: Vec<Row>,
+    /// Whether the bar is showing where each figure came from instead of the figure.
+    pub stats_sources: bool,
     /// Every command the palette offers, with the task behind each unbuilt one.
     pub commands: Vec<Command>,
     /// Whether the panes hold seeded data rather than the daemon's.
@@ -1484,6 +1491,7 @@ impl App {
             sidebar_width: Layout::default().sidebar,
             toast: None,
             integrations: Vec::new(),
+            stats_sources: false,
             commands: acpilot_demo::palette::commands(),
             demo: false,
             agents: Vec::new(),
@@ -1546,7 +1554,10 @@ impl App {
         let marks = acpilot_git::line_changes(&demo.diff.patch(), &demo.editor.path);
         app.editor = Some(EditorPane::seeded(&demo.editor, marks, &mut app.grammars));
         app.diff = Some(demo.diff.clone());
-        app.integrations = demo.integrations.clone();
+        // The seeded rows go through the same conversion the daemon's do: a design
+        // pass that drew a different bar from the product's would be a screenshot
+        // of something nobody will see.
+        app.integrations = acpilot_stats::rows_now(&demo.integrations);
         app.terminals = demo.terminals.clone();
         app.permissions = vec![demo.permission.clone()];
         if let Some(first) = demo.sessions.first() {
@@ -1874,6 +1885,7 @@ impl App {
                 self.status = format!("connected · acpilotd {version}");
             }
             Update::Agents(agents) => self.agents = agents,
+            Update::Stats(stats) => self.integrations = acpilot_stats::rows_now(&stats),
             Update::Sessions(sessions) => {
                 // Keep pointing at the same session when the list is reordered by
                 // a new one arriving; an index alone would jump to a stranger.
@@ -2141,6 +2153,16 @@ impl App {
         // is not on screen yet would be lost.
         if self.terminal_picker {
             return self.picker_key(key);
+        }
+
+        // `F4` is the bar's provenance: the same rows with where each figure came
+        // from, and the same key back. A function key for the same reason `F2` and
+        // `F3` are — a pane whose keys are text gives up nothing printable for it —
+        // and handled before the terminal takes the keyboard, because a bar is the
+        // client's and a shell has no use for a function key that prints nothing.
+        if key.code == KeyCode::F(4) {
+            self.stats_sources = !self.stats_sources;
+            return None;
         }
 
         // A pane being read takes the keys: scrolling, selecting and yanking are
@@ -3847,6 +3869,43 @@ mod tests {
             !app.permission_card,
             "a refresh must not reopen a dismissed card"
         );
+    }
+
+    #[test]
+    fn f4_turns_the_bar_into_its_sources_and_back() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let f4 = KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE);
+        assert!(!app.stats_sources);
+        assert_eq!(app.handle_key(f4), None);
+        assert!(app.stats_sources, "the numbers become their provenance");
+        assert_eq!(app.handle_key(f4), None);
+        assert!(!app.stats_sources, "and the same key puts them back");
+    }
+
+    #[test]
+    fn the_daemons_stats_are_measured_when_they_arrive() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Stats(vec![
+            acpilot_proto::stats::IntegrationStats {
+                id: "lmstudio".to_owned(),
+                kind: acpilot_proto::stats::IntegrationKind::Provider,
+                label: "lmstudio".to_owned(),
+                context: Some(acpilot_proto::stats::ContextStats {
+                    used_tokens: 16_384,
+                    window_tokens: Some(32_768),
+                    source: acpilot_proto::stats::StatSource::Server,
+                }),
+                credits: None,
+                updated_at: "2026-10-30T12:00:00Z".to_owned(),
+            },
+        ]));
+        assert_eq!(app.integrations.len(), 1);
+        let track = app.integrations[0]
+            .context
+            .as_ref()
+            .expect("a context track");
+        assert_eq!(track.fill, Some(0.5), "the ratio is computed once, here");
+        assert_eq!(track.text, "16.4k / 32.8k");
     }
 
     #[test]

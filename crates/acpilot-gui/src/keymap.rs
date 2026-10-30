@@ -51,6 +51,8 @@ pub enum Action {
     NextProfile,
     /// Select the previous profile.
     PreviousProfile,
+    /// Swap the stats bar's figures for the source behind each one.
+    ToggleStatsSources,
     /// Leave the app.
     Quit,
 }
@@ -96,6 +98,14 @@ pub const DEFAULT: &[Binding] = &[
         action: Action::PreviousProfile,
         contexts: &[Shell],
         description: "Previous profile",
+    },
+    // A function key, as in the terminal: no pane whose keys are text gives one
+    // up, and this one is not text.
+    Binding {
+        keys: "f4",
+        action: Action::ToggleStatsSources,
+        contexts: &[Shell],
+        description: "Where the stats came from",
     },
     Binding {
         keys: "down",
@@ -192,6 +202,7 @@ mod tests {
             Action::PaletteDismiss,
             Action::NextProfile,
             Action::PreviousProfile,
+            Action::ToggleStatsSources,
             Action::Quit,
         ] {
             assert!(

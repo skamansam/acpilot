@@ -52,6 +52,7 @@ Frozen for v1. `WS` routes are upgraded, not JSON responses.
 GET    /v1/health
 GET    /v1/openapi.json
 GET    /app                              (HTML, no token: the web shell)
+GET    /app/stats                        (JSON: the page's measured bar, token required)
 GET    /docs                             (HTML, no token: Swagger UI, --features docs)
 
 GET    /v1/hosts                          POST   /v1/hosts
@@ -87,6 +88,8 @@ POST   /v1/profiles/{id}/export
 GET    /v1/lsp/servers                    POST   /v1/lsp/servers/{id}/restart
 GET    /v1/lsp/servers/{id}/logs
 GET    /v1/lsp/diagnostics                POST   /v1/lsp/request
+
+GET    /v1/stats
 ```
 
 `GET /v1/health` is the one route a client calls before it trusts anything else:
@@ -96,8 +99,53 @@ daemon already listening is serving the directory it was asked about, rather tha
 restarting a daemon that may be mid-turn (ADR 0004 §2).
 
 **Deliberately not v1**: providers and models, the model lab and recipes, the ACP
-bridge and remote drivers, extensions and stats. They follow the same conventions
-when they land; none of them changes a route above.
+bridge and remote drivers, and extensions. They follow the same conventions when
+they land; none of them changes a route above.
+
+## Stats
+
+`GET /v1/stats` returns `IntegrationStats[]`: one row per integration, including the
+quiet ones, because a bar that reflowed when a provider stopped answering would be a
+bar nobody could watch. A row is `{ id, kind, label, context?, credits?, updated_at
+}`; `kind` is `provider` or `agent`, and `label` is the display name so a bar can be
+drawn without a second lookup.
+
+`context` is `{ used_tokens, window_tokens?, source }` and `credits` is `{ used?,
+remaining?, limit?, currency, source }`. `source` is `server`, `configured`,
+`estimated` or `unknown`, recorded **per figure** — a server may report a window and
+no balance, and a plan may name a ceiling the server never mentions.
+
+The rules a client is held to:
+
+- **No default window.** An absent `window_tokens` renders as an indeterminate
+track, never a full or an empty one. Substituting 32k is how a prompt gets
+truncated without anyone noticing.
+- **A missing figure is absent, not zero.** A local server has no credit bar; a
+provider with no balance endpoint shows no credits rather than `0.00`.
+- **An estimate is labelled.** `estimated` is a figure this daemon counted, and a
+UI that styles it as a measurement is claiming something nobody reported.
+- **The age is on the wire.** `updated_at` is the last observation, so a frozen bar
+is visible as frozen.
+
+What fills it today is the roster, and — for an agent with a conversation behind it
+— an estimated context reading. One `agent` row per entry in the profile's
+`agents.toml`; when a session with that agent has said anything, the sessions engine
+has counted the characters it carries (four to a token), so the row is
+`source: estimated` with no `window_tokens`, and a UI draws `18.4k / ?` against an
+indeterminate track rather than a fraction of a window nobody stated. An agent's own
+usage update replaces the count when it sends one (`source: server`, and the window
+it names). A session that has done nothing yet reports no `context` at all, and a
+row with a reading carries that session's last event as its `updated_at`, so a
+conversation that stopped goes old on the bar instead of looking fresh for as long
+as the roster can be read. Provider rows, configured windows and the balance reads
+are the models phase's task (P4.5-12).
+
+`GET /app/stats` is the page's copy: the same rows with `fill`, `text` and `source`
+worked out, because a browser cannot link `acpilot-stats` and a second
+implementation of the arithmetic in JavaScript is one that drifts. Same rows, same
+order, measured by `acpilot-stats` — the crate the TUI and the desktop app also
+draw. It is under `/app` because it is a rendering of the contract rather than part
+of it, and it needs the token: an agent roster is not the page's own business.
 
 Three names are frozen here because two documents disagreed, and the wire is
 harder to rename than prose:

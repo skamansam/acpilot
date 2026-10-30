@@ -52,6 +52,7 @@ use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, SessionId, SessionStatus, SessionSummary,
 };
+use acpilot_proto::stats::ContextStats;
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path as ApiPath, Query, State};
@@ -63,6 +64,7 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use utoipa::openapi::path::{HttpMethod, Operation};
 
+use crate::usage::Usage;
 use crate::{ApiError, AppState, HEARTBEAT};
 
 /// How many events a session keeps for replay.
@@ -142,6 +144,44 @@ impl Sessions {
             .map(|record| record.id.clone())
     }
 
+    /// What the newest conversation with `agent` costs, and when it last spoke.
+    ///
+    /// One reading per agent, because the bar lists integrations rather than
+    /// conversations: three sessions with the same agent are one row, and the newest
+    /// is the one a person is watching. The timestamp is the session's own — the last
+    /// event it recorded — so a conversation that stopped goes old on the bar instead
+    /// of looking fresh for as long as the roster can be read. A session whose stamp
+    /// cannot be read loses to one that can, the same rule the bar's own staleness
+    /// check follows.
+    #[must_use]
+    pub fn reading(&self, agent: &str) -> Option<(ContextStats, String)> {
+        let records: Vec<Arc<Record>> = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|record| record.agent_id == agent)
+            .cloned()
+            .collect();
+        let mut newest: Option<(jiff::Timestamp, String, ContextStats)> = None;
+        for record in records {
+            let Some(context) = record.context() else {
+                continue;
+            };
+            let at = record.summary().updated_at;
+            let observed = at
+                .parse::<jiff::Timestamp>()
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+            if newest
+                .as_ref()
+                .is_none_or(|(current, _, _)| observed >= *current)
+            {
+                newest = Some((observed, at, context));
+            }
+        }
+        newest.map(|(_, at, context)| (context, at))
+    }
+
     /// Forget a session and end its agent.
     pub fn remove(&self, id: &str) -> bool {
         let removed = self
@@ -198,6 +238,12 @@ pub struct Record {
     /// The last audit sequence written, so a turn appends what is new and not the
     /// whole profile's history again.
     grants_written: Mutex<u64>,
+    /// What this conversation costs, counted as its events arrive.
+    ///
+    /// Held against the session rather than against the agent, because two
+    /// conversations with one agent are two contexts; [`Sessions::reading`] picks
+    /// the newest for the stats bar.
+    usage: Mutex<Usage>,
     /// The mailbox of the task that owns the [`Session`].
     ///
     /// The ACP handle is `Send` but not `Sync` — the SDK's connection owns an
@@ -283,6 +329,7 @@ impl Record {
                 transcript_warned: AtomicBool::new(false),
                 broker,
                 grants_written: Mutex::new(0),
+                usage: Mutex::new(Usage::default()),
                 commands,
             }),
             mailbox,
@@ -359,6 +406,12 @@ impl Record {
 
     /// Record one event: ring for replay, feed for whoever is attached.
     pub fn record(&self, event: SessionEvent) {
+        // Counted before the event is visible, so a client that sees a chunk and
+        // asks the stats route in the same breath is not told it has not arrived.
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .observe(&event);
         {
             let mut state = self
                 .lifecycle
@@ -435,6 +488,26 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner)
             .live
             .subscribe()
+    }
+
+    /// Count a prompt on its way to the agent.
+    ///
+    /// Called by the owner task when it sends, not by a route: the prompt is part of
+    /// the conversation whether or not the agent ever echoes it back.
+    fn count_prompt(&self, text: &str) {
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .prompt(text);
+    }
+
+    /// What this conversation costs, when it has anything to report.
+    #[must_use]
+    pub fn context(&self) -> Option<ContextStats> {
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .context()
     }
 
     /// The turn in flight, when there is one.
@@ -669,6 +742,7 @@ async fn drive_turn(
     mailbox: &mut mpsc::Receiver<Command>,
     text: String,
 ) -> Continue {
+    record.count_prompt(&text);
     let turn = session.prompt(text);
     tokio::pin!(turn);
     loop {
@@ -1385,6 +1459,99 @@ mod tests {
         // A second prompt does not rename a conversation.
         record.title_from("something else");
         assert_eq!(record.summary().title, "update the readme");
+    }
+
+    #[test]
+    fn a_conversation_is_counted_as_it_is_recorded() {
+        let (record, _mailbox) =
+            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
+        assert!(
+            record.context().is_none(),
+            "a session nobody has spoken to reports nothing rather than zero"
+        );
+
+        record.count_prompt("explain this function");
+        record.record(stamped(
+            "s1",
+            SessionEventKind::MessageChunk,
+            serde_json::json!({ "role": "assistant", "content": { "text": "it sorts a list" } }),
+            "2026-10-30T12:00:00Z",
+        ));
+
+        // 21 characters of prompt and 14 of answer, four to a token.
+        let context = record.context().expect("a reading");
+        assert_eq!(context.used_tokens, 9);
+        assert_eq!(
+            context.source,
+            acpilot_proto::stats::StatSource::Estimated,
+            "a count, not a measurement"
+        );
+        assert_eq!(context.window_tokens, None);
+    }
+
+    #[test]
+    fn an_agents_reading_is_its_newest_conversation() {
+        let sessions = Sessions::new();
+        let (older, _a) = Record::new("s1".into(), "default".into(), "mock".into(), None, None);
+        let (newer, _b) = Record::new("s2".into(), "default".into(), "mock".into(), None, None);
+        let (elsewhere, _c) = Record::new(
+            "s3".into(),
+            "default".into(),
+            "elsewhere".into(),
+            None,
+            None,
+        );
+        older.count_prompt("the first conversation");
+        newer.count_prompt("the second conversation, which is longer");
+        elsewhere.count_prompt("somebody else's conversation entirely");
+        // Stamped explicitly, so the order is the clock's and not the map's.
+        older.record(stamped(
+            "s1",
+            SessionEventKind::Notice,
+            serde_json::json!({ "title": "test" }),
+            "2026-10-30T12:00:00.000000000Z",
+        ));
+        newer.record(stamped(
+            "s2",
+            SessionEventKind::Notice,
+            serde_json::json!({ "title": "test" }),
+            "2026-10-30T12:05:00.000000000Z",
+        ));
+        elsewhere.record(stamped(
+            "s3",
+            SessionEventKind::Notice,
+            serde_json::json!({ "title": "test" }),
+            "2026-10-30T12:09:00.000000000Z",
+        ));
+        sessions.insert(older);
+        sessions.insert(newer);
+        sessions.insert(elsewhere);
+
+        let (context, at) = sessions.reading("mock").expect("a reading");
+        assert_eq!(
+            at, "2026-10-30T12:05:00.000000000Z",
+            "the newest conversation with this agent, and its own clock"
+        );
+        assert!(
+            context.used_tokens >= 8,
+            "the second conversation's prompt, not the first's: {context:?}"
+        );
+        assert!(sessions.reading("nobody").is_none());
+    }
+
+    fn stamped(
+        id: &str,
+        kind: SessionEventKind,
+        payload: serde_json::Value,
+        at: &str,
+    ) -> SessionEvent {
+        SessionEvent {
+            seq: 1,
+            session_id: id.to_owned(),
+            kind,
+            at: at.to_owned(),
+            payload,
+        }
     }
 
     fn event(record: &Record, seq: u64) -> SessionEvent {

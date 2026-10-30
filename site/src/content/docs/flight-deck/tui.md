@@ -24,6 +24,13 @@ flowchart LR
 Panels are the same three in every UI — files, text, agents — because the mental
 model should not change when you change cockpit.
 
+The footer carries the stats bar: one row per integration, a context track and a
+credit track, a name per row even when it has nothing to report. A window nobody
+reported is drawn as an indeterminate track rather than a full or an empty one,
+an estimate is marked and coloured as an estimate, and `F4` swaps every figure for
+the source behind it. The same rows are drawn by the desktop app and the page,
+because the measuring is `acpilot-stats` rather than each frontend.
+
 The colours are not this crate's: every pane, card and status label is drawn from
 the theme tokens the desktop app and the browser read, resolved from
 `theme_tui` (over `theme`) in the project's settings. A theme is an extension, so

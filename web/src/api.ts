@@ -35,6 +35,33 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+/** Where one figure came from, as the daemon spells it. */
+export type StatSource = 'server' | 'configured' | 'estimated' | 'unknown';
+
+/**
+ * One measured quantity.
+ *
+ * `fill` is absent when the denominator was not reported — a track with no fill,
+ * never a full or an empty one. `text` is the same sentence the TUI draws, spelled
+ * by the daemon from the same crate, so the two bars cannot disagree.
+ */
+export interface Track {
+  fill: number | null;
+  text: string;
+  source: StatSource;
+}
+
+/** One integration's row in the stats bar, as `GET /app/stats` measures it. */
+export interface StatRow {
+  id: string;
+  kind: 'provider' | 'agent';
+  label: string;
+  context?: Track;
+  credits?: Track;
+  updated_at: string;
+  stale: boolean;
+}
+
 /** Why a call failed, in the terms the page shows. */
 export class ApiError extends Error {
   readonly status: number;
@@ -97,4 +124,16 @@ export function health(token: string, signal?: AbortSignal): Promise<Health> {
 
 export function sessions(token: string, signal?: AbortSignal): Promise<SessionSummary[]> {
   return get<SessionSummary[]>('/v1/sessions', token, signal);
+}
+
+/**
+ * `GET /app/stats` — the page's copy of the stats bar.
+ *
+ * Under `/app` rather than `/v1` because it is not the contract: a browser cannot
+ * link the crate that does the arithmetic, so the daemon measures the contract's
+ * rows for it. It needs the token like every other call — the roster is not the
+ * page's own business — which is why it is a `fetch` and not an `EventSource`.
+ */
+export function stats(token: string, signal?: AbortSignal): Promise<StatRow[]> {
+  return get<StatRow[]>('/app/stats', token, signal);
 }

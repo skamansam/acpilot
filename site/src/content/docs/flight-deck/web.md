@@ -58,8 +58,10 @@ daemon needs no Node; CI rebuilds it and fails if the committed page drifted fro
 its source.
 
 The page asks for the daemon's token, then shows what that token can see: the
-health answer (service, API version, workspace), and the session list with each
-row's agent, status and last event. **About** names the running build and the
+health answer (service, API version, workspace), the stats bar — a track per
+integration, with **Show sources** naming where each figure came from, which is the
+same question the terminal's `F4` asks — and the session list with each row's
+agent, status and last event. **About** names the running build and the
 licence; **Quit** tries to close the tab and says so when the browser refuses.
 The shell is served without a token like `/docs`, because a browser cannot attach
 a header to a typed address and the page holds no data; every API call behind it
@@ -69,7 +71,15 @@ The page's colours come from the same theme extension the terminal and the windo
 read: `/app` inlines the web theme's palette into its `:root`, and the page then
 listens on `GET /app/palette/events` so saving a theme anywhere — the TUI, the
 desktop app, another tab — repaints an open page instead of waiting for a reload.
-That stream is one of the unauthenticated routes, alongside `/app` and `/docs`. A
+That stream is one of the unauthenticated routes, alongside `/app` and `/docs`.
+
+The bar's rows are measured by the daemon, not by the page: `GET /app/stats`
+answers the same rows `acpilot-stats` builds for the terminal and the desktop app,
+already reduced to a fill and a sentence. A browser cannot link a Rust crate, and a
+second implementation of the denominator rules in TypeScript is one that drifts the
+first time a rule changes. That route is under `/app` because it is a rendering of
+the contract rather than part of it, and it needs the token — an agent roster is not
+the page's own business. A
 browser cannot put an `Authorization` header on an `EventSource`, and the obvious
 alternative — the token in the stream's query string — is a secret in the daemon's
 log, the browser's history and any `Referer`. It is safe to leave open because the

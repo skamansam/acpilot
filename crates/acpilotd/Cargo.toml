@@ -29,6 +29,10 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The stats bar as a value: `/v1/stats` serves the contract, and `/app/stats`
+# serves the rows a browser can draw, measured by the same crate the TUI uses so
+# the two bars cannot disagree about a denominator.
+acpilot-stats = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }

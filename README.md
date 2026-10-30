@@ -289,6 +289,7 @@ GET    /v1/profiles/{id}/preferences      PATCH .../preferences
 GET    /v1/lsp/servers                    POST /v1/lsp/servers/{id}/restart
 GET    /v1/lsp/servers/{id}/logs          GET  /v1/lsp/diagnostics
 POST   /v1/lsp/request
+GET    /v1/stats
 ```
 
 The list is **frozen** for v1, with the reasoning and the rejected alternatives in

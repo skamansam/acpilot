@@ -7,8 +7,8 @@
 //!
 //! Two layers, and the split is deliberate:
 //!
-//! * [`theme`], [`profiles`], [`palette`] and [`keymap`] are plain data and are
-//!   tested without a window. They are the part that must be right before a
+//! * [`theme`], [`profiles`], [`palette`], [`stats`] and [`keymap`] are plain data
+//!   and are tested without a window. They are the part that must be right before a
 //!   pixel is drawn, and they compile on a machine with no graphics stack at all.
 //! * [`app`] is the gpui view, behind the `gui` feature. It is off by default so
 //!   `cargo test --workspace` does not compile a renderer (or need
@@ -25,6 +25,7 @@ pub mod keymap;
 pub mod palette;
 pub mod platform;
 pub mod profiles;
+pub mod stats;
 pub mod theme;
 
 #[cfg(feature = "gui")]

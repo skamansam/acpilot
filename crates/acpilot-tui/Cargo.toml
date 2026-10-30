@@ -24,6 +24,9 @@ acpilot-extensions = { workspace = true }
 # CLI resolved at launch, so an edit is a recolour rather than a restart.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The stats bar as a value: the fill ratios and the words beside them come from the
+# same crate the daemon hands the page, so the two bars cannot disagree.
+acpilot-stats = { workspace = true }
 # The text model behind the editor pane: one rope, one caret set, one undo
 # history, shared with the desktop app and the browser so "Ctrl-Z" cannot mean
 # three things in three frontends. The pane's scrolling and clipping live in

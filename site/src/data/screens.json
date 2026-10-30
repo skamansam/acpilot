@@ -1614,22 +1614,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -2850,22 +2905,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -4486,22 +4596,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -4527,7 +4692,7 @@
           {
             "column": 10,
             "text": "F",
-            "style": 25
+            "style": 27
           },
           {
             "column": 11,
@@ -6157,22 +6322,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -6455,7 +6675,7 @@
           {
             "column": 11,
             "text": "s1 · Write crates/acpilot-tui/src/app.rs",
-            "style": 26
+            "style": 28
           },
           {
             "column": 109,
@@ -6908,7 +7128,7 @@
           {
             "column": 11,
             "text": "- ",
-            "style": 27
+            "style": 29
           },
           {
             "column": 13,
@@ -7218,22 +7438,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -7699,7 +7974,7 @@
           {
             "column": 42,
             "text": "  agent-terminal-1",
-            "style": 28
+            "style": 25
           },
           {
             "column": 101,
@@ -8364,22 +8639,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -8644,7 +8974,7 @@
           {
             "column": 35,
             "text": "PASS",
-            "style": 29
+            "style": 30
           },
           {
             "column": 39,
@@ -8686,7 +9016,7 @@
           {
             "column": 35,
             "text": "PASS",
-            "style": 29
+            "style": 30
           },
           {
             "column": 39,
@@ -8728,7 +9058,7 @@
           {
             "column": 35,
             "text": "PASS",
-            "style": 29
+            "style": 30
           },
           {
             "column": 39,
@@ -8797,7 +9127,7 @@
           {
             "column": 32,
             "text": "Summary",
-            "style": 26
+            "style": 28
           },
           {
             "column": 39,
@@ -9310,22 +9640,77 @@
         [
           {
             "column": 0,
-            "text": " ● lmstudio · qwen2.5-coder-7b",
-            "style": 10
-          },
-          {
-            "column": 30,
-            "text": " 21620 tok · $0.000 · 214ms │ ",
+            "text": " ◇ ",
             "style": 3
           },
           {
-            "column": 60,
-            "text": " ● anthropic · claude-sonnet-4",
+            "column": 3,
+            "text": "lmstudio",
+            "style": 25
+          },
+          {
+            "column": 12,
+            "text": "████",
             "style": 10
           },
           {
-            "column": 90,
-            "text": " 7060 tok · $0.084 · 1380ms",
+            "column": 16,
+            "text": "░░░░",
+            "style": 26
+          },
+          {
+            "column": 20,
+            "text": " │  ◇ ",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "anthropic",
+            "style": 25
+          },
+          {
+            "column": 36,
+            "text": "█",
+            "style": 10
+          },
+          {
+            "column": 37,
+            "text": "░░░░░░░",
+            "style": 26
+          },
+          {
+            "column": 44,
+            "text": "  cr ",
+            "style": 3
+          },
+          {
+            "column": 49,
+            "text": "███",
+            "style": 13
+          },
+          {
+            "column": 52,
+            "text": "░░░░░",
+            "style": 26
+          },
+          {
+            "column": 57,
+            "text": " │  ◆ ",
+            "style": 3
+          },
+          {
+            "column": 63,
+            "text": "Claude Code",
+            "style": 15
+          },
+          {
+            "column": 74,
+            "text": " (old)",
+            "style": 3
+          },
+          {
+            "column": 81,
+            "text": "╌╌╌╌╌╌╌╌ │ +1 ",
             "style": 3
           }
         ]
@@ -9449,6 +9834,14 @@
       "bg": "token:bg_panel"
     },
     {
+      "fg": "token:text",
+      "bg": "default"
+    },
+    {
+      "fg": "token:border",
+      "bg": "default"
+    },
+    {
       "fg": "token:accent_high",
       "bg": "token:bg_panel",
       "modifiers": [
@@ -9465,10 +9858,6 @@
     },
     {
       "fg": "token:danger",
-      "bg": "default"
-    },
-    {
-      "fg": "token:text",
       "bg": "default"
     },
     {

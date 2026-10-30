@@ -40,7 +40,11 @@ mod files;
 pub mod embedded;
 mod platform;
 mod sessions;
+mod stats;
 mod terminals;
+// What a conversation costs, counted from the events its agent streamed. Not a
+// route and not a renderer: the sessions engine counts, `/v1/stats` reports.
+mod usage;
 
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
@@ -1045,7 +1049,8 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     let module_operations = sessions::operations()
         .into_iter()
         .chain(terminals::operations())
-        .chain(files::operations());
+        .chain(files::operations())
+        .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
@@ -1319,6 +1324,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
         .merge(sessions::routes())
+        .merge(stats::routes())
         .merge(terminals::routes())
         .with_state(state);
 

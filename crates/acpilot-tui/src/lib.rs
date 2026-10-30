@@ -19,6 +19,7 @@ pub mod app;
 pub mod backend;
 pub mod clipboard;
 pub mod editor;
+pub mod layout;
 pub mod theme;
 pub mod ui;
 
@@ -42,12 +43,24 @@ use crate::backend::{Update, Worker};
 /// looks frozen and far above a busy loop.
 const FRAME: Duration = Duration::from_millis(120);
 
+/// How often a drag resting at a pane's edge scrolls.
+///
+/// A drag only arrives while the pointer moves, so a pointer held still against
+/// an edge sends nothing at all — the scroll has to be the loop's own clock. 30 ms
+/// is a line per tick at about 33 lines a second, which reads as one continuous
+/// scroll without being a busy loop; the clock is only this fast while there is
+/// more view in the direction the pointer is pulling.
+const AUTOSCROLL: Duration = Duration::from_millis(30);
+
 /// How long the terminal is given to answer the colour query.
 ///
 /// One escape round-trip before the screen is taken over. Long enough for a
 /// terminal at the end of an SSH connection, short enough that a terminal which
 /// will not answer costs a quarter of a second at launch rather than a second.
 const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// The file the divider widths are remembered in, under the data directory.
+const LAYOUT_FILE: &str = "tui-layout.toml";
 
 /// Run the TUI against the daemon at `daemon` until the user leaves.
 ///
@@ -105,6 +118,10 @@ pub fn run(
     );
     watch_theme(files, changes);
     let mut app = App::new(daemon);
+    // A width the dividers were dragged to is remembered per machine, in the data
+    // directory rather than in `config.toml`: it is the client's memory of itself,
+    // not a setting a person writes.
+    app.remember_layout(acpilot_profile::data_dir().join(LAYOUT_FILE));
     app.set_theme(theme);
     drive(app, worker, inbox, mouse)
 }
@@ -283,19 +300,25 @@ fn drive(
     if mouse {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     }
-    let result = event_loop(&mut terminal, app, worker, &mut inbox);
+    let mut app = app;
+    let result = event_loop(&mut terminal, &mut app, worker, &mut inbox);
     // Reportings off before the screen is restored, so a failed session does not
     // leave the shell receiving mouse events it never asked for.
     if mouse {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     }
     ratatui::restore();
+    // After the screen is the shell's again, so the sentence lands in a terminal
+    // where the person can read it.
+    if let Some(error) = app.save_layout() {
+        eprintln!("acpilot tui: cannot remember the pane widths: {error}");
+    }
     result
 }
 
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
-    mut app: App,
+    app: &mut App,
     worker: Worker,
     inbox: &mut UnboundedReceiver<Update>,
 ) -> io::Result<()> {
@@ -308,6 +331,11 @@ fn event_loop(
             app.apply(update);
         }
 
+        // A drag held against a pane's edge is a scroll that keeps going without
+        // the pointer moving a cell, so it is asked for here rather than waited
+        // for as an event.
+        app.autoscroll();
+
         // `draw` reads the layout and hands back the panes' inner sizes, so a
         // program and the screen agree on the width, and a copy cursor and the
         // transcript agree on how many lines it can scroll — without the loop
@@ -316,7 +344,7 @@ fn event_loop(
         // from the parse the measurement asked for; every other pane still only
         // reads.
         let viewports = std::cell::Cell::new(None);
-        terminal.draw(|frame| viewports.set(Some(ui::draw(frame, &mut app))))?;
+        terminal.draw(|frame| viewports.set(Some(ui::draw(frame, app))))?;
         if let Some(viewports) = viewports.get() {
             app.set_viewports(viewports);
             if app.terminal.is_some() {
@@ -330,7 +358,12 @@ fn event_loop(
             }
         }
 
-        if event::poll(FRAME)? {
+        let wait = if app.autoscrolling() {
+            AUTOSCROLL
+        } else {
+            FRAME
+        };
+        if event::poll(wait)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     if let Some(request) = app.handle_key(key) {

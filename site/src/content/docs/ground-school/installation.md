@@ -32,7 +32,7 @@ user found it.
 git clone https://github.com/skamansam/acpilot.git
 cd acpilot
 cargo build            # the daemon, the CLI, and the workspace crates
-cargo xtask check      # what CI runs: fmt, clippy, tests
+cargo xtask check      # what CI runs: fmt, clippy, tests, the shell, the web UI
 ```
 
 `rustup` reads `rust-toolchain.toml`, so the pinned compiler and components
@@ -47,8 +47,16 @@ cargo build -p acpilot-gui --features gui
 ```
 
 On Linux that links gpui's X11/Wayland backends and needs their dev packages; the
-list is in `CONTRIBUTING.md`. Release tarballs include the app alongside the CLI
-and the daemon, so installing the release gives you all three.
+list is in `CONTRIBUTING.md`. `cargo xtask check` builds that feature too — a
+shell that stops compiling is otherwise found by CI and nowhere else — and it runs
+the web UI's checks, so it also wants Node 22 and npm. `cargo xtask check --no-web`
+is the Rust-only loop.
+
+Release packaging is `cargo-dist`'s (`dist-workspace.toml`, P12-1), which makes one
+archive per program per platform: `acpilot`, `acpilotd` and `acpilot-gui`. The
+installers put them in the same directory, which matters for the first two — the
+CLI looks for the daemon beside its own executable rather than on `PATH`, so
+installing `acpilot` without `acpilotd` gives you a client with nothing to talk to.
 
 ## Run what exists today
 

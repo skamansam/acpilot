@@ -72,12 +72,15 @@ plain `cargo build` forgets:
 cargo xtask build gui      # the binary, with gpui
 cargo xtask run gui        # build and launch it
 cargo xtask test gui       # `gui` plus `gui-tests`, gpui's headless harness
+cargo xtask gui-check      # lint, link and tests: the whole `gui` job
 ```
 
 `test gui` adds the harness because it is a second feature: it compiles gpui's
 `test-support` machinery, which is what lets the About panel be drawn in a real
-`Context` with no display. CI's `gui` job runs that same task rather than a raw
-`nextest` line, so a green local run and a green job mean the same thing.
+`Context` with no display. `gui-check` is that run plus the clippy with both
+features and the link, which is all CI's `gui` job does; the job runs this task
+rather than three raw cargo lines, so a green local run and a green job mean the
+same thing.
 
 On Linux the link needs the development packages gpui asks for:
 

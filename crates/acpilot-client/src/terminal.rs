@@ -233,9 +233,22 @@ async fn connect(base: &str, request: &Request<()>) -> Result<Box<dyn Duplex>, C
     let uri = request.uri();
     let host = uri.host().unwrap_or("localhost").to_owned();
     let port = uri.port_u16().unwrap_or(80);
-    let stream = tokio::net::TcpStream::connect((host.as_str(), port))
-        .await
-        .map_err(|error| ClientError::Terminal(format!("{base}: {error}")))?;
+    // Bounded, because "nothing is listening" has two shapes. A closed port
+    // refuses at once; a port behind a firewall that drops the SYN leaves the
+    // kernel retrying for over two minutes, and a pane that is merely empty for
+    // that long reads as a hung editor rather than a wrong endpoint.
+    let stream = tokio::time::timeout(
+        platform::CONNECT,
+        tokio::net::TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| {
+        ClientError::Terminal(format!(
+            "{base}: nothing answered within {:?}",
+            platform::CONNECT
+        ))
+    })?
+    .map_err(|error| ClientError::Terminal(format!("{base}: {error}")))?;
     Ok(Box::new(stream))
 }
 

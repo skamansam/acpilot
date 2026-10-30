@@ -54,21 +54,22 @@ same command as CI. `cargo test --workspace` still works for a single crate or a
 processes and skips doctests, and the local check should fail for the same
 reasons CI does.
 
-One thing `cargo xtask check` deliberately does not do is build the desktop shell:
+It also builds the desktop shell and runs the web UI's half. The shell first:
 `acpilot-gui`'s gpui dependency sits behind a `gui` feature that is off by
-default, so the workspace gate stays fast and does not need a graphics stack.
-CI's `gui` job is what keeps the shell from rotting. Locally it is
-`cargo xtask build gui`, `cargo xtask run gui` and `cargo xtask test gui` — the
-tasks carry the feature flag a plain `cargo build` forgets — and `test gui` adds
-`gui-tests` on top of `gui`, because the headless harness is a second feature and
-`cargo xtask check` compiles neither. `cargo xtask build all` compiles both
-clients and the daemon in one go; `cargo xtask run daemon` is the backend on its
-own, for a debugger or a second client. That harness is gpui's own: without it
-the About panel and the palette that opens it have no `Context` to live in, so
-the tests that draw the window would only be testing a copy of it. It is separate
-from `gui` because it compiles gpui's `test-support` machinery, which the default
-workspace gate should not pay for. On Linux both
-need the dev packages gpui links against:
+default, so neither `cargo clippy --workspace` nor the workspace tests compile it,
+and a refactor that breaks the shell would otherwise be found by CI's `gui` job
+and nowhere else. It is a build rather than a `check` because linking is where
+gpui's missing Linux symlink shows up, and it is the same call `cargo xtask build
+gui` makes. The shell's *tests* stay out of the gate: they need `gui-tests` on top
+of `gui`, since the headless harness is a second feature and another gpui build —
+`cargo xtask gui-check` is that run, and it is the whole of CI's `gui` job: the
+lint with both features, the link, and `cargo xtask test gui`. `cargo xtask test
+all` is the workspace run plus it. That harness is gpui's own: without it the
+About panel and the palette that opens it have no `Context` to live in, so the
+tests that draw the window would only be testing a copy of it. `cargo xtask build all` compiles both clients
+and the daemon in one go; `cargo xtask run gui` is the shell; `cargo xtask run
+daemon` is the backend on its own, for a debugger or a second client. On Linux the
+build and those tests need the dev packages gpui links against:
 
 ```bash
 sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
@@ -79,6 +80,17 @@ and `libc` held at exactly 0.2.189; the crate manifest names both, and `README.m
 §5.4 explains why the pin exists. The `xkbcommon-x11` half of that list is not
 avoidable from this workspace — gpui 0.2.2 asks its `xkbcommon` dependency for
 `x11` in its own manifest, and Cargo features only ever add (ADR 0009 §5).
+
+The web UI's half is a task of its own, `cargo xtask web-check`: `npm ci` when
+`web/node_modules` is missing, `npm run check`, `npm test`, a `cargo build -p
+acpilotd` for the live test, `npm run test:live`, then `npm run build` and a
+comparison of the result with the committed page. `cargo xtask check` calls it and
+CI's `web` job calls it, so that list exists once rather than in a workflow and a
+local habit that agree until somebody edits one. A `.svelte` edit that was never
+rebuilt, or a type error only `svelte-check` sees, therefore fails locally instead
+of on a runner — and when the page drifted, the rebuilt file is already in your
+tree to commit. It needs Node 22 and npm; the failure message says so. `cargo
+xtask check --no-web` is the Rust-only loop: everything above, without Node.
 
 The web UI is built, not hand-written, and the build output is committed so
 `cargo build` never needs Node:
@@ -93,7 +105,18 @@ npm run build   # one HTML file, written into crates/acpilot-web/assets/
 
 Run `npm run build` whenever you change anything under `web/`, and commit the
 regenerated `crates/acpilot-web/assets/index.html` in the same commit. CI's `web`
-job rebuilds it and fails with a diff if you forget.
+job rebuilds it — `cargo xtask web-check` is that job — and fails if you forget.
+
+From the repository root, `cargo xtask web-build` is that build plus the two things
+around it: it runs `npm ci` when `web/node_modules` is missing, and it ends by
+saying whether the committed page changed — the diff CI fails on. `cargo xtask
+check` runs the same build as its last web step, but treats a changed page as a
+failure, which is the gate's job rather than the build task's. `cargo xtask dev`
+is the other half of the loop: the daemon on `127.0.0.1:7777` with the Vite dev
+server over it, so a `.svelte` edit is a browser reload rather than a rebuild and a
+commit. The page in that mode is the address Vite prints (`http://localhost:5173`),
+`/v1` is proxied to the daemon, and the token to paste is the one the daemon logs.
+Stop it with Ctrl-C: the task stops both processes when either one stops.
 
 The page's theme repaint is tested against a real daemon as well as a mock:
 `npm test` mounts the shell with a fake stream, and `npm run test:live` spawns
@@ -405,6 +428,20 @@ committed back and `main` stays a tree only pull requests change. The `gui` feat
 ships in the same tarball as the CLI and the daemon, built with `--features
 acpilot-gui/gui`; the Linux runner installs the graphics stack it links against,
 and the Windows and macOS runners use their own system frameworks.
+
+`cargo xtask dist` is the packaging half of that without a tag: it drives
+`cargo-dist` from `dist-workspace.toml` and writes the archives, checksums, the
+shell and PowerShell installers, the Homebrew formula and an SBOM per program into
+`target/distrib/`. Only the host's target is built unless you pass `--target`, and
+the task refuses a `cargo-dist` other than the one the config pins, so a local build
+and a released one are the same tool's output. It needs two things on `PATH` —
+`cargo-dist` at that pinned version and `cargo-cyclonedx` — and prints the install
+command for whichever is missing.
+
+The workflow above and `dist` do not package the same shape yet: the workflow puts
+all three programs in one tarball per platform, while `cargo-dist` archives one
+package at a time (installed side by side in the same bin directory). Choosing one
+is P12-2's, and the first release is the deadline.
 
 ## Decisions
 

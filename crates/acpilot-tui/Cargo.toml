@@ -38,6 +38,10 @@ vt100 = { workspace = true }
 # Session events carry their payload as JSON, because the ACP updates they come
 # from are not one shape; reading them is the app's job, not a typed bypass.
 serde_json = { workspace = true }
+# The one file this client writes for itself: the widths the dividers were
+# dragged to. TOML because a person who opens it should be able to read it.
+serde = { workspace = true }
+toml = { workspace = true }
 # Asking the terminal what its background and foreground are, so
 # `[preferences] theme_follow_terminal` has a pair to solve a palette around.
 terminal-colorsaurus = { workspace = true }

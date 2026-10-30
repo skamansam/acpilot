@@ -92,7 +92,10 @@ drag that selects and the wheel all need it. It costs the terminal its own
 drag-to-select — most terminals keep that on Shift-drag — so `--no-mouse` turns
 reporting off and leaves the gesture to the terminal. Nothing is lost but the
 pointer: every mouse action has a key, and `F2` copy mode is the built-in answer
-for reading a terminal's output.
+for reading a terminal's output. A drag held against the top or bottom of the editor
+or the terminal scrolls past its edge and keeps selecting, and the widths the
+dividers were dragged to are remembered for the next launch in `tui-layout.toml`
+under the data directory — not in a settings file, which is the person's to edit.
 
 The default endpoint is the daemon's unix socket in `$XDG_RUNTIME_DIR/acpilot`
 (`$TMPDIR` on macOS), or loopback HTTP on Windows until the named pipe exists.

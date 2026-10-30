@@ -346,10 +346,15 @@ impl EditorPane {
     }
 
     /// Scroll the window without moving the caret, which is what a wheel does.
-    pub fn scroll(&mut self, lines: i32) {
-        self.viewport
+    ///
+    /// Answers whether the view moved: the top of a file is a scroll that cannot
+    /// happen, and a drag held against it should not be redrawing for it.
+    pub fn scroll(&mut self, lines: i32) -> bool {
+        let moved = self
+            .viewport
             .scroll_lines(self.document.buffer(), lines as isize);
         self.rows = self.viewport.visible(self.document.buffer());
+        moved
     }
 
     /// Put the caret where a click landed, and anchor a selection there.

@@ -16,6 +16,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::backend::{Request, Update};
 use crate::editor::EditorPane;
+use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
 /// Which pane has the keyboard.
@@ -280,12 +281,6 @@ pub struct Entry {
     /// Its text, which may contain newlines.
     pub text: String,
 }
-
-/// The tree's column, in cells, when nobody has dragged the divider.
-const FILES_WIDTH: u16 = 26;
-
-/// The sidebar's column — sessions, transcript, composer — when nobody has.
-const SIDEBAR_WIDTH: u16 = 44;
 
 /// How many lines of history a pane keeps behind its live screen.
 ///
@@ -938,6 +933,55 @@ impl TerminalPane {
         self.set_scroll(scroll);
     }
 
+    /// Scroll the view under a drag that is holding a selection.
+    ///
+    /// Positive is older output, the same way the wheel reads. The selection is
+    /// kept in cells of the view, so a scroll on its own would move what its
+    /// earlier cells point at — a drag across a shell's output would quietly drop
+    /// what it had marked and take the line above instead. The two ends therefore
+    /// travel with the text they were put on.
+    ///
+    /// A scroll that would carry either end off the screen is refused rather than
+    /// half-done: a selection with an end nobody can see is a selection the yank
+    /// could not take either, and stopping is the honest place to stop.
+    pub fn scroll_selection(&mut self, lines: i32) -> bool {
+        let Some(anchor) = self.reader.view.anchor else {
+            return false;
+        };
+        if lines == 0 {
+            return false;
+        }
+        let before = self.reader.view.scroll;
+        let target = if lines > 0 {
+            before.saturating_add(lines.unsigned_abs() as usize)
+        } else {
+            before.saturating_sub(lines.unsigned_abs() as usize)
+        };
+        self.set_scroll(target);
+        let after = self.reader.view.scroll;
+        if after == before {
+            return false;
+        }
+        // Which way the cells moved: reading further back pushes the text down.
+        let down = after > before;
+        let shift = i32::try_from(after.abs_diff(before)).unwrap_or(i32::MAX);
+        let rows = i32::from(self.grid_size().0.saturating_sub(1));
+        let carry = |cell: (u16, u16)| -> Option<(u16, u16)> {
+            let row = i32::from(cell.0) + if down { shift } else { -shift };
+            u16::try_from(row)
+                .ok()
+                .filter(|_| (0..=rows).contains(&row))
+                .map(|row| (row, cell.1))
+        };
+        let (Some(anchor), Some(cursor)) = (carry(anchor), carry(self.reader.view.cursor)) else {
+            self.set_scroll(before);
+            return false;
+        };
+        self.reader.view.anchor = Some(anchor);
+        self.reader.view.cursor = cursor;
+        true
+    }
+
     /// Back to the newest line, which is where answering a program puts the view.
     ///
     /// Reading behind a program is not a mode here, so the first keystroke is also
@@ -1378,6 +1422,29 @@ pub struct App {
     pub dividers: Dividers,
     /// What the mouse is holding, if it is holding anything.
     pub drag: Option<Drag>,
+    /// Where the pointer was at the last press or drag.
+    ///
+    /// A drag only arrives while the pointer moves, so a pointer resting on a
+    /// pane's edge sends nothing at all — and resting on the edge is exactly what
+    /// asks for the view to scroll. The last cell is kept so the loop can keep
+    /// asking, rather than waiting for a hand to twitch.
+    pub drag_at: Option<(u16, u16)>,
+    /// Whether the last autoscroll moved the view.
+    ///
+    /// The loop reads it to decide how long to wait for input: a drag resting at
+    /// an edge wants the next line now, and a drag that has run out of file does
+    /// not want a faster clock for nothing.
+    pub drag_scroll: bool,
+    /// Where the divider widths are remembered, when this client has somewhere to
+    /// write them.
+    ///
+    /// [`None`] for the design pass and for every test: a demo that wrote to a
+    /// person's data directory would be a screenshot that edited the machine it was
+    /// taken on.
+    pub layout_path: Option<std::path::PathBuf>,
+    /// The widths last read or written, so a launch that changed nothing writes
+    /// nothing.
+    pub layout_saved: Layout,
     /// The size the terminal pane was last drawn at.
     ///
     /// The event loop tells the app every frame and the program only when this
@@ -1413,8 +1480,8 @@ impl App {
             theme_from_daemon: false,
             about: false,
             which_key: false,
-            files_width: FILES_WIDTH,
-            sidebar_width: SIDEBAR_WIDTH,
+            files_width: Layout::default().files,
+            sidebar_width: Layout::default().sidebar,
             toast: None,
             integrations: Vec::new(),
             commands: acpilot_demo::palette::commands(),
@@ -1442,6 +1509,10 @@ impl App {
             terminal_area: None,
             dividers: Dividers::default(),
             drag: None,
+            drag_at: None,
+            drag_scroll: false,
+            layout_path: None,
+            layout_saved: Layout::default(),
             pane_size: None,
             focus: Focus::Sessions,
             status: "connecting".to_owned(),
@@ -2531,6 +2602,98 @@ impl App {
         self.scroll_terminal(column, row, up);
     }
 
+    /// Scroll the pane a drag is resting against, and grow the selection with it.
+    ///
+    /// A pointer cannot leave the screen, so a drag alone can only ever mark what
+    /// one screen holds. Resting on the top or bottom row of the pane the drag
+    /// began in is the ask for the rest: the view moves a line and the selection
+    /// keeps growing, which is how a selection reaches past the edge it is being
+    /// dragged against. Like the wheel, the gesture is the pointer's, and it is
+    /// also a key: `Ctrl-U`/`Ctrl-D` and Page Up/Down reach the same lines.
+    ///
+    /// Returns whether the view actually moved, so the loop knows whether to keep
+    /// a faster clock: a drag resting at the top of a file has run out of file and
+    /// should not redraw thirty times a second to prove it.
+    ///
+    /// What stays put is the part already marked. The editor's selection is a
+    /// buffer offset, so scrolling the view under it cannot move it; the terminal's
+    /// is a cell of the view, so the pane shifts it with its text — a drag across a
+    /// shell's output must not quietly reassign the cells it covered.
+    pub fn autoscroll(&mut self) -> bool {
+        let step = self.edge_step();
+        let Some(step) = step else {
+            self.drag_scroll = false;
+            return false;
+        };
+        let Some((column, row)) = self.drag_at else {
+            self.drag_scroll = false;
+            return false;
+        };
+        let moved = match self.drag {
+            Some(Drag::Editor) => {
+                let moved = self
+                    .editor
+                    .as_mut()
+                    .is_some_and(|editor| editor.scroll(step));
+                if moved {
+                    self.drag_editor(column, row);
+                }
+                moved
+            }
+            Some(Drag::Terminal) => {
+                // The editor's step is a direction in the file; the terminal's is
+                // a scroll, and older output is positive.
+                let moved = self
+                    .terminal
+                    .as_mut()
+                    .is_some_and(|pane| pane.scroll_selection(-step));
+                if moved {
+                    self.drag_terminal(column, row);
+                }
+                moved
+            }
+            _ => false,
+        };
+        self.drag_scroll = moved;
+        moved
+    }
+
+    /// Which way a resting drag is pulling the view: `-1` past the top, `1` past
+    /// the bottom, nothing for a pointer that is over the pane.
+    ///
+    /// Rows are what an edge is here. A drag that has wandered sideways is still
+    /// at the top of the pane if it is on the pane's top row or above it, and a
+    /// drag that left the window upward is asking for more of the same.
+    fn edge_step(&self) -> Option<i32> {
+        let area = match self.drag {
+            Some(Drag::Editor) => self.editor_area.map(|area| area.pane),
+            Some(Drag::Terminal) => self.terminal_area,
+            _ => return None,
+        }?;
+        if area.height == 0 {
+            return None;
+        }
+        let (_, row) = self.drag_at?;
+        let last = area.y.saturating_add(area.height.saturating_sub(1));
+        if row <= area.y {
+            return Some(-1);
+        }
+        if row >= last {
+            return Some(1);
+        }
+        None
+    }
+
+    /// Whether the loop should keep the fast clock for a drag at an edge.
+    ///
+    /// Asked after [`App::autoscroll`], so it is the last move's answer rather than
+    /// a guess: true only while there is more view in the direction the pointer is
+    /// pulling.
+    #[must_use]
+    pub fn autoscrolling(&self) -> bool {
+        self.drag_scroll
+    }
+
     /// Scroll the terminal under the wheel, without taking the keyboard.
     fn scroll_terminal(&mut self, column: u16, row: u16, up: i32) -> bool {
         let Some(area) = self.terminal_area else {
@@ -2714,16 +2877,16 @@ impl App {
         match self.focus {
             Focus::Files | Focus::Editor => {
                 self.files_width = if grow {
-                    (self.files_width + STEP).min(60)
+                    (self.files_width + STEP).min(MAX_FILES)
                 } else {
-                    self.files_width.saturating_sub(STEP).max(16)
+                    self.files_width.saturating_sub(STEP).max(MIN_FILES)
                 };
             }
             _ => {
                 self.sidebar_width = if grow {
-                    (self.sidebar_width + STEP).min(80)
+                    (self.sidebar_width + STEP).min(MAX_SIDEBAR)
                 } else {
-                    self.sidebar_width.saturating_sub(STEP).max(24)
+                    self.sidebar_width.saturating_sub(STEP).max(MIN_SIDEBAR)
                 };
             }
         }
@@ -2731,6 +2894,49 @@ impl App {
             "panes · tree {} · sidebar {} columns",
             self.files_width, self.sidebar_width
         );
+    }
+
+    /// Open with the widths a previous launch left, and remember where they live.
+    ///
+    /// Only the clients that have somewhere to keep them call this: a width is
+    /// remembered per machine and not per project, because the window is the same
+    /// window whatever workspace is in it.
+    pub fn remember_layout(&mut self, path: std::path::PathBuf) {
+        let layout = Layout::load(&path);
+        self.files_width = layout.files;
+        self.sidebar_width = layout.sidebar;
+        self.layout_saved = layout;
+        self.layout_path = Some(path);
+    }
+
+    /// Write the widths on the way out, when they are not the ones that were read.
+    ///
+    /// Once, at the end, rather than on every frame of a drag: a remembered column
+    /// is not worth a file write per mouse move, and nothing is worth keeping until
+    /// the dragging has stopped.
+    ///
+    /// The error is handed back rather than swallowed or printed here: the screen
+    /// has to be the person's again before anything can be said to them, and only
+    /// the caller is in a position to know that it is.
+    pub fn save_layout(&mut self) -> Option<std::io::Error> {
+        let path = self.layout_path.clone()?;
+        let layout = self.layout();
+        if layout == self.layout_saved {
+            return None;
+        }
+        match layout.save(&path) {
+            Ok(()) => {
+                self.layout_saved = layout;
+                None
+            }
+            Err(error) => Some(error),
+        }
+    }
+
+    /// The widths as they are now, held to what a pane can be drawn at.
+    #[must_use]
+    fn layout(&self) -> Layout {
+        Layout::new(self.files_width, self.sidebar_width)
     }
 
     /// What a mouse event means: a menu, a divider, or a selection.
@@ -2748,10 +2954,12 @@ impl App {
                 }
                 if self.press_editor(event.column, event.row) {
                     self.drag = Some(Drag::Editor);
+                    self.drag_at = Some((event.column, event.row));
                     return None;
                 }
                 if self.click_terminal(event.column, event.row) {
                     self.drag = Some(Drag::Terminal);
+                    self.drag_at = Some((event.column, event.row));
                     return None;
                 }
                 // A divider is a cell and a half wide, so it is looked for before
@@ -2759,6 +2967,7 @@ impl App {
                 // grab, which is what makes them easy to hit.
                 if let Some(divider) = self.divider_at(event.column) {
                     self.drag = Some(Drag::Divider(divider));
+                    self.drag_at = None;
                     return None;
                 }
                 if self.click_files(event.column, event.row) {
@@ -2768,6 +2977,7 @@ impl App {
                     return request;
                 }
                 self.drag = None;
+                self.drag_at = None;
                 None
             }
             // The wheel scrolls the pane under the pointer and nothing else: it is
@@ -2781,6 +2991,7 @@ impl App {
                 None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                self.drag_at = Some((event.column, event.row));
                 match self.drag {
                     Some(Drag::Divider(divider)) => self.drag_to(divider, event.column),
                     Some(Drag::Terminal) => self.drag_terminal(event.column, event.row),
@@ -2803,6 +3014,8 @@ impl App {
                     _ => {}
                 }
                 self.drag = None;
+                self.drag_at = None;
+                self.drag_scroll = false;
                 None
             }
             _ => None,
@@ -2965,12 +3178,16 @@ impl App {
                 self.files_width = column
                     .saturating_sub(self.dividers.left)
                     .saturating_add(1)
-                    .clamp(16, 60);
+                    .clamp(MIN_FILES, MAX_FILES);
             }
             Divider::Sidebar => {
                 // The sidebar's width is everything from the drag column to the right
                 // edge of the body.
-                self.sidebar_width = self.dividers.right.saturating_sub(column).clamp(24, 80);
+                self.sidebar_width = self
+                    .dividers
+                    .right
+                    .saturating_sub(column)
+                    .clamp(MIN_SIDEBAR, MAX_SIDEBAR);
             }
         }
         self.status = format!(
@@ -4213,6 +4430,72 @@ mod tests {
     }
 
     #[test]
+    fn the_widths_a_drag_chose_are_the_widths_the_next_launch_opens() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        // Nested, because the first launch on a machine is exactly when the
+        // directory does not exist yet.
+        let path = directory.path().join("acpilot").join("tui-layout.toml");
+
+        let mut first = App::new("http://127.0.0.1:7777");
+        first.remember_layout(path.clone());
+        assert_eq!(
+            first.files_width,
+            crate::layout::DEFAULT_FILES,
+            "a first launch"
+        );
+        with_dividers(&mut first);
+        first.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 26));
+        first.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 39));
+        first.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 39));
+        first.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 95));
+        first.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 60));
+        first.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 60));
+        assert_eq!((first.files_width, first.sidebar_width), (40, 80));
+        assert!(first.save_layout().is_none(), "a width it could write");
+
+        let mut second = App::new("http://127.0.0.1:7777");
+        second.remember_layout(path.clone());
+        assert_eq!(
+            (second.files_width, second.sidebar_width),
+            (40, 80),
+            "the drag was the launch's starting point"
+        );
+
+        // A launch that changed nothing writes nothing: opening a window is not a
+        // reason to touch the disk.
+        std::fs::remove_file(&path).expect("the file it read");
+        assert!(second.save_layout().is_none());
+        assert!(!path.exists(), "nothing to remember, nothing written");
+
+        // The design pass has nowhere to write and says so by having no path.
+        let demo = App::new("http://127.0.0.1:7777");
+        assert!(demo.layout_path.is_none());
+    }
+
+    /// The two dividers where a 140-column body would draw them: the tree's border
+    /// at 25 and the sidebar's at 95.
+    fn with_dividers(app: &mut App) {
+        app.set_viewports(Viewports {
+            files: None,
+            sessions: None,
+            terminal: TerminalSize {
+                cols: 140,
+                rows: 30,
+            },
+            transcript: None,
+            dividers: Dividers {
+                tree: Some(25),
+                sidebar: Some(95),
+                left: 0,
+                right: 140,
+            },
+            menu: MenuAreas::default(),
+            editor: None,
+            terminal_area: None,
+        });
+    }
+
+    #[test]
     fn a_drag_cannot_make_a_pane_unusable() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.set_viewports(Viewports {
@@ -4377,6 +4660,46 @@ mod tests {
             Some(editor.caret().line),
             editor.rows().last().map(|row| row.line),
             "the head stopped at the last row the pane shows"
+        );
+    }
+
+    #[test]
+    fn a_drag_resting_at_the_editors_edge_scrolls_and_keeps_growing() {
+        let mut app = with_editor();
+        let top = app.editor.as_ref().expect("a buffer").viewport().top();
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 30, 4));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 34, 21));
+
+        // A pointer that rests sends nothing at all, so the scroll is the loop's
+        // clock rather than an event's.
+        assert!(app.autoscroll(), "there is more file under the edge");
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.viewport().top(), top + 1, "the view moved a line");
+        let first = editor.caret().line;
+
+        app.autoscroll();
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.viewport().top(), top + 2);
+        assert!(editor.caret().line > first, "the selection grew with it");
+        assert_eq!(
+            Some(editor.caret().line),
+            editor.rows().last().map(|row| row.line),
+            "and its head is still the row the pointer rests on"
+        );
+
+        // The end of the file is the end of the scroll, and it says so rather than
+        // redrawing thirty times a second to prove it.
+        for _ in 0..80 {
+            app.autoscroll();
+        }
+        assert!(!app.autoscroll());
+        assert!(
+            !app.autoscrolling(),
+            "the loop can go back to its own clock"
+        );
+        assert!(
+            app.editor.as_ref().expect("a buffer").has_selection(),
+            "and the run it marked is still marked"
         );
     }
 
@@ -4631,6 +4954,47 @@ mod tests {
             app.clipboard.as_deref(),
             Some("hello world"),
             "a pointer past the pane marks everything to its edge"
+        );
+    }
+
+    #[test]
+    fn a_drag_resting_at_the_terminals_edge_reads_further_back() {
+        let mut app = drawn_terminal();
+        let printed: String = (0..60).map(|line| format!("line {line}\r\n")).collect();
+        app.apply(Update::TerminalData(printed.into_bytes()));
+
+        // A press in the middle of the screen, dragged to the pane's first row.
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 12));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 3, 2));
+        let before = app.terminal.as_ref().expect("a pane").yank();
+        let began_on = before.lines().last().unwrap_or("").to_owned();
+
+        assert!(app.autoscroll(), "there is output behind the screen");
+        let pane = app.terminal.as_ref().expect("a pane");
+        assert_eq!(pane.reader.view.scroll, 1, "one line older, drawn lower");
+        let after = pane.yank();
+        assert_eq!(
+            after.lines().last(),
+            Some(began_on.as_str()),
+            "the line the drag began on is still the line it marks"
+        );
+        assert!(
+            after.lines().count() > before.lines().count(),
+            "and the line above it joined the selection"
+        );
+
+        // Dragged the other way it comes forward again, and the same cells keep
+        // meaning the same text.
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 3, 31));
+        assert!(app.autoscroll());
+        assert_eq!(
+            app.terminal.as_ref().expect("a pane").reader.view.scroll,
+            0,
+            "a drag at the bottom edge is the way back to live"
+        );
+        assert!(
+            !app.autoscroll(),
+            "and at the live screen there is nothing further forward"
         );
     }
 

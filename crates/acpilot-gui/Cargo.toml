@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 default = []
@@ -69,3 +71,10 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+# Shipped, and the one package whose binary needs telling about: `acpilot-gui` is
+# behind `required-features = ["gui"]`, so a dist build without that feature would
+# produce the other two and silently no desktop app.
+[package.metadata.dist]
+dist = true
+features = ["gui"]

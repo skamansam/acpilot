@@ -154,6 +154,22 @@ focus move and a choice: the tree selects the row under the pointer, and the ses
 list opens the session under it, because a list is a column of targets rather than a
 pane you click to get into.
 
+A drag does not stop at the pane's edge. A pointer cannot leave the screen, so a
+drag held against the top or bottom row of the pane it began in scrolls the view a
+line and keeps the selection growing with it — the loop's clock rather than an
+event's, because a pointer held still sends nothing at all, and a faster clock only
+while there is more view in the direction it is pulling. What was already marked
+stays marked: the editor's selection is a buffer offset, and the terminal's anchor
+travels with its text, so a drag across a shell's output cannot quietly hand the
+cells it covered to the lines above.
+
+The widths the dividers were dragged to are remembered, once, on the way out — in
+`<data>/tui-layout.toml`, not in `config.toml`: a width is the client's memory of
+itself rather than a setting anyone edits, and a client that rewrote a hand-edited
+settings file to remember a column would be editing something it does not own. A
+launch that changed nothing writes nothing, a file that does not parse is the
+defaults, and a width no pane could use is clamped on the way in.
+
 Mouse reporting costs the terminal's own click-drag selection, so `--no-mouse` turns
 it off and leaves the terminal's selection alone: every mouse action here has a key,
 and `Ctrl-←`/`Ctrl-→`, `F2` copy mode and a click's caret are reachable without a
@@ -183,6 +199,20 @@ that is before a tty is written to. A debug build of the same run is 9.2 ms mean
 slower, and it is still inside the budget. What this measures is the drawing — the
 layout, the cells, every styled span — and not the daemon, the event poll or the
 OSC 52 write; those are the loop's, and the loop's cost at rest is the 120 ms tick.
+
+`--budget <ms>` turns the run into the gate CI uses:
+
+```bash
+cargo run --release -p acpilot-tui --example frame -- 200 60 300 --budget 16.7
+exit 0    # mean 0.45–0.63 ms, p95 0.61–1.01 ms, worst 2.3–2.5 ms
+```
+
+The numbers are printed either way, and the run exits 1 when the mean or the 95th
+percentile misses the budget. The worst frame is printed and not gated: a shared
+runner produces one occasionally, and one scheduler hiccup is not a regression,
+while a sustained doubling — which is what the mean and the p95 see — is exactly
+the bug the budget exists to name. `frame-budget` in `.github/workflows/ci.yml`
+runs it in release and is one of `required`'s jobs.
 
 The gutter's markers are git's answer, not the buffer's: `acpilot-git` parses the
 same patch the permission card shows, so the `~` beside a line and the hunk in the

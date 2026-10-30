@@ -9,6 +9,10 @@
 *.rej
 *.orig
 
+# SBOMs, written beside a crate's manifest by `cargo cyclonedx` before
+# `cargo xtask dist` moves them into `target/distrib/`
+*.cdx.xml
+
 # web (P11)
 web/node_modules
 web/dist

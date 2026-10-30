@@ -63,6 +63,12 @@ jobs:
   # It is also where the live shell test runs, which is why this job has a Rust
   # toolchain: that test spawns a real daemon, and a fake one would prove the
   # repaint against the same mock the unit test already uses.
+  #
+  # The checks themselves are `cargo xtask web-check` — install, `svelte-check`,
+  # the token-flow tests, the daemon build, the live shell test, the page build
+  # and the drift comparison, in that order. They live in the task because a
+  # developer's `cargo xtask check` runs the same list: written here instead, the
+  # runner could keep checking five commands while the local gate grew a sixth.
   web:
     name: web UI matches web/
     runs-on: ubuntu-latest
@@ -81,39 +87,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install
-        working-directory: web
-        run: npm ci
-
-      - name: Type-check
-        working-directory: web
-        run: npm run check
-
-      # The token flow is a browser fact, so it is tested in a DOM rather than
-      # checked by hand: the token is kept in the tab, sent only in an
-      # `Authorization` header, and forgotten when the daemon refuses it.
-      - name: Token-flow tests
-        working-directory: web
-        run: npm test
-
-      # The shell in a headless DOM against a daemon this checkout built: the
-      # palette stream is a real HTTP one, and the settings file the test saves is
-      # watched by the daemon rather than announced by a mock. `npm test` above
-      # excludes it (`vitest.config.ts`), because a unit run must not need a Rust
-      # build; this step is what keeps the exclusion from being a skip.
-      - name: Build the daemon the live shell test spawns
-        run: cargo build -p acpilotd
-
-      - name: Live shell test (real daemon)
-        working-directory: web
-        run: npm run test:live
-
-      - name: Build into the crate that embeds it
-        working-directory: web
-        run: npm run build
-
-      - name: Fail if the embedded page drifted from its source
-        run: git diff --exit-code -- crates/acpilot-web/assets/index.html
+      # Install, types, both test runs and the embedded page, in the task's order.
+      # A drift failure names the page to commit and exits non-zero; the rebuilt
+      # file is left in the working tree, so the log has something to point at.
+      - name: Web checks
+        run: cargo xtask web-check
 
   # The desktop shell is behind a feature that is off by default, so the `check`
   # job above never compiles it — which means it is one refactor away from not
@@ -164,29 +142,25 @@ jobs:
             fi
           done
 
-      - name: Clippy (gui feature)
-        run: cargo clippy -p acpilot-gui --features gui,gui-tests --all-targets -- -D warnings
-
-      # `check` and a test build do not link the binary, and the Linux link is
-      # exactly where the missing xkbcommon-x11 symlink shows up.
-      - name: Build the binary
-        run: cargo build -p acpilot-gui --features gui
-
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      # `gui-tests` adds gpui's headless harness, so the About panel and the
-      # palette that opens it are tested in a real `Context` without a display.
-      # It is not in the default feature set because it compiles gpui's
-      # `test-support` machinery, which the plain workspace gate should not pay
-      # for.
+      # The job's three checks are one task, so a developer reproduces them with
+      # `cargo xtask gui-check`: the lint with both features (`gui-tests` decides
+      # what the test targets compile, so the lint sees the same feature set the
+      # tests do), the link — `check` does not link, and the Linux link is exactly
+      # where the missing xkbcommon-x11 symlink shows up — and the tests, where
+      # `gui-tests` adds gpui's headless harness so the About panel and the palette
+      # that opens it are exercised in a real `Context` without a display.
       #
-      # The command is the task rather than the raw `nextest` line so that a
-      # developer's `cargo xtask test gui` and this job cannot drift apart — the
-      # task is where the two features are named once. `xtask test all` is the
-      # same run after the workspace gate, which is what the local session does.
-      - name: Test (gui feature, with the window harness)
-        run: cargo xtask test gui
+      # It is a task and not raw cargo lines for the reason every other job is a
+      # task: the feature pair and the order are written once, and this file cannot
+      # fall behind what a local run does. `cargo xtask test all` is the workspace
+      # gate plus this test run, which is what a full local session does; `cargo
+      # xtask check` builds the shell but leaves the harness out, because it is a
+      # second gpui build.
+      - name: Check (gui feature, with the window harness)
+        run: cargo xtask gui-check
 
   # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
   # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into
@@ -297,6 +271,35 @@ jobs:
           path: ${{ runner.temp }}/wsl-helper.json
           if-no-files-found: warn
 
+  # P6-12's promise is "60 fps at 200×60, or it is a bug", and this is the job that
+  # keeps it from being a sentence in a note. It draws the design pass's world —
+  # the tree, the editor with a real parse, the session list, the transcript and
+  # both footer rows — into a `TestBackend` at the size the budget is stated for,
+  # and fails if the mean or the 95th percentile misses one frame's worth of a
+  # 60 fps budget.
+  #
+  # Release, because an unoptimised build is nineteen times slower (`docs/notes/
+  # tui-shell.md`) and that number describes nothing anybody runs. The worst frame
+  # is printed and not gated: a shared runner produces one occasionally, and one
+  # scheduler hiccup is not a regression, while a sustained doubling is — which is
+  # what the mean and the p95 see. The example exits 1 on its own, so the failure
+  # reads as the four numbers plus how far off it was, rather than as a missing
+  # command.
+  frame-budget:
+    name: frame budget (200x60)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Draw 200x60 frames and hold them to 16.7 ms
+        run: cargo run --release --quiet -p acpilot-tui --example frame -- 200 60 300 --budget 16.7
+
   deny:
     name: licences and advisories
     runs-on: ubuntu-latest
@@ -339,7 +342,7 @@ jobs:
   # one a rule points at.
   required:
     name: required checks
-    needs: [check, web, gui, probes, deny, docs]
+    needs: [check, web, gui, probes, frame-budget, deny, docs]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -350,6 +353,7 @@ jobs:
             web=${{ needs.web.result }}
             gui=${{ needs.gui.result }}
             probes=${{ needs.probes.result }}
+            frame-budget=${{ needs.frame-budget.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
         run: |

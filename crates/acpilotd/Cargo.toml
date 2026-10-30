@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "acpilotd"
@@ -69,3 +71,7 @@ tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true
+
+# Shipped: it is the daemon the installed `acpilot` spawns.
+[package.metadata.dist]
+dist = true

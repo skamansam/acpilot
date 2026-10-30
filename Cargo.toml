@@ -7,6 +7,14 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95" # floor set by rusqlite_migration 2.6; see README §5.9
 license = "MIT OR Apache-2.0"
+# Where a release lives. cargo-dist reads it to build the download URLs its
+# installers fetch from, so it is one fact for the three packages it ships rather
+# than a string per installer.
+repository = "https://github.com/skamansam/acpilot"
+# The Homebrew formula's `homepage` and a person's first link when they find the
+# tarball, which is the repository rather than the documentation site: the code is
+# what they are about to run.
+homepage = "https://github.com/skamansam/acpilot"
 
 [workspace.dependencies]
 # internal
@@ -213,3 +221,12 @@ todo = "warn"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# The profile cargo-dist builds with (P12-1). It inherits the release profile and
+# names itself, because that is what dist asks for: `dist build` looks for a profile
+# called `dist` rather than `release`, so a packaging run is a separate target
+# directory from a `cargo build --release` and cannot be handed a binary that was
+# built for something else. The two are deliberately identical — a release and a
+# package of the same commit should be the same code.
+[profile.dist]
+inherits = "release"

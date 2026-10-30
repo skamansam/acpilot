@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "acpilot"
@@ -37,3 +39,8 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+# This package is what `acpilot` installs: cargo-dist ships it, and the profile
+# policy, the daemon and the desktop shell are its neighbours in the same tarball.
+[package.metadata.dist]
+dist = true

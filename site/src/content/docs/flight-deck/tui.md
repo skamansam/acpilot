@@ -64,9 +64,10 @@ gets you the first hour and costs you the second year.
 - **No blocking calls in the render loop.** Everything is a channel message.
 - **60 fps or it is a bug.** The budget is 16 ms p95 from keystroke to paint, the
   same as the desktop app. `examples/frame.rs` measures the drawing at 200×60: half
-  a millisecond a frame on average and 0.8 ms at p95, over five hundred frames, in a
-  release build. That is a floor rather than the whole path — a keystroke also waits
-  for the loop's poll — and a CI gate on it is not there yet.
+  a millisecond a frame on average and about 1 ms at p95, over three hundred frames,
+  in a release build. That is a floor rather than the whole path — a keystroke also waits for the
+  loop's poll — and it is a gate: `examples/frame.rs --budget 16.7` is the
+  `frame-budget` job in CI, and a pull request that misses the budget is red.
 - **Same keymap data as the desktop and browser.** One `keymap.toml`, three
   consumers.
 
@@ -96,7 +97,9 @@ the mouse — click a title, slide along the bar to another, click a row to run 
 while a shell still gets `Alt` and a letter as the two bytes it has always meant.
 `Ctrl-Left` and `Ctrl-Right` move the two dividers, and a mouse drag on either one
 does the same thing, so the tree, the editor and the sidebar are the widths the
-person reading them wants rather than the widths a constant guessed. The editor
+person reading them wants rather than the widths a constant guessed — and those
+widths are remembered for the next launch, in the data directory rather than in a
+settings file somebody may hand-edit. The editor
 answers the pointer where a pointer is quicker than a key: a click on the text puts
 the caret on the cell it landed on and gives the pane the keyboard, and the wheel
 scrolls the buffer under it three lines at a time without moving the caret — a pane
@@ -112,7 +115,9 @@ to a command belongs below the fold you were reading. Dragging across the output
 selects the run it covered and leaves the pane in copy mode with the selection
 marked, so `y` takes it over OSC 52 and `Esc` gives the keys back — and a click that
 selected nothing leaves again, because copy mode is the one state where a keystroke
-goes nowhere near the program. Mouse reporting costs the terminal its own
+goes nowhere near the program. A drag held against the top or bottom of either pane
+keeps scrolling the view and keeps growing the selection, which is how a run longer
+than one screen gets marked at all. Mouse reporting costs the terminal its own
 drag-to-select, so `acpilot tui --no-mouse` turns it off and the terminal keeps that
 gesture; every action the pointer has is also a key. The gutter beside the numbers is
 git's: its markers are parsed from the same patch the permission card shows, so the

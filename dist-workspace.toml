@@ -1,0 +1,67 @@
+# What a release ships, and where its installers send people (P12-1).
+#
+# `cargo xtask dist` drives this file. `.github/workflows/release.yml` is still the
+# hand-written pipeline that decides the version from a merged pull request's
+# labels, so `allow-dirty` below is deliberate rather than an oversight: moving the
+# workflow itself onto `dist generate` is a decision about versioning, and belongs
+# with P12-2.
+#
+# cargo-dist packages one *package* per archive, so a release is three archives per
+# platform — `acpilot`, `acpilotd` and `acpilot-gui` — not one tarball holding all
+# three. The installers put every program in the same bin directory, which is where
+# `acpilot` looks for the daemon it spawns (beside its own executable, never on
+# `PATH`); a machine therefore installs `acpilot` and `acpilotd` with two scripts,
+# which is why the install instructions name both.
+#
+# The members dist reads. The same workspace as the root `Cargo.toml`: cargo-dist
+# treats this file as the workspace's manifest when it is present, so a crate it
+# cannot see is a crate its plan cannot ship.
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+# `release.yml` is not generated, so `dist generate --check` would call it stale
+# forever. The CI is ours; the artifacts are dist's.
+allow-dirty = ["ci"]
+
+# Everything is a library or a fixture unless it says otherwise, and the three
+# programs say so in their own manifests (`[package.metadata.dist] dist = true`).
+# The inverse — listing what to skip — would ship the next test fixture that grew a
+# binary: `acpilot-mock-agent` and `acpilot-terminal-colours` are tools for our own
+# tests, and a release is the one place they must not appear.
+dist = false
+
+# Two libc flavours on Linux, because a musl build is the answer to "it runs on a
+# box older than my glibc" and a gnu build is the answer to "it links the system
+# TLS"; both, so neither is guessed at install time.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+# `curl | sh` on unix and `irm | iex` on Windows, both reading the checksum file
+# beside the archive; the formula is for people who would rather `brew install`
+# than pipe a script, and it is generated from the same artifacts.
+installers = ["shell", "powershell", "homebrew"]
+tap = "skamansam/homebrew-tap"
+
+# The formula lands in the tap, and the archives land in the GitHub release. The
+# built-in release job is not in this list: it is not a `publish-job`, it is what
+# the hosting backend does. Without `homebrew` here dist warns that `tap` has
+# nowhere to go.
+publish-jobs = ["homebrew"]
+
+# The default, written down because it is a promise: every archive ships with a
+# neighbouring `.sha256`, and the installers refuse a download that does not match.
+checksum = "sha256"
+
+# A dependency list per program, attached to the release: P12-6 reviews it, and a
+# user can read what they installed without a lockfile.
+cargo-cyclonedx = true

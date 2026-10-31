@@ -1,0 +1,68 @@
+---
+title: Showcase
+description: The terminal client's own screens, replayed in a browser — every frame painted by the client, every colour resolved from the theme files.
+---
+
+import Showcase from '../../components/Showcase.astro';
+
+The screens below are not screenshots. `cargo xtask showcase` builds the seeded
+world, drives the real `acpilot_tui` client with the keys a person would press, and
+paints each state through the client's own `ui::draw`. The page reads those frames
+and draws them again, so a pane that changes shape changes this page in the same
+commit — the capture is a test, and `cargo test` fails when it goes stale.
+
+The colours are not baked in either. Each captured cell names a theme token rather
+than a colour, and the palette is applied when the frame is drawn. Switching the
+palette above is therefore the same operation as switching it in the product: the
+surface asks the theme what `accent` is, and paints with the answer.
+
+## What each screen is
+
+<Showcase />
+
+## The palette the page solves
+
+The **Follow a terminal** palette is not a third theme written for this page. It is
+`acpilot_palette::follow::solve` — the function `theme_follow_terminal = true` runs
+at startup — compiled to WebAssembly and called in your browser with whatever pair
+of colours you pick. The ratio beside it is the solver's own measurement, and the
+palette it returns is held to the same `AA` floor the product's themes are.
+
+If the button does not load, the module is missing: `cargo xtask showcase` writes it
+to `site/public/showcase/`, and it is built rather than committed, because a `.wasm`
+binary in the repository is a binary nobody remembers to rebuild.
+
+**This page's colours** takes the background and text of the page you are reading as
+the pair to solve from. A browser cannot ask the operating system's terminal what it
+looks like, so that is the honest stand-in: a pair the solver has not seen, solved by
+the code that ships.
+
+## The desktop shell
+
+The window is drawn by gpui and needs a graphics stack, which a documentation build
+does not have. What the card at the end of this page shows is the data the window is
+built from — the keymap it installs and the rows its command palette produces — read
+from `acpilot-gui` by the same task that captures the screens. It recolours with the
+palette you pick above, because it reads the same tokens.
+
+The panes — the editor, the transcript, the permission card — are the terminal
+client's until the desktop phase wires them to the same seeded world. The design
+pass exists so that decision is made once, against something that answers the
+keyboard, rather than twice against two mocks.
+
+## Regenerating
+
+```bash
+cargo xtask showcase    # frames, the desktop tables, and the wasm solver
+```
+
+The task needs the `wasm32-unknown-unknown` target:
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+`site/src/data/screens.json` and `site/src/data/desktop.json` are committed, and a
+test in `acpilot-showcase` compares them with a fresh capture — the rule the
+published JSON Schemas follow, for the same reason: an artefact that describes a
+file the program no longer accepts is worse than no artefact.

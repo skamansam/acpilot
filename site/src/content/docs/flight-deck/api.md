@@ -18,13 +18,15 @@ GET /v1/health                  # {"ok":true,"service":"acpilotd","version":"0.1
 GET /v1/agents                  # configured agents, with availability (available | missing)
 GET /v1/permissions?status=pending
 POST /v1/permissions/{id}/resolve
-GET /v1/events                  # text/event-stream: permission.requested, heartbeat
+GET /v1/events                  # text/event-stream: preferences, permission.requested, heartbeat
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
+GET /v1/stats                   # one row per integration: context usage, credits, and where each came from
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs; asks for the token
 GET /app                        # the web shell: build version, About, quit; no token
+GET /app/stats                  # the shell's stats bar, measured by the daemon; needs the token
 ```
 
 `GET /v1/health` also reports the workspace the daemon was started with
@@ -45,6 +47,16 @@ same object the pending list returns, so the client can answer it without asking
 again. It is profile-wide, and it does not replay — a request that arrived while
 the client was away is recovered from the pending list, which is state.
 
+The same stream carries the theme. A `prefs` frame is the whole `Preferences`
+object the daemon would apply, sent as the first frame of a connection and again
+whenever the user's or the project's `config.toml` settles after a save, so a
+window or a browser can follow `theme` without seeing this machine's files and
+without a restart. Preferences are state rather than history, which is why they
+are the one thing the stream sends on connect; a file that does not parse
+announces nothing, and the last good preferences stay in force. The TUI resolves
+the same frames, so a client behind a socket and one sitting in the daemon's
+directory end up with the same palette from two paths.
+
 `WS /v1/terminals/{id}/attach` is the one route that upgrades instead of
 answering. Binary frames are the terminal in both directions — keystrokes one
 way, output the other — and text frames are control: `resize` from the client,
@@ -52,6 +64,9 @@ way, output the other — and text frames are control: `resize` from the client,
 screen follow, and those bytes are the escape sequences that redraw what the
 terminal already shows, so attaching late is the normal case rather than a race.
 Closing the socket leaves the process running: a pane is a view, not an owner.
+The same route serves the terminals an agent opens — they are listed under an
+`agent-` id, over the PTY the agent already has, so a person can watch and type
+into the shell an agent started without a second process behind it.
 
 ## Planned
 

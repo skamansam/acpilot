@@ -15,4 +15,17 @@ format_on_save = false
 trim_trailing_whitespace = true
 wrap = false
 theme = "acpilot.night-flight"
+# A theme is an extension, and the same one draws the TUI, the desktop app and the
+# browser: `theme` is the answer for every surface that does not name its own. Set
+# one of these only to give a surface a different one — a light window beside a
+# dark terminal is a real preference, not a mistake. A project's
+# `.acpilot/config.toml` may override any of the four keys on its own, so a client
+# repository can be light while everything else stays night flight.
+# theme_tui = "acpilot.paper"
+# theme_gui = "acpilot.paper"
+# theme_web = "acpilot.paper"
+# Solve the terminal's palette from the terminal's own background and foreground
+# instead of naming one. A terminal that will not say what its colours are falls
+# back to the theme named above, so this is safe to turn on anywhere.
+theme_follow_terminal = false
 diagnostics_min_severity = "warning"

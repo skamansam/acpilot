@@ -9,6 +9,10 @@
 *.rej
 *.orig
 
+# SBOMs, written beside a crate's manifest by `cargo cyclonedx` before
+# `cargo xtask dist` moves them into `target/distrib/`
+*.cdx.xml
+
 # web (P11)
 web/node_modules
 web/dist
@@ -17,6 +21,9 @@ web/dist
 site/node_modules
 site/dist
 site/.astro
+# The palette solver the showcase page runs, built by `cargo xtask showcase` (and
+# by the docs workflow): a build output, not an artefact to keep in step by hand.
+site/public/showcase/*.wasm
 
 # session history captured for resuming work locally; not part of the product
 .history/

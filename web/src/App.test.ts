@@ -10,7 +10,7 @@
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import type { Health, SessionSummary } from './api';
+import type { Health, SessionSummary, StatRow } from './api';
 
 const TOKEN_KEY = 'acpilot.token';
 
@@ -32,6 +32,32 @@ const SESSION: SessionSummary = {
   updated_at: '2026-10-24T12:05:00Z',
 };
 
+// One row of each shape the bar has to draw: a measured context window, and an
+// estimate with no denominator that is also old enough to say so.
+const STATS: StatRow[] = [
+  {
+    id: 'lmstudio',
+    kind: 'provider',
+    label: 'lmstudio',
+    context: { fill: 0.5, text: '16.4k / 32.8k', source: 'server' },
+    updated_at: '2026-10-24T12:00:00Z',
+    stale: false,
+  },
+  {
+    id: 'claude-code',
+    kind: 'agent',
+    label: 'Claude Code',
+    context: { fill: null, text: '41.0k / ?', source: 'estimated' },
+    credits: {
+      fill: null,
+      text: '4.50 credits left',
+      source: 'server',
+    },
+    updated_at: '2026-10-24T11:40:00Z',
+    stale: true,
+  },
+];
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -42,6 +68,51 @@ function json(body: unknown, status = 200): Response {
 let target: HTMLDivElement;
 let fetchMock: ReturnType<typeof vi.fn>;
 let cleanups: (() => void)[];
+
+/**
+ * `EventSource`, as much of it as the page uses.
+ *
+ * happy-dom has no `EventSource`, and a real one would open a socket in a unit
+ * test. This one records the URL, lets a test push a frame, and notices `close` —
+ * which is everything the page's theme listener touches.
+ */
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+
+  readonly url: string;
+  closed = false;
+  private listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
+
+  constructor(url: string) {
+    this.url = url;
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void {
+    const forType = this.listeners.get(type) ?? [];
+    forType.push(listener);
+    this.listeners.set(type, forType);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  /** Deliver a frame of `type` with `data`, the way a daemon would. */
+  emit(type: string, data: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new MessageEvent(type, { data }));
+    }
+  }
+}
+
+function lastSource(): FakeEventSource {
+  const source = FakeEventSource.instances.at(-1);
+  if (!source) {
+    throw new Error('the page did not open a palette stream');
+  }
+  return source;
+}
 
 /** Mount the page the way `main.ts` does, and remember to take it down again. */
 function render(): void {
@@ -87,6 +158,11 @@ beforeEach(() => {
   document.body.append(target);
   sessionStorage.clear();
   cleanups = [];
+  // The repaint writes inline style onto the document element; a test that starts
+  // with yesterday's colours would pass for the wrong reason.
+  document.documentElement.removeAttribute('style');
+  FakeEventSource.instances = [];
+  vi.stubGlobal('EventSource', FakeEventSource);
 
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const route = String(input);
@@ -95,6 +171,9 @@ beforeEach(() => {
     }
     if (route === '/v1/sessions') {
       return json([SESSION]);
+    }
+    if (route === '/app/stats') {
+      return json(STATS);
     }
     return new Response('not found', { status: 404 });
   });
@@ -131,7 +210,11 @@ describe('a remembered token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(target.textContent).toContain('a session that exists');
     expect(target.textContent).toContain('v1');
-    expect(sentTokens()).toEqual(['Bearer stored', 'Bearer stored']);
+    expect(sentTokens()).toEqual([
+      'Bearer stored',
+      'Bearer stored',
+      'Bearer stored',
+    ]);
     expect(target.querySelector('input#token')).toBeNull();
   });
 
@@ -144,6 +227,82 @@ describe('a remembered token', () => {
     expect(row.textContent).toContain('a session that exists');
     expect(row.textContent).toContain('mock-agent');
     expect(row.querySelector('[data-status]')?.getAttribute('data-status')).toBe('idle');
+  });
+});
+
+describe('the stats bar', () => {
+  it('draws a track and the figures behind it for each integration', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const rows = await vi.waitFor(() => {
+      const found = [...target.querySelectorAll('.stats-row')];
+      expect(found.length).toBe(2);
+      return found;
+    });
+    const [first] = rows;
+    expect(first?.textContent).toContain('lmstudio');
+    expect(first?.textContent).toContain('16.4k / 32.8k');
+    // Half of the window, drawn as half a track.
+    expect(first?.querySelector<HTMLElement>('.track-fill')?.style.width).toBe('50%');
+  });
+
+  it('an unreported denominator is an indeterminate track, not an empty one', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const unknown = await vi.waitFor(() => {
+      const found = target.querySelector<HTMLElement>(
+        '.stats-row[data-stale="true"] .track[data-indeterminate="true"]',
+      );
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    // No value to announce: a bar that said 0% would be claiming a measurement.
+    expect(unknown.getAttribute('aria-valuenow')).toBeNull();
+    expect(unknown.getAttribute('aria-valuetext')).toBe('no denominator reported');
+    expect(
+      target.querySelector('.stats-row[data-stale="true"] .old')?.getAttribute('title'),
+    ).toBe('2026-10-24T11:40:00Z');
+  });
+
+  it('a daemon that cannot answer for the bar still shows the page', async () => {
+    // An older daemon has no `/app/stats`. The sessions are still what a person
+    // came for, so the bar reports what it could not read instead of failing the
+    // load — and the note says which daemon would answer.
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('a session that exists'));
+    expect(target.textContent).toContain('/app/stats');
+  });
+
+  it('the sources are one click away', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    render();
+    const button = await findButton('Show sources');
+
+    button.click();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('context estimated · credits server'));
+    expect(target.textContent).not.toContain('16.4k / 32.8k');
+    expect(
+      target.querySelector('button.link')?.getAttribute('aria-pressed'),
+      'the control says what it did',
+    ).toBe('true');
   });
 });
 
@@ -168,7 +327,7 @@ describe('no token', () => {
 
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
-    expect(sentTokens()).toEqual(['Bearer typed', 'Bearer typed']);
+    expect(sentTokens()).toEqual(['Bearer typed', 'Bearer typed', 'Bearer typed']);
   });
 
   it('an empty submission connects to nothing', async () => {
@@ -215,6 +374,53 @@ describe('a token the daemon rejects', () => {
 
     await find('input#token');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('the theme stream', () => {
+  it('recolours the page in place instead of waiting for a reload', async () => {
+    // A theme saved in the TUI or the desktop app reaches an open tab without the
+    // reload the page used to need.
+    render();
+    await find('input#token');
+    const source = lastSource();
+    // Same origin as the page, so a build served by the daemon needs no base URL
+    // and `npm run dev` proxies it.
+    expect(source.url).toBe('/app/palette/events');
+
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--bg')).toBe('');
+
+    source.emit(
+      'palette',
+      JSON.stringify({ color_scheme: 'light', vars: { '--bg': '#fbf7ef', '--accent': '#8a4b12' } }),
+    );
+
+    expect(root.style.getPropertyValue('--bg')).toBe('#fbf7ef');
+    expect(root.style.getPropertyValue('--accent')).toBe('#8a4b12');
+    expect(root.style.colorScheme).toBe('light');
+  });
+
+  it('a frame it cannot read leaves the colours alone', async () => {
+    render();
+    await find('input#token');
+    const source = lastSource();
+    const root = document.documentElement;
+
+    source.emit('palette', '{not json');
+
+    expect(root.style.getPropertyValue('--bg')).toBe('');
+  });
+
+  it('closes the stream when the page goes away', async () => {
+    render();
+    await find('input#token');
+    const source = lastSource();
+
+    await vi.waitFor(() => expect(cleanups.length).toBe(1));
+    cleanups.shift()!();
+
+    expect(source.closed).toBe(true);
   });
 });
 

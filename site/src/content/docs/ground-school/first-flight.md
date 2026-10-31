@@ -7,13 +7,14 @@ description: The five-minute version, and the honest footnote about what is miss
 
 A first flight usually means "start a session, ask an agent to change a file,
 approve the diff". That flight is not available yet — it lands in the engine phase (P2). What you
-can do today is pre-flight: open the terminal UI — which brings the daemon up with
-it — and read the contract.
+can do today is pre-flight: open the terminal UI — which hosts the daemon when none is
+running — and read the contract.
 
 ## Pre-flight (works now)
 
-`acpilot tui` probes `GET /v1/health` and starts the daemon if nothing answers
-(ADR 0004), which is why this block needs no second terminal:
+`acpilot tui` probes `GET /v1/health` and, when nothing answers, runs the daemon's core
+in its own process (P6-11) — nothing is spawned and nothing is written — which is why
+this block needs no second terminal:
 
 ```bash
 cargo build --bins     # acpilot and acpilotd; the client starts the sibling, not one on PATH

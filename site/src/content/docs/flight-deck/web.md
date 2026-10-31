@@ -12,6 +12,13 @@ no account to create — the daemon serves its own frontend.
 ## Shape
 
 `acpilotd` embeds the built SPA, so "install the web UI" means "run the daemon".
+The page is themed by the same extension the terminal and the desktop app read:
+the daemon resolves `theme_web` (over `theme`) from the workspace's settings each
+time the page is served and sends those tokens as its CSS variables, so `--bg` and
+`--accent` are the theme's, not values someone typed into a stylesheet. Reading it
+per request is what makes a settings file only worth saving once: nothing has to be
+restarted for the next load to be the new colours.
+
 Routes are profile- and workspace-aware:
 
 ```text
@@ -51,12 +58,41 @@ daemon needs no Node; CI rebuilds it and fails if the committed page drifted fro
 its source.
 
 The page asks for the daemon's token, then shows what that token can see: the
-health answer (service, API version, workspace), and the session list with each
-row's agent, status and last event. **About** names the running build and the
+health answer (service, API version, workspace), the stats bar — a track per
+integration, with **Show sources** naming where each figure came from, which is the
+same question the terminal's `F4` asks — and the session list with each row's
+agent, status and last event. **About** names the running build and the
 licence; **Quit** tries to close the tab and says so when the browser refuses.
 The shell is served without a token like `/docs`, because a browser cannot attach
 a header to a typed address and the page holds no data; every API call behind it
 is still guarded.
+
+The page's colours come from the same theme extension the terminal and the window
+read: `/app` inlines the web theme's palette into its `:root`, and the page then
+listens on `GET /app/palette/events` so saving a theme anywhere — the TUI, the
+desktop app, another tab — repaints an open page instead of waiting for a reload.
+That stream is one of the unauthenticated routes, alongside `/app` and `/docs`.
+
+The bar's rows are measured by the daemon, not by the page: `GET /app/stats`
+answers the same rows `acpilot-stats` builds for the terminal and the desktop app,
+already reduced to a fill and a sentence. A browser cannot link a Rust crate, and a
+second implementation of the denominator rules in TypeScript is one that drifts the
+first time a rule changes. That route is under `/app` because it is a rendering of
+the contract rather than part of it, and it needs the token — an agent roster is not
+the page's own business. A
+browser cannot put an `Authorization` header on an `EventSource`, and the obvious
+alternative — the token in the stream's query string — is a secret in the daemon's
+log, the browser's history and any `Referer`. It is safe to leave open because the
+frame carries exactly the variables the page was served with: no session, no file,
+nothing a token would have protected. If that ever stops being true, the route
+needs a token, not a wider exception.
+
+Two tests hold that page to account. `npm test` mounts the shell in a headless DOM
+against a fake stream, which is the page's own logic; `npm run test:live` builds a
+real daemon, opens the page against it, saves `theme_web` in a temporary settings
+file, and asserts the already-open page repainted — a socket, a watcher and a
+stream, with the browser as the only stand-in. CI runs both in the `web` job, so
+the repaint is a gate rather than a demonstration.
 
 ```bash
 cargo run -p acpilotd -- --addr 127.0.0.1:7777

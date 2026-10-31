@@ -19,14 +19,18 @@
 //! ms, because the device is already there.
 
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use acpilot_gui::app;
 use acpilot_gui::platform::{self, Claim};
 use acpilot_gui::profiles;
 use acpilot_gui::theme::GuiTheme;
+use acpilot_gui::{Shell, daemon};
+use acpilot_stats::Row;
 use clap::Parser;
 use futures::StreamExt as _;
-use gpui::{App, Application};
+use gpui::{App, Application, Entity};
 
 /// The Acpilot desktop app.
 #[derive(Debug, Parser)]
@@ -45,9 +49,99 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     profile: Vec<std::path::PathBuf>,
 
-    /// Theme id to draw with, from any loaded extension.
-    #[arg(long, value_name = "ID", default_value = "acpilot.night-flight")]
-    theme: String,
+    /// Theme id to draw with, overriding the one the settings name.
+    ///
+    /// The theme is a setting: `[preferences] theme_gui` in the user's config, or
+    /// in the project's `.acpilot/config.toml`, and this flag is only for looking
+    /// at another one without editing either.
+    #[arg(long, value_name = "ID")]
+    theme: Option<String>,
+}
+
+/// Recolour every open window when the daemon announces new settings.
+///
+/// A poll on the app's own timer rather than an `await` on the channel: the
+/// receiver is a blocking one filled by a plain thread, and the window's executor
+/// has to stay free to draw. 120 ms is under the threshold where a recolour reads
+/// as a missed frame and far above a busy loop. Only the newest theme is applied —
+/// two saves inside one tick are one repaint, not two flickers.
+fn recolour_on_settings(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<GuiTheme>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let mut latest: Option<GuiTheme> = None;
+            while let Ok(theme) = changed.try_recv() {
+                latest = Some(theme);
+            }
+            let Some(theme) = latest else {
+                continue;
+            };
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                let theme = theme.clone();
+                // The app is shutting down when this fails, which is the one
+                // reason to stop asking.
+                if cx
+                    .update(|cx| shell.update(cx, |shell, cx| shell.set_theme(theme, cx)))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
+}
+
+/// Push the daemon's stats at every open window when a new answer arrives.
+///
+/// The same shape as `recolour_on_settings`: a poll on the app's own timer, because
+/// the receiver is a blocking channel filled by a plain thread. The newest answer
+/// wins inside one tick — the rows are a snapshot, so an older one is not news.
+fn measure_on_stats(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<Vec<Row>>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let mut latest: Option<Vec<Row>> = None;
+            while let Ok(rows) = changed.try_recv() {
+                latest = Some(rows);
+            }
+            let Some(rows) = latest else {
+                continue;
+            };
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                let rows = rows.clone();
+                // The app is shutting down when this fails, which is the one reason
+                // to stop asking.
+                if cx
+                    .update(|cx| shell.update(cx, |shell, cx| shell.set_stats(rows, cx)))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
 }
 
 fn main() -> ExitCode {
@@ -74,13 +168,42 @@ fn main() -> ExitCode {
         }
     };
 
-    let theme = match GuiTheme::from_extensions(&extensions, &cli.theme) {
+    // The settings are the ground truth: the theme is a preference, and this flag
+    // is the override. A launch whose settings do not parse should say so rather
+    // than draw in a theme nobody chose.
+    let theme_id = match cli.theme.clone() {
+        Some(id) => id,
+        None => match profiles::theme_id(cli.path.as_deref()) {
+            Ok(id) => id,
+            Err(error) => {
+                eprintln!("acpilot-gui: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let theme = match GuiTheme::from_extensions(&extensions, &theme_id) {
         Ok(theme) => theme,
         Err(error) => {
             eprintln!("acpilot-gui: theme: {error}");
             return ExitCode::FAILURE;
         }
     };
+
+    // The daemon's answer is the live one: the launch theme above is what the
+    // window opens with, and a `prefs` frame replaces it. A daemon that is not
+    // running costs this thread one failed request, not a window.
+    let (settings, changed) = std::sync::mpsc::channel::<GuiTheme>();
+    daemon::follow(daemon::endpoint(), extensions.clone(), move |theme| {
+        let _ = settings.send(theme);
+    });
+
+    // The stats bar is a second, slower question to the same daemon: the roster and
+    // what each integration costs. A window with no daemon behind it keeps an empty
+    // bar that says so, rather than failing a launch over a footer.
+    let (stats, stats_changed) = std::sync::mpsc::channel::<Vec<Row>>();
+    daemon::follow_stats(daemon::endpoint(), move |rows| {
+        let _ = stats.send(rows);
+    });
 
     // The claim is taken before the runtime starts, so a launch that is only
     // handing over never pays for a renderer. It is also taken after the profiles
@@ -104,8 +227,17 @@ fn main() -> ExitCode {
         // Once, on the app: a second window shares this keymap, and binding it
         // again per window would append a duplicate for every launch.
         cx.bind_keys(app::key_bindings());
-        app::open_window(cx, profiles.clone(), theme.clone())
+        // Every window, so a settings change reaches all of them. A forwarded
+        // launch opens one more while the app is running; it joins the list.
+        let shells: Arc<Mutex<Vec<Entity<Shell>>>> = Arc::default();
+        let opened = app::open_window(cx, profiles.clone(), theme.clone())
             .expect("the platform accepted a window");
+        shells
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(opened);
+        recolour_on_settings(cx, Arc::clone(&shells), changed);
+        measure_on_stats(cx, Arc::clone(&shells), stats_changed);
 
         let Some(mut requests) = requests else {
             return;
@@ -122,7 +254,13 @@ fn main() -> ExitCode {
                     let started = std::time::Instant::now();
                     let opened = app::open_window(cx, profiles, theme);
                     cx.activate(true);
-                    opened.map(|()| (cx.windows().len(), started.elapsed()))
+                    if let Ok(shell) = &opened {
+                        shells
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push(shell.clone());
+                    }
+                    opened.map(|_| (cx.windows().len(), started.elapsed()))
                 });
                 match opened {
                     // The app is shutting down; the channel's sender is dropped

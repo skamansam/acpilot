@@ -9,6 +9,9 @@ The terminal UI is the primary interface, not the fallback. It is what runs over
 an SSH session, inside tmux, on a machine with no GPU, and it is the reason the
 daemon exists: close the laptop, reconnect, and the turn is still running.
 
+[The showcase](/acpilot/showcase/) replays its screens in a browser — painted by
+this crate, in any theme, including one solved from a pair of colours you pick.
+
 ## Layout
 
 ```mermaid
@@ -21,13 +24,38 @@ flowchart LR
 Panels are the same three in every UI — files, text, agents — because the mental
 model should not change when you change cockpit.
 
+The footer carries the stats bar: one row per integration, a context track and a
+credit track, a name per row even when it has nothing to report. A window nobody
+reported is drawn as an indeterminate track rather than a full or an empty one,
+an estimate is marked and coloured as an estimate, and `F4` swaps every figure for
+the source behind it. The same rows are drawn by the desktop app and the page,
+because the measuring is `acpilot-stats` rather than each frontend.
+
+The colours are not this crate's: every pane, card and status label is drawn from
+the theme tokens the desktop app and the browser read, resolved from
+`theme_tui` (over `theme`) in the project's settings. A theme is an extension, so
+one pack recolours all three surfaces at once, and a project can choose a
+different one without changing anything global. Saving the settings file is the
+recolour: the client watches the user's and the project's `config.toml`, and the
+status bar names the theme it switched to, so editing `theme_tui` in one window
+is not a note to restart in another. The daemon's answer outranks that watch: the
+profile-wide event stream opens with the preferences the daemon would apply and
+sends a new set after every save, so a client attached to a daemon whose files it
+cannot see — a remote host, a container — still follows `theme_tui`. The file
+watch is the fallback for a client with no daemon, or a daemon too old to announce
+them. `theme_follow_terminal = true` instead asks
+the terminal for its own background and foreground when the client starts and
+solves a palette around them, so the terminal UI can match the shell it was opened
+in rather than the other way round; a terminal that will not answer keeps the named
+theme.
+
 ## What it is built on
 
 | Need | Choice |
 | --- | --- |
 | Rendering | `ratatui` + `crossterm` — immediate mode, the editor loop owns state |
 | Text | `ropey` for the buffer, `tree-sitter` for highlighting |
-| Agent terminals | `tui-term` over `vt100` grids |
+| Agent terminals | a `vt100` grid drawn as styled lines, fed by the attach WebSocket |
 | Transcript | markdown rendered to styled lines, not a browser |
 
 <Aside type="note" title="Why not the obvious textarea widget">
@@ -42,7 +70,11 @@ gets you the first hour and costs you the second year.
   minimalism; it is what makes the TUI usable on a bad connection.
 - **No blocking calls in the render loop.** Everything is a channel message.
 - **60 fps or it is a bug.** The budget is 16 ms p95 from keystroke to paint, the
-  same as the desktop app, measured in CI.
+  same as the desktop app. `examples/frame.rs` measures the drawing at 200×60: half
+  a millisecond a frame on average and about 1 ms at p95, over three hundred frames,
+  in a release build. That is a floor rather than the whole path — a keystroke also waits for the
+  loop's poll — and it is a gate: `examples/frame.rs --budget 16.7` is the
+  `frame-budget` job in CI, and a pull request that misses the budget is red.
 - **Same keymap data as the desktop and browser.** One `keymap.toml`, three
   consumers.
 
@@ -50,5 +82,58 @@ gets you the first hour and costs you the second year.
 
 The crate is a working client: it lists the daemon's sessions, streams the open
 session's transcript, answers a permission request with `y`, `a` or `n`, and starts
-the daemon if nothing is listening (ADR 0004). Editor panes, inline diffs and the
-workspace picker are the editor phase (P6).
+the daemon if nothing is listening (ADR 0004). `Ctrl-T` opens a terminal pane over
+the shells an agent asked for — the same PTY the agent reads, typed into and resized
+live, with the program's colours — asking which one when a session has several, and
+`Ctrl-T` again leaves it without ending the program. The pane keeps ten thousand
+lines behind its screen: `F2` reads back through them, `/` finds a string in that
+history — case-insensitive until the query has a capital in it, landing on the
+newest match before the cursor, with `n` and `N` to walk older and newer — and `v` and `y` copy a selection to the clipboard over OSC 52,
+which is what makes a copy work over SSH. The transcript is a pane like the others —
+`Tab` reaches it, or `F3` from anywhere — and answers to the same copy keys, so a
+long answer is scrolled, searched and yanked with what the terminal already taught;
+`?` lists those keys rather than the editor's while a pane is being read.
+
+A menu bar across the top (`F9`) names every pane and the client's own commands as
+rows, each row drawn with the chord that runs it from anywhere — a pane's own keys
+are named in the pane, not in the bar — with **About** under Help: version, licence,
+field manual, what built it and which daemon it is talking to. The underlined letter
+in a title is the `Alt` chord that opens it, the way a menu bar has named its own
+keys since before a terminal could report a mouse; the bar and its lists also answer
+the mouse — click a title, slide along the bar to another, click a row to run it —
+while a shell still gets `Alt` and a letter as the two bytes it has always meant.
+`Ctrl-Left` and `Ctrl-Right` move the two dividers, and a mouse drag on either one
+does the same thing, so the tree, the editor and the sidebar are the widths the
+person reading them wants rather than the widths a constant guessed — and those
+widths are remembered for the next launch, in the data directory rather than in a
+settings file somebody may hand-edit. The editor
+answers the pointer where a pointer is quicker than a key: a click on the text puts
+the caret on the cell it landed on and gives the pane the keyboard, and the wheel
+scrolls the buffer under it three lines at a time without moving the caret — a pane
+you point at does not have to be focused first. Dragging across the text selects the
+run it covered, and `y` copies it over OSC 52; the editor copies the buffer's own
+slice of the range, so a tab or a wide glyph comes across once, and `Esc` clears the
+selection without moving the caret. A click on a row of the tree, or of the session
+list, focuses that pane on the row it hit — and the session list opens that session,
+because a list is a column of targets. The wheel does the same to a terminal: it
+reads back through the scrollback, the title says `behind n/history` while it is
+scrolled, and the next keystroke returns it to the newest line, because the answer
+to a command belongs below the fold you were reading. Dragging across the output
+selects the run it covered and leaves the pane in copy mode with the selection
+marked, so `y` takes it over OSC 52 and `Esc` gives the keys back — and a click that
+selected nothing leaves again, because copy mode is the one state where a keystroke
+goes nowhere near the program. A drag held against the top or bottom of either pane
+keeps scrolling the view and keeps growing the selection, which is how a run longer
+than one screen gets marked at all. Mouse reporting costs the terminal its own
+drag-to-select, so `acpilot tui --no-mouse` turns it off and the terminal keeps that
+gesture; every action the pointer has is also a key. The gutter beside the numbers is
+git's: its markers are parsed from the same patch the permission card shows, so the
+`~` next to a line and the hunk in the review are one edit, not two lists.
+
+`acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
+sidebar, command palette, which-key hints and the stats bar — with no daemon and
+nothing read from disk. Every command that is not built yet is tagged with the task
+that would build it, so the screen is also the work list; `docs/notes/tui-shell.md`
+is the layout and the decisions it is meant to settle. The desktop app renders the
+same world when it gets its shell, so the two cannot drift apart. Editor panes,
+inline diffs and the workspace picker are the editor phase (P6).

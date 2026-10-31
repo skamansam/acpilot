@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 default = []
@@ -38,9 +40,20 @@ required-features = ["gui"]
 #   could drop it — and 0.2.2 is the newest published version (ADR 0009 §5).
 
 [dependencies]
+# The theme the window draws with is the daemon's answer: one client crate for
+# every surface, so a window and a terminal cannot disagree about what a
+# preference means or how a `prefs` frame is read.
+acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
 acpilot-profile = { workspace = true }
+# The preferences the launch reads: which theme this surface draws with is a
+# protocol type, shared with the daemon's settings cascade.
+acpilot-proto = { workspace = true }
+# The stats bar's rows: the fill ratio, the sentence and the source come from the
+# same crate the terminal and the page read, so the window cannot disagree with
+# either about what `18.4k / 32.8k` means.
+acpilot-stats = { workspace = true }
 # `open_window` hands gpui's error back rather than panicking: a window that
 # cannot be created is a launch to report, not a process to abort.
 anyhow = { workspace = true }
@@ -53,9 +66,19 @@ gpui = { workspace = true, optional = true }
 # A launch that cannot decide which profile to open fails with a message naming
 # the file that asked and the profile that was missing.
 thiserror = { workspace = true }
+# The settings subscription runs on a runtime of its own thread: one long request
+# that must not sit on the window's executor.
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+# Shipped, and the one package whose binary needs telling about: `acpilot-gui` is
+# behind `required-features = ["gui"]`, so a dist build without that feature would
+# produce the other two and silently no desktop app.
+[package.metadata.dist]
+dist = true
+features = ["gui"]

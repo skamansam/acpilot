@@ -1,0 +1,95 @@
+{
+  "generated_by": "cargo xtask showcase",
+  "schema_version": 1,
+  "version": "0.1.0",
+  "keymap": [
+    {
+      "keys": "secondary-shift-p",
+      "action": "TogglePalette",
+      "description": "Command palette",
+      "contexts": [
+        "Shell",
+        "Palette"
+      ]
+    },
+    {
+      "keys": "secondary-q",
+      "action": "Quit",
+      "description": "Quit Acpilot",
+      "contexts": [
+        "Shell",
+        "Palette"
+      ]
+    },
+    {
+      "keys": "down",
+      "action": "NextProfile",
+      "description": "Next profile",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
+      "keys": "up",
+      "action": "PreviousProfile",
+      "description": "Previous profile",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
+      "keys": "f4",
+      "action": "ToggleStatsSources",
+      "description": "Where the stats came from",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
+      "keys": "down",
+      "action": "PaletteDown",
+      "description": "Next command",
+      "contexts": [
+        "Palette"
+      ]
+    },
+    {
+      "keys": "up",
+      "action": "PaletteUp",
+      "description": "Previous command",
+      "contexts": [
+        "Palette"
+      ]
+    },
+    {
+      "keys": "enter",
+      "action": "PaletteConfirm",
+      "description": "Run the selected command",
+      "contexts": [
+        "Palette"
+      ]
+    },
+    {
+      "keys": "escape",
+      "action": "PaletteDismiss",
+      "description": "Close the palette",
+      "contexts": [
+        "Palette"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "label": "About Acpilot",
+      "detail": "Version 0.1.0"
+    },
+    {
+      "label": "Where the stats came from",
+      "detail": "Each figure's source, instead of its numbers"
+    },
+    {
+      "label": "Quit Acpilot",
+      "detail": "Close the window"
+    }
+  ]
+}

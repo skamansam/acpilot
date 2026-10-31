@@ -86,14 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let state = acpilotd::state_for(cli.profile.as_deref(), &cli.workspace)?
-        // Conversations outlive the process that streamed them, which is the point
-        // of a transcript: a client that reconnects after a restart can read what
-        // happened. Where that lives is the data directory, not the socket's.
-        .with_transcripts(acpilotd::transcript_dir());
-    // A terminal is a process; one an agent opened and never released has to end
-    // on its own, because `terminal/release` is optional in ACP.
-    state.reap_terminals_on_a_timer();
+    // The state and the background work are one call so that the embedded daemon
+    // a client runs in its own process (P6-11) gets exactly what this binary gives.
+    let state = acpilotd::startup(cli.profile.as_deref(), &cli.workspace)?;
 
     let target = acpilotd::resolve_target(cli.addr, cli.socket)
         .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidInput, why))?;

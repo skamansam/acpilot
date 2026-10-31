@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "acpilot"
@@ -14,6 +16,10 @@ path = "src/main.rs"
 acpilot-agent = { workspace = true }
 acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
+# `tui` on a machine with no daemon runs the daemon's own core in this process
+# (P6-11): the router, the sessions and the broker, not a second implementation of
+# them. It is also what makes `acpilot` a client that needs nothing installed.
+acpilotd = { workspace = true }
 acpilot-extensions = { workspace = true }
 # Where the daemon put the token a TCP endpoint needs, and the runtime directory
 # its socket lives in: platform paths belong in the crate that owns them, not in a
@@ -25,8 +31,11 @@ acpilot-host = { workspace = true }
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
 # `acpilot tui` starts in this binary rather than as a second executable: one
-# process per surface, and the TUI inherits the same argument surface.
+# process per surface, and the TUI inherits the same argument surface. With the
+# daemon's crate above, that process is also the daemon when none is running.
 acpilot-tui = { workspace = true }
+# `tui --demo`: the seeded world the design pass draws, which needs no daemon.
+acpilot-demo = { workspace = true }
 clap = { workspace = true }
 
 [dev-dependencies]
@@ -35,3 +44,8 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+# This package is what `acpilot` installs: cargo-dist ships it, and the profile
+# policy, the daemon and the desktop shell are its neighbours in the same tarball.
+[package.metadata.dist]
+dist = true

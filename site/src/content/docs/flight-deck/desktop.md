@@ -62,15 +62,81 @@ Two honest limits: on Windows there is no channel yet, so every launch is its ow
 process until packaging; and on Linux the device is created per window at our
 pin, so the repeat launch saves the boot rather than the device.
 
+## Building the shell
+
+gpui sits behind a `gui` feature that is off by default, so `cargo build` and the
+workspace test gate still compile no graphics stack. The tasks carry the flag a
+plain `cargo build` forgets:
+
+```bash
+cargo xtask build gui      # the binary, with gpui
+cargo xtask run gui        # build and launch it
+cargo xtask test gui       # `gui` plus `gui-tests`, gpui's headless harness
+cargo xtask gui-check      # lint, link and tests: the whole `gui` job
+```
+
+`test gui` adds the harness because it is a second feature: it compiles gpui's
+`test-support` machinery, which is what lets the About panel be drawn in a real
+`Context` with no display. `gui-check` is that run plus the clippy with both
+features and the link, which is all CI's `gui` job does; the job runs this task
+rather than three raw cargo lines, so a green local run and a green job mean the
+same thing.
+
+On Linux the link needs the development packages gpui asks for:
+
+```bash
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+  libwayland-dev libfreetype-dev libfontconfig1-dev pkg-config clang
+```
+
+`libxkbcommon-x11-dev` is neither a mistake nor optional, and it is worth knowing
+why. gpui 0.2.2 declares its `xkbcommon` dependency with
+`features = ["wayland", "x11"]` in its own manifest, and Cargo features only ever
+add: nothing a consumer writes can turn one of them off. So even a Wayland-only
+run links `libxkbcommon-x11`, and without the dev package's `.so` symlink the link
+step fails with a missing `-lxkbcommon-x11` while the runtime library is sitting
+right there — which reads like a missing X server and is not. XWayland does not
+remove the requirement either: it runs X11 clients under a compositor, it does not
+replace the shared library a binary already linked against. The remaining options
+are a fork of gpui or of `xkbcommon`, which trades one `apt install` for a vendored
+framework; ADR 0009 §5 records that and keeps the package.
+
+`libc` must also stay at exactly `0.2.189` on Linux: gpui 0.2.2 pulls `xattr`
+0.2.3, which uses `libc::ENOATTR`, and `0.2.190` removed it. `cargo update` breaks
+that silently, and the error a developer sees is `xattr`'s. The fix is
+`cargo update -p libc --precise 0.2.189`; CI asserts the pin before it builds.
+
 ## Status
 
 The crate drives a real window: the shared theme tokens, a menu bar, the profile
 list it was launched with, the command palette on `secondary-shift-p`, and
 **About** (the Acpilot menu, or `escape` to close it) naming the version, the
 licence, the field manual and the tools this was built with. Quit is
-`secondary-q` or the menu item. Panes,
-the editor and the daemon connection belong to tasks P10-3 and P10-4 of the desktop phase. The `gui` feature is
-off by default, so `cargo test` still compiles no graphics stack.
+`secondary-q` or the menu item. The window's theme is a setting — `theme_gui`
+over `theme`, from the user's config or the project's — and `--theme` is only the
+override for looking at another one without editing either.
+
+The theme is also the window's first daemon connection, and it is a connection
+rather than a file read on purpose: `acpilot-gui` subscribes to `GET /v1/events`
+and redraws when a `prefs` frame names another theme. The frame that opens the
+stream carries the current preferences, so a window on a machine that cannot see
+the daemon's `config.toml` — a remote host, a container — still opens with the
+right colours, and a save reaches every open window without a relaunch. A daemon
+that is not running costs one request and leaves the launch theme in place; no
+daemon is spawned, because a window that starts one has taken on the sessions it
+serves. Panes and the editor are P10-3, and owning sessions over that connection
+is P10-4. The `gui` feature is off by default, so `cargo test` still compiles no
+graphics stack.
+
+The footer carries the stats bar: one row per provider and agent, a context track and
+a credit track, laid out from the same `acpilot_stats` value the terminal and the
+page draw — so the window cannot disagree with either about what `18.4k / 32.8k`
+means, or paint an estimate as a measurement. A figure nobody reported is drawn as a
+hairline rather than a full or an empty strip, and a reading that went quiet says
+`old`. `F4`, or **Where the stats came from** in the palette, shows what each figure
+was measured by instead of what it is. The window asks the daemon for these every
+fifteen seconds; with no daemon behind it the bar says so rather than failing a
+launch over a footer.
 
 A launch names a path rather than a profile: `acpilot-gui` opens the project you
 are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile

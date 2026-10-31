@@ -10,17 +10,19 @@
 //! here.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, KeyDownEvent, Menu, MenuItem, ParentElement, Render, SharedString,
+    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement,
+    IntoElement, KeyBinding, KeyDownEvent, Menu, MenuItem, ParentElement, Render, SharedString,
     Size as GpuiSize, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions,
     actions, div, point, px, rgb,
 };
 
 use acpilot_extensions::UiToken;
+use acpilot_stats::{Row, Track};
 
 use crate::keymap::{self, Action as KeyAction, Context as KeyContext};
 use crate::palette::{self, Command, CommandId};
 use crate::profiles::ShellProfile;
+use crate::stats;
 use crate::theme::GuiTheme;
 
 actions!(
@@ -35,6 +37,7 @@ actions!(
         PreviousProfile,
         ShowAbout,
         DismissAbout,
+        ToggleStatsSources,
         Quit,
     ]
 );
@@ -72,6 +75,7 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::PaletteDismiss => KeyBinding::new(keys, PaletteDismiss, Some(context)),
         KeyAction::NextProfile => KeyBinding::new(keys, NextProfile, Some(context)),
         KeyAction::PreviousProfile => KeyBinding::new(keys, PreviousProfile, Some(context)),
+        KeyAction::ToggleStatsSources => KeyBinding::new(keys, ToggleStatsSources, Some(context)),
         KeyAction::Quit => KeyBinding::new(keys, Quit, Some(context)),
     }
 }
@@ -139,6 +143,10 @@ pub struct Shell {
     palette: Option<PaletteState>,
     /// Whether the About view is showing.
     about: bool,
+    /// The stats bar's rows, as the shared crate measured them.
+    integrations: Vec<Row>,
+    /// Whether the bar shows each figure's source instead of its numbers.
+    stats_sources: bool,
     focus: FocusHandle,
     focused: bool,
 }
@@ -153,6 +161,8 @@ impl Shell {
             theme,
             palette: None,
             about: false,
+            integrations: Vec::new(),
+            stats_sources: false,
             focus: cx.focus_handle(),
             focused: false,
         }
@@ -162,6 +172,52 @@ impl Shell {
     #[must_use]
     pub fn current(&self) -> Option<&ShellProfile> {
         self.profiles.get(self.selected)
+    }
+
+    /// The theme the window is drawing with.
+    #[must_use]
+    pub fn theme(&self) -> &GuiTheme {
+        &self.theme
+    }
+
+    /// Recolour the window.
+    ///
+    /// Called when the daemon announces the settings changed. A theme that is the
+    /// one already on screen is not a repaint: the frame that opens a connection
+    /// carries the same preferences the window launched with, and every window
+    /// would flicker once at startup for a change that did not happen.
+    pub fn set_theme(&mut self, theme: GuiTheme, cx: &mut Context<Self>) {
+        if self.theme == theme {
+            return;
+        }
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// Replace the stats bar's rows.
+    ///
+    /// The rows arrive already measured by `acpilot_stats`, so there is no
+    /// arithmetic here. A snapshot equal to the one on screen is not a repaint: the
+    /// poll asks every fifteen seconds and most answers carry the same figures, so
+    /// comparing first keeps a window that is sitting still from drawing.
+    pub fn set_stats(&mut self, rows: Vec<Row>, cx: &mut Context<Self>) {
+        if self.integrations == rows {
+            return;
+        }
+        self.integrations = rows;
+        cx.notify();
+    }
+
+    /// The rows the bar is drawing.
+    #[must_use]
+    pub fn integrations(&self) -> &[Row] {
+        &self.integrations
+    }
+
+    /// Whether the bar is showing provenance instead of figures.
+    #[must_use]
+    pub fn showing_stats_sources(&self) -> bool {
+        self.stats_sources
     }
 
     /// Run a palette command.
@@ -181,6 +237,13 @@ impl Shell {
             CommandId::About => {
                 self.palette = None;
                 self.about = true;
+                cx.notify();
+            }
+            // A toggle that acts on the bar behind the palette, so the palette
+            // closes: every command in this list leaves the palette closed.
+            CommandId::StatsSources => {
+                self.palette = None;
+                self.stats_sources = !self.stats_sources;
                 cx.notify();
             }
             CommandId::Quit => cx.quit(),
@@ -222,6 +285,17 @@ impl Shell {
             self.about = false;
             cx.notify();
         }
+    }
+
+    /// `F4`: swap every figure for the source behind it, and back.
+    fn toggle_stats_sources(
+        &mut self,
+        _: &ToggleStatsSources,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stats_sources = !self.stats_sources;
+        cx.notify();
     }
 
     /// Whether About is showing, for a caller that needs to know before drawing.
@@ -344,15 +418,18 @@ impl Shell {
 /// Every window is its own view with its own command palette; the keymap and the
 /// theme are already on the app, so a second window costs a view and nothing
 /// else. That is what makes the activation path cheap — see [`crate::platform`].
+///
+/// The view is returned because the theme is now live: the daemon announces a
+/// save, and every open window has to be recoloured without being reopened.
 pub fn open_window(
     cx: &mut App,
     profiles: Vec<ShellProfile>,
     theme: GuiTheme,
-) -> anyhow::Result<()> {
-    cx.open_window(window_options(), move |_window, cx| {
+) -> anyhow::Result<Entity<Shell>> {
+    let handle = cx.open_window(window_options(), move |_window, cx| {
         cx.new(|cx| Shell::new(profiles, theme, cx))
     })?;
-    Ok(())
+    handle.entity(cx)
 }
 
 /// The window the app opens with.
@@ -408,6 +485,12 @@ impl Render for Shell {
                     index == self.selected,
                 )
             })
+            .collect();
+
+        let segments: Vec<Segment> = self
+            .integrations
+            .iter()
+            .map(|row| Segment::of(row, self.stats_sources))
             .collect();
 
         let palette_rows: Vec<(usize, CommandId, String, String, bool)> = self
@@ -540,6 +623,38 @@ impl Render for Shell {
                 }),
         );
 
+        // An empty bar says why it is empty rather than drawing nothing: a footer
+        // that vanishes and a footer with no integrations are the same picture
+        // otherwise.
+        let stats_children: Vec<AnyElement> = if segments.is_empty() {
+            vec![
+                div()
+                    .text_color(rgb(theme.ui(UiToken::TextMuted)))
+                    .child(SharedString::from("stats · no integrations"))
+                    .into_any_element(),
+            ]
+        } else {
+            segments
+                .iter()
+                .map(|segment| segment_element(&theme, segment))
+                .collect()
+        };
+
+        let stats_bar = div()
+            .id("stats")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(16.0))
+            .h(px(28.0))
+            .px(px(12.0))
+            .overflow_hidden()
+            .bg(rgb(theme.ui(UiToken::BgPanel)))
+            .border_t(px(1.0))
+            .border_color(rgb(theme.ui(UiToken::Border)))
+            .text_size(px(11.0))
+            .children(stats_children);
+
         let about_panel = about_open.then(|| {
             let lines: Vec<(usize, String, String)> = about_lines()
                 .into_iter()
@@ -611,6 +726,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::previous_profile))
             .on_action(cx.listener(Self::show_about))
             .on_action(cx.listener(Self::dismiss_about))
+            .on_action(cx.listener(Self::toggle_stats_sources))
             .on_action(cx.listener(Self::quit))
             .on_key_down(cx.listener(Self::key_down))
             .child(header)
@@ -626,6 +742,7 @@ impl Render for Shell {
             } else {
                 list.into_any_element()
             })
+            .child(stats_bar)
             .child(
                 div()
                     .p(px(12.0))
@@ -633,10 +750,158 @@ impl Render for Shell {
                     .text_size(px(11.0))
                     .child(SharedString::from(footer))
                     .child(SharedString::from(
-                        "secondary-shift-p — command palette · down/up — profile · escape — close about · secondary-q — quit",
+                        "secondary-shift-p — command palette · down/up — profile · f4 — where the stats came from · escape — close about · secondary-q — quit",
                     )),
             )
     }
+}
+
+/// One integration, as the bar draws it.
+///
+/// A projection of [`acpilot_stats::Row`], not a second measurement: the words are
+/// the crate's, and what is added here is what only a window can answer — the
+/// glyph, the theme tokens and the pixel lengths.
+struct Segment {
+    marker: &'static str,
+    label: String,
+    stale: bool,
+    quiet: bool,
+    /// The provenance line, when the bar is showing sources instead of figures.
+    sources: Option<String>,
+    context: Option<TrackView>,
+    credits: Option<TrackView>,
+}
+
+/// One measured quantity, ready to draw.
+struct TrackView {
+    /// The filled length in pixels, or `None` for a figure with no denominator.
+    width: Option<f32>,
+    colour: UiToken,
+    figure: UiToken,
+    text: String,
+}
+
+impl Segment {
+    fn of(row: &Row, sources: bool) -> Self {
+        Self {
+            marker: stats::marker(row.kind),
+            label: row.label.clone(),
+            stale: row.stale,
+            quiet: row.is_quiet(),
+            sources: sources.then(|| row.sources()),
+            context: row.context.as_ref().map(TrackView::of),
+            credits: row.credits.as_ref().map(TrackView::of),
+        }
+    }
+}
+
+impl TrackView {
+    fn of(track: &Track) -> Self {
+        Self {
+            width: stats::fill_width(track),
+            colour: stats::source_token(track.source),
+            figure: stats::figure_token(track.source),
+            text: track.text.clone(),
+        }
+    }
+}
+
+/// One integration's place on the bar: a glyph, a name, and what it costs.
+///
+/// A row with nothing reported says so instead of drawing two empty strips, which
+/// would be read as two zeros.
+fn segment_element(theme: &GuiTheme, segment: &Segment) -> AnyElement {
+    let label = if segment.stale {
+        theme.ui(UiToken::TextMuted)
+    } else {
+        theme.ui(UiToken::Text)
+    };
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .child(
+            div()
+                .text_color(rgb(theme.ui(UiToken::TextMuted)))
+                .child(SharedString::from(segment.marker)),
+        )
+        .child(
+            div()
+                .text_color(rgb(label))
+                .child(SharedString::from(segment.label.clone())),
+        );
+    // A stale reading keeps its label and loses its emphasis: the number is still
+    // the last one somebody reported, and when is enough to read it right.
+    if segment.stale {
+        row = row.child(muted(theme, "old"));
+    }
+    if let Some(sources) = &segment.sources {
+        row = row.child(muted(theme, sources.clone()));
+    } else if segment.quiet {
+        row = row.child(muted(theme, "nothing reported"));
+    } else {
+        if let Some(context) = &segment.context {
+            row = row.child(measured(theme, context));
+        }
+        if let Some(credits) = &segment.credits {
+            row = row.child(muted(theme, "cr"));
+            row = row.child(measured(theme, credits));
+        }
+    }
+    row.into_any_element()
+}
+
+/// A track and the figures beside it, kept together so a length and its number
+/// cannot drift apart when the bar is reflowed.
+fn measured(theme: &GuiTheme, view: &TrackView) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(5.0))
+        .child(track_strip(theme, view))
+        .child(
+            div()
+                .text_color(rgb(theme.ui(view.figure)))
+                .child(SharedString::from(view.text.clone())),
+        )
+        .into_any_element()
+}
+
+/// The strip itself: a filled length over a track-coloured bed.
+///
+/// A figure with no denominator is a hairline instead of a full or an empty strip,
+/// so "nobody reported a window" cannot be read as "the window is nearly empty" or
+/// as "there is no conversation".
+fn track_strip(theme: &GuiTheme, view: &TrackView) -> AnyElement {
+    let Some(width) = view.width else {
+        return div()
+            .w(px(stats::TRACK_WIDTH))
+            .h(px(stats::INDETERMINATE_HEIGHT))
+            .bg(rgb(theme.ui(UiToken::TextMuted)))
+            .into_any_element();
+    };
+    div()
+        .w(px(stats::TRACK_WIDTH))
+        .h(px(stats::TRACK_HEIGHT))
+        .bg(rgb(theme.ui(UiToken::Border)))
+        .child(
+            div()
+                .w(px(width))
+                .h(px(stats::TRACK_HEIGHT))
+                .bg(rgb(theme.ui(view.colour))),
+        )
+        .into_any_element()
+}
+
+/// Secondary text on the bar.
+fn muted(theme: &GuiTheme, text: impl Into<SharedString>) -> AnyElement {
+    let text: SharedString = text.into();
+    div()
+        .text_color(rgb(theme.ui(UiToken::TextMuted)))
+        .child(text)
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -711,6 +976,26 @@ mod drawn {
             .expect("night-flight resolves")
     }
 
+    /// A row as the daemon would report it: half a window the server measured, and
+    /// no credit bar, because a local server owes nothing.
+    fn rows() -> Vec<Row> {
+        use acpilot_proto::stats::{IntegrationKind, StatSource};
+
+        vec![Row {
+            id: "lmstudio".to_owned(),
+            kind: IntegrationKind::Provider,
+            label: "lmstudio".to_owned(),
+            context: Some(Track {
+                fill: Some(0.5),
+                text: "16.4k / 32.8k".to_owned(),
+                source: StatSource::Server,
+            }),
+            credits: None,
+            updated_at: "2026-10-30T12:00:00Z".to_owned(),
+            stale: false,
+        }]
+    }
+
     /// The path that works on Linux and Windows, where gpui 0.2.2 draws no menu
     /// bar: the palette row is the only way in.
     #[gpui::test]
@@ -743,6 +1028,103 @@ mod drawn {
             !visual.update(|_window, cx| shell.read(cx).showing_about()),
             "escape closes it again"
         );
+    }
+
+    /// The bar draws what the daemon measured: a row arrives already measured, and
+    /// the window only lays it out. `F4` swaps every figure for its source, and the
+    /// same key puts them back.
+    #[gpui::test]
+    async fn the_stats_bar_takes_the_daemons_rows_and_f4_shows_their_sources(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        assert!(
+            visual.update(|_window, cx| shell.read(cx).integrations().is_empty()),
+            "a window with no daemon behind it starts with an empty bar"
+        );
+
+        let rows = rows();
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.set_stats(rows.clone(), cx));
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell.read(cx).integrations().len()),
+            1,
+            "the row the daemon reported is on the bar"
+        );
+        assert!(
+            !visual.update(|_window, cx| shell.read(cx).showing_stats_sources()),
+            "and it is drawn as figures to begin with"
+        );
+
+        let segment = Segment::of(&rows[0], false);
+        let context = segment.context.expect("a context track");
+        assert_eq!(
+            context.width,
+            Some(stats::TRACK_WIDTH / 2.0),
+            "half a window is half a track, in pixels"
+        );
+        assert_eq!(
+            context.text, "16.4k / 32.8k",
+            "the sentence is the shared crate's, not the window's"
+        );
+        assert!(
+            segment.credits.is_none() && !segment.quiet,
+            "a local server owes nothing, which is not the same as reporting nothing"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.toggle_stats_sources(&ToggleStatsSources, window, cx);
+            });
+        });
+        let shown = visual.update(|_window, cx| {
+            let shell = shell.read(cx);
+            (
+                shell.showing_stats_sources(),
+                Segment::of(&rows[0], true).sources,
+            )
+        });
+        assert!(shown.0, "F4 puts the provenance on the bar");
+        assert_eq!(
+            shown.1.as_deref(),
+            Some("context server · credits —"),
+            "which is the row's own words, including the credits nobody reported"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.toggle_stats_sources(&ToggleStatsSources, window, cx);
+            });
+        });
+        assert!(
+            !visual.update(|_window, cx| shell.read(cx).showing_stats_sources()),
+            "and the same key puts the numbers back"
+        );
+    }
+
+    /// The bar is painted, not just stored: the shell is the window's root view
+    /// here, so drawing it lays the profile list, the bar and the footer out. A
+    /// track that cannot be laid out or a colour token the theme does not have
+    /// fails here rather than at somebody's first launch.
+    #[gpui::test]
+    async fn the_window_draws_with_the_stats_bar(cx: &mut gpui::TestAppContext) {
+        let (shell, visual) = cx.add_window_view(|_window, cx| Shell::new(Vec::new(), theme(), cx));
+
+        // Once with nothing reported, once with a measured row, and once in the
+        // provenance view: the three shapes the bar has.
+        let _ = visual.update(|window, cx| window.draw(cx));
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.set_stats(rows(), cx));
+        });
+        let _ = visual.update(|window, cx| window.draw(cx));
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.toggle_stats_sources(&ToggleStatsSources, window, cx);
+            });
+        });
+        let _ = visual.update(|window, cx| window.draw(cx));
     }
 
     /// About and the palette share one escape key, so opening About has to close

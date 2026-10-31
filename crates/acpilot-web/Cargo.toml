@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The theme tokens the page's CSS variables come from: the browser is the third
+# surface reading the same extension, not a page with its own palette.
+acpilot-extensions = { workspace = true }
+# The live repaint payload: the same variables, as one small JSON object.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

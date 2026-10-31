@@ -220,6 +220,77 @@ async fn agents_are_served_from_the_registry_with_their_availability() {
     );
 }
 
+#[tokio::test]
+async fn stats_without_a_profile_is_an_empty_list_not_an_error() {
+    let (status, body) = get("/v1/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn stats_are_one_row_per_agent_with_nothing_invented() {
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n\
+         [[agents]]\nid = \"absent\"\ntransport = \"acp-stdio\"\n\
+         command = \"acpilot-no-such-program-anywhere\"\n"
+    );
+    let state = agents_state(&manifest);
+
+    let (status, body) = get_from(router_with(state), "/v1/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("a list");
+    assert_eq!(rows.len(), 2, "a quiet integration keeps its row");
+    assert_eq!(rows[0]["id"], "present");
+    assert_eq!(rows[0]["label"], "Present");
+    assert_eq!(rows[0]["kind"], "agent");
+    // Neither agent has been given a conversation and nothing reads a balance, so
+    // there is no context or credit reading to send. A bar built from an invented
+    // `0` would report a full, empty or measured-wrong track instead of asking.
+    assert!(rows[0].get("context").is_none(), "{rows:?}");
+    assert!(rows[0].get("credits").is_none(), "{rows:?}");
+    rows[0]["updated_at"]
+        .as_str()
+        .expect("a timestamp")
+        .parse::<jiff::Timestamp>()
+        .expect("RFC 3339, because a clock a client cannot read is no use");
+}
+
+#[tokio::test]
+async fn the_page_is_handed_the_same_rows_already_measured() {
+    // A browser cannot link `acpilot-stats`, so the daemon measures for it. The
+    // fields are the ones the page draws; the arithmetic is not in the page.
+    let present = std::env::current_exe().expect("current test binary");
+    let manifest = format!(
+        "schema_version = 1\n\
+         [[agents]]\nid = \"present\"\nname = \"Present\"\ntransport = \"acp-stdio\"\n\
+         command = {present:?}\n"
+    );
+    let state = agents_state(&manifest);
+
+    let (status, body) = get_from(router_with(state), "/app/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("a list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["label"], "Present");
+    assert_eq!(rows[0]["stale"], false);
+    assert!(
+        rows[0].get("context").is_none(),
+        "a roster row has no track to draw"
+    );
+}
+
+#[tokio::test]
+async fn the_document_names_the_stats_route() {
+    let (_, body) = get("/v1/openapi.json").await;
+    assert_eq!(
+        body["paths"]["/v1/stats"]["get"]["responses"]["200"]["description"],
+        "One row per integration, including the quiet ones"
+    );
+}
+
 /// The router under a real listener, not `oneshot`.
 ///
 /// `oneshot` proves the handler; this proves the server, the bind, and the HTTP
@@ -324,4 +395,240 @@ async fn docs_page_points_at_our_openapi_route() {
     )
     .expect("utf-8");
     assert!(body.contains("/v1/openapi.json"));
+}
+
+/// One chunk of a `text/event-stream` body, as text.
+///
+/// The stream never ends, so a chunk that does not arrive within ten seconds means
+/// a daemon that is not saying anything — which is the failure these tests are
+/// about, and better as a named panic than a hung suite.
+async fn chunk(stream: &mut axum::body::BodyDataStream) -> String {
+    use futures::StreamExt as _;
+
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
+        .await
+        .expect("the stream says something")
+        .expect("the stream is open")
+        .expect("bytes");
+    String::from_utf8_lossy(&chunk).into_owned()
+}
+
+/// Read frames until what has arrived contains `wanted`.
+///
+/// Returns everything read, because the assertion that follows is usually about a
+/// frame *and* what was in it.
+async fn until(stream: &mut axum::body::BodyDataStream, wanted: &str) -> String {
+    let mut seen = String::new();
+    while !seen.contains(wanted) {
+        seen.push_str(&chunk(stream).await);
+    }
+    seen
+}
+
+/// A daemon serving a project whose `.acpilot/config.toml` says `theme_web` is `theme`.
+fn serving(theme: &str) -> (tempfile::TempDir, std::path::PathBuf, AppState) {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let config = directory.path().join(".acpilot");
+    std::fs::create_dir_all(&config).expect("config dir");
+    let settings = config.join("config.toml");
+    std::fs::write(
+        &settings,
+        format!("[preferences]\ntheme_web = \"{theme}\"\n"),
+    )
+    .expect("settings");
+    let state = acpilotd::state_for(None, directory.path()).expect("state");
+    (directory, settings, state)
+}
+
+async fn stream_of(state: AppState) -> axum::body::BodyDataStream {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    response.into_body().into_data_stream()
+}
+
+#[tokio::test]
+async fn the_event_stream_opens_with_the_preferences_the_daemon_would_apply() {
+    // Preferences are state, not history: a client that connects should be told
+    // what the daemon would draw with instead of waiting for a save that may never
+    // come. This is that first frame.
+    let (_directory, _settings, state) = serving("acpilot.paper");
+    let mut stream = stream_of(state).await;
+
+    let frame = chunk(&mut stream).await;
+    assert!(frame.contains("event: prefs"), "{frame}");
+    assert!(frame.contains("acpilot.paper"), "{frame}");
+}
+
+#[tokio::test]
+async fn a_saved_settings_file_reaches_a_client_over_the_event_stream() {
+    // The case the event exists for: a client that cannot see the daemon's disk.
+    // The file is saved while the stream is open, so the only way the new theme can
+    // arrive is the watcher, the announcement and the frame.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = stream_of(state).await;
+
+    let first = until(&mut stream, "acpilot.paper").await;
+    assert!(first.contains("event: prefs"), "{first}");
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("save");
+
+    let announced = until(&mut stream, "acpilot.night-flight").await;
+    assert!(announced.contains("event: prefs"), "{announced}");
+}
+
+#[tokio::test]
+async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
+    // A half-written file must not become the palette a client draws with. It
+    // resolves to nothing, so the watcher announces nothing — and the next good
+    // save still arrives, which is what a stream that died on a typo would not do.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = stream_of(state.clone()).await;
+    let first = until(&mut stream, "acpilot.paper").await;
+    assert!(first.contains("event: prefs"), "{first}");
+
+    std::fs::write(&settings, "[preferences\ntheme_web = 3\n").expect("a broken save");
+    assert!(
+        state.preferences().is_none(),
+        "a file that does not parse is not a set of preferences"
+    );
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("a good save after it");
+    let announced = until(&mut stream, "acpilot.night-flight").await;
+    assert!(announced.contains("event: prefs"), "{announced}");
+}
+
+/// The body of `uri`, as text.
+async fn body_of(state: AppState, uri: &str) -> String {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("utf-8")
+}
+
+/// The stream the web page listens on.
+async fn palette_stream_of(state: AppState) -> axum::body::BodyDataStream {
+    let response = router_with(state)
+        .oneshot(
+            Request::builder()
+                .uri("/app/palette/events")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router");
+    assert_eq!(response.status(), StatusCode::OK);
+    // A page that connected to something other than a stream would sit with the
+    // theme its HTML was built with until it was reloaded, which is the bug.
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream"),
+        "the page is listening for events"
+    );
+    response.into_body().into_data_stream()
+}
+
+/// The JSON in the first `palette` frame of a stream that has just opened.
+async fn first_palette(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
+    let frame = chunk(stream).await;
+    assert!(frame.contains("event: palette"), "{frame}");
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .unwrap_or_else(|| panic!("a data line in {frame}"));
+    serde_json::from_str(data).expect("the frame is JSON")
+}
+
+#[tokio::test]
+async fn the_palette_stream_opens_with_the_colours_the_page_was_served_with() {
+    // The page applies these to its own `:root`. If the stream and the HTML ever
+    // disagreed, every load would flash one palette and settle on another.
+    let (_directory, _settings, state) = serving("acpilot.paper");
+    let html = body_of(state.clone(), "/app").await;
+    let mut stream = palette_stream_of(state).await;
+    let palette = first_palette(&mut stream).await;
+
+    assert_eq!(palette["color_scheme"], "light");
+    let bg = palette["vars"]["--bg"].as_str().expect("a background");
+    assert!(
+        html.contains(&format!("--bg: {bg}")),
+        "the served page says `--bg: {bg}` too"
+    );
+    assert!(
+        !html.contains("--bg: #0b1220"),
+        "styled with the theme, not the page's own dark palette"
+    );
+}
+
+#[tokio::test]
+async fn a_saved_theme_repaints_the_page_without_a_reload() {
+    // The point of the stream: the browser holds no token and can see no files, and
+    // saving a theme from the TUI or the desktop app has to reach it anyway.
+    let (_directory, settings, state) = serving("acpilot.paper");
+    state.watch_preferences();
+    let mut stream = palette_stream_of(state).await;
+
+    let first = first_palette(&mut stream).await;
+    assert_eq!(first["color_scheme"], "light");
+
+    std::fs::write(
+        &settings,
+        "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+    )
+    .expect("save");
+
+    let announced = first_palette(&mut stream).await;
+    assert_eq!(announced["color_scheme"], "dark");
+    assert_eq!(
+        announced["vars"]["--bg"], "#070d18",
+        "the colour the page applies, not just an announcement"
+    );
+}
+
+#[tokio::test]
+async fn a_workspace_with_no_settings_still_answers_the_stream() {
+    // A daemon nobody has saved preferences for has nothing to send, and a page
+    // left waiting on a stream that never opens is worse than one with no stream
+    // at all: the connection is the answer, the frames are the extras.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    if state.web_palette().is_some() {
+        // A machine with a global settings file has preferences; the stream is
+        // then exercised by the tests above. This one is about their absence.
+        return;
+    }
+    let _stream = palette_stream_of(state).await;
 }

@@ -10,7 +10,9 @@ use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
 use acpilot_profile::Profile;
 use acpilot_profile::project::Root;
+use acpilot_profile::settings::Settings;
 use acpilot_proto::API_PREFIX;
+use acpilot_proto::profile::ThemeSurface;
 use clap::{Args, Parser, Subcommand};
 
 use crate::ext::{self, Paths};
@@ -54,11 +56,15 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// Open the terminal UI against a running daemon.
+    /// Open the terminal UI against a running daemon, or run one here.
     ///
     /// The TUI is a client, not a second engine: it opens sessions, sends
     /// prompts and answers permissions over the same API the CLI and the GUI
-    /// use, so nothing it does can drift from what the daemon records.
+    /// use, so nothing it does can drift from what the daemon records. When no
+    /// daemon answers, the daemon's own core runs inside this process (P6-11), so
+    /// the command needs nothing installed and nothing started — with the trade
+    /// that the sessions it opens end with the window. A daemon that is running
+    /// is always attached to first, and its sessions outlive every client.
     Tui {
         /// A directory, or a file inside one. Defaults to this directory.
         ///
@@ -76,22 +82,22 @@ pub enum Command {
         /// Windows), which is where `acpilotd` listens when given no flags.
         #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
         api_url: Option<String>,
-        /// Fail if no daemon is running instead of starting one.
+        /// Fail if no daemon is running instead of running one in this process.
         ///
         /// For tests, CI and anyone debugging a startup problem: the error is
-        /// more useful than a daemon this client started out of sight.
+        /// more useful than a daemon this client started without being asked.
         #[arg(long)]
         no_spawn: bool,
-        /// Profile directory the spawned daemon serves.
+        /// Profile directory the daemon serves.
         ///
-        /// Only used when this command has to start the daemon; a daemon that is
+        /// Only used when this command runs the daemon itself; a daemon that is
         /// already running keeps the profile it was started with, and naming a
         /// different one here is an error rather than a silent mismatch. Without
         /// it, the profile named by the project's settings is used, so the usual
         /// launch names no profile at all.
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
-        /// Workspace root the spawned daemon serves. Defaults to this directory.
+        /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
         /// Bearer token for a daemon on a TCP endpoint.
@@ -102,6 +108,24 @@ pub enum Command {
         /// somewhere this machine's runtime directory cannot describe.
         #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
         token: Option<String>,
+        /// Draw the interface on seeded data, with no daemon and nothing read from
+        /// disk.
+        ///
+        /// The design pass: every pane is filled from `acpilot-demo`, and every
+        /// action that is not built answers with the task that would build it. It
+        /// is how the layout is argued about before the backend for it exists, and
+        /// it is the same world the desktop app draws when it gets its shell.
+        #[arg(long)]
+        demo: bool,
+        /// Do not ask the terminal to report the mouse.
+        ///
+        /// Mouse reporting is on by default, and it costs the terminal's own
+        /// click-drag selection: most terminals keep it on Shift-drag, but not all.
+        /// With this flag the terminal keeps its selection, and the TUI is driven by
+        /// keys alone — every mouse action has a key, so nothing is lost but the
+        /// pointer.
+        #[arg(long)]
+        no_mouse: bool,
     },
 }
 
@@ -264,7 +288,18 @@ pub fn run(cli: Cli) -> u8 {
             profile,
             workspace,
             token,
-        }) => run_tui(path, api_url, no_spawn, profile, workspace, token),
+            demo,
+            no_mouse,
+        }) => run_tui(TuiFlags {
+            path,
+            api_url,
+            no_spawn,
+            profile,
+            workspace,
+            token,
+            demo,
+            mouse: !no_mouse,
+        }),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -278,20 +313,76 @@ pub fn run(cli: Cli) -> u8 {
     }
 }
 
-/// Open the TUI, starting the daemon if this is the first client (ADR 0004).
+/// What `acpilot tui` was asked for.
 ///
-/// The flags are the daemon's, not the TUI's: they only matter on the spawn
-/// path. A daemon that is already running was started with its own, and
+/// A struct rather than seven arguments: one of them is about the daemon, one is
+/// about the design pass and one is about the terminal, and a positional list of
+/// booleans is where `demo` and `no_spawn` get swapped by the next person.
+struct TuiFlags {
+    /// The project to open.
+    path: Option<PathBuf>,
+    /// The daemon's endpoint, when it is not the default.
+    api_url: Option<String>,
+    /// Fail instead of starting a daemon.
+    no_spawn: bool,
+    /// The profile to serve.
+    profile: Option<PathBuf>,
+    /// The workspace root the spawned daemon serves.
+    workspace: Option<PathBuf>,
+    /// The bearer token a TCP daemon requires.
+    token: Option<String>,
+    /// Draw the seeded world instead of asking a daemon.
+    demo: bool,
+    /// Ask the terminal to report the mouse.
+    mouse: bool,
+}
+
+/// Open the TUI, attaching to a daemon if one is running and hosting one if not
+/// (P6-11).
+///
+/// The daemon's flags are here because they only matter on the launch path this
+/// command owns. A daemon that is already running was started with its own, and
 /// pretending otherwise would show one project's sessions under another's name —
 /// so a mismatch is refused rather than ignored.
-fn run_tui(
-    path: Option<PathBuf>,
-    api_url: Option<String>,
-    no_spawn: bool,
-    profile: Option<PathBuf>,
-    workspace: Option<PathBuf>,
-    token: Option<String>,
-) -> u8 {
+fn run_tui(flags: TuiFlags) -> u8 {
+    let TuiFlags {
+        path,
+        api_url,
+        no_spawn,
+        profile,
+        workspace,
+        token,
+        demo,
+        mouse,
+    } = flags;
+    // The design pass comes first, before anything is resolved: it has no daemon
+    // to start, no project to find and no profile to read, and a flag that still
+    // touched the disk would be a flag that fails on a machine with neither.
+    if demo {
+        // The design pass reads nothing from disk, themes included: it draws in the
+        // built-in default, which is the theme a person who set nothing has.
+        let theme = match Settings::load(None, None) {
+            Ok(settings) => match tui_theme(&settings) {
+                Ok(theme) => theme,
+                Err(message) => {
+                    eprintln!("acpilot tui: {message}");
+                    return exit::FAILURE;
+                }
+            },
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                return exit::FAILURE;
+            }
+        };
+        return match acpilot_tui::run_demo(acpilot_demo::demo(), theme, mouse) {
+            Ok(()) => exit::SUCCESS,
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                exit::FAILURE
+            }
+        };
+    }
+
     // What the person named, or where they are: the workspace and the project are
     // implied by the argument rather than by two flags that have to agree with it.
     let root = match Root::resolve(path.as_deref()) {
@@ -302,31 +393,50 @@ fn run_tui(
         }
     };
     let workspace = workspace.unwrap_or_else(|| root.root().to_path_buf());
+    // The settings are read once, here: the profile they name and the theme they
+    // name come from the same cascade, and reading it twice is how two keys end up
+    // resolved from two different files.
+    let settings = match root.settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let theme = match tui_theme(&settings) {
+        Ok(theme) => theme,
+        Err(message) => {
+            eprintln!("acpilot tui: {message}");
+            return exit::FAILURE;
+        }
+    };
     // The profile is the project's, unless the caller named one. A project that
     // names none means the daemon's default, which is a profile nobody has to
     // spell out on the command line.
     let profile = match profile {
         Some(directory) => Some(directory),
-        None => match implied_profile(&root) {
+        None => match implied_profile(&settings) {
             Ok(profile) => profile,
             Err(code) => return code,
         },
     };
     let implied = profile.is_some();
-    let mut daemon_args = vec!["--workspace".to_owned(), workspace.display().to_string()];
-    if let Some(profile) = &profile {
-        daemon_args.push("--profile".to_owned());
-        daemon_args.push(profile.display().to_string());
-    }
 
     let token = token.or_else(local_token);
     let options = acpilot_client::daemon::Options {
         endpoint: api_url,
         no_spawn,
         token: token.clone(),
-        daemon_args,
+        // Unused here: this path never spawns a process — when no daemon answers,
+        // the core below runs in this one. The field belongs to `ensure`, which is
+        // what starts `acpilotd` for a caller that wants a separate process.
+        daemon_args: Vec::new(),
     };
-    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+    let in_process = InProcess {
+        profile: profile.clone(),
+        workspace: workspace.clone(),
+    };
+    let running = match acpilot_client::daemon::ensure_or_embed_blocking(&options, &in_process) {
         Ok(running) => running,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
@@ -334,7 +444,10 @@ fn run_tui(
         }
     };
 
-    if !running.spawned() {
+    // Only a daemon someone else is holding can disagree about the profile or the
+    // workspace: one this command started — in a process before, in this one now —
+    // was given both just above.
+    if running.attached() {
         if implied {
             eprintln!(
                 "acpilot tui: a daemon is already running at {}; it serves the profile it was \
@@ -356,12 +469,115 @@ fn run_tui(
         }
     }
 
-    match acpilot_tui::run(&running.endpoint, token.as_deref()) {
+    // The files the theme came from: the client watches them, so an edit to either
+    // is the colours on screen rather than a note to restart.
+    let theme_files = acpilot_tui::ThemeFiles {
+        user: Some(acpilot_profile::user_config_path()),
+        project: root.project().map(|project| project.config_path()),
+        // The terminal's own colours are asked for by the client, before it takes
+        // the screen: one reader of one terminal.
+        terminal: None,
+    };
+    // The token the launch settled on, which for an embedded daemon is the one it
+    // generated — the caller could not have had it before the launch.
+    let token = running.token().map(str::to_owned);
+    match acpilot_tui::run(
+        &running.endpoint,
+        token.as_deref(),
+        theme,
+        theme_files,
+        mouse,
+    ) {
         Ok(()) => exit::SUCCESS,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
         }
+    }
+}
+
+/// The daemon this binary can run without a process (P6-11).
+///
+/// `acpilotd --profile DIR --workspace DIR` is the same launch written as flags;
+/// this carries the two directories that launch would have passed, so embedded mode
+/// serves exactly what a daemon started for this command would have served. It is a
+/// value rather than a closure because the state is built only when nothing
+/// answered — a run against a real daemon must not read a profile twice.
+struct InProcess {
+    /// The profile the daemon would have been told to serve.
+    profile: Option<PathBuf>,
+    /// The workspace root it would have been given.
+    workspace: PathBuf,
+}
+
+impl acpilot_client::daemon::Embedded for InProcess {
+    fn start(
+        &self,
+    ) -> Result<acpilot_client::daemon::Started, acpilot_client::daemon::ConnectError> {
+        use acpilot_client::daemon::{ConnectError, Started};
+
+        // The same startup the `acpilotd` binary runs, down to the terminal reaper:
+        // a daemon that forgot one of them would behave differently depending on
+        // who started it, which is the fork this task exists to prevent.
+        let state = acpilotd::startup(self.profile.as_deref(), &self.workspace).map_err(|why| {
+            ConnectError::Embedded {
+                why: why.to_string(),
+            }
+        })?;
+        let listener =
+            acpilotd::embedded::Embedded::start(state).map_err(|why| ConnectError::Embedded {
+                why: why.to_string(),
+            })?;
+        Ok(Started::new(
+            listener.endpoint().to_owned(),
+            listener.token().to_owned(),
+            listener,
+        ))
+    }
+}
+
+/// The theme the terminal draws with, resolved from the settings' id.
+///
+/// The same extension the desktop app and the browser use, resolved by the same
+/// code: `[preferences] theme_tui` overrides `theme`, and a project's
+/// `.acpilot/config.toml` overrides either for that project alone. A theme that is
+/// not installed is refused by name rather than drawn as the terminal's own
+/// colours — a setting that silently does nothing is worse than a message.
+fn tui_theme(settings: &Settings) -> Result<acpilot_tui::Theme, String> {
+    let id = settings.preferences.theme_for(ThemeSurface::Tui);
+    let extensions = acpilot_extensions::builtin::load_all().map_err(|errors| {
+        let mut message = String::from("the built-in extensions do not load:");
+        for error in errors {
+            message.push_str("\n  ");
+            message.push_str(&error.to_string());
+        }
+        message
+    })?;
+    let registry = acpilot_extensions::ThemeRegistry::new(&extensions);
+    match registry.complete_with_warnings(id) {
+        Ok((resolved, warnings)) => {
+            // A theme that loads and breaks a rule is said out loud here, which is
+            // the only place a theme is loaded by a person: the panel window is a
+            // warning, not a refusal, so the theme still draws.
+            for warning in warnings {
+                eprintln!("acpilot tui: {warning}");
+            }
+            Ok(acpilot_tui::Theme::from_resolved(&resolved))
+        }
+        // Following the terminal makes the named theme the fallback for a terminal
+        // that will not say what its colours are, so a name that is not installed
+        // is a note rather than a refused launch.
+        Err(error) if settings.preferences.theme_follow_terminal => {
+            eprintln!(
+                "acpilot tui: {error}; the terminal's own colours are followed, so this theme is \
+                 only the fallback"
+            );
+            registry
+                .complete("acpilot.night-flight")
+                .map(|resolved| acpilot_tui::Theme::from_resolved(&resolved))
+                .map_err(|error| format!("{error}, and no built-in dark theme to fall back to"))
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -371,15 +587,8 @@ fn run_tui(
 /// that is not there is refused rather than ignored: starting a daemon on the
 /// default profile because a name had a typo is how a work prompt goes out under a
 /// personal key.
-fn implied_profile(root: &Root) -> Result<Option<PathBuf>, u8> {
-    let settings = match root.settings() {
-        Ok(settings) => settings,
-        Err(error) => {
-            eprintln!("acpilot tui: {error}");
-            return Err(exit::FAILURE);
-        }
-    };
-    let Some(name) = settings.profile else {
+fn implied_profile(settings: &Settings) -> Result<Option<PathBuf>, u8> {
+    let Some(name) = settings.profile.clone() else {
         return Ok(None);
     };
     match Profile::named(&name) {

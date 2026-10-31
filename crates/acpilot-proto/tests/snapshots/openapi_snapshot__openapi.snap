@@ -1342,8 +1342,33 @@ expression: canonical(document)
             "type": "integer"
           },
           "theme": {
-            "description": "Theme identifier, shared by TUI, GUI and web.",
+            "description": "Theme identifier for every surface that does not name its own.\n\nA theme is an extension, so this is the id of one: `acpilot.night-flight`\nunless someone says otherwise.",
             "type": "string"
+          },
+          "theme_follow_terminal": {
+            "description": "Solve the terminal's palette from the terminal's own colours.\n\nOn, `theme_tui` and `theme` name no theme for the terminal: the background\nand foreground the terminal reports (`OSC 11`/`OSC 10`) are the pair a\ncomplete token set is solved around, and they are what the terminal UI draws\nwith. A terminal that cannot report them falls back to the theme the\nsettings name, so the key is safe to turn on anywhere.\n\nThe desktop app and the browser are unaffected: neither has a terminal to\nask, and a window that took its colours from the shell that launched it would\nchange appearance depending on where it was started from.",
+            "type": "boolean"
+          },
+          "theme_gui": {
+            "description": "Theme for the desktop app, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_tui": {
+            "description": "Theme for the terminal UI, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_web": {
+            "description": "Theme for the browser UI, when it should differ from [`Preferences::theme`].",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "trim_trailing_whitespace": {
             "description": "Strip trailing whitespace on save.",

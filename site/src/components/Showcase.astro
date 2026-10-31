@@ -1,0 +1,724 @@
+---
+// The showcase: the terminal client's own screens, replayed in the browser.
+//
+// Every frame comes from `site/src/data/screens.json`, which `cargo xtask showcase`
+// captures by driving the real `App` and painting through `acpilot_tui::ui::draw`.
+// The palettes are `themes.json`, generated from the theme files. The
+// follow-the-terminal mode calls the product's own solver, compiled to WebAssembly
+// from `crates/acpilot-palette`. Nothing here is a drawing of the client.
+//
+// The frames are embedded as JSON in a `<script type="application/json">` block
+// rather than imported into the bundle: they are data a reader can inspect, and
+// `JSON.parse` of a text node is the same cost as the module import without making
+// the page's JavaScript depend on how the data grows.
+import themesData from '../data/themes.json';
+import screensData from '../data/screens.json';
+import desktopData from '../data/desktop.json';
+
+// `BASE_URL` is the site's base path and may or may not carry a trailing slash
+// depending on how it was configured; the task's output is under `public/showcase`.
+const base = import.meta.env.BASE_URL.endsWith('/')
+  ? import.meta.env.BASE_URL
+  : `${import.meta.env.BASE_URL}/`;
+const wasm = `${base}showcase/acpilot-palette.wasm`;
+const screens = {
+  generated_by: screensData.generated_by,
+  columns: screensData.columns,
+  rows: screensData.rows,
+  styles: screensData.styles,
+  scenes: screensData.scenes,
+};
+const palettes = themesData.themes.map((theme) => ({
+  id: theme.id,
+  name: theme.name,
+  appearance: theme.appearance,
+  ui: theme.ui,
+  syntax: theme.syntax,
+}));
+
+// `<` is the only character that can end the script block early, and inside a JSON
+// string the escape is the same character again.
+const embed = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
+const first = screensData.scenes[0];
+---
+
+<section class="showcase" data-showcase data-wasm={wasm} tabindex="-1">
+  <div class="showcase-head">
+    <div class="theme-picker" role="group" aria-label="Palette">
+      {
+        palettes.map((palette, index) => (
+          <button
+            type="button"
+            class="pick"
+            data-theme={palette.id}
+            aria-pressed={index === 0 ? 'true' : 'false'}
+          >
+            {palette.name}
+            <span class="chip" style={`--chip-bg:${palette.ui.bg};--chip-accent:${palette.ui.accent}`} />
+          </button>
+        ))
+      }
+      <button type="button" class="pick" data-theme="follow" aria-pressed="false">
+        Follow a terminal
+      </button>
+    </div>
+
+    <div class="follow" data-follow hidden>
+      <label>
+        background
+        <input type="color" data-bg value="#0b0f14" />
+      </label>
+      <label>
+        foreground
+        <input type="color" data-fg value="#e6edf3" />
+      </label>
+      <button type="button" class="ghost" data-sample>this page's colours</button>
+      <span class="ratio" data-ratio></span>
+    </div>
+  </div>
+
+  <p class="follow-note" data-follow-note hidden></p>
+
+  <div class="stage">
+    <canvas data-canvas role="img" aria-label={`The client's screen: ${first.title}`}></canvas>
+  </div>
+
+  <div class="scenes">
+    <button type="button" class="step" data-step="-1" aria-label="Previous screen">←</button>
+    <ol>
+      {
+        screensData.scenes.map((scene, index) => (
+          <li>
+            <button type="button" class="scene" data-scene={index} aria-pressed={index === 0 ? 'true' : 'false'}>
+              {scene.title}
+            </button>
+          </li>
+        ))
+      }
+    </ol>
+    <button type="button" class="step" data-step="1" aria-label="Next screen">→</button>
+  </div>
+
+  <p class="caption">
+    <span class="keys" data-keys>{first.keys}</span>
+    <span data-caption>{first.caption}</span>
+  </p>
+
+  <details class="text-version">
+    <summary>The current screen as text</summary>
+    <pre data-text></pre>
+  </details>
+
+  <p class="provenance" data-provenance>
+    Frames: <code>cargo xtask showcase</code>, painted by <code>acpilot_tui::ui::draw</code>.
+  </p>
+
+  <script type="application/json" id="showcase-screens" set:html={embed(screens)} />
+  <script type="application/json" id="showcase-palettes" set:html={embed(palettes)} />
+</section>
+
+<section class="window-card" data-window>
+  <header>
+    <h2>The desktop shell, as it is built</h2>
+    <p>
+      {desktopData.keymap.length} bindings and {desktopData.commands.length} palette rows, read
+      from the tables the window installs. The window itself is gpui and needs a graphics
+      stack, so this is a representation of its data rather than a screenshot of it.
+    </p>
+  </header>
+
+  <div class="window">
+    <div class="window-bar">
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="title">Acpilot · <span data-palette-name>{palettes[0].name}</span></span>
+      <span class="version">v{desktopData.version}</span>
+    </div>
+    <div class="window-body">
+      <div class="window-half">
+        <h3>Command palette</h3>
+        <ul class="rows">
+          {
+            desktopData.commands.map((command) => (
+              <li>
+                <span class="label">{command.label}</span>
+                <span class="detail">{command.detail}</span>
+              </li>
+            ))
+          }
+        </ul>
+        <p class="half-note">
+          Built from the profiles the window was launched with; a page has none, so
+          these are the two rows that do not depend on one.
+        </p>
+      </div>
+      <div class="window-half">
+        <h3>Keymap</h3>
+        <ul class="rows keys">
+          {
+            desktopData.keymap.map((binding) => (
+              <li>
+                <kbd>{binding.keys}</kbd>
+                <span class="label">{binding.description}</span>
+                <span class="detail">{binding.contexts.join(', ')}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .showcase {
+    margin-block: 2rem;
+    --sc-bg: #070d18;
+    --sc-bg_panel: #141e33;
+    --sc-text: #e8edf6;
+    --sc-text_muted: #97a5b8;
+    --sc-accent: #f7c65c;
+    --sc-border: #24334a;
+  }
+
+  .showcase-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .theme-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .pick,
+  .step,
+  .scene,
+  .ghost {
+    font: inherit;
+    font-size: var(--sl-text-sm, 0.85rem);
+    color: var(--sl-color-text);
+    background: var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.4rem;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+  }
+
+  .pick[aria-pressed='true'],
+  .scene[aria-pressed='true'] {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-text-accent);
+  }
+
+  .pick .chip {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-inline-start: 0.4rem;
+    border-radius: 50%;
+    background: var(--chip-bg);
+    box-shadow: inset 0 0 0 2px var(--chip-accent);
+    vertical-align: baseline;
+  }
+
+  .follow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    font-size: var(--sl-text-sm, 0.85rem);
+  }
+
+  .follow label {
+    display: inline-flex;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .follow input[type='color'] {
+    inline-size: 2rem;
+    block-size: 1.4rem;
+    padding: 0;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.3rem;
+    background: none;
+  }
+
+  .ratio {
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-gray-3);
+  }
+
+  .follow-note {
+    margin-block: 0.75rem 0;
+    font-size: var(--sl-text-sm, 0.85rem);
+    color: var(--sl-color-gray-3);
+  }
+
+  .stage {
+    margin-block-start: 1rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.6rem;
+    overflow: hidden;
+    background: var(--sc-bg);
+    box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.8);
+  }
+
+  canvas {
+    display: block;
+    inline-size: 100%;
+    block-size: auto;
+  }
+
+  .scenes {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-block-start: 0.9rem;
+  }
+
+  .scenes ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .caption {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
+    align-items: baseline;
+    margin-block: 0.9rem 0;
+    font-size: var(--sl-text-sm, 0.85rem);
+    color: var(--sl-color-gray-2, #b9c4d4);
+  }
+
+  .caption .keys,
+  .scenes kbd {
+    font-family: var(--sl-font-mono, ui-monospace, monospace);
+    font-size: 0.8em;
+    color: var(--sl-color-text-accent);
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    white-space: nowrap;
+  }
+
+  .text-version {
+    margin-block-start: 1rem;
+    font-size: var(--sl-text-sm, 0.85rem);
+  }
+
+  .text-version pre {
+    max-block-size: 22rem;
+    overflow: auto;
+    font-size: 0.7rem;
+    line-height: 1.1;
+    padding: 0.9rem;
+    border-radius: 0.5rem;
+    background: var(--sc-bg);
+    color: var(--sc-text);
+  }
+
+  .provenance {
+    margin-block-start: 0.75rem;
+    font-size: var(--sl-text-xs, 0.75rem);
+    color: var(--sl-color-gray-3);
+  }
+
+  /* The desktop shell's tables, in a frame that carries the same palette. */
+  .window-card {
+    margin-block: 3rem 2rem;
+  }
+
+  .window-card h2 {
+    margin-block-end: 0.4rem;
+  }
+
+  .window {
+    margin-block-start: 1rem;
+    border: 1px solid var(--sc-border);
+    border-radius: 0.7rem;
+    overflow: hidden;
+    background: var(--sc-bg);
+    color: var(--sc-text);
+    font-size: var(--sl-text-sm, 0.85rem);
+  }
+
+  .window-bar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.5rem 0.8rem;
+    background: var(--sc-bg_panel);
+    border-block-end: 1px solid var(--sc-border);
+  }
+
+  .window-bar .dots {
+    display: inline-flex;
+    gap: 0.35rem;
+  }
+
+  .window-bar .dots i {
+    inline-size: 0.6rem;
+    block-size: 0.6rem;
+    border-radius: 50%;
+    background: var(--sc-border);
+  }
+
+  .window-bar .title {
+    font-weight: 600;
+  }
+
+  .window-bar .version {
+    margin-inline-start: auto;
+    color: var(--sc-text_muted);
+    font-family: var(--sl-font-mono, ui-monospace, monospace);
+    font-size: 0.8em;
+  }
+
+  .window-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 1.25rem;
+    padding: 1rem;
+  }
+
+  .window-half h3 {
+    margin: 0 0 0.6rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sc-accent);
+  }
+
+  .rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .rows li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    align-items: baseline;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.35rem;
+    background: var(--sc-bg_panel);
+  }
+
+  .rows .label {
+    font-weight: 600;
+  }
+
+  .rows .detail {
+    margin-inline-start: auto;
+    color: var(--sc-text_muted);
+    font-size: 0.85em;
+  }
+
+  .rows kbd {
+    font-family: var(--sl-font-mono, ui-monospace, monospace);
+    font-size: 0.85em;
+    color: var(--sc-text_muted);
+  }
+
+  .half-note {
+    margin-block: 0.7rem 0;
+    font-size: 0.8em;
+    color: var(--sl-color-gray-3);
+  }
+
+  @media (max-width: 40rem) {
+    .caption {
+      flex-direction: column;
+    }
+  }
+</style>
+
+<script>
+  const root = document.querySelector('[data-showcase]');
+
+  if (root && !root.dataset.ready) {
+    root.dataset.ready = 'true';
+
+    const read = (id) => JSON.parse(document.getElementById(id).textContent);
+    const screens = read('showcase-screens');
+    const palettes = read('showcase-palettes');
+    const cards = document.querySelectorAll('[data-window], [data-palette-name]');
+
+    const canvas = root.querySelector('[data-canvas]');
+    const ctx = canvas.getContext('2d');
+    const caption = root.querySelector('[data-caption]');
+    const keys = root.querySelector('[data-keys]');
+    const text = root.querySelector('[data-text]');
+    const note = root.querySelector('[data-follow-note]');
+    const follow = root.querySelector('[data-follow]');
+    const bgInput = root.querySelector('[data-bg]');
+    const fgInput = root.querySelector('[data-fg]');
+    const ratio = root.querySelector('[data-ratio]');
+    const name = document.querySelector('[data-palette-name]');
+
+    // The ANSI colours a program's own screen can name. The terminal pane is the one
+    // part of a frame whose colours are not the theme's: it parses a program's bytes,
+    // and 16-colour output asks for the terminal's table, not ours.
+    const ANSI = [
+      '#000000', '#cd3131', '#0dbc79', '#e5e510', '#2472c8', '#bc3fbc', '#11a8cd', '#e5e5e5',
+      '#666666', '#f14c4c', '#23d18b', '#f5f543', '#3b8eea', '#d670d6', '#29b8db', '#ffffff',
+    ];
+
+    let palette = palettes[0];
+    let scene = 0;
+    let solver = null;
+
+    const fallback = (kind) => (kind === 'fg' ? palette.ui.text : palette.ui.bg);
+
+    /** A style field as a colour: a token, a program's own, an index, or the default. */
+    function colour(spec, kind) {
+      if (typeof spec !== 'string' || spec === 'default' || spec === '') {
+        return fallback(kind);
+      }
+      if (spec.startsWith('token:')) {
+        const token = spec.slice(6);
+        return palette.ui[token] || palette.syntax[token] || fallback(kind);
+      }
+      if (spec.startsWith('ansi:')) {
+        return ANSI[Number(spec.slice(5))] || fallback(kind);
+      }
+      return spec;
+    }
+
+    /** The frame as plain text, for the `<details>` and for a reader's fallback. */
+    function asText(frame) {
+      return frame.rows
+        .map((row) => {
+          const line = new Array(screens.columns).fill(' ');
+          for (const run of row) {
+            [...run.text].forEach((ch, offset) => {
+              if (run.column + offset < line.length) line[run.column + offset] = ch;
+            });
+          }
+          return line.join('').replace(/\s+$/, '');
+        })
+        .join('\n');
+    }
+
+    function metrics(width) {
+      const cellW = width / screens.columns;
+      ctx.font = '100px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const advance = ctx.measureText('M').width / 100 || 0.6;
+      return { cellW, cellH: cellW * 2, fontSize: cellW / advance };
+    }
+
+    function paint() {
+      const frame = screens.scenes[scene];
+      const width = canvas.clientWidth;
+      if (!width || !frame) return;
+
+      const { cellW, cellH, fontSize } = metrics(width);
+      const height = Math.round(cellH * screens.rows);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.height = `${height}px`;
+      canvas.setAttribute('aria-label', `The client's screen: ${frame.title}`);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = palette.ui.bg;
+      ctx.fillRect(0, 0, width, height);
+
+      for (const [row, runs] of frame.rows.entries()) {
+        for (const run of runs) {
+          const style = screens.styles[run.style];
+          const mods = style.modifiers || [];
+          const reversed = mods.includes('reverse');
+          const fg = colour(style.fg, 'fg');
+          const bg = colour(style.bg, 'bg');
+          const x = run.column * cellW;
+          const y = row * cellH;
+          const w = [...run.text].length * cellW;
+
+          if (reversed || bg !== palette.ui.bg) {
+            ctx.fillStyle = reversed ? fg : bg;
+            ctx.fillRect(x, y, w, cellH);
+          }
+
+          ctx.globalAlpha = mods.includes('dim') ? 0.65 : 1;
+          ctx.fillStyle = reversed ? bg : fg;
+          ctx.font = `${mods.includes('bold') ? 'bold ' : ''}${
+            mods.includes('italic') ? 'italic ' : ''
+          }${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+          ctx.fillText(run.text, x, y + cellH * 0.8);
+
+          if (mods.includes('underline') || mods.includes('strike')) {
+            const line = Math.max(1, cellH * 0.06);
+            const at = mods.includes('underline') ? y + cellH * 0.9 : y + cellH * 0.55;
+            ctx.fillRect(x, at, w, line);
+          }
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      caption.textContent = frame.caption;
+      keys.textContent = frame.keys;
+      text.textContent = asText(frame);
+    }
+
+    /** Apply a palette to the player and to the shell card beside it. */
+    function recolour(next) {
+      palette = next;
+      const tokens = { ...next.ui, ...next.syntax };
+      for (const [token, value] of Object.entries(tokens)) {
+        root.style.setProperty(`--sc-${token}`, value);
+      }
+      if (name) name.textContent = next.name;
+      for (const card of cards) {
+        card.style.setProperty('--sc-bg', next.ui.bg);
+        card.style.setProperty('--sc-bg_panel', next.ui.bg_panel);
+        card.style.setProperty('--sc-text', next.ui.text);
+        card.style.setProperty('--sc-text_muted', next.ui.text_muted);
+        card.style.setProperty('--sc-accent', next.ui.accent);
+        card.style.setProperty('--sc-border', next.ui.border);
+      }
+      paint();
+    }
+
+    function chooseScene(index) {
+      scene = (index + screens.scenes.length) % screens.scenes.length;
+      for (const button of root.querySelectorAll('[data-scene]')) {
+        button.setAttribute('aria-pressed', String(Number(button.dataset.scene) === scene));
+      }
+      paint();
+    }
+
+    for (const button of root.querySelectorAll('[data-scene]')) {
+      button.addEventListener('click', () => chooseScene(Number(button.dataset.scene)));
+    }
+    for (const button of root.querySelectorAll('[data-step]')) {
+      button.addEventListener('click', () =>
+        chooseScene(scene + Number(button.dataset.step)),
+      );
+    }
+
+    root.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        chooseScene(scene - 1);
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        chooseScene(scene + 1);
+      }
+    });
+
+    // The wasm module is loaded on demand: the built-in palettes need no solver, and
+    // a reader who never opens the follow mode should not download one.
+    let loading = null;
+    function load() {
+      loading ??= (async () => {
+        const url = root.dataset.wasm;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`${response.status} for ${url}`);
+        const bytes = await response.arrayBuffer();
+        const { instance } = await WebAssembly.instantiate(bytes, {});
+        return instance.exports;
+      })();
+      return loading;
+    }
+
+    const hex = (value) => {
+      const text = String(value || '').trim();
+      if (/^#[0-9a-f]{6}$/i.test(text)) return text.toLowerCase();
+      if (/^#[0-9a-f]{3}$/i.test(text)) {
+        return `#${[...text.slice(1)].map((ch) => ch + ch).join('')}`.toLowerCase();
+      }
+      return null;
+    };
+    const word = (value) => parseInt(value.slice(1), 16);
+
+    async function solveFromInputs() {
+      note.hidden = true;
+      const bg = hex(bgInput.value);
+      const fg = hex(fgInput.value);
+      if (!bg || !fg) return;
+
+      try {
+        solver ??= await load();
+      } catch (error) {
+        note.hidden = false;
+        note.textContent =
+          'The solver did not load, so this mode is off. It is built by `cargo xtask showcase` ' +
+          `(${error.message}).`;
+        return;
+      }
+
+      ratio.textContent = `${solver.ratio(word(bg), word(fg)).toFixed(2)}:1 · AA needs ${solver.aa_threshold()}`;
+      const length = solver.solve(word(bg), word(fg));
+      if (!length) {
+        note.hidden = false;
+        note.textContent = 'That pair cannot be solved into a palette with readable text.';
+        return;
+      }
+      const bytes = new Uint8Array(solver.memory.buffer, solver.out_ptr(), length).slice();
+      recolour(JSON.parse(new TextDecoder().decode(bytes)));
+    }
+
+    for (const button of root.querySelectorAll('[data-theme]')) {
+      button.addEventListener('click', async () => {
+        for (const other of root.querySelectorAll('[data-theme]')) {
+          other.setAttribute('aria-pressed', String(other === button));
+        }
+        if (button.dataset.theme !== 'follow') {
+          follow.hidden = true;
+          note.hidden = true;
+          recolour(palettes.find((entry) => entry.id === button.dataset.theme) ?? palettes[0]);
+          return;
+        }
+        follow.hidden = false;
+        if (!bgInput.dataset.sampled) {
+          bgInput.dataset.sampled = 'true';
+          samplePage();
+        }
+        await solveFromInputs();
+      });
+    }
+
+    /** The colours of the page the reader is on, as a pair to solve from. */
+    function samplePage() {
+      const styles = getComputedStyle(document.documentElement);
+      const bg = hex(styles.getPropertyValue('--sl-color-bg')) || '#0b0f14';
+      const fg = hex(styles.getPropertyValue('--sl-color-text')) || '#e6edf3';
+      bgInput.value = bg;
+      fgInput.value = fg;
+    }
+
+    root.querySelector('[data-sample]')?.addEventListener('click', async () => {
+      samplePage();
+      await solveFromInputs();
+    });
+    for (const input of [bgInput, fgInput]) {
+      input.addEventListener('input', solveFromInputs);
+    }
+
+    // A narrower window is a different number of pixels per cell, not a different
+    // screen: repainting keeps the frame legible instead of scaling a bitmap.
+    let pending = 0;
+    new ResizeObserver(() => {
+      cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(paint);
+    }).observe(canvas);
+
+    recolour(palette);
+    chooseScene(0);
+  }
+</script>

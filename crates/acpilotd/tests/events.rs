@@ -192,12 +192,16 @@ async fn the_stream_is_documented_where_a_client_generator_looks() {
     let description = body["paths"]["/v1/events"]["get"]["responses"]["200"]["description"]
         .as_str()
         .expect("the route is in the document");
-    assert!(
-        description.contains("text/event-stream") && description.contains("permission"),
-        "the description says what a client will receive: {description}"
-    );
+    for frame in ["text/event-stream", "prefs", "permission"] {
+        assert!(
+            description.contains(frame),
+            "the description says what a client will receive, and `{frame}` is missing: \
+             {description}"
+        );
+    }
     assert_eq!(
-        body["paths"]["/v1/events"]["get"]["summary"], "Follow new permission requests",
+        body["paths"]["/v1/events"]["get"]["summary"],
+        "Follow permission requests and settings changes",
         "a generated client has a name for the route"
     );
 }

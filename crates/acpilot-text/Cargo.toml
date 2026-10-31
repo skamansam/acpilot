@@ -7,6 +7,28 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The rope under every edit path. 1.6.x on purpose: 2.0.0-beta.1 exists and the
+# rope is the last thing in this workspace to take a pre-release (README §5.3).
+acpilot-palette = { workspace = true }
+ropey = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+# The grammars that ship with the binary. Which file is which language is the
+# registry's question, not this table's.
+tree-sitter-json = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-toml-ng = { workspace = true }
+# How many cells a character takes in a terminal. A caret placed by counting
+# characters drifts left of the glyph the first time a line holds a `日` or a
+# combining mark, and the drift is invisible until somebody types next to one.
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Only a test uses it: the reference implementation is the oracle the capture
+# walk is held to, so the runtime pays for one parse rather than two.
+tree-sitter-highlight = { workspace = true }
 
 [lints]
 workspace = true

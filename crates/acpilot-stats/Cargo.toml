@@ -1,0 +1,24 @@
+[package]
+name = "acpilot-stats"
+description = "The integration stats bar, as every surface draws it: rows, tracks and the words in them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# A leaf, like `acpilot-palette` and `acpilot-text`: it reads the wire contract and
+# draws nothing. The terminal, the window and the browser are three renderers of
+# one answer to "how full is this bar, and what do we say when nobody said".
+[dependencies]
+# The fill arithmetic: an unknown denominator is `None`, an over-budget one clamps.
+acpilot-core = { workspace = true }
+acpilot-proto = { workspace = true }
+# The age of a reading, so a bar that stopped updating says so instead of sitting
+# there looking current.
+jiff = { workspace = true }
+# The daemon serves these rows to the browser, which cannot compile Rust: the
+# same rows the terminal draws are what the page receives.
+serde = { workspace = true }
+
+[lints]
+workspace = true

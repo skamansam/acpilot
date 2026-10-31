@@ -19,6 +19,7 @@ use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
+use acpilot_proto::profile::Preferences;
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
 use axum::Json;
 use axum::Router;
@@ -34,15 +35,22 @@ use utoipa::OpenApi as _;
 
 mod auth;
 mod files;
+// The in-process listener: the same router, served by a client instead of a
+// process (P6-11).
+pub mod embedded;
 mod platform;
 mod sessions;
+mod stats;
 mod terminals;
+// What a conversation costs, counted from the events its agent streamed. Not a
+// route and not a renderer: the sessions engine counts, `/v1/stats` reports.
+mod usage;
 
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
 pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
-pub use terminals::{Terminal, Terminals};
+pub use terminals::{Output, Terminal, Terminals};
 
 use axum::response::Html;
 
@@ -219,6 +227,13 @@ pub struct AppState {
     ///
     /// [`Host`]: acpilot_host::Host
     agent_terminals: Arc<AgentTerminals>,
+    /// Settings saves, announced to every client on the profile-wide stream.
+    ///
+    /// A channel rather than a value: the stream is the reader, there may be none,
+    /// and a daemon whose events nobody is watching should not accumulate anything
+    /// it has to remember to drop. `AppState` always holds a sender, so the channel
+    /// is never closed while the daemon runs.
+    preference_changes: broadcast::Sender<Preferences>,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -244,6 +259,7 @@ impl Default for AppState {
             terminals: Terminals::default(),
             transcripts: None,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
+            preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
         }
     }
@@ -316,6 +332,98 @@ impl AppState {
         self
     }
 
+    /// The settings this daemon would apply right now, resolved from the cascade.
+    ///
+    /// Read rather than cached, for the same reason the palette is: a settings file
+    /// edited while the daemon runs should be the answer the next caller gets. A
+    /// daemon with no workspace, or with a file that does not parse, answers
+    /// [`None`] — which is "carry on with what you have", not an error.
+    #[must_use]
+    pub fn settings(&self) -> Option<acpilot_profile::settings::Settings> {
+        let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
+        root.settings().ok()
+    }
+
+    /// The preferences a client of this daemon would draw with, resolved now.
+    #[must_use]
+    pub fn preferences(&self) -> Option<Preferences> {
+        Some(self.settings()?.preferences)
+    }
+
+    /// Subscribe to settings saves, for whoever is serving the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_preferences(&self) -> broadcast::Receiver<Preferences> {
+        self.preference_changes.subscribe()
+    }
+
+    /// Announce the settings a person saves, for as long as the daemon runs.
+    ///
+    /// The daemon watches rather than each client because a client may not be able
+    /// to see this machine's files: a window, a browser, or anything reaching the
+    /// daemon over TCP. `GET /v1/events` carries the answer, and a client applies a
+    /// frame the same way it applies the settings it reads at launch.
+    ///
+    /// A daemon with no workspace, or whose settings no watcher can reach, still
+    /// serves the first frame of a stream from [`Self::preferences`]: the fallback
+    /// is a client that never hears about a save, not a launcher that fails.
+    pub fn watch_preferences(&self) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Ok(root) = acpilot_profile::project::Root::resolve(Some(&workspace.root)) else {
+            return;
+        };
+        // Both files the cascade reads, so a save in either is a change: a project
+        // can be light while the user's own settings stay night flight.
+        let mut paths = vec![acpilot_profile::user_config_path()];
+        if let Some(project) = root.project() {
+            paths.push(project.config_path());
+        }
+        let Some(changes) = acpilot_profile::watch::changes(paths) else {
+            tracing::warn!(
+                "settings are not being watched; clients will only see the preferences \
+                             they read at connect"
+            );
+            return;
+        };
+        let state = self.clone();
+        std::thread::spawn(move || {
+            while changes.recv().is_ok() {
+                // A file that does not parse, or names something no extension
+                // provides, answers `None`: the last good preferences stay in
+                // force and the stream says nothing rather than something wrong.
+                let Some(preferences) = state.preferences() else {
+                    continue;
+                };
+                let _ = state.preference_changes.send(preferences);
+            }
+        });
+    }
+
+    /// The palette the web page is drawn with, resolved now.
+    ///
+    /// Read per request rather than at startup: the browser page is the one
+    /// surface whose theme can be re-read for free, and a settings file edited
+    /// while the daemon runs should be the colours on the next page load instead of
+    /// a reason to restart. `None` leaves the page's own palette, which is what a
+    /// daemon with no workspace or no settings has always served.
+    ///
+    /// The same [`acpilot_extensions::AppliedTheme`] the window and the terminal
+    /// draw with: the browser is a surface, not a third interpretation of a theme
+    /// file.
+    #[must_use]
+    pub fn web_palette(&self) -> Option<acpilot_extensions::AppliedTheme> {
+        use acpilot_proto::profile::ThemeSurface;
+
+        let settings = self.settings()?;
+        let extensions = acpilot_extensions::builtin::load_all().ok()?;
+        acpilot_extensions::AppliedTheme::from_extensions(
+            &extensions,
+            settings.preferences.theme_for(ThemeSurface::Web),
+        )
+        .ok()
+    }
+
     /// Where transcripts are kept, when the daemon keeps them.
     pub fn transcripts(&self) -> Option<&std::path::Path> {
         self.transcripts.as_deref()
@@ -329,6 +437,49 @@ impl AppState {
     /// it are the same switch.
     pub fn agent_terminals(&self) -> &Arc<AgentTerminals> {
         &self.agent_terminals
+    }
+
+    /// Give every terminal an agent opens a pane of its own, from now on.
+    ///
+    /// The agent's terminal is the process; the pane is the screen a person can
+    /// attach to and type into. They are the same PTY — the pane reads the bytes
+    /// the agent's reader already got and writes to the same descriptor — so a
+    /// shell the agent started can be watched and driven from a client without the
+    /// daemon owning a second process for it.
+    ///
+    /// A session the daemon cannot map (its `session/new` failed after the agent
+    /// chose an id, say) is filed under the agent's own id rather than dropped: a
+    /// pane with an unfamiliar owner is more useful than a shell nobody can see.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn mirror_agent_terminals(&self) {
+        let panes = self.terminals.clone();
+        let sessions = self.sessions.clone();
+        let mut opened = self.agent_terminals.subscribe_opened();
+        tokio::spawn(async move {
+            loop {
+                match opened.recv().await {
+                    Ok(handle) => {
+                        let session_id = sessions
+                            .id_for_acp(handle.session_id())
+                            .unwrap_or_else(|| handle.session_id().to_owned());
+                        panes.adopt(session_id, handle);
+                    }
+                    // A mirror that falls 256 terminals behind loses those
+                    // panes, not the processes: every terminal it skipped still
+                    // works for the agent, which is the owner, and the next one
+                    // opened is adopted as normal. Said out loud rather than
+                    // silently, because a shell with no pane is something the
+                    // log should be able to explain.
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "pane mirror fell behind");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
     }
 
     /// Kill agent terminals nobody has touched in [`IDLE_TIMEOUT`], on a timer.
@@ -447,6 +598,41 @@ pub fn state_for(
         Some(directory) => state_for_profile(directory, workspace),
         None => Ok(AppState::new().with_workspace(workspace_at(workspace)?)),
     }
+}
+
+/// The state a launch serves, with the background work a daemon is.
+///
+/// One function for the binary and for embedded mode, because the parts after the
+/// state are not optional: the terminal reaper ends the processes an agent opened
+/// and never released, the mirror makes an agent's terminal watchable, and the
+/// settings watch is how a client behind a socket sees a theme saved on this
+/// machine. A second launch path that remembered only some of them would be a
+/// daemon that behaves differently depending on who started it — which is exactly
+/// what P6-11's single code path is for.
+///
+/// # Errors
+///
+/// The profile or the workspace could not be read (see [`state_for`]).
+pub fn startup(
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+) -> Result<AppState, StateError> {
+    let state = state_for(profile, workspace)
+        // Conversations outlive the process that streamed them, which is the point
+        // of a transcript: a client that reconnects after a restart can read what
+        // happened. Where that lives is the data directory, not the socket's.
+        .map(|state| state.with_transcripts(transcript_dir()))?;
+    // A terminal is a process; one an agent opened and never released has to end
+    // on its own, because `terminal/release` is optional in ACP.
+    state.reap_terminals_on_a_timer();
+    // And one an agent opened should be watchable: the same PTY, seen through a
+    // pane a client can attach to.
+    state.mirror_agent_terminals();
+    // A saved `config.toml` is the theme a client is drawing with, and a client
+    // behind a socket cannot see this machine's files: the daemon watches them and
+    // announces the new preferences on `GET /v1/events`.
+    state.watch_preferences();
+    Ok(state)
 }
 
 /// Where the daemon keeps the transcripts of its sessions.
@@ -594,17 +780,31 @@ struct PendingQuery {
 /// `GET /v1/events` — the profile-wide stream.
 ///
 /// The stream announces a request the moment one appears, so a UI can offer a
-/// prompt without polling `GET /v1/permissions`. It is announced here rather
-/// than on a session stream because the pending list is profile-wide: a client
-/// watching every session is exactly the client that must not miss one.
+/// prompt without polling `GET /v1/permissions`, and the preferences the moment a
+/// settings file settles, so a client that cannot see this daemon's disk — a
+/// window, a browser, anything over TCP — follows `theme` without a restart. Both
+/// are announced here rather than on a session stream because both are
+/// profile-wide: a client watching every session is exactly the client that must
+/// not miss one.
 ///
-/// Nothing is replayed. A request that arrived while the client was away is
+/// Preferences are also the stream's first frame, because they are state and not
+/// history: the daemon has one current answer, and a client that connects should
+/// be told what it is rather than learn it only when somebody edits a file.
+/// Requests are not replayed — one that arrived while a client was away is
 /// recovered by fetching the pending list, which is state; replaying old prompts
 /// would ask a person to answer something already answered (`docs/api.md`).
 async fn events(State(state): State<AppState>) -> Response {
     let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+    // Subscribed before the current answer is read, so a save landing between the
+    // two is announced rather than silently skipped.
+    let preferences = state.subscribe_preferences();
+    if let Some(current) = state.preferences() {
+        // The channel is fresh, so this cannot fail; if it somehow did, the pump
+        // below is the next thing to notice.
+        let _ = sender.send(prefs_frame(None, &current)).await;
+    }
     let requests = state.broker.as_ref().map(|broker| broker.subscribe());
-    tokio::spawn(pump(requests, sender));
+    tokio::spawn(pump(state, requests, preferences, sender));
     Sse::new(futures::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -617,47 +817,73 @@ async fn events(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
+/// One `prefs` frame: the preferences this daemon would apply right now.
+///
+/// `id` is the frame's place in the stream, so `Last-Event-ID` and a `resync` have
+/// something to name. The first frame of a connection has none: it is the answer
+/// to a question, not a change.
+fn prefs_frame(id: Option<u64>, preferences: &Preferences) -> Event {
+    let mut frame = Event::default().event("prefs");
+    if let Some(id) = id {
+        frame = frame.id(id.to_string());
+    }
+    frame.data(serde_json::json!({ "preferences": preferences }).to_string())
+}
+
 /// What the pump has to say next.
 enum Step {
     /// Time to prove the connection is still there.
     Beat,
     /// The broker announced something, or the subscription ended.
-    Announced(Result<PermissionRequest, broadcast::error::RecvError>),
+    Permission(Result<PermissionRequest, broadcast::error::RecvError>),
+    /// The settings settled, or that subscription ended.
+    Preferences(Result<Preferences, broadcast::error::RecvError>),
 }
 
-/// Turn broker announcements and a clock into SSE frames.
+/// Turn announcements and a clock into SSE frames.
 ///
 /// `requests` is `None` when the daemon has no broker: no request can ever be
-/// announced, so the stream only heartbeats instead of closing. A closing stream
-/// would make every client reconnect on the same two seconds the reconnect
+/// announced, so that half of the stream stays quiet instead of closing. A closing
+/// stream would make every client reconnect on the same two seconds the reconnect
 /// advice names, forever, for a state the daemon could simply describe as quiet.
+/// Preferences are never optional — every daemon has settings — which is why they
+/// are the half that always has something to say.
 async fn pump(
+    state: AppState,
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
+    mut preferences: broadcast::Receiver<Preferences>,
     sender: mpsc::Sender<Event>,
 ) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Announced requests only: the stream has no replay, so this number is the
-    // id of the last frame it sent, which is what a `resync` names.
+    // Announced frames only: the stream has no replay, so this number is the id of
+    // the last frame it sent, which is what a `resync` names.
     let mut seq = 0_u64;
 
     loop {
-        let step = match requests.as_mut() {
-            Some(requests) => tokio::select! {
-                _ = beat.tick() => Step::Beat,
-                announced = requests.recv() => Step::Announced(announced),
-            },
-            None => {
-                beat.tick().await;
-                Step::Beat
+        // A daemon without a broker has nothing to poll, and `pending` keeps the
+        // branch parked rather than busy.
+        let announced = async {
+            match requests.as_mut() {
+                Some(requests) => requests.recv().await,
+                None => {
+                    std::future::pending::<Result<PermissionRequest, broadcast::error::RecvError>>()
+                        .await
+                }
             }
+        };
+
+        let step = tokio::select! {
+            _ = beat.tick() => Step::Beat,
+            preferences = preferences.recv() => Step::Preferences(preferences),
+            requests = announced => Step::Permission(requests),
         };
 
         let frame = match step {
             Step::Beat => Event::default()
                 .event("heartbeat")
                 .data(serde_json::json!({ "seq": seq }).to_string()),
-            Step::Announced(Ok(request)) => {
+            Step::Permission(Ok(request)) => {
                 seq += 1;
                 Event::default()
                     .event("permission")
@@ -666,13 +892,30 @@ async fn pump(
                         serde_json::json!({ "type": "requested", "request": request }).to_string(),
                     )
             }
-            // The client fell behind the announcement channel. It cannot catch
-            // up from the stream, so it is told where it now is and refetches
-            // the pending list — the same recovery as a reconnecting client.
-            Step::Announced(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+            Step::Preferences(Ok(preferences)) => {
+                seq += 1;
+                prefs_frame(Some(seq), &preferences)
+            }
+            // The client fell behind the announcement channel. It cannot catch up
+            // from the stream, so it is told where it now is and refetches what is
+            // state: the pending list, and — for preferences, which this daemon can
+            // answer directly — the current preferences.
+            Step::Permission(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
                 .event("resync")
                 .data(serde_json::json!({ "latest_seq": seq }).to_string()),
-            Step::Announced(Err(broadcast::error::RecvError::Closed)) => break,
+            Step::Preferences(Err(broadcast::error::RecvError::Lagged(_))) => {
+                match state.preferences() {
+                    Some(current) => {
+                        seq += 1;
+                        prefs_frame(Some(seq), &current)
+                    }
+                    None => Event::default()
+                        .event("resync")
+                        .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+                }
+            }
+            Step::Permission(Err(broadcast::error::RecvError::Closed))
+            | Step::Preferences(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -806,7 +1049,8 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     let module_operations = sessions::operations()
         .into_iter()
         .chain(terminals::operations())
-        .chain(files::operations());
+        .chain(files::operations())
+        .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
@@ -844,10 +1088,10 @@ fn permissions_doc() {}
     get,
     path = "/v1/events",
     tag = "events",
-    summary = "Follow new permission requests",
+    summary = "Follow permission requests and settings changes",
     responses((
         status = 200,
-        description = "text/event-stream: `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}
@@ -877,8 +1121,79 @@ fn resolve_doc() {}
 /// version, and two buttons. What it proves is that the daemon can be reached from
 /// a browser at all, which is the first question when the web UI is the one that
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
-async fn web_app() -> Html<String> {
-    Html(acpilot_web::page(acpilot_core::VERSION))
+async fn web_app(State(state): State<AppState>) -> Html<String> {
+    Html(match state.web_palette() {
+        Some(theme) => acpilot_web::themed_page(acpilot_core::VERSION, &theme),
+        None => acpilot_web::page(acpilot_core::VERSION),
+    })
+}
+
+/// The web page's colours, as they change.
+///
+/// A browser repaints this page by listening here, so a theme saved from the TUI,
+/// the desktop app or another tab applies without a reload. `EventSource` cannot
+/// set a header, which is why this stream is one of the unauthenticated ones — and
+/// why it must not be given the token some other way: a secret in a query string
+/// ends up in the daemon's own logs, the browser's history and any `Referer`.
+///
+/// What it carries instead is the palette the page was already served with
+/// inline: the same names, the same colours, and nothing about any session. That
+/// is the whole reason the colours can travel without a token — the page at `/app`
+/// is public for the same reason, and this stream adds no fact to it.
+///
+/// The first frame is the palette in force right now, sent before the subscription
+/// is waited on, so a page that connects after a save lands on the current theme
+/// rather than the one its HTML was built with.
+async fn web_palette_events(State(state): State<AppState>) -> Response {
+    let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+    // Subscribed before the current answer is read, so a save landing between the
+    // two is announced rather than silently skipped.
+    let mut changes = state.subscribe_preferences();
+    if let Some(frame) = palette_frame(&state) {
+        let _ = sender.send(frame).await;
+    }
+    tokio::spawn(async move {
+        loop {
+            match changes.recv().await {
+                Ok(_) => {}
+                // A page that fell behind gets the next palette, which is the whole
+                // of the state: skipping a beat loses nothing.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+            match palette_frame(&state) {
+                // A daemon that loses its settings mid-stream sends nothing: the
+                // page keeps the last colours it had, which are still the ones its
+                // stylesheet defaults to.
+                None => {}
+                Some(frame) => {
+                    if sender.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    Sse::new(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (Ok::<_, Infallible>(frame), receiver))
+        },
+    ))
+    .into_response()
+}
+
+/// One `palette` frame: the colours the web page should be painted with now.
+fn palette_frame(state: &AppState) -> Option<Event> {
+    let theme = state.web_palette()?;
+    Some(
+        Event::default()
+            .event("palette")
+            .data(acpilot_web::palette_json(&theme)),
+    )
 }
 
 /// Swagger UI, loaded from a CDN against this daemon's own OpenAPI route.
@@ -1006,8 +1321,10 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/openapi.json", get(openapi))
         .route("/app", get(web_app))
+        .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
         .merge(sessions::routes())
+        .merge(stats::routes())
         .merge(terminals::routes())
         .with_state(state);
 
@@ -1020,6 +1337,45 @@ pub fn router_with(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_web_page_theme_is_read_when_the_page_is_asked_for() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let marker = directory.path().join(".acpilot");
+        std::fs::create_dir_all(&marker).expect("marker directory");
+        let config = marker.join("config.toml");
+        std::fs::write(&config, "[preferences]\ntheme_web = \"acpilot.paper\"\n")
+            .expect("project settings");
+
+        let state = AppState::new().with_workspace(Workspace {
+            id: "thing".to_owned(),
+            root: directory.path().to_path_buf(),
+        });
+        let theme = state.web_palette().expect("a theme is named");
+        assert_eq!(
+            theme.color(acpilot_extensions::UiToken::Bg).to_string(),
+            "#fbf7ef",
+            "paper's background, from the project's settings"
+        );
+
+        // Editing the file is the next page load's colours: no restart, no cache.
+        std::fs::write(
+            &config,
+            "[preferences]\ntheme_web = \"acpilot.night-flight\"\n",
+        )
+        .expect("project settings");
+        let theme = state.web_palette().expect("a theme is named");
+        assert_eq!(
+            theme.color(acpilot_extensions::UiToken::Bg).to_string(),
+            "#070d18",
+            "night flight, because the file changed"
+        );
+    }
+
+    #[test]
+    fn a_daemon_with_no_workspace_serves_the_pages_own_palette() {
+        assert!(AppState::new().web_palette().is_none());
+    }
 
     #[test]
     fn statuses_match_the_documented_contract() {

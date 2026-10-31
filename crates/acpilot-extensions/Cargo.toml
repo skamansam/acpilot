@@ -12,6 +12,10 @@ license.workspace = true
 # cannot be one thing to the daemon and another to `acpilot ext why`.
 acpilot-agent = { workspace = true }
 acpilot-proto = { workspace = true }
+# The tokens, the contrast gate and the solver, as a leaf crate: the terminal, the
+# window, the browser and the site's WebAssembly showcase all read one definition
+# of `Color` and one answer to "what does the terminal's own palette become?"
+acpilot-palette = { workspace = true }
 directories = { workspace = true }
 # The published `extension-v1.json` schema is generated from `Manifest`, the type
 # the loader parses, so an editor and a refusal cannot describe different files.

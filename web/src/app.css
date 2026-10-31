@@ -7,14 +7,15 @@
 :root {
   color-scheme: dark;
   --bg: #0b1220;
-  --panel: #131c2e;
-  --border: #223049;
+  --bg-panel: #131c2e;
   --text: #e6ecf7;
-  --muted: #93a4c0;
+  --text-muted: #93a4c0;
   --accent: #5aa9ff;
-  --on-accent: #08101d;
+  --accent-high: #8fc4ff;
+  --border: #223049;
+  --success: #7ee0a3;
+  --warning: #f7c65c;
   --danger: #ff8a80;
-  --ok: #7ee0a3;
 }
 
 * {
@@ -48,7 +49,7 @@ body {
   gap: 1rem;
   padding: 0.9rem 1.5rem;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--bg-panel);
 }
 
 .brand {
@@ -58,7 +59,7 @@ body {
 }
 
 .version {
-  color: var(--muted);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -76,14 +77,14 @@ h2 {
 
 .tagline,
 .note {
-  color: var(--muted);
+  color: var(--text-muted);
   margin: 0 0 1.5rem;
 }
 
 .card {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
-  background: var(--panel);
+  background: var(--bg-panel);
   padding: 1.25rem;
 }
 
@@ -116,14 +117,16 @@ button:disabled {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--on-accent);
+  /* The background is the colour that contrasts with the accent on both halves:
+   * a dark panel under a bright accent, a cream one under a dark accent. */
+  color: var(--bg);
   font-weight: 600;
 }
 
 label {
   display: block;
   font-size: 0.85rem;
-  color: var(--muted);
+  color: var(--text-muted);
   margin-bottom: 0.35rem;
 }
 
@@ -161,12 +164,150 @@ button:focus-visible {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .facts dd {
   margin: 0.15rem 0 0;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The stats bar: one row per integration, a track per measured figure and the
+ * sentence beside it. The colour is the *source*, not the level — green is "the
+ * server said so", amber "this client counted", the accent "a plan stated it" —
+ * because a bar coloured by fullness paints an estimate as a measurement.
+ */
+.stats {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-panel);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.stats-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.stats-head h3 {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+button.link:hover {
+  color: var(--accent-high);
+  border: 0;
+}
+
+button.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stats-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+}
+
+.stats-name {
+  min-width: 9rem;
+  font-weight: 600;
+}
+
+.stats-name .old {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.stats-source {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.track {
+  display: inline-block;
+  width: 6rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.track[data-indeterminate='true'] {
+  /* No denominator: a dashed track, never an empty one, which would read as
+   * "nothing used". A repeating gradient is the shape a person already knows. */
+  background: repeating-linear-gradient(
+    90deg,
+    var(--text-muted) 0 0.25rem,
+    transparent 0.25rem 0.5rem
+  );
+  opacity: 0.35;
+}
+
+.track-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+}
+
+.track[data-source='configured'] .track-fill {
+  background: var(--accent);
+}
+
+.track[data-source='estimated'] .track-fill {
+  background: var(--warning);
+}
+
+.track[data-source='unknown'] .track-fill {
+  background: var(--text-muted);
+}
+
+.track[data-indeterminate='true'] .track-fill {
+  display: none;
+}
+
+.track-text {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.track-text[data-source='estimated'] {
+  color: var(--warning);
+}
+
+.track-text[data-source='unknown'] {
+  color: var(--text-muted);
 }
 
 table {
@@ -177,7 +318,7 @@ table {
 
 caption {
   text-align: left;
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 0.85rem;
   padding-bottom: 0.5rem;
 }
@@ -194,12 +335,12 @@ th {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 td.muted,
 .empty {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .status {
@@ -215,7 +356,7 @@ td.muted,
 }
 
 .status[data-status='idle'] {
-  color: var(--ok);
+  color: var(--success);
 }
 
 dialog {
@@ -224,7 +365,7 @@ dialog {
   padding: 1.5rem;
   border: 1px solid var(--accent);
   border-radius: 0.75rem;
-  background: var(--panel);
+  background: var(--bg-panel);
   color: var(--text);
 }
 
@@ -245,7 +386,7 @@ dialog dl {
 }
 
 dialog dt {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 dialog dd {

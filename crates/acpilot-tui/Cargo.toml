@@ -7,15 +7,64 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The product's version, so About names the build the tarball names.
+acpilot-core = { workspace = true }
 acpilot-client = { workspace = true }
+# The design pass's seeded world. Shared with the desktop app (P10) so both draw
+# the same sessions, tree and transcript, and so a layout decision is one decision.
+acpilot-demo = { workspace = true }
+# Where the gutter's markers come from. The editor does not decide which lines
+# changed — git does, from the same diff the permission card shows — so the marks
+# and the review cannot disagree about what the agent touched.
+acpilot-git = { workspace = true }
+# The theme tokens the three surfaces share: the terminal is one of them, so it
+# reads the same token file rather than keeping a private palette.
+acpilot-extensions = { workspace = true }
+# Where the theme setting lives: a running client re-reads the same cascade the
+# CLI resolved at launch, so an edit is a recolour rather than a restart.
+acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The stats bar as a value: the fill ratios and the words beside them come from the
+# same crate the daemon hands the page, so the two bars cannot disagree.
+acpilot-stats = { workspace = true }
+# The text model behind the editor pane: one rope, one caret set, one undo
+# history, shared with the desktop app and the browser so "Ctrl-Z" cannot mean
+# three things in three frontends. The pane's scrolling and clipping live in
+# `acpilot-text::pane` for the same reason.
+acpilot-text = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 ratatui = { workspace = true }
+# The screen a pane draws. The daemon sends bytes, not cells: a client that
+# rendered raw escape sequences would print `ESC[1;31m` instead of red text.
+vt100 = { workspace = true }
 # Session events carry their payload as JSON, because the ACP updates they come
 # from are not one shape; reading them is the app's job, not a typed bypass.
 serde_json = { workspace = true }
+# The one file this client writes for itself: the widths the dividers were
+# dragged to. TOML because a person who opens it should be able to read it.
+serde = { workspace = true }
+toml = { workspace = true }
+# Asking the terminal what its background and foreground are, so
+# `[preferences] theme_follow_terminal` has a pair to solve a palette around.
+terminal-colorsaurus = { workspace = true }
 tokio = { workspace = true }
+
+# A terminal that answers the colour query, for `tests/terminal_colours.rs`.
+# Nothing in the product runs it: the test spawns it on the slave side of a real
+# pty and plays the terminal from the master side, which is the only way the
+# `OSC 10`/`OSC 11` round-trip is exercised rather than assumed.
+[[bin]]
+name = "acpilot-terminal-colours"
+path = "tests/fixtures/colour_probe.rs"
+test = false
+doc = false
+
+[dev-dependencies]
+# The pty itself: the test needs a master to answer on and a slave to be the
+# child's terminal, and an in-process pipe is not a terminal to `isatty`.
+portable-pty = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

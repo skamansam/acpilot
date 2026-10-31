@@ -21,13 +21,16 @@
 
 pub mod daemon;
 mod platform;
+pub mod terminal;
 
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionDecision, PermissionOption, PermissionRequest};
+use acpilot_proto::profile::Preferences;
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
+use acpilot_proto::terminal::TerminalSummary;
 use eventsource_stream::Eventsource;
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -70,6 +73,13 @@ pub enum ClientError {
     /// An event stream failed, or delivered a frame that did not parse.
     #[error("the event stream failed: {0}")]
     Stream(String),
+
+    /// A terminal attach failed: it could not be opened, or the socket broke.
+    ///
+    /// Separate from [`Self::Stream`] because a terminal is not an event feed a
+    /// caller can resync: a pane that lost its socket has to attach again.
+    #[error("the terminal failed: {0}")]
+    Terminal(String),
 }
 
 impl ClientError {
@@ -134,6 +144,13 @@ pub enum SessionStream {
 pub enum ProfileStream {
     /// An agent is waiting for an answer.
     Permission(PermissionRequest),
+    /// The settings a surface should now apply.
+    ///
+    /// The whole object, not a diff: it is state, so applying one is replacing
+    /// what the client had. The first frame of a connection is one of these too,
+    /// which is how a client that cannot read the daemon's files learns the
+    /// current preferences at all.
+    Preferences(Preferences),
     /// The stream is quiet but alive.
     Heartbeat,
     /// The client fell behind; refetch the pending list.
@@ -216,6 +233,29 @@ impl Client {
     /// `GET /v1/sessions`.
     pub async fn sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
         self.get("/v1/sessions").await
+    }
+
+    /// `GET /v1/stats`.
+    ///
+    /// The contract's rows, not a drawn bar: `acpilot-stats` turns them into tracks,
+    /// and that crate is a client-side dependency on purpose — the daemon reports
+    /// figures and every surface measures them the same way.
+    pub async fn stats(&self) -> Result<Vec<acpilot_proto::stats::IntegrationStats>, ClientError> {
+        self.get("/v1/stats").await
+    }
+
+    /// `GET /v1/terminals?session=`.
+    ///
+    /// `None` lists every terminal the daemon owns, which is what a debugger
+    /// wants; a pane asks for the ones its session opened.
+    pub async fn terminals(
+        &self,
+        session: Option<&str>,
+    ) -> Result<Vec<TerminalSummary>, ClientError> {
+        match session {
+            Some(id) => self.get(&format!("/v1/terminals?session={id}")).await,
+            None => self.get("/v1/terminals").await,
+        }
     }
 
     /// `GET /v1/sessions/{id}`.
@@ -459,6 +499,16 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
                 .map(ProfileStream::Permission)
                 .map_err(|error| {
                     ClientError::Stream(format!("a permission request did not parse: {error}"))
+                })
+        }
+        "prefs" => {
+            let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
+                ClientError::Stream(format!("a prefs frame did not parse: {error}"))
+            })?;
+            serde_json::from_value(value["preferences"].clone())
+                .map(ProfileStream::Preferences)
+                .map_err(|error| {
+                    ClientError::Stream(format!("the preferences did not parse: {error}"))
                 })
         }
         "heartbeat" => Ok(ProfileStream::Heartbeat),

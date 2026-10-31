@@ -56,7 +56,7 @@ acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
-acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>]
+acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
 acpilot serve [--http]
 acpilot doctor
 ```
@@ -81,10 +81,21 @@ client of the same API as everything else, so the editor phase (P6) grows this
 window rather than a second engine.
 
 ```bash
-$ acpilot tui                       # the first client starts the daemon
-$ acpilot tui --no-spawn            # fail instead: tests, CI, a service manager
+$ acpilot tui                       # attach to a daemon, or host the core in this process
+$ acpilot tui --no-spawn            # attach or fail: tests, CI, a service manager
 $ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
+$ acpilot tui --no-mouse            # the terminal keeps its own drag-to-select
 ```
+
+Mouse reporting is on: the menu bar, the dividers, a click that lands the caret, a
+drag that selects and the wheel all need it. It costs the terminal its own
+drag-to-select — most terminals keep that on Shift-drag — so `--no-mouse` turns
+reporting off and leaves the gesture to the terminal. Nothing is lost but the
+pointer: every mouse action has a key, and `F2` copy mode is the built-in answer
+for reading a terminal's output. A drag held against the top or bottom of the editor
+or the terminal scrolls past its edge and keeps selecting, and the widths the
+dividers were dragged to are remembered for the next launch in `tui-layout.toml`
+under the data directory — not in a settings file, which is the person's to edit.
 
 The default endpoint is the daemon's unix socket in `$XDG_RUNTIME_DIR/acpilot`
 (`$TMPDIR` on macOS), or loopback HTTP on Windows until the named pipe exists.

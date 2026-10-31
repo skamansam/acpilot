@@ -11,14 +11,21 @@ name: Docs
 #   gh variable set DOCS_DEPLOY --body true
 # Until then, `cd site && npm run dev` is the preview.
 
+# The published page carries two things the site does not own: the frames the
+# client painted (`site/src/data/screens.json`, captured from `acpilot-showcase`)
+# and the palette solver it runs in the browser (compiled from
+# `acpilot-palette`). Both live under `site/`, so a change to either is a `site/**`
+# change — except the solver, which is a crate. It is named here because a
+# solver fix that reached the terminal but not the page would leave the showcase
+# demonstrating a function the product no longer has.
 on:
   push:
     branches: [main]
-    paths: ['site/**', '.github/workflows/docs.yml']
+    paths: ['site/**', 'crates/acpilot-palette*/**', '.github/workflows/docs.yml']
   # A link that only the site build can resolve is exactly the kind of break a
   # reviewer cannot see in a diff.
   pull_request:
-    paths: ['site/**', '.github/workflows/docs.yml']
+    paths: ['site/**', 'crates/acpilot-palette*/**', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:
@@ -41,6 +48,28 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: site/package-lock.json
+
+      # The showcase page runs the product's palette solver in WebAssembly. It is
+      # built here rather than committed: a `.wasm` binary in the repository is one
+      # nobody remembers to rebuild when the solver changes, and the frames beside
+      # it are already covered by a drift test (`cargo test -p acpilot-showcase`).
+      # `cargo xtask showcase` is the same build plus that capture, for a developer;
+      # this job builds only the module, because it has no business compiling the
+      # client to publish a page.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          target: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the palette solver the showcase runs
+        run: |
+          cargo build -p acpilot-palette-wasm --release --target wasm32-unknown-unknown
+          mkdir -p site/public/showcase
+          cp target/wasm32-unknown-unknown/release/acpilot_palette_wasm.wasm \
+             site/public/showcase/acpilot-palette.wasm
+          test -s site/public/showcase/acpilot-palette.wasm
 
       - name: Install
         working-directory: site

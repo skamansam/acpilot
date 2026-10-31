@@ -86,7 +86,7 @@ fn write(path: &Path) -> io::Result<String> {
         std::fs::create_dir_all(directory)?;
         crate::private_dir(directory)?;
     }
-    let token = generate()?;
+    let token = random()?;
     // Written first, narrowed second: the directory is already `0700`, so the
     // window between the two is not one another user can use.
     std::fs::write(path, format!("{token}\n"))?;
@@ -94,11 +94,25 @@ fn write(path: &Path) -> io::Result<String> {
     Ok(token)
 }
 
+/// A fresh token that is not written anywhere.
+///
+/// For a listener that lives no longer than one client: an embedded daemon
+/// (P6-11) has no runtime directory to share a secret through, and a token on
+/// disk would outlive the only process it guarded. Everything else should use
+/// [`load_or_create`], which is what makes a rotation possible at all.
+///
+/// # Errors
+///
+/// The system's random source refused.
+pub fn generate() -> io::Result<String> {
+    random()
+}
+
 /// 32 bytes from the system's random source, as hex.
 ///
 /// 256 bits because a token has no rate limit of its own: whatever can reach the
 /// port can guess, and the only defence is that guessing is hopeless.
-fn generate() -> io::Result<String> {
+fn random() -> io::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())

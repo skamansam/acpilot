@@ -7,6 +7,14 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95" # floor set by rusqlite_migration 2.6; see README §5.9
 license = "MIT OR Apache-2.0"
+# Where a release lives. cargo-dist reads it to build the download URLs its
+# installers fetch from, so it is one fact for the three packages it ships rather
+# than a string per installer.
+repository = "https://github.com/skamansam/acpilot"
+# The Homebrew formula's `homepage` and a person's first link when they find the
+# tarball, which is the repository rather than the documentation site: the code is
+# what they are about to run.
+homepage = "https://github.com/skamansam/acpilot"
 
 [workspace.dependencies]
 # internal
@@ -19,11 +27,42 @@ acpilot-model = { version = "0.1.0", path = "crates/acpilot-model" }
 acpilot-agent = { version = "0.1.0", path = "crates/acpilot-agent" }
 acpilot-profile = { version = "0.1.0", path = "crates/acpilot-profile" }
 acpilot-extensions = { version = "0.1.0", path = "crates/acpilot-extensions" }
+# The colour maths, without the loader: the tokens, the contrast gate and the
+# terminal-following solver. Every surface reads them through `acpilot-extensions`;
+# the site's WebAssembly showcase imports this leaf directly, because a browser has
+# no extensions to load and no business compiling the daemon's dependency tree.
+acpilot-palette = { version = "0.1.0", path = "crates/acpilot-palette" }
+# The text model every editor pane edits through — rope, selections, edits,
+# highlighting and the viewport arithmetic. A leaf on purpose: no HTTP, no
+# `ratatui`, no `gpui`, so the terminal, the window and the browser share one
+# answer to what a keystroke means.
+acpilot-text = { version = "0.1.0", path = "crates/acpilot-text" }
 # The daemon API as a library: every UI (CLI, TUI, later the GUI and web) calls
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
+# The engine, as a library: the socket and TCP listeners a release runs, and the
+# in-process one `acpilot tui` runs when no daemon answers (P6-11). It is what the
+# client talks to, not a thing the client reimplements.
+acpilotd = { version = "0.1.0", path = "crates/acpilotd" }
 acpilot-tui = { version = "0.1.0", path = "crates/acpilot-tui" }
+# The desktop shell's plain-data half — the keymap and the command table — which is
+# what the site's showcase shows of it. The window itself is behind the crate's
+# `gui` feature and is not something a page can read.
+acpilot-gui = { version = "0.1.0", path = "crates/acpilot-gui" }
+# The capture behind the site's showcase, and the drift test that keeps it current.
+acpilot-showcase = { version = "0.1.0", path = "crates/acpilot-showcase" }
+# Git state for the editor's gutter and the commit writer: the user's own `git`,
+# so filters, worktrees and submodules mean what they mean on the command line.
+acpilot-git = { version = "0.1.0", path = "crates/acpilot-git" }
+# The integration stats bar as a value rather than a drawing: rows, fill ratios and
+# the words beside them, from `IntegrationStats`. No ratatui, no gpui, no DOM, so the
+# terminal and the page cannot draw two answers to "how full is this bar" (P6-13).
+acpilot-stats = { version = "0.1.0", path = "crates/acpilot-stats" }
+# The seeded world the interface is designed against. Data only, in protocol types,
+# so the terminal and the desktop app render one copy of it instead of two that
+# drift apart in the first week (P6-3, P10).
+acpilot-demo = { version = "0.1.0", path = "crates/acpilot-demo" }
 # The page a browser lands on when it is pointed at the daemon. Embedded, so the
 # daemon serves its own frontend and a release tarball has no asset directory to
 # lose.
@@ -54,6 +93,11 @@ rustix = { version = "1", features = ["process"] }
 # `ws` is the terminal attach transport: a terminal is bytes in both directions,
 # and a WebSocket is the only route in the API that upgrades rather than answers.
 axum = { version = "0.8", features = ["ws"] }
+# The client half of that upgrade: `handshake` speaks it over a stream the client
+# already knows how to open (a unix socket or loopback TCP), `stream` is the
+# frames. No TLS feature — the daemon serves none, and an `https://` endpoint is
+# refused by name rather than spoken to in the clear.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "stream"] }
 axum-extra = "0.12"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "compression-full", "cors"] }
@@ -69,7 +113,12 @@ eventsource-stream = "0.2"
 # tui
 ratatui = "0.30"
 crossterm = "0.29"
-tui-term = "0.3"
+# What the terminal's own background and foreground are, so `theme_follow_terminal`
+# can solve a palette around them. OSC 11/10 with the parts that are easy to get
+# wrong hand-rolled: feature detection, raw-mode restore, a timeout, tmux.
+terminal-colorsaurus = "1"
+# The screen behind a terminal pane, parsed here rather than by a widget: the pane
+# also sends keystrokes and resizes back, so it owns the attach, not just the grid.
 vt100 = "0.18"
 
 # gui
@@ -83,8 +132,18 @@ gpui = "=0.2.2"
 
 # editor
 ropey = "1.6"
+# Cells, not characters: the pane measures a tab and a wide glyph the way the
+# terminal will draw them.
+unicode-width = "0.2"
 tree-sitter = "0.27"
 tree-sitter-highlight = "0.27"
+# The grammars compiled into the editor. A missing language falls back to plain
+# text rather than to nothing, and more arrive as extensions (P4.6-8), which is
+# why the registry takes a grammar rather than owning a fixed list.
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-toml-ng = "0.7"
 imara-diff = "0.2"
 similar = "3"
 ignore = "0.4"
@@ -103,14 +162,14 @@ url = "2"
 # ed25519 and ECDSA are unaffected. P8-1 re-adds `rsa` with a written
 # justification when a host needs it. Feature selection lives here because cargo
 # forbids a member overriding `default-features` on an inherited dependency.
-russh = { version = "0.64", default-features = false, features = ["flate2", "aws-lc-rs"] }
+russh = { version = "0.65", default-features = false, features = ["flate2", "aws-lc-rs"] }
 russh-sftp = "3"
 ssh2-config = "0.9"
 openssh = "0.11" # optional fallback
 portable-pty = "0.9"
 
 # storage & config
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 rusqlite_migration = "2"
 figment = "0.10"
 # `v1` is the platform-independent Entry API (Keychain, Credential Manager,
@@ -121,8 +180,8 @@ directories = "6"
 # misc
 # The daemon's TCP token: 256 bits from the system source, because a port has no
 # rate limit of its own and the only defence is that guessing is hopeless.
-getrandom = "0.3"
-sha2 = "0.10"
+getrandom = "0.4"
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # YAML frontmatter for SKILL.md. serde-saphyr is the maintained, panic-free
@@ -131,7 +190,7 @@ serde-saphyr = { version = "2", default-features = false, features = ["deseriali
 schemars = "1"
 # The published manifest schema is checked against the presets in a test. Local
 # `$ref`s only, so the TLS and HTTP resolver features are off at the call site.
-jsonschema = { version = "0.58", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 toml = "1.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = "0.2"
@@ -170,3 +229,12 @@ todo = "warn"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# The profile cargo-dist builds with (P12-1). It inherits the release profile and
+# names itself, because that is what dist asks for: `dist build` looks for a profile
+# called `dist` rather than `release`, so a packaging run is a separate target
+# directory from a `cargo build --release` and cannot be handed a binary that was
+# built for something else. The two are deliberately identical — a release and a
+# package of the same commit should be the same code.
+[profile.dist]
+inherits = "release"

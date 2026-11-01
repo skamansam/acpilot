@@ -164,8 +164,8 @@ async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
         .collect();
     assert_eq!(
         paths,
-        vec!["src/deep/main_helper.rs", "src/main.rs"],
-        "a search walks the whole workspace, sorted: {body}"
+        vec!["src/main.rs", "src/deep/main_helper.rs"],
+        "a search walks the whole workspace, and the nearer path ranks first: {body}"
     );
 
     // An ignored path is not findable, and a hidden file that is *not* ignored is:
@@ -207,6 +207,118 @@ async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_path_search_ranks_the_better_match_first() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir_all(directory.path().join("src")).expect("src");
+    fs::create_dir_all(directory.path().join("crates/acpilot-tui/src")).expect("crates");
+    fs::create_dir_all(directory.path().join("examples/old/src")).expect("examples");
+    for path in [
+        "src/app.rs",
+        "crates/acpilot-tui/src/app.rs",
+        "examples/old/src/app.rs",
+    ] {
+        fs::write(directory.path().join(path), "fn main() {}\n").expect(path);
+    }
+
+    // Initials: `aptui` is the letters of `acpilot-tui`, in order, and no substring
+    // of any path matches it.
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=aptui",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body[0]["path"], "crates/acpilot-tui/src/app.rs",
+        "the initials match ranks first: {body}"
+    );
+
+    // The same letters in three files: the shorter path is the one meant.
+    let (_, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=app.rs",
+        None,
+    )
+    .await;
+    assert_eq!(body[0]["path"], "src/app.rs", "{body}");
+
+    // A letter that is not in the path is not a match: fuzzy is not an anagram.
+    let (_, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=zapp",
+        None,
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(0), "{body}");
+}
+
+#[tokio::test]
+async fn a_content_search_finds_lines_and_skips_binaries() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    let greeting = \"hello\";\n    println!(\"{greeting}\");\n}\n",
+    )
+    .expect("main");
+    fs::write(directory.path().join("notes.txt"), "hello there\n").expect("notes");
+    fs::write(directory.path().join("blob.txt"), [0x00, b'h', b'i', 0x01]).expect("blob");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=greeting",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let matches = body.as_array().expect("a list");
+    assert_eq!(matches.len(), 2, "{body}");
+    assert_eq!(matches[0]["path"], "src/main.rs");
+    assert_eq!(matches[0]["line"], 2, "a line is counted from one: {body}");
+    assert_eq!(matches[0]["text"], "    let greeting = \"hello\";");
+    assert_eq!(matches[1]["line"], 3);
+
+    // Case is ignored, a binary file is skipped rather than decoded, and the
+    // binary's bytes are not a line of text either.
+    let (_, caseless) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=HELLO",
+        None,
+    )
+    .await;
+    let paths: Vec<&str> = caseless
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|hit| hit["path"].as_str())
+        .collect();
+    assert_eq!(paths, vec!["notes.txt", "src/main.rs"], "{caseless}");
+
+    // Nothing typed matches nothing rather than reading every file.
+    let (status, empty) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_content_search_with_no_workspace_is_a_conflict() {
+    let (status, body) = send(app(AppState::new()), "GET", "/v1/files/grep?q=main", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }
 
 #[tokio::test]

@@ -27,7 +27,7 @@ use std::time::UNIX_EPOCH;
 
 use acpilot_core::AcpilotError;
 use acpilot_proto::ErrorBody;
-use acpilot_proto::file::{FileContent, FileEntry, FileWriteRequest};
+use acpilot_proto::file::{FileContent, FileEntry, FileWriteRequest, GrepMatch};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -54,6 +54,22 @@ pub const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 /// cap keeps one keystroke from walking a monorepo into a status line, and the walk
 /// stops where it does rather than reading everything and throwing it away.
 pub const MAX_SEARCH_RESULTS: usize = 200;
+
+/// The most candidates a path search collects before ranking.
+///
+/// A fuzzy ranking has to see the whole answer before it can put the right file
+/// first, so the cap cannot stop the walk the way a plain `contains` could. It
+/// bounds what one keystroke's walk remembers instead: thirty times the number
+/// returned, which is enough headroom for a broad query to still rank the file
+/// somebody meant.
+const MAX_SEARCH_CANDIDATES: usize = 6_000;
+
+/// The most lines a content search returns.
+///
+/// The same rule as the path search's cap: a query that matches half a repository
+/// is the wrong query, and the answer that says "200 of them" is more useful than
+/// a response the length of the workspace.
+pub const MAX_GREP_RESULTS: usize = 200;
 
 /// `GET /v1/files?workspace=&path=`.
 ///
@@ -192,7 +208,7 @@ async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<FileEntry>>, ApiError> {
     let root = workspace_root(&state, query.workspace.as_deref())?;
-    let needle = query.q.as_deref().unwrap_or_default().trim().to_lowercase();
+    let needle = query.q.as_deref().unwrap_or_default().trim().to_owned();
     if needle.is_empty() {
         // Nothing typed is nothing matched; a walk for "" would walk the repository.
         return Ok(Json(Vec::new()));
@@ -200,30 +216,12 @@ async fn search(
     let honour = state
         .preferences()
         .is_none_or(|preferences| preferences.tree_respect_gitignore);
-    let mut builder = WalkBuilder::new(&root);
-    builder
-        // The one preference that matters, and the three files that are not it:
-        // `.ignore` and the two per-machine excludes are not what the tree follows,
-        // so a search does not follow them either.
-        .git_ignore(honour)
-        .git_global(false)
-        .git_exclude(false)
-        .ignore(false)
-        .parents(false)
-        // Hidden files are findable, `.git` is not walked: a search for `env` that
-        // could not find `.env` would be a search of half the workspace.
-        .hidden(false)
-        .follow_links(false)
-        // A `.gitignore` means the same thing in a directory that is not a checkout
-        // yet, which is exactly the workspace before its first commit.
-        .require_git(false)
-        .filter_entry(|entry| {
-            !(entry.file_type().is_some_and(|kind| kind.is_dir())
-                && entry.file_name() == std::ffi::OsStr::new(".git"))
-        });
-
-    let mut found = Vec::new();
-    for entry in builder.build() {
+    // Ranked after the walk, not stopped by the cap: an initials match can be met
+    // late in a directory walk, and a cap applied first would make the answer
+    // depend on the order the filesystem hands directories back. The collection is
+    // bounded instead, and the truncation happens once the scores are known.
+    let mut found: Vec<(i32, FileEntry)> = Vec::new();
+    for entry in walk(&root, honour) {
         let Ok(entry) = entry else { continue };
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
@@ -233,26 +231,178 @@ async fn search(
             continue;
         }
         let relative = display_path(&root, path);
-        if !relative.to_lowercase().contains(&needle) {
+        let Some(score) = fuzzy_score(&relative, &needle) else {
+            continue;
+        };
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        found.push((
+            score,
+            FileEntry {
+                path: relative,
+                is_dir: false,
+                size: metadata.len(),
+                modified: modified(&metadata),
+                // A search never returns a hidden row: the walk did not enter one.
+                ignored: false,
+            },
+        ));
+        if found.len() == MAX_SEARCH_CANDIDATES {
+            break;
+        }
+    }
+    found.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    found.truncate(MAX_SEARCH_RESULTS);
+    Ok(Json(found.into_iter().map(|(_, entry)| entry).collect()))
+}
+
+/// `GET /v1/files/grep?workspace=&q=`.
+///
+/// Contents, not paths: every line of every text file the tree would show that
+/// contains `q`, ignoring case, with the line's own text so a list can be read
+/// before it is chosen from.
+///
+/// The walk is the path search's ([`walk`]), because a content find that read what
+/// the tree hides would be a second answer to `tree_respect_gitignore`. A binary
+/// file is skipped instead of decoded: the NUL test is the one a read uses, and
+/// line numbers counted through replacement characters would point at text nobody
+/// can see. Files over the read cap are skipped for the same reason a read refuses
+/// them — a search is not a way around the route's limits.
+///
+/// # Errors
+///
+/// No workspace to walk (`409`). A file that cannot be read is skipped rather than
+/// failing the search: the rest of the workspace is still greppable.
+async fn grep(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<GrepMatch>>, ApiError> {
+    let root = workspace_root(&state, query.workspace.as_deref())?;
+    let needle = query.q.as_deref().unwrap_or_default().trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let honour = state
+        .preferences()
+        .is_none_or(|preferences| preferences.tree_respect_gitignore);
+    let mut found = Vec::new();
+    'files: for entry in walk(&root, honour) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if !inside(&root, path) {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        found.push(FileEntry {
-            path: relative,
-            is_dir: false,
-            size: metadata.len(),
-            modified: modified(&metadata),
-            // A search never returns a hidden row: the walk did not enter one.
-            ignored: false,
-        });
-        if found.len() == MAX_SEARCH_RESULTS {
-            break;
+        if metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let relative = display_path(&root, path);
+        for (index, line) in text.lines().enumerate() {
+            if !line.to_lowercase().contains(&needle) {
+                continue;
+            }
+            found.push(GrepMatch {
+                path: relative.clone(),
+                line: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                text: line.trim_end().to_owned(),
+            });
+            if found.len() == MAX_GREP_RESULTS {
+                break 'files;
+            }
         }
     }
-    found.sort_by(|left, right| left.path.cmp(&right.path));
+    found.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
     Ok(Json(found))
+}
+
+/// A walk of the workspace that follows what the tree follows.
+///
+/// One walk for both searches: `.gitignore` applies only when
+/// `tree_respect_gitignore` is on, `.ignore` and the two per-machine excludes
+/// never, `.git` is never entered, and hidden files are walked because `.env` is a
+/// file people search for by name. Two copies of these rules would be two answers
+/// to one setting. `require_git(false)` is what makes a `.gitignore` mean the same
+/// thing in a workspace that is not a checkout yet, which is every project before
+/// its first commit.
+fn walk(root: &Path, honour: bool) -> ignore::Walk {
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .git_ignore(honour)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .parents(false)
+        .hidden(false)
+        .follow_links(false)
+        .require_git(false)
+        .filter_entry(|entry| {
+            !(entry.file_type().is_some_and(|kind| kind.is_dir())
+                && entry.file_name() == std::ffi::OsStr::new(".git"))
+        });
+    builder.build()
+}
+
+/// How well a path answers a query, or `None` when it does not.
+///
+/// Initials are the point: `aptui` finds `crates/acpilot-tui/src/app.rs`, which a
+/// substring match cannot. The characters have to appear in order, and a character
+/// at the start of a segment (`/`, `_`, `-`, `.`, the beginning) scores above one
+/// inside a word, so the first row is usually the file somebody meant. A run of
+/// consecutive characters scores highest of all, which keeps the old behaviour —
+/// typing a plain substring — ranking above an initials match of the same length.
+///
+/// The last term is a length penalty, because `src/app.rs` and
+/// `examples/old/src/app.rs` match the same letters and the shorter one is the
+/// answer more often than not.
+#[must_use]
+fn fuzzy_score(path: &str, query: &str) -> Option<i32> {
+    let haystack = path.to_lowercase();
+    let needle = query.to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut score = 0;
+    let mut chars = haystack.char_indices().peekable();
+    let mut previous_end = None;
+    for wanted in needle.chars() {
+        let mut matched = None;
+        for (index, candidate) in chars.by_ref() {
+            if candidate == wanted {
+                matched = Some(index);
+                break;
+            }
+        }
+        let index = matched?;
+        score += 1;
+        if previous_end.is_some_and(|end| end == index) {
+            score += 5;
+        }
+        let before = haystack[..index].chars().next_back();
+        if index == 0 || before.is_some_and(|character| "/_- .".contains(character)) {
+            score += 8;
+        }
+        previous_end = Some(index + wanted.len_utf8());
+    }
+    Some(score - i32::try_from(haystack.len() / 12).unwrap_or(i32::MAX))
 }
 
 /// `PUT /v1/files`.
@@ -587,6 +737,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/files", get(read).put(write))
         .route("/v1/files/list", get(list))
         .route("/v1/files/search", get(search))
+        .route("/v1/files/grep", get(grep))
 }
 
 #[allow(dead_code)]
@@ -636,14 +787,31 @@ fn list_doc() {}
     summary = "Find files by path",
     params(
         ("workspace" = Option<String>, Query, description = "Workspace id; empty or absent means the one this daemon serves"),
-        ("q" = String, Query, description = "Substring a path has to contain, ignoring case")
+        ("q" = String, Query, description = "A path query: a substring, or initials matched in order, ignoring case")
     ),
     responses(
-        (status = 200, description = "Matching files, sorted by path, at most MAX_SEARCH_RESULTS of them", body = Vec<FileEntry>),
+        (status = 200, description = "Matching files, best match first, at most MAX_SEARCH_RESULTS of them", body = Vec<FileEntry>),
         (status = 409, description = "This daemon has no workspace to walk", body = ErrorBody)
     )
 )]
 fn search_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/files/grep",
+    tag = "files",
+    summary = "Find lines by content",
+    params(
+        ("workspace" = Option<String>, Query, description = "Workspace id; empty or absent means the one this daemon serves"),
+        ("q" = String, Query, description = "Text a line has to contain, ignoring case")
+    ),
+    responses(
+        (status = 200, description = "Matching lines, sorted by path and line, at most MAX_GREP_RESULTS of them", body = Vec<GrepMatch>),
+        (status = 409, description = "This daemon has no workspace to walk", body = ErrorBody)
+    )
+)]
+fn grep_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
@@ -685,6 +853,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/files/search",
             HttpMethod::Get,
             <__path_search_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files/grep",
+            HttpMethod::Get,
+            <__path_grep_doc as Path>::operation(),
         ),
     ]
 }

@@ -77,7 +77,8 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
   money, latency. A provider that stopped answering is drawn hollow, not hidden.
 
 Overlays, back to front: the terminal picker, the key list, the palette, the
-permission card, the diff review that answers it, the toast.
+content search's jump list, the permission card, the diff review that answers it,
+the toast.
 
 ## What is real, and what is not
 
@@ -90,7 +91,7 @@ permission card, the diff review that answers it, the toast.
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
-| File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which walks with the same ignore rules, so a find cannot see what the tree cannot. Rows carry no git letters yet | P6-6 (workspace grep, jump list), P6.5-2 (decorations) |
+| File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which ranks a substring or initials and walks with the same ignore rules, so a find cannot see what the tree cannot. `Ctrl-Shift-F` (or the palette's **Search file contents**) opens a jump list fed by `GET /v1/files/grep`: `Enter` opens the file at that line. Rows carry no git letters yet | P6.5-2 (decorations) |
 | Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. The buffer is whatever the tree opened — or the seeded one in `--demo` — and a `+` on the tab says the text is not the file's | P6-5 (the keymap layer: `keymap.toml`, visual mode and a goal column), P7-10 (saving) |
 | Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a roster, plus an estimated context for an agent with a conversation behind it and no window unless the agent names one, so a live bar before any session is rows that say so; the seeded rows in `--demo` exercise all four sources | P4.5-12 (provider rows and balances) |
 

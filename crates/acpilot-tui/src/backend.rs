@@ -73,6 +73,8 @@ pub enum Request {
     },
     /// Walk the workspace for paths containing a query, for the files pane's find.
     SearchFiles(String),
+    /// Search the workspace's file contents for a query, for the jump list.
+    Grep(String),
     /// Read a file, by workspace-relative path.
     OpenFile(String),
     /// Attach to one of the open session's terminals, by id.
@@ -126,6 +128,14 @@ pub enum Update {
         query: String,
         /// The files whose paths contain it, sorted by the daemon.
         entries: Vec<acpilot_proto::file::FileEntry>,
+    },
+    /// A content search's answer, tagged with the query that asked for the same
+    /// reason [`Update::Found`] is: the words on screen are the newest question.
+    Matches {
+        /// The query that was asked.
+        query: String,
+        /// The lines that contain it, sorted by path and line.
+        matches: Vec<acpilot_proto::file::GrepMatch>,
     },
     /// A file's text, for the editor.
     File {
@@ -378,6 +388,16 @@ async fn run(
                     match client.search_files(&query).await {
                         Ok(entries) => {
                             let _ = updates.send(Update::Found { query, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Grep(query)) => {
+                    match client.grep(&query).await {
+                        Ok(matches) => {
+                            let _ = updates.send(Update::Matches { query, matches });
                         }
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
@@ -836,6 +856,24 @@ async fn run_demo(
                 let _ = updates.send(Update::Status(format!(
                     "design pass · no workspace to walk for {query}"
                 )));
+            }
+            Request::Grep(query) => {
+                // The design pass has one file, and greps it: enough to review the
+                // list without pretending the fixture is a workspace.
+                let needle = query.to_lowercase();
+                let matches = demo
+                    .editor
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| !needle.is_empty() && line.to_lowercase().contains(&needle))
+                    .map(|(index, line)| acpilot_proto::file::GrepMatch {
+                        path: demo.editor.path.clone(),
+                        line: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                        text: line.trim_end().to_owned(),
+                    })
+                    .collect();
+                let _ = updates.send(Update::Matches { query, matches });
             }
             Request::OpenFile(path) => {
                 if path == demo.editor.path {

@@ -248,6 +248,14 @@ fn file_documents() {
         "ignored": true
     }));
 
+    // A line a content search matched: the number is 1-based because it is a line
+    // an editor would go to, and the text travels so the list can be read.
+    round_trip::<acpilot_proto::file::GrepMatch>(json!({
+        "path": "src/main.rs",
+        "line": 2,
+        "text": "    let greeting = \"hello\";"
+    }));
+
     round_trip::<acpilot_proto::file::FileEntry>(json!({
         "path": "src",
         "is_dir": true,

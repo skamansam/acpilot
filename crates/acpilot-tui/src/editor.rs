@@ -680,6 +680,21 @@ impl EditorPane {
         }
     }
 
+    /// Put the caret at the start of a line, counting from one.
+    ///
+    /// The answer a jump list gives: a row names a line, and the file arrives after
+    /// the row was chosen. A line past the end lands on the last one rather than
+    /// refusing — the file may have changed since the search read it, and the end of
+    /// it is a more useful place to be than nowhere.
+    pub fn goto_line(&mut self, line: u32) {
+        let last = self.document.buffer().line_count().saturating_sub(1);
+        let index = usize::try_from(line.saturating_sub(1))
+            .unwrap_or(usize::MAX)
+            .min(last);
+        self.place(LineColumn::new(index, 0));
+        self.message = format!("line {}", index + 1);
+    }
+
     /// Open the go-to-line box.
     pub fn go_to_line(&mut self) {
         self.open(PromptKind::Line, String::new());

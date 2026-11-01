@@ -279,6 +279,19 @@ impl Client {
             .await
     }
 
+    /// `GET /v1/files/grep?q=`.
+    ///
+    /// The other half of a find: `search_files` answers a path, this answers a word
+    /// inside a file. The lines come back with their text and a 1-based number, so a
+    /// jump list can be read and chosen from without opening every file first.
+    pub async fn grep(
+        &self,
+        query: &str,
+    ) -> Result<Vec<acpilot_proto::file::GrepMatch>, ClientError> {
+        self.get(&format!("/v1/files/grep?q={}", query_value(query)))
+            .await
+    }
+
     /// `GET /v1/files?path=`.
     ///
     /// The text plus the ETag a save sends back as `if_match`: the read half of the

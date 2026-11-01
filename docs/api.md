@@ -314,11 +314,23 @@ rows a `.gitignore` hides, each with `ignored: true`; the flag is absent from an
 ordinary row, so a client can tell an exception from a file.
 
 `GET /v1/files/search?workspace=&q=` returns `FileEntry[]` of the files whose
-paths contain `q`, ignoring case, sorted, at most 200 of them. The walk follows
-the same ignore rules the listing does — `.gitignore` files are read when
-`tree_respect_gitignore` is on — so a find cannot return what the tree hides.
-Hidden files that no rule names (`.env`) are found, `.git` is never walked, and an
-empty `q` matches nothing rather than walking the repository.
+paths answer `q`, ignoring case, best match first, at most 200 of them. A query is
+a substring (`tui` finds `crates/acpilot-tui/src/app.rs`) or initials matched in
+order (`aptui` finds the same path), because a find that only accepted a substring
+would not find the file you can half-remember. The walk follows the same ignore
+rules the listing does — `.gitignore` files are read when `tree_respect_gitignore`
+is on — so a find cannot return what the tree hides. Hidden files that no rule
+names (`.env`) are found, `.git` is never walked, and an empty `q` matches nothing
+rather than walking the repository.
+
+`GET /v1/files/grep?workspace=&q=` returns `GrepMatch[]` (`{ path, line, text }`):
+the lines of the workspace's text files that contain `q`, ignoring case, `line`
+counted from 1, sorted by path and line, at most 200 of them. Same walk and the
+same ignore rules as the path search, so a word cannot be found in a file the tree
+hides. Binary files are skipped rather than decoded — the NUL test a read uses —
+and so are files over the read cap, because a search is not a way around a route's
+limits. The line's text travels with the match so a jump list can be read before it
+is chosen from; an empty `q` matches nothing.
 
 `PUT /v1/files` takes `FileWriteRequest { path, text, if_match? }`. `if_match` is
 the `etag` last read; a mismatch is `409 conflict`, never a silent overwrite.

@@ -1434,6 +1434,13 @@ pub struct App {
     /// the review is what a person has said about it so far: answering a hunk must
     /// not rewrite the diff the gutter's marks were parsed from.
     pub review: Option<Review>,
+    /// The workspace content search, when one is up.
+    pub grep: Option<GrepSearch>,
+    /// The line a jump list's row named, waiting for the file to arrive.
+    ///
+    /// A list answers with a line before the text exists, so the line is held here
+    /// rather than being forgotten between the answer and the read.
+    pub pending_line: Option<u32>,
     /// The palette, when it is up.
     pub palette: Option<Palette>,
     /// The menu bar, when it has the keyboard.
@@ -1577,6 +1584,23 @@ pub struct App {
     pub should_quit: bool,
 }
 
+/// The workspace content search: what was typed, the lines it found, and the row
+/// the keyboard is on.
+///
+/// A jump list rather than a pane: the only thing a person does with a result is go
+/// there, so `Enter` opens the file at that line and closes the list. It lives
+/// beside the panes rather than in one of them because the answer spans the whole
+/// workspace — the tree lists directories, and this lists lines.
+#[derive(Debug, Default)]
+pub struct GrepSearch {
+    /// The query, as typed.
+    pub query: String,
+    /// The lines the daemon found, sorted by path and line.
+    pub matches: Vec<acpilot_proto::file::GrepMatch>,
+    /// Which row `Enter` opens.
+    pub selected: usize,
+}
+
 impl App {
     /// A TUI pointed at `daemon`, with nothing loaded yet.
     #[must_use]
@@ -1598,6 +1622,8 @@ impl App {
             grammars: Grammars::new(),
             diff: None,
             review: None,
+            grep: None,
+            pending_line: None,
             palette: None,
             menu: None,
             menu_areas: MenuAreas::default(),
@@ -2135,6 +2161,22 @@ impl App {
                     };
                 }
             }
+            Update::Matches { query, matches } => {
+                // The same rule the path find keeps: an answer to the query before
+                // this one is an answer to a question nobody is asking.
+                if self.grep.as_ref().is_some_and(|view| view.query == query) {
+                    let total = matches.len();
+                    if let Some(view) = &mut self.grep {
+                        view.matches = matches;
+                        view.selected = 0;
+                    }
+                    self.status = match total {
+                        0 => format!("no line contains {query}"),
+                        1 => "1 line matches".to_owned(),
+                        total => format!("{total} lines match"),
+                    };
+                }
+            }
             Update::File { path, text } => {
                 let lines = text.lines().count();
                 let marks = acpilot_git::line_changes("", &path);
@@ -2144,6 +2186,14 @@ impl App {
                     marks,
                     &mut self.grammars,
                 ));
+                if let Some(line) = self.pending_line.take()
+                    && let Some(editor) = &mut self.editor
+                {
+                    // The line is a place in a file, and the file arrives after the
+                    // row that named it: the jump is taken here, once there is text
+                    // to take it into.
+                    editor.goto_line(line);
+                }
                 self.set_focus(Focus::Editor);
                 self.status = format!("opened {path} · {lines} lines");
             }
@@ -2280,6 +2330,13 @@ impl App {
         }
         if self.palette.is_some() {
             return self.palette_key(key);
+        }
+
+        // The content search is the next question out: it is drawn over every pane
+        // and its keys are text, so letting a key through to a pane would be a key
+        // acting on something nobody can see.
+        if self.grep.is_some() {
+            return self.grep_key(key);
         }
 
         // The menu bar. `F9` is the key terminals have kept for menus since before
@@ -2430,6 +2487,14 @@ impl App {
                     return Some(Request::Refresh {
                         include_ignored: self.show_ignored,
                     });
+                }
+                // `Shift` is required: `Ctrl-F` belongs to the editor's find box,
+                // and a chord that meant both would be a bug report. Where the
+                // terminal cannot tell the two apart, the palette's row still
+                // opens this.
+                KeyCode::Char('f' | 'F') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.open_grep();
+                    return None;
                 }
                 _ => {}
             }
@@ -2817,6 +2882,88 @@ impl App {
         self.found.clear();
         self.file_selected = 0;
         self.status = "find · type a path · Enter opens · Esc puts the tree back".to_owned();
+    }
+
+    /// Open the workspace content search.
+    fn open_grep(&mut self) {
+        self.grep = Some(GrepSearch::default());
+        self.status = "find in files · type · Enter opens · Esc closes".to_owned();
+    }
+
+    /// The content search's keys: text, a row to choose, and a jump.
+    ///
+    /// Every printable key is a character, the same rule the path find keeps: a
+    /// query that could not contain a `j` would be a query nobody could type.
+    fn grep_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let view = self.grep.as_ref()?;
+        let selected = view.selected;
+        let found = view.matches.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.grep = None;
+                self.status = "the search is closed".to_owned();
+            }
+            KeyCode::Up => {
+                if let Some(view) = &mut self.grep {
+                    view.selected = selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if selected + 1 < found
+                    && let Some(view) = &mut self.grep
+                {
+                    view.selected = selected + 1;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(view) = &mut self.grep {
+                    view.query.pop();
+                    view.selected = 0;
+                }
+                return self.ask_for_contents();
+            }
+            KeyCode::Char(character) if !control => {
+                if let Some(view) = &mut self.grep {
+                    view.query.push(character);
+                    view.selected = 0;
+                }
+                return self.ask_for_contents();
+            }
+            KeyCode::Enter => {
+                let Some(hit) = self
+                    .grep
+                    .as_ref()
+                    .and_then(|view| view.matches.get(selected))
+                    .cloned()
+                else {
+                    self.notice("nothing matches to open");
+                    return None;
+                };
+                self.grep = None;
+                self.pending_line = Some(hit.line);
+                self.status = format!("opening {}:{}\u{2026}", hit.path, hit.line);
+                return Some(Request::OpenFile(hit.path));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Ask the daemon which lines hold what has been typed.
+    fn ask_for_contents(&mut self) -> Option<Request> {
+        let query = self.grep.as_ref()?.query.clone();
+        self.status = format!("find in files · {query}");
+        if query.trim().is_empty() {
+            // A walk for nothing is a read of every file: the list clears instead,
+            // and the next character is the question.
+            if let Some(view) = &mut self.grep {
+                view.matches.clear();
+                view.selected = 0;
+            }
+            return None;
+        }
+        Some(Request::Grep(query))
     }
 
     /// Requests a key asked for beyond the one it returned.
@@ -3887,6 +4034,10 @@ impl App {
             }
             Run::FindFile => {
                 self.find_file();
+                None
+            }
+            Run::SearchContents => {
+                self.open_grep();
                 None
             }
             Run::ReviewDiff => {
@@ -5030,6 +5181,55 @@ mod tests {
             credits: None,
             updated_at: "2026-10-30T12:00:00Z".to_owned(),
         }
+    }
+
+    #[test]
+    fn the_content_search_asks_the_daemon_and_opens_the_line_it_chose() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert!(app.grep.is_some(), "the chord opens the search");
+
+        // Nothing is assumed before the daemon answers: the list is empty while the
+        // query is only what has been typed.
+        for character in "seed".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(
+            app.grep.as_ref().map(|view| view.query.as_str()),
+            Some("seed")
+        );
+        assert_eq!(app.grep.as_ref().map(|view| view.matches.len()), Some(0));
+
+        app.apply(Update::Matches {
+            query: "seed".to_owned(),
+            matches: vec![acpilot_proto::file::GrepMatch {
+                path: "src/app.rs".to_owned(),
+                line: 9,
+                text: "seeded".to_owned(),
+            }],
+        });
+        assert_eq!(app.grep.as_ref().map(|view| view.matches.len()), Some(1));
+
+        // The row is a jump: the file it names, at the line it named.
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::OpenFile("src/app.rs".to_owned()))
+        );
+        assert!(app.grep.is_none(), "a jump closes the list");
+
+        app.apply(Update::File {
+            path: "src/app.rs".to_owned(),
+            text: "one\ntwo\nthree".to_owned(),
+        });
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(
+            editor.caret().line,
+            2,
+            "line 9 of a 3-line file lands on the last line"
+        );
     }
 
     #[test]

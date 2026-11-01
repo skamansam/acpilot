@@ -35,6 +35,21 @@ fn is_false(flag: &bool) -> bool {
     !*flag
 }
 
+/// One line a content search matched.
+///
+/// The line's text travels with the match because a jump list has to be read
+/// before it is chosen from: a list of `src/main.rs:12` is a list nobody can pick
+/// the right row out of without opening every one of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GrepMatch {
+    /// Workspace-relative path of the file the line is in.
+    pub path: String,
+    /// 1-based line number, as an editor counts lines.
+    pub line: u32,
+    /// The line as it reads, with trailing whitespace removed.
+    pub text: String,
+}
+
 /// File contents plus the token needed to write them back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileContent {

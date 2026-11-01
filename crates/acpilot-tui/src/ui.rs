@@ -69,6 +69,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.palette.is_some() {
         draw_palette(frame, app, body);
     }
+    if app.grep.is_some() {
+        draw_grep(frame, app, body);
+    }
     if app.permission_card
         && let Some(request) = app.permissions.first()
     {
@@ -1337,6 +1340,79 @@ fn draw_palette(frame: &mut Frame, app: &App, area: Rect) {
                 ));
             }
             Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows), list);
+}
+
+/// The workspace content search: the query, and one row per matching line.
+///
+/// A jump list, so every row leads somewhere: the path and line on the left, the
+/// line's text beside them. The text is not truncated here — a row that runs off the
+/// card is a row whose match was past the edge, and guessing at where to cut would
+/// hide the reason it matched more often than not.
+fn draw_grep(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(grep) = &app.grep else {
+        return;
+    };
+    let card = middle(area, 90, 70);
+    if card.width < 24 || card.height < 4 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Find in files · {} ", grep.matches.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [input, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+
+    let query = if grep.query.is_empty() {
+        Span::styled(
+            "type to search…",
+            Style::default().fg(app.theme.text_muted()),
+        )
+    } else {
+        Span::raw(grep.query.clone())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.accent())),
+            query,
+        ])),
+        input,
+    );
+    let typed = u16::try_from(grep.query.chars().count()).unwrap_or(u16::MAX);
+    frame.set_cursor_position((input.x + 2 + typed, input.y));
+
+    // The list follows the selection, so a match far down the file list is never
+    // chosen off the bottom of the card.
+    let capacity = usize::from(list.height).max(1);
+    let first = grep.selected.saturating_sub(capacity - 1);
+    let rows: Vec<Line> = grep
+        .matches
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(capacity)
+        .map(|(index, hit)| {
+            let chosen = index == grep.selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Line::from(vec![
+                Span::styled(format!("{}:{}", hit.path, hit.line), row),
+                Span::styled(
+                    format!("  {}", hit.text.trim()),
+                    Style::default().fg(app.theme.text_muted()),
+                ),
+            ])
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), list);
@@ -2774,15 +2850,33 @@ mod tests {
     fn a_planned_action_names_the_task_in_a_toast() {
         let mut app = App::demo(&acpilot_demo::demo());
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        // A row that is still planned: reading file contents is the daemon's walk
-        // and has no listing route to answer it.
-        for character in "contents".chars() {
+        // A row that is still planned: a definition is the language server's (P7-4)
+        // and nothing in this build asks one.
+        for character in "definition".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let text = render(&mut app);
-        assert!(text.contains("planned · P6-6"), "{text}");
+        assert!(text.contains("planned · P7-4"), "{text}");
         assert!(text.contains("not implemented"), "{text}");
+    }
+
+    #[test]
+    fn the_content_search_draws_a_row_per_matching_line() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.grep = Some(crate::app::GrepSearch {
+            query: "const".to_owned(),
+            matches: vec![acpilot_proto::file::GrepMatch {
+                path: "src/app.rs".to_owned(),
+                line: 3,
+                text: "const SCROLLBACK: usize = 10_000;".to_owned(),
+            }],
+            selected: 0,
+        });
+        let text = render(&mut app);
+        assert!(text.contains("Find in files · 1"), "{text}");
+        assert!(text.contains("src/app.rs:3"), "{text}");
+        assert!(text.contains("const SCROLLBACK"), "{text}");
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub enum Run {
     Find,
     /// Find a file in the workspace, from the tree that opens one.
     FindFile,
+    /// Find a line in the workspace's files, in a jump list.
+    SearchContents,
     /// Go to a line and column of the open buffer.
     GoToLine,
     /// Leave.
@@ -116,9 +118,9 @@ pub fn commands() -> Vec<Command> {
         // open one. It is the tree's own find now, because a file is opened by
         // picking it out of a list rather than by typing a name into nothing.
         run("Find a file…", "ctrl-o", Run::FindFile),
-        // Paths are searched; contents are still a walk that reads every file, which
-        // is a different answer from the tree's listing and not built yet.
-        planned("Search file contents", "ctrl-shift-f", "P6-6"),
+        // The other half of a find: contents are a walk that reads the files rather
+        // than a listing of their names, and the answer is a jump list.
+        run("Search file contents", "ctrl-shift-f", Run::SearchContents),
         planned("Go to definition", "f12", "P7-4"),
         planned("Rename symbol", "f2", "P7-5"),
         planned("Split editor", "ctrl-\\", "P6-3"),

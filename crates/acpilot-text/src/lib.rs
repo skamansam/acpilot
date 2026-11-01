@@ -46,14 +46,16 @@ pub mod highlight;
 pub mod history;
 pub mod outline;
 pub mod pane;
+pub mod references;
 pub mod selection;
 
 pub use buffer::{Buffer, LineColumn, LineEnding, TextError, is_word};
 pub use document::Document;
 pub use edit::{Edit, IndentMode, IndentStyle, Replacement};
-pub use highlight::{Grammar, Grammars, Highlights, Span, token_for};
+pub use highlight::{Grammar, Grammars, Highlights, Span, language_for, token_for};
 pub use history::{Change, Flavour, GROUP_WINDOW, History};
 pub use pane::{
     Cell, Find, Hit, Row, TAB_WIDTH, Viewport, bracket_at, caret_cells, parse_position,
 };
+pub use references::{Use, identifier_at, uses};
 pub use selection::{Cursor, Motion, Selection, Selections};

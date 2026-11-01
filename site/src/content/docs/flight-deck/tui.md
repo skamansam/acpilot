@@ -54,7 +54,7 @@ theme.
 The editor is the middle of the window and the columns either side hold panels.
 `Alt-P` opens the Panels menu, which says which panel is on which side: a row is a
 place (`File manager on the right`), two panels on one side share the column, and
-the arrangement is remembered with the divider widths. Three panels exist today.
+the arrangement is remembered with the divider widths. Four panels exist today.
 
 | Panel | What it answers | State |
 | --- | --- | --- |
@@ -63,9 +63,9 @@ the arrangement is remembered with the divider widths. Three panels exist today.
 | **Assistant** | the sessions, the open transcript and the composer — the agent's half of the window | built |
 | **Project map** | what the workspace is *for*: which package owns which idea and how they depend on each other | <span class="pill pill--hangar">hangar</span> |
 | **Wiki** | one linked page per subsystem, written from the code so the repository explains itself | <span class="pill pill--hangar">hangar</span> |
-| **References** | every real use of the identifier under the caret, without the language's own noise | <span class="pill pill--hangar">hangar</span> |
+| **References** | every real use of the identifier under the caret, without the language's own noise; `Enter` on a row opens the file at the use | built |
 
-The three in the hangar are panels rather than screens because that is the unit a
+The two in the hangar are panels rather than screens because that is the unit a
 person arranges: each answers a question about *this* workspace while a file is
 open, each is read in a column, and each can be put on either side or put away.
 
@@ -86,15 +86,20 @@ a reader and a jump — not an editor, because the agent is the author and the
 repository is the store.
 
 **References** is the question a person asks about a name: where else is this used?
-It excludes the language's own furniture — keywords, stdlib names, the text inside
-comments and strings — so the list is uses of *that* function or variable. Where a
-language server is running it is `textDocument/references` (P7-4); before that it is
-a word-bounded search over the workspace's own files, filtered by the parse tree,
-which is the same trick that keeps the outline from listing an `fn` inside a string.
-A row is a place: `Enter` jumps, the way the content search's rows do.
+`Shift-F12` — or **Find References** in the View menu — reads the word under the
+caret and asks the daemon, and the panel lists the answer: the path and line, then
+the line's own text with the name marked. What makes the list worth reading is the
+parse tree: a row is a leaf the grammar calls a name, so the comment that mentions
+it, the string that spells it and the documentation page that explains it are not
+uses. It is `GET /v1/files/references`, walking the workspace under the same ignore
+rules as the tree and the content search, and it is a search rather than a language
+server's `textDocument/references` until one is running (P7-4): scope is unresolved,
+so two functions called `new` are one name. A row is a place — `Enter` opens the file
+at the use — and the keys go back to the buffer with it.
 
-All three are planned in `TODO.md`, which is where their state is kept honest; this
-page describes what they are for so the shape is agreed before they are built.
+Project map and wiki are planned in `TODO.md`, which is where their state is kept
+honest; this page describes what they are for so the shape is agreed before they are
+built.
 
 ## What it is built on
 

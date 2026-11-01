@@ -366,6 +366,57 @@ async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
 }
 
 #[tokio::test]
+async fn a_references_search_lists_code_and_leaves_prose_alone() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/lib.rs"),
+        "// parse_position in a comment\nfn parse_position(at: usize) {}\nfn other() { let text = \"parse_position\"; parse_position(0); }\n",
+    )
+    .expect("lib");
+    // No grammar parses this, so the same word here is prose rather than a use.
+    fs::write(
+        directory.path().join("notes.md"),
+        "parse_position is documented here\n",
+    )
+    .expect("notes");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/references?q=parse_position",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    assert_eq!(
+        rows.len(),
+        2,
+        "the definition and the call, not the comment or the string: {body}"
+    );
+    assert_eq!(rows[0]["path"], "src/lib.rs");
+    assert_eq!(rows[0]["line"], 2, "a line is counted from one: {body}");
+    assert_eq!(rows[0]["column"], 4, "the name after `fn `: {body}");
+    assert_eq!(rows[0]["text"], "fn parse_position(at: usize) {}");
+    assert_eq!(rows[1]["line"], 3);
+
+    // A name that is not one word cannot be an identifier, and nothing typed finds
+    // nothing rather than walking the repository.
+    for query in ["parse%20position", "", "1"] {
+        let (status, body) = send(
+            app(serving(directory.path())),
+            "GET",
+            &format!("/v1/files/references?q={query}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{query}: {body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(0), "{query}: {body}");
+    }
+}
+
+#[tokio::test]
 async fn a_path_search_ranks_the_better_match_first() {
     let directory = tempfile::tempdir().expect("a workspace");
     fs::create_dir_all(directory.path().join("src")).expect("src");

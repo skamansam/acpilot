@@ -31,6 +31,7 @@ use acpilot_git::{ChangeKind, Repo, StatusEntry};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::file::{
     FileChange, FileContent, FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark,
+    Reference,
 };
 use axum::Json;
 use axum::Router;
@@ -74,6 +75,12 @@ const MAX_SEARCH_CANDIDATES: usize = 6_000;
 /// is the wrong query, and the answer that says "200 of them" is more useful than
 /// a response the length of the workspace.
 pub const MAX_GREP_RESULTS: usize = 200;
+
+/// The most uses a references search returns.
+///
+/// The content search's cap and its reason: a name used two hundred times is a name
+/// whose answer is a rename rather than a list.
+pub const MAX_REFERENCES: usize = 200;
 
 /// `GET /v1/files?workspace=&path=`.
 ///
@@ -389,6 +396,97 @@ async fn grep(
         }
     }
     found.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
+    Ok(Json(found))
+}
+
+/// `GET /v1/files/references?workspace=&q=`.
+///
+/// Where one identifier is used, in code. The walk is the content search's ([`walk`]),
+/// so the ignore rules cannot become two answers to one preference, and the text rules
+/// are its rules too — a file over the cap, or one that is not UTF-8, is skipped rather
+/// than served around the route's limits. What a row is, though, is the grammar's
+/// answer rather than a substring's: [`acpilot_text::references::uses`] lists the
+/// leaves the parse calls identifiers, so a comment that mentions the name and a string
+/// that spells it are not uses, and a file this build ships no grammar for is skipped
+/// rather than searched as prose.
+///
+/// The parse happens here because the text is here: a client that filtered its own rows
+/// would need the contents of every file the walk read, and the grammar crates are
+/// already in the build the editor links.
+///
+/// # Errors
+///
+/// No workspace to walk (`409`). A file that cannot be read is skipped rather than
+/// failing the search: the rest of the workspace is still searchable.
+async fn references(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<Reference>>, ApiError> {
+    let root = workspace_root(&state, query.workspace.as_deref())?;
+    let needle = query.q.as_deref().unwrap_or_default().trim().to_owned();
+    // An identifier is one word. Anything else cannot be a use of a name, and a walk
+    // that read every file to prove it would be a search for nothing.
+    if needle.is_empty() || !needle.chars().all(acpilot_text::is_word) {
+        return Ok(Json(Vec::new()));
+    }
+    let honour = state
+        .preferences()
+        .is_none_or(|preferences| preferences.tree_respect_gitignore);
+    let mut found: Vec<Reference> = Vec::new();
+    'files: for entry in walk(&root, honour) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if !inside(&root, path) {
+            continue;
+        }
+        let relative = display_path(&root, path);
+        // A file no grammar parses is prose or data: searching it for a name would
+        // list the documentation as if it were code.
+        let language = acpilot_text::language_for(&relative);
+        if language.is_empty() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        // Split rather than `lines()`: the parser counts rows the way the rope does,
+        // and the row a use is on has to be the row whose text the row draws.
+        let lines: Vec<&str> = text.split('\n').collect();
+        for hit in acpilot_text::references::uses(language, text, &needle) {
+            found.push(Reference {
+                path: relative.clone(),
+                line: u32::try_from(hit.line + 1).unwrap_or(u32::MAX),
+                column: u32::try_from(hit.column + 1).unwrap_or(u32::MAX),
+                text: lines
+                    .get(hit.line)
+                    .map_or_else(String::new, |line| line.trim_end().to_owned()),
+            });
+            if found.len() == MAX_REFERENCES {
+                break 'files;
+            }
+        }
+    }
+    found.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.line.cmp(&right.line))
+            .then(left.column.cmp(&right.column))
+    });
     Ok(Json(found))
 }
 
@@ -904,6 +1002,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/files/list", get(list))
         .route("/v1/files/search", get(search))
         .route("/v1/files/grep", get(grep))
+        .route("/v1/files/references", get(references))
 }
 
 #[allow(dead_code)]
@@ -981,6 +1080,23 @@ fn grep_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
+    get,
+    path = "/v1/files/references",
+    tag = "files",
+    summary = "Find the code uses of an identifier",
+    params(
+        ("workspace" = Option<String>, Query, description = "Workspace id; empty or absent means the one this daemon serves"),
+        ("q" = String, Query, description = "The identifier to look for: one word, found where the parse tree calls it a name")
+    ),
+    responses(
+        (status = 200, description = "Uses in code, sorted by path, line and column, at most MAX_REFERENCES of them", body = Vec<Reference>),
+        (status = 409, description = "This daemon has no workspace to walk", body = ErrorBody)
+    )
+)]
+fn references_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
     put,
     path = "/v1/files",
     tag = "files",
@@ -1024,6 +1140,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/files/grep",
             HttpMethod::Get,
             <__path_grep_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files/references",
+            HttpMethod::Get,
+            <__path_references_doc as Path>::operation(),
         ),
     ]
 }

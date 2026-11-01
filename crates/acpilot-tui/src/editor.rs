@@ -401,7 +401,12 @@ impl EditorPane {
     }
 
     /// The caret's offset in the buffer.
-    fn caret_offset(&self) -> usize {
+    ///
+    /// The pane moves by line and column, and a search that reads the text as one
+    /// string needs the offset instead: asking for both is what keeps the references
+    /// search from counting the newlines itself.
+    #[must_use]
+    pub fn caret_offset(&self) -> usize {
         self.document.selections().primary().head.at
     }
 
@@ -908,18 +913,13 @@ impl EditorPane {
 
 /// The language a path's extension names, as the grammar registry spells it.
 ///
-/// The registry is the authority on which grammars exist; this only maps a suffix to
-/// the name one is registered under. An unknown suffix is `""`, which
-/// [`Grammars::get`] answers with `None`.
+/// The registry is the authority on which grammars exist, and it is in `acpilot-text`
+/// rather than here for the reason the grammars are: the daemon's references search
+/// reads the same table, and two copies would be two answers about what a `.rs` is. An
+/// unknown suffix is `""`, which [`Grammars::get`] answers with `None`.
 #[must_use]
 pub fn language_for(path: &str) -> &'static str {
-    match path.rsplit('.').next() {
-        Some("rs") => "rust",
-        Some("py") => "python",
-        Some("json") => "json",
-        Some("toml") => "toml",
-        _ => "",
-    }
+    acpilot_text::language_for(path)
 }
 
 /// One row's cells, joined into runs of one token and one state.

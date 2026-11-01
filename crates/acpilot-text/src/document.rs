@@ -27,6 +27,7 @@ pub struct Document {
     buffer: Buffer,
     selections: Selections,
     history: History,
+    revision: u64,
 }
 
 impl Document {
@@ -37,6 +38,7 @@ impl Document {
             buffer,
             selections: Selections::caret(0),
             history: History::new(),
+            revision: 0,
         }
     }
 
@@ -77,6 +79,17 @@ impl Document {
     #[must_use]
     pub fn selections(&self) -> &Selections {
         &self.selections
+    }
+
+    /// How many edits this document has taken, counting undo and redo.
+    ///
+    /// For a panel that reads the text and would otherwise have to compare the whole
+    /// buffer to know whether to re-read it: the number changes when the text does and
+    /// not when a caret moves, so "parse again" is one comparison rather than a copy
+    /// of the file per frame.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Move the carets. Offsets past the end are clamped rather than refused: a
@@ -204,6 +217,7 @@ impl Document {
         match self.history.undo(&mut self.buffer) {
             Some(caret) => {
                 self.selections = Selections::caret(caret.min(self.buffer.char_len()));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -215,6 +229,7 @@ impl Document {
         match self.history.redo(&mut self.buffer) {
             Some(caret) => {
                 self.selections = Selections::caret(caret.min(self.buffer.char_len()));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -267,6 +282,7 @@ impl Document {
         self.selections.map_through(change.forward());
         self.selections.normalize(self.buffer.char_len());
         self.history.record(change, now);
+        self.revision += 1;
     }
 }
 

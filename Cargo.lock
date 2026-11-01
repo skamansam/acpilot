@@ -301,6 +301,7 @@ dependencies = [
  "acpilot-profile",
  "acpilot-proto",
  "acpilot-stats",
+ "acpilot-text",
  "acpilot-web",
  "agent-client-protocol",
  "axum",

@@ -292,6 +292,19 @@ impl Client {
             .await
     }
 
+    /// `GET /v1/files/references?q=`.
+    ///
+    /// Where the name is used in code, as the daemon's parse trees read it: a comment
+    /// that mentions the name and a string that spells it are not uses, and a file this
+    /// build has no grammar for is not searched rather than searched as prose.
+    pub async fn references(
+        &self,
+        name: &str,
+    ) -> Result<Vec<acpilot_proto::file::Reference>, ClientError> {
+        self.get(&format!("/v1/files/references?q={}", query_value(name)))
+            .await
+    }
+
     /// `PUT /v1/files`.
     ///
     /// The write half of the read, and the reason the read returns a token: a save

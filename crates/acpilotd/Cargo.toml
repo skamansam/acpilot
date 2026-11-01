@@ -33,6 +33,10 @@ acpilot-proto = { workspace = true }
 # serves the rows a browser can draw, measured by the same crate the TUI uses so
 # the two bars cannot disagree about a denominator.
 acpilot-stats = { workspace = true }
+# The references search parses the files it reads: the filter that tells a use from a
+# mention is the parse tree, and it has to run where the text is. The grammars are the
+# ones the editor links, so one crate answers both surfaces.
+acpilot-text = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }

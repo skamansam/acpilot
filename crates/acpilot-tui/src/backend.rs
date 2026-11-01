@@ -75,6 +75,12 @@ pub enum Request {
     SearchFiles(String),
     /// Search the workspace's file contents for a query, for the jump list.
     Grep(String),
+    /// Find the code uses of an identifier, for the references panel.
+    ///
+    /// The name rather than a position: the pane read the word off its own buffer, and
+    /// a request that named a line and a column would make the daemon open the file to
+    /// find out what the person meant.
+    References(String),
     /// Read a file, by workspace-relative path.
     OpenFile(String),
     /// Write a buffer back, with the token the read came with.
@@ -148,6 +154,14 @@ pub enum Update {
         query: String,
         /// The lines that contain it, sorted by path and line.
         matches: Vec<acpilot_proto::file::GrepMatch>,
+    },
+    /// A references answer, tagged with the name that asked for the same reason the
+    /// searches are tagged with their queries.
+    References {
+        /// The identifier that was asked about.
+        name: String,
+        /// Its uses in code, sorted by path, line and column.
+        hits: Vec<acpilot_proto::file::Reference>,
     },
     /// A file's text, for the editor.
     File {
@@ -439,6 +453,16 @@ async fn run(
                     match client.grep(&query).await {
                         Ok(matches) => {
                             let _ = updates.send(Update::Matches { query, matches });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::References(name)) => {
+                    match client.references(&name).await {
+                        Ok(hits) => {
+                            let _ = updates.send(Update::References { name, hits });
                         }
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
@@ -925,6 +949,25 @@ async fn run_demo(
                     })
                     .collect();
                 let _ = updates.send(Update::Matches { query, matches });
+            }
+            Request::References(name) => {
+                // The design pass parses its one fixture: the same filter over the text
+                // it drew, so the panel can be reviewed without a workspace.
+                let text = demo.editor.lines.join("\n");
+                let lines: Vec<&str> = text.split('\n').collect();
+                let language = acpilot_text::language_for(&demo.editor.path);
+                let hits = acpilot_text::references::uses(language, &text, &name)
+                    .into_iter()
+                    .map(|hit| acpilot_proto::file::Reference {
+                        path: demo.editor.path.clone(),
+                        line: u32::try_from(hit.line + 1).unwrap_or(u32::MAX),
+                        column: u32::try_from(hit.column + 1).unwrap_or(u32::MAX),
+                        text: lines
+                            .get(hit.line)
+                            .map_or_else(String::new, |line| line.trim_end().to_owned()),
+                    })
+                    .collect();
+                let _ = updates.send(Update::References { name, hits });
             }
             Request::OpenFile(path) => {
                 if path == demo.editor.path {

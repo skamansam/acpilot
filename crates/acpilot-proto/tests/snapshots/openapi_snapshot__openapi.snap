@@ -861,6 +861,31 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "GrepMatch": {
+        "description": "One line a content search matched.\n\nThe line's text travels with the match because a jump list has to be read\nbefore it is chosen from: a list of `src/main.rs:12` is a list nobody can pick\nthe right row out of without opening every one of them.",
+        "properties": {
+          "line": {
+            "description": "1-based line number, as an editor counts lines.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative path of the file the line is in.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The line as it reads, with trailing whitespace removed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "text"
+        ],
+        "type": "object"
+      },
       "HostCapabilities": {
         "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files, and the UIs need to know that before offering an\nagent.",
         "properties": {
@@ -1661,6 +1686,38 @@ expression: canonical(document)
           "base_url",
           "status",
           "model_count"
+        ],
+        "type": "object"
+      },
+      "Reference": {
+        "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
+        "properties": {
+          "column": {
+            "description": "1-based character column the name starts at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "description": "1-based line number, as an editor counts lines.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative path of the file the use is in.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The line as it reads, with trailing whitespace removed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "column",
+          "text"
         ],
         "type": "object"
       },

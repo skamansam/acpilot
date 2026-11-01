@@ -93,6 +93,24 @@ pub struct GrepMatch {
     pub text: String,
 }
 
+/// One use of an identifier, for the references panel.
+///
+/// `column` is a character column rather than a byte offset: a pane places a caret on
+/// the glyph, and a byte column drifts left of it the first time a line holds a `日`.
+/// The line's text travels with the row for the same reason a content search's does —
+/// a list of `src/app.rs:12` cannot be chosen from without opening every one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Reference {
+    /// Workspace-relative path of the file the use is in.
+    pub path: String,
+    /// 1-based line number, as an editor counts lines.
+    pub line: u32,
+    /// 1-based character column the name starts at.
+    pub column: u32,
+    /// The line as it reads, with trailing whitespace removed.
+    pub text: String,
+}
+
 /// What happened to one line since the last commit, for a gutter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

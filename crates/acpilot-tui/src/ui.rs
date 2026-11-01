@@ -28,6 +28,12 @@ use crate::app::{
 /// column that could be dragged would be a third divider for a panel that is mostly
 /// read rather than browsed.
 const OUTLINE_WIDTH: u16 = 30;
+
+/// How wide the references list's column is.
+///
+/// Wider than the outline because a row is a path and a line of code rather than a
+/// name: the same reason the content search's rows carry their text.
+const REFERENCES_WIDTH: u16 = 44;
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
 
@@ -131,6 +137,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         if wide && app.show_outline && app.panels.on(Panel::Outline, side) {
             width = width.max(OUTLINE_WIDTH);
         }
+        if wide && app.show_references && app.panels.on(Panel::References, side) {
+            width = width.max(REFERENCES_WIDTH);
+        }
         if app.panels.on(Panel::Assistant, side) {
             width = width.max(assistant_width);
         }
@@ -172,6 +181,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
                 Panel::FileManager => files_area = Some(draw_files(frame, app, slot)),
                 Panel::Outline => {
                     draw_outline(frame, app, slot);
+                }
+                Panel::References => {
+                    draw_references(frame, app, slot);
                 }
                 Panel::Assistant => {
                     let (size, sessions) = draw_agents(frame, app, slot);
@@ -728,6 +740,7 @@ fn panels_on(app: &App, column: Rect, side: Side, wide: bool) -> Vec<(Rect, Pane
         .into_iter()
         .filter(|panel| wide || *panel != Panel::FileManager)
         .filter(|panel| app.show_outline || *panel != Panel::Outline)
+        .filter(|panel| app.show_references || *panel != Panel::References)
         .collect();
     if stack.is_empty() {
         return Vec::new();
@@ -797,6 +810,84 @@ fn draw_outline(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         })
         .collect();
     frame.render_widget(List::new(items).block(block), area);
+    pane_area(inner)
+}
+
+/// The references panel: one row per code use of the name under the caret.
+///
+/// The row is the path and the line, then the line's own text with the name marked:
+/// the answer to "where is this used" has to be readable before it is chosen from,
+/// which is the same reason the content search's rows carry text.
+fn draw_references(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let title = if app.references_name.is_empty() {
+        " References ".to_owned()
+    } else {
+        format!(
+            " References · {} · {} ",
+            app.references_name,
+            app.references.len()
+        )
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style(app.focus == Focus::References, &app.theme));
+    let inner = block.inner(area);
+    if app.references.is_empty() {
+        let message = if app.editor.is_some() {
+            "no uses yet\nshift-f12 names the word under the caret"
+        } else {
+            "no file is open\nEnter in the file manager reads one"
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(app.theme.text_muted()))
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.references_selected, app.references.len(), height);
+    let rows: Vec<Line> = app
+        .references
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, hit)| {
+            let chosen = index == app.references_selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let body = if chosen {
+                row
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            let mark = Style::default()
+                .bg(app.theme.accent())
+                .fg(app.theme.bg())
+                .add_modifier(Modifier::BOLD);
+            let mut spans = vec![
+                Span::styled(format!("{}:{}", hit.path, hit.line), row),
+                Span::styled("  ", body),
+            ];
+            spans.extend(highlight_line(
+                hit.text.trim(),
+                &app.references_name,
+                body,
+                mark,
+            ));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows).block(block), area);
     pane_area(inner)
 }
 
@@ -1764,6 +1855,14 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-y", "redo"),
             ("x", "delete a character"),
             ("f12", "go to definition"),
+            ("shift-f12", "find references"),
+        ],
+        Focus::References => &[
+            ("j / k", "move"),
+            ("enter", "open the use"),
+            ("shift-f12", "another word"),
+            ("esc", "back to the buffer"),
+            ("tab", "next pane"),
         ],
         Focus::Sessions => &[
             ("j / k", "choose"),

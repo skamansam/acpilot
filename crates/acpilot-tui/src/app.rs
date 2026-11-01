@@ -41,6 +41,8 @@ pub enum Focus {
     Terminal,
     /// The open buffer's definitions, when the outline panel is up.
     Outline,
+    /// The uses of one name, when the references panel is up.
+    References,
 }
 
 impl Focus {
@@ -55,6 +57,7 @@ impl Focus {
             Self::Prompt => "prompt",
             Self::Terminal => "terminal",
             Self::Outline => "outline",
+            Self::References => "references",
         }
     }
 }
@@ -71,6 +74,8 @@ pub enum Panel {
     FileManager,
     /// The open buffer's definitions, in the order they appear in the file.
     Outline,
+    /// Where the name under the caret is used, across the workspace.
+    References,
     /// The sessions, the transcript and the composer: the agent's half.
     Assistant,
 }
@@ -82,6 +87,7 @@ impl Panel {
         match self {
             Self::FileManager => "File manager",
             Self::Outline => "Outline",
+            Self::References => "References",
             Self::Assistant => "Assistant",
         }
     }
@@ -119,6 +125,8 @@ pub struct Panels {
     pub files: Side,
     /// Where the outline is, while it is shown.
     pub outline: Side,
+    /// Where the references list is, while it is shown.
+    pub references: Side,
     /// Where the assistant is.
     pub assistant: Side,
 }
@@ -130,6 +138,7 @@ impl Default for Panels {
             // Beside the tree it describes, and already closed on a first launch:
             // `show_outline` is what puts it on screen.
             outline: Side::Left,
+            references: Side::Left,
             assistant: Side::Right,
         }
     }
@@ -142,6 +151,7 @@ impl Panels {
         match panel {
             Panel::FileManager => self.files,
             Panel::Outline => self.outline,
+            Panel::References => self.references,
             Panel::Assistant => self.assistant,
         }
     }
@@ -157,6 +167,7 @@ impl Panels {
         match panel {
             Panel::FileManager => self.files = side,
             Panel::Outline => self.outline = side,
+            Panel::References => self.references = side,
             Panel::Assistant => self.assistant = side,
         }
     }
@@ -165,10 +176,15 @@ impl Panels {
     /// the agent, because a person opens a file to show it to an agent.
     #[must_use]
     pub fn stack(&self, side: Side) -> Vec<Panel> {
-        [Panel::FileManager, Panel::Outline, Panel::Assistant]
-            .into_iter()
-            .filter(|panel| self.on(*panel, side))
-            .collect()
+        [
+            Panel::FileManager,
+            Panel::Outline,
+            Panel::References,
+            Panel::Assistant,
+        ]
+        .into_iter()
+        .filter(|panel| self.on(*panel, side))
+        .collect()
     }
 }
 
@@ -218,6 +234,10 @@ pub enum MenuAction {
     MovePanel(Panel, Side),
     /// Show the outline panel, or put it away.
     ToggleOutline,
+    /// Show the references panel, or put it away.
+    ToggleReferences,
+    /// List where the name under the caret is used.
+    FindReferences,
     /// Ask to leave.
     Quit,
 }
@@ -302,6 +322,11 @@ pub const MENUS: &[MenuDef] = &[
                 keys: "ctrl-t",
                 action: MenuAction::Terminal,
             },
+            MenuRow {
+                label: "Find References",
+                keys: "shift-f12",
+                action: MenuAction::FindReferences,
+            },
         ],
     },
     MenuDef {
@@ -341,9 +366,24 @@ pub const MENUS: &[MenuDef] = &[
                 action: MenuAction::MovePanel(Panel::Outline, Side::Right),
             },
             MenuRow {
+                label: "References on the left",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::References, Side::Left),
+            },
+            MenuRow {
+                label: "References on the right",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::References, Side::Right),
+            },
+            MenuRow {
                 label: "Show outline",
                 keys: "",
                 action: MenuAction::ToggleOutline,
+            },
+            MenuRow {
+                label: "Show references",
+                keys: "",
+                action: MenuAction::ToggleReferences,
             },
         ],
     },
@@ -1580,6 +1620,19 @@ pub struct App {
     pub outline: Vec<acpilot_text::outline::Symbol>,
     /// Which of them `Enter` goes to.
     pub outline_selected: usize,
+    /// The document revision the outline was parsed from.
+    ///
+    /// A number rather than a flag: the panel re-parses when the text has changed since
+    /// the read, and a comparison is cheaper than remembering which keys edit.
+    pub outline_revision: u64,
+    /// Whether the references panel is on screen.
+    pub show_references: bool,
+    /// The uses of [`App::references_name`], as the daemon found them.
+    pub references: Vec<acpilot_proto::file::Reference>,
+    /// The name the list is about: the word under the caret when it was asked for.
+    pub references_name: String,
+    /// Which use `Enter` opens.
+    pub references_selected: usize,
     /// The rows a workspace search found, when one is up.
     pub found: Vec<FileNode>,
     /// The query being typed in the files pane's search, when it is.
@@ -1814,6 +1867,11 @@ impl App {
             show_outline: false,
             outline: Vec::new(),
             outline_selected: 0,
+            outline_revision: 0,
+            show_references: false,
+            references: Vec::new(),
+            references_name: String::new(),
+            references_selected: 0,
             found: Vec::new(),
             search: None,
             pending: Vec::new(),
@@ -2378,6 +2436,20 @@ impl App {
                     };
                 }
             }
+            Update::References { name, hits } => {
+                // The same rule as the searches: an answer about the name before this
+                // one is an answer about a word the caret has left.
+                if self.references_name == name {
+                    let total = hits.len();
+                    self.references = hits;
+                    self.references_selected = 0;
+                    self.status = match total {
+                        0 => format!("no code uses {name}"),
+                        1 => format!("1 use of {name}"),
+                        total => format!("{total} uses of {name}"),
+                    };
+                }
+            }
             Update::File {
                 path,
                 text,
@@ -2809,8 +2881,10 @@ impl App {
             // rather than being a step that goes nowhere.
             let next = match self.focus {
                 Focus::Files if self.show_outline => Focus::Outline,
+                Focus::Outline if self.show_references => Focus::References,
                 Focus::Files => Focus::Editor,
                 Focus::Outline => Focus::Editor,
+                Focus::References => Focus::Editor,
                 Focus::Editor => Focus::Sessions,
                 Focus::Sessions if self.readable_transcript() => Focus::Transcript,
                 Focus::Sessions => Focus::Prompt,
@@ -2829,6 +2903,7 @@ impl App {
         match self.focus {
             Focus::Files => self.files_key(key),
             Focus::Outline => self.outline_key(key),
+            Focus::References => self.references_key(key),
             Focus::Editor => self.editor_key(key),
             Focus::Sessions => self.sessions_key(key),
             Focus::Transcript => self.transcript_key(key),
@@ -3219,14 +3294,15 @@ impl App {
 
     /// Re-read the open buffer's definitions.
     ///
-    /// The parse tree is the outline, so this runs when a buffer arrives rather than
-    /// on every keystroke: a list that re-parsed on each character would charge a
-    /// parse per character, and a definition's line only moves when text above it
-    /// changes.
+    /// The parse tree is the outline, so this runs when a buffer arrives and whenever
+    /// the text has changed since the last read — not per keystroke: [`App::tick`] is
+    /// the clock that debounces a burst of typing into one parse, and the frame is
+    /// 120 ms, so the list is at most one frame behind the text.
     fn refresh_outline(&mut self) {
         let Some(editor) = &self.editor else {
             self.outline.clear();
             self.outline_selected = 0;
+            self.outline_revision = 0;
             return;
         };
         let text = editor.document().text();
@@ -3234,6 +3310,33 @@ impl App {
         self.outline_selected = self
             .outline_selected
             .min(self.outline.len().saturating_sub(1));
+        self.outline_revision = editor.document().revision();
+    }
+
+    /// Catch up on work that is deferred rather than done on the key that caused it.
+    ///
+    /// The event loop calls this once a frame, after the daemon's answers have been
+    /// folded in and before the frame is painted, so the screen shows the list the text
+    /// it is drawn beside implies.
+    pub fn tick(&mut self) {
+        self.refresh_outline_if_stale();
+    }
+
+    /// Re-read the outline when the buffer has changed since the last read.
+    ///
+    /// A closed panel is not re-parsed: opening it re-reads it, and a list nobody can
+    /// see is not worth a parse per frame of typing.
+    fn refresh_outline_if_stale(&mut self) {
+        if !self.show_outline {
+            return;
+        }
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        if editor.document().revision() == self.outline_revision {
+            return;
+        }
+        self.refresh_outline();
     }
 
     /// The outline's keys: choose a definition, and go to it.
@@ -3266,6 +3369,61 @@ impl App {
                 }
                 self.set_focus(Focus::Editor);
                 self.status = format!("{name} · line {line}");
+            }
+            KeyCode::Esc => self.set_focus(Focus::Editor),
+            _ => {}
+        }
+        None
+    }
+
+    /// Ask where the name under the caret is used.
+    ///
+    /// The word is read here rather than in the daemon: the caret is this pane's, and a
+    /// request naming a line and a column would make the daemon open the file to find
+    /// out what the person meant. The answer arrives as [`Update::References`], and the
+    /// panel is put up first so the list has somewhere to land.
+    fn find_references(&mut self) -> Option<Request> {
+        let Some(editor) = &self.editor else {
+            self.notice("no file is open · the caret names the word");
+            return None;
+        };
+        let text = editor.document().text();
+        let caret = editor.caret_offset();
+        let Some((name, _)) = acpilot_text::references::identifier_at(&text, caret) else {
+            self.notice("the caret is not on a word");
+            return None;
+        };
+        self.show_references = true;
+        self.references_name = name.clone();
+        self.references.clear();
+        self.references_selected = 0;
+        self.status = format!("references · {name}\u{2026}");
+        Some(Request::References(name))
+    }
+
+    /// The references panel's keys: choose a use, and go to it.
+    ///
+    /// A row is a place, like the outline's: `Enter` opens the file at the line the name
+    /// was found on and gives the keys back to the buffer. The list stays up, because
+    /// reading the other uses is what a person does next.
+    fn references_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.references_selected = self.references_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.references_selected + 1 < self.references.len() {
+                    self.references_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let Some(hit) = self.references.get(self.references_selected).cloned() else {
+                    self.notice("the list has no rows to go to");
+                    return None;
+                };
+                self.pending_line = Some(hit.line);
+                self.status = format!("opening {}:{}\u{2026}", hit.path, hit.line);
+                return Some(Request::OpenFile(hit.path));
             }
             KeyCode::Esc => self.set_focus(Focus::Editor),
             _ => {}
@@ -3401,6 +3559,9 @@ impl App {
         }
 
         let mut planned: Option<(&'static str, &'static str)> = None;
+        // A key that asks the daemon a question rather than moving the caret: the pane
+        // is borrowed for the whole match, so the request is made after it ends.
+        let mut asked = false;
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => editor.move_caret(-1, 0),
             KeyCode::Down | KeyCode::Char('j') => editor.move_caret(1, 0),
@@ -3466,12 +3627,18 @@ impl App {
             KeyCode::Char('z') if control => {
                 editor.undo();
             }
+            // `Shift-F12` is where a references list lives in the editors people came
+            // from, and it is free beside the planned go-to-definition.
+            KeyCode::F(12) if shift => asked = true,
             KeyCode::F(12) => planned = Some(("P7-4", "go to definition")),
             _ => {}
         }
         let message = editor.message().to_owned();
         if !message.is_empty() {
             self.status = message;
+        }
+        if asked {
+            return self.find_references();
         }
         if let Some((task, feature)) = planned {
             self.planned(task, feature);
@@ -3945,6 +4112,15 @@ impl App {
                     "outline closed".to_owned()
                 };
             }
+            MenuAction::ToggleReferences => {
+                self.show_references = !self.show_references;
+                self.status = if self.show_references {
+                    format!("references · {} uses", self.references.len())
+                } else {
+                    "references closed".to_owned()
+                };
+            }
+            MenuAction::FindReferences => return self.find_references(),
             MenuAction::NewSession => {
                 return self
                     .agents
@@ -3991,8 +4167,8 @@ impl App {
             // The outline's column is a fixed width, so an arrow here has nothing to
             // widen. Falling through to the assistant's width — which the `_` arm did
             // — would have been an arrow in one pane resizing another.
-            Focus::Outline => {
-                self.status = "the outline's column is fixed · Panels moves it".to_owned();
+            Focus::Outline | Focus::References => {
+                self.status = "a panel's column is fixed · Panels moves it".to_owned();
                 return;
             }
         }
@@ -5860,10 +6036,11 @@ mod tests {
         // it is shown: where a panel belongs and whether it is up are two answers.
         assert_eq!(
             app.panels.stack(Side::Left),
-            vec![Panel::FileManager, Panel::Outline]
+            vec![Panel::FileManager, Panel::Outline, Panel::References]
         );
         assert_eq!(app.panels.stack(Side::Right), vec![Panel::Assistant]);
         assert!(!app.show_outline);
+        assert!(!app.show_references, "a panel's side is not its being up");
 
         assert_eq!(
             app.run_menu(MenuAction::MovePanel(Panel::Assistant, Side::Left)),
@@ -5871,7 +6048,12 @@ mod tests {
         );
         assert_eq!(
             app.panels.stack(Side::Left),
-            vec![Panel::FileManager, Panel::Outline, Panel::Assistant],
+            vec![
+                Panel::FileManager,
+                Panel::Outline,
+                Panel::References,
+                Panel::Assistant
+            ],
             "the workspace above the agent"
         );
         assert!(app.panels.stack(Side::Right).is_empty());
@@ -5885,8 +6067,88 @@ mod tests {
         assert_eq!(app.panels.stack(Side::Right), vec![Panel::FileManager]);
         assert_eq!(
             app.panels.stack(Side::Left),
-            vec![Panel::Outline, Panel::Assistant]
+            vec![Panel::Outline, Panel::References, Panel::Assistant]
         );
+    }
+
+    #[test]
+    fn the_outline_follows_the_buffer_as_it_is_edited() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn first() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.run_menu(MenuAction::ToggleOutline);
+        assert_eq!(app.outline.len(), 1);
+
+        // Type a second definition. The list is not re-parsed per character — `tick`
+        // is the frame's clock — so before the next frame it is still the old list.
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('o')));
+        for character in "fn second() {}".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.tick();
+        let names: Vec<&str> = app
+            .outline
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["first", "second"],
+            "the new definition is listed"
+        );
+
+        // Undo takes the line back out, and the frame after it says so.
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Char('u')));
+        app.tick();
+        assert_eq!(app.outline.len(), 1, "the list follows the text back");
+    }
+
+    #[test]
+    fn the_references_panel_asks_for_the_word_under_the_caret_and_opens_a_use() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn first() {}\nfn second() { first(); }\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        // `fn f…`: three columns right of the start of the line is the name itself.
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('l')));
+        }
+        let mut chord = key(KeyCode::F(12));
+        chord.modifiers = KeyModifiers::SHIFT;
+        assert_eq!(
+            app.handle_key(chord),
+            Some(Request::References("first".to_owned())),
+            "the pane names the word rather than a position"
+        );
+        assert!(app.show_references, "the panel is up for the answer");
+
+        app.apply(Update::References {
+            name: "first".to_owned(),
+            hits: vec![acpilot_proto::file::Reference {
+                path: "src/main.rs".to_owned(),
+                line: 2,
+                column: 15,
+                text: "fn second() { first(); }".to_owned(),
+            }],
+        });
+        assert_eq!(app.status, "1 use of first");
+
+        app.set_focus(Focus::References);
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::OpenFile("src/main.rs".to_owned())),
+            "a row is a place"
+        );
+        assert_eq!(app.pending_line, Some(2), "the line travels with the read");
     }
 
     #[test]

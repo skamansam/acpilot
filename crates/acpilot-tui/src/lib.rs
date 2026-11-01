@@ -335,6 +335,10 @@ fn event_loop(
         // the pointer moving a cell, so it is asked for here rather than waited
         // for as an event.
         app.autoscroll();
+        // Work that is deferred rather than done on the key that caused it: the outline
+        // re-parses a changed buffer once a frame, and this loop's clock is the
+        // debounce.
+        app.tick();
 
         // `draw` reads the layout and hands back the panes' inner sizes, so a
         // program and the screen agree on the width, and a copy cursor and the

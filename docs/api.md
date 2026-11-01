@@ -350,6 +350,20 @@ and so are files over the read cap, because a search is not a way around a route
 limits. The line's text travels with the match so a jump list can be read before it
 is chosen from; an empty `q` matches nothing.
 
+`GET /v1/files/references?workspace=&q=` returns `Reference[]`
+(`{ path, line, column, text }`): where one identifier is used in **code**, sorted by
+path, line and column, at most 200 of them. The search is word-bounded and then
+filtered by the parse tree — a row is a leaf the grammar calls a name — so a comment
+that mentions it and a string that spells it are not uses, and a file this build
+ships no grammar for (a `.md`, a `.sh`) is skipped rather than searched as prose.
+That filter is what makes the list readable, and it is why the parse happens here:
+the text is the daemon's. `column` is a character column counted from 1, not a byte
+offset; `text` is the line, so a row can be read before it is chosen. Same walk and
+ignore rules as the other two searches, the same cap on file size, and a `q` that is
+empty or not one word matches nothing. It is a search with a parser's help rather than
+`textDocument/references`: scope is unresolved, so two different functions called
+`new` are one name until a language server answers (P7-4).
+
 `PUT /v1/files` takes `FileWriteRequest { path, text, if_match? }`. `if_match` is
 the `etag` last read; a mismatch is `409 conflict`, never a silent overwrite.
 Omitting it creates a file and is `409` if the file already exists. Binary content

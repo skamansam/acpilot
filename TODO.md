@@ -1920,7 +1920,9 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
   panel that says so. It is a panel like the other two — the Panels menu moves it, and
   **Show outline** puts it up — and a row is a place: `Enter` puts the caret on the
   definition's line and gives the keys back to the buffer. The list is as of the last
-  read rather than re-parsed per keystroke, which is the trade named in the source.
+  read rather than re-parsed per keystroke, and re-parsed by `App::tick` whenever
+  `Document::revision` has moved — one parse a frame at most, which is the debounce
+  the trade named in the source asked for.
 - [x] **A real gutter and a real save (2026-11-01)** — `GET /v1/files` answers with
   `marks`, so the editor's gutter is the daemon's git rather than an empty patch, and
   `Ctrl-S` writes the buffer back through `PUT /v1/files` with the `etag` the read
@@ -1940,9 +1942,30 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
   read-only in a pane. What makes it a wiki is that pages are linked and that a link
   to something nobody has written yet is a prompt to write it, so the panel needs a
   page list, a reader and a jump — not an editor, because the agent writes it.
-- [ ] **References panel** — every real use of the identifier under the caret:
-  functions, types, constants and variables, excluding the language's own keywords and
-  stdlib names. That is a language server's `textDocument/references` where one is
-  running (P7-4), and the grep-shaped fallback before it: word-bounded matches in the
-  workspace's own files, filtered by the parse tree so a comment or a string is not a
-  reference. Rows jump to the line, like the content search's do.
+- [x] **References panel (2026-11-01)** — every real use of the identifier under the
+  caret. `acpilot_text::references::identifier_at` reads the word from the pane's own
+  caret (the character before it first, because that is where the caret is after
+  typing) and `uses` walks the parse tree keeping only leaves the grammar calls names —
+  `identifier`, `field_identifier`, `type_identifier`,
+  `shorthand_field_identifier` — so a comment is a `line_comment`, a string's inside is
+  `string_content`, and neither can be a row however it is spelled. `GET
+  /v1/files/references?q=` walks the workspace with the content search's own `walk`,
+  reads the files under the same cap and NUL test, and skips a path no grammar parses
+  rather than listing prose; it returns `Reference { path, line, column, text }` with a
+  1-based character column (tree-sitter counts bytes) and the line's text so a row can
+  be read before it is chosen. The parse is in the daemon because the text is there,
+  which is the one new dependency it took: `acpilotd` now links `acpilot-text` and the
+  four grammars the TUI already ships. `Shift-F12` or View → **Find References** puts
+  the panel up and asks by name; the panel sits on either side from the Panels menu,
+  `j`/`k` choose, `Enter` opens the file at the use and gives the keys back to the
+  buffer, `Esc` returns them, and an answer about a name the caret has left is dropped
+  by comparing the name, the way the two searches compare their queries. A language
+  server's `textDocument/references` replaces the search where one runs (P7-4): scope is
+  unresolved here, so two functions called `new` are one name.
+  **Tests:** five in `acpilot-text` (the word under a caret and the one before it, a
+  number not being an identifier, comment and string excluded with character columns
+  counted past a multi-byte glyph, a keyword never a use, Python's own kinds, and a
+  grammar with no names), one in the daemon (the definition and the call listed, the
+  comment, the string and the `.md` not, with the empty and not-one-word queries), and
+  one in the TUI (`Shift-F12` naming the word rather than a position, the answer filling
+  the list, `Enter` asking for the file and remembering the line).

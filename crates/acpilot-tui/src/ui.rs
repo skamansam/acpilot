@@ -1348,8 +1348,9 @@ fn draw_palette(frame: &mut Frame, app: &App, area: Rect) {
 /// The workspace content search: the query, and one row per matching line.
 ///
 /// A jump list, so every row leads somewhere: the path and line on the left, the
-/// line's text beside them. The text is not truncated here — a row that runs off the
-/// card is a row whose match was past the edge, and guessing at where to cut would
+/// line's text beside them, with the words that matched marked, so a row explains
+/// itself without being re-read. The text is not truncated here — a row that runs off
+/// the card is a row whose match was past the edge, and guessing at where to cut would
 /// hide the reason it matched more often than not.
 fn draw_grep(frame: &mut Frame, app: &App, area: Rect) {
     let Some(grep) = &app.grep else {
@@ -1406,16 +1407,73 @@ fn draw_grep(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
-            Line::from(vec![
+            // The selection is the row's background, so the body inherits it rather
+            // than starting from nothing and leaving a band of terminal colour in the
+            // middle of the chosen row.
+            let body = if chosen {
+                row
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            let mark = Style::default()
+                .bg(app.theme.accent())
+                .fg(app.theme.bg())
+                .add_modifier(Modifier::BOLD);
+            let mut spans = vec![
                 Span::styled(format!("{}:{}", hit.path, hit.line), row),
-                Span::styled(
-                    format!("  {}", hit.text.trim()),
-                    Style::default().fg(app.theme.text_muted()),
-                ),
-            ])
+                Span::styled("  ", body),
+            ];
+            spans.extend(highlight_line(hit.text.trim(), &grep.query, body, mark));
+            Line::from(spans)
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), list);
+}
+
+/// The line's text, with every occurrence of the query marked.
+///
+/// The daemon matches case-insensitively (`line.to_lowercase().contains(needle)`), and
+/// this folds the same way: a row that matched with nothing marked is a row a person
+/// has to read again to see why. The offsets are the original string's, never the
+/// folded one's, because lowering a character can change how many bytes it takes.
+///
+/// A query that is empty after trimming marks nothing, which is what the daemon's
+/// empty query returns too.
+fn highlight_line<'a>(text: &'a str, query: &str, base: Style, mark: Style) -> Vec<Span<'a>> {
+    let needle: Vec<char> = query.trim().to_lowercase().chars().collect();
+    if needle.is_empty() {
+        return vec![Span::styled(text, base)];
+    }
+    let folded: Vec<(usize, char)> = text
+        .char_indices()
+        .flat_map(|(index, character)| character.to_lowercase().map(move |folded| (index, folded)))
+        .collect();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    let mut at = 0;
+    while at + needle.len() <= folded.len() {
+        let matched = folded[at..at + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|((_, folded), wanted)| folded == wanted);
+        if !matched {
+            at += 1;
+            continue;
+        }
+        let start = folded[at].0;
+        let last = folded[at + needle.len() - 1].0;
+        let end = last + text[last..].chars().next().map_or(0, char::len_utf8);
+        if start > cursor {
+            spans.push(Span::styled(&text[cursor..start], base));
+        }
+        spans.push(Span::styled(&text[start..end], mark));
+        cursor = end;
+        at += needle.len();
+    }
+    if cursor < text.len() {
+        spans.push(Span::styled(&text[cursor..], base));
+    }
+    spans
 }
 
 /// The keys the focused pane answers to, for `?`.
@@ -2877,6 +2935,33 @@ mod tests {
         assert!(text.contains("Find in files · 1"), "{text}");
         assert!(text.contains("src/app.rs:3"), "{text}");
         assert!(text.contains("const SCROLLBACK"), "{text}");
+    }
+
+    #[test]
+    fn a_result_row_marks_the_words_that_matched() {
+        let base = Style::default().fg(Color::Gray);
+        let mark = Style::default().fg(Color::Black).bg(Color::Yellow);
+        let marked = |text: &str, query: &str| -> Vec<String> {
+            highlight_line(text, query, base, mark)
+                .iter()
+                .filter(|span| span.style == mark)
+                .map(|span| span.content.to_string())
+                .collect()
+        };
+
+        let text = "const SCROLLBACK: usize = 10_000;";
+        let spans = highlight_line(text, "const", base, mark);
+        // Marking splits the line, so the pieces have to add back up to it: a row that
+        // dropped or repeated a character would not read as the file does.
+        let joined: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(joined, text);
+        assert_eq!(marked(text, "const"), ["const"]);
+        assert_eq!(marked("const and const", "const"), ["const", "const"]);
+        // The daemon folds case to decide a line matched, so the row folds it to mark.
+        assert_eq!(marked("Const x", "CONST"), ["Const"]);
+        // Nothing to mark: the whole line stays in the body's own style.
+        assert!(marked(text, "  ").is_empty());
+        assert_eq!(highlight_line(text, "", base, mark).len(), 1);
     }
 
     #[test]

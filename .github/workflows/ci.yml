@@ -1,12 +1,26 @@
 name: CI
 
 on:
+  # Every branch, not only `main`. A branch whose pull request has already merged
+  # fires no `pull_request` event, and a branch with no pull request yet fires none
+  # either, so a push there used to start nothing at all — the commits nobody is
+  # being asked to review were the ones getting no checks. `main` is still covered
+  # by this trigger; `release.yml` and `docs.yml` stay on `main` alone because they
+  # publish rather than check.
   push:
-    branches: [main]
   pull_request:
+  # And a way to ask for a run against a commit that is already pushed: a workflow
+  # that can only start from an event cannot check a branch tip after the fact.
+  workflow_dispatch:
 
+# One run per branch, whichever event started it. With `push` on every branch and
+# `pull_request` both firing, a pull request would otherwise pay for two runs of the
+# same tree — the push ref and the merge ref — on every commit. `head_ref` is the
+# branch a pull request comes from and is empty on a push, so both events land in
+# the same group and the later one cancels the earlier rather than queueing behind
+# it. On `main` this is the same group as before, since there is no `head_ref`.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:

@@ -6,37 +6,7 @@
 //! produce from `ignore` and the filesystem, and therefore the same shape the
 //! design is judged on.
 
-/// A file's relation to the last commit, as the tree decorates it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GitStatus {
-    /// Unchanged since the last commit.
-    Clean,
-    /// Tracked, with edits.
-    Modified,
-    /// Staged for the next commit.
-    Added,
-    /// Not in the index at all.
-    Untracked,
-    /// Gone from the working tree.
-    Deleted,
-    /// Merging, and not resolved.
-    Conflicted,
-}
-
-impl GitStatus {
-    /// The letter a gutter or tree row shows, or nothing for a clean file.
-    #[must_use]
-    pub fn letter(self) -> Option<&'static str> {
-        match self {
-            Self::Clean => None,
-            Self::Modified => Some("M"),
-            Self::Added => Some("A"),
-            Self::Untracked => Some("?"),
-            Self::Deleted => Some("D"),
-            Self::Conflicted => Some("!"),
-        }
-    }
-}
+use acpilot_proto::file::FileChange;
 
 /// One row of the tree.
 #[derive(Debug, Clone)]
@@ -51,8 +21,12 @@ pub struct FileNode {
     pub expanded: bool,
     /// Whether an ignore rule hides this row, which the tree draws greyed.
     pub ignored: bool,
-    /// How it differs from the last commit.
-    pub status: GitStatus,
+    /// How it differs from the last commit, or `None` when it does not.
+    ///
+    /// The wire's own type rather than a second enum with the same five states:
+    /// the daemon answers this per row, and a fixture that spelled it differently
+    /// would be a design the listing could not produce.
+    pub status: Option<FileChange>,
 }
 
 impl FileNode {
@@ -70,24 +44,36 @@ impl FileNode {
 #[must_use]
 pub fn files() -> Vec<FileNode> {
     vec![
-        file("Cargo.toml", 0, GitStatus::Modified),
+        file("Cargo.toml", 0, Some(FileChange::Modified)),
         dir("crates", 0, true),
         dir("crates/acpilot-tui", 1, true),
-        file("crates/acpilot-tui/Cargo.toml", 2, GitStatus::Clean),
+        file("crates/acpilot-tui/Cargo.toml", 2, None),
         dir("crates/acpilot-tui/src", 2, true),
-        file("crates/acpilot-tui/src/app.rs", 3, GitStatus::Modified),
-        file("crates/acpilot-tui/src/backend.rs", 3, GitStatus::Modified),
-        file("crates/acpilot-tui/src/ui.rs", 3, GitStatus::Modified),
+        file(
+            "crates/acpilot-tui/src/app.rs",
+            3,
+            Some(FileChange::Modified),
+        ),
+        file(
+            "crates/acpilot-tui/src/backend.rs",
+            3,
+            Some(FileChange::Modified),
+        ),
+        file(
+            "crates/acpilot-tui/src/ui.rs",
+            3,
+            Some(FileChange::Modified),
+        ),
         dir("crates/acpilot-tui/tests", 2, false),
         dir("crates/acpilot-demo", 1, false),
         dir("crates/acpilotd", 1, false),
         dir("docs", 0, false),
-        file("README.md", 0, GitStatus::Clean),
-        file("TODO.md", 0, GitStatus::Untracked),
+        file("README.md", 0, None),
+        file("TODO.md", 0, Some(FileChange::Untracked)),
     ]
 }
 
-fn file(path: &str, depth: u8, status: GitStatus) -> FileNode {
+fn file(path: &str, depth: u8, status: Option<FileChange>) -> FileNode {
     FileNode {
         path: path.to_owned(),
         depth,
@@ -105,7 +91,7 @@ fn dir(path: &str, depth: u8, expanded: bool) -> FileNode {
         dir: true,
         expanded,
         ignored: false,
-        status: GitStatus::Clean,
+        status: None,
     }
 }
 
@@ -115,9 +101,21 @@ mod tests {
 
     #[test]
     fn a_row_is_labelled_with_its_own_name() {
-        let node = file("crates/acpilot-tui/src/ui.rs", 3, GitStatus::Modified);
+        let node = file(
+            "crates/acpilot-tui/src/ui.rs",
+            3,
+            Some(FileChange::Modified),
+        );
         assert_eq!(node.label(), "ui.rs");
-        assert_eq!(node.status.letter(), Some("M"));
-        assert_eq!(GitStatus::Clean.letter(), None, "a clean file says nothing");
+        assert_eq!(
+            node.status.map(FileChange::letter),
+            Some("M"),
+            "the row's letter is the wire type's"
+        );
+        assert_eq!(
+            file("README.md", 0, None).status,
+            None,
+            "a clean file says nothing"
+        );
     }
 }

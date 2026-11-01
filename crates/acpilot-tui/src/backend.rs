@@ -77,6 +77,18 @@ pub enum Request {
     Grep(String),
     /// Read a file, by workspace-relative path.
     OpenFile(String),
+    /// Write a buffer back, with the token the read came with.
+    ///
+    /// The text and the token travel together because they are one write: a save
+    /// without the token would be a save that could overwrite a change nobody saw.
+    SaveFile {
+        /// The file, relative to the workspace root.
+        path: String,
+        /// The whole buffer, as it reads now.
+        text: String,
+        /// The `etag` the read answered with.
+        etag: String,
+    },
     /// Attach to one of the open session's terminals, by id.
     OpenTerminal {
         /// The terminal to attach to, as the daemon listed it.
@@ -143,6 +155,17 @@ pub enum Update {
         path: String,
         /// The UTF-8 contents.
         text: String,
+        /// The token a save sends back as `if_match`.
+        etag: String,
+        /// The lines that differ from the last commit, for the gutter.
+        marks: Vec<acpilot_proto::file::LineMark>,
+    },
+    /// A buffer was written back.
+    Saved {
+        /// The path the daemon answered with.
+        path: String,
+        /// The token the next save must send, which is the new file's.
+        etag: String,
     },
     /// The integrations the bar draws, as the daemon reported them.
     Stats(Vec<IntegrationStats>),
@@ -394,6 +417,24 @@ async fn run(
                         }
                     }
                 }
+                Some(Request::SaveFile { path, text, etag }) => {
+                    let body = acpilot_proto::file::FileWriteRequest {
+                        path: path.clone(),
+                        text,
+                        if_match: Some(etag),
+                    };
+                    match client.write_file(&body).await {
+                        Ok(content) => {
+                            let _ = updates.send(Update::Saved {
+                                path: content.path,
+                                etag: content.etag,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::Grep(query)) => {
                     match client.grep(&query).await {
                         Ok(matches) => {
@@ -410,6 +451,8 @@ async fn run(
                             let _ = updates.send(Update::File {
                                 path: content.path,
                                 text: content.text,
+                                etag: content.etag,
+                                marks: content.marks,
                             });
                         }
                         Err(error) => {
@@ -857,6 +900,14 @@ async fn run_demo(
                     "design pass · no workspace to walk for {query}"
                 )));
             }
+            // The fixture is the design pass's own buffer, and it is not a file: a
+            // save has nowhere to go, and the status line says which world the window
+            // is in rather than pretending a write happened.
+            Request::SaveFile { path, .. } => {
+                let _ = updates.send(Update::Status(format!(
+                    "design pass · {path} is the fixture's text"
+                )));
+            }
             Request::Grep(query) => {
                 // The design pass has one file, and greps it: enough to review the
                 // list without pretending the fixture is a workspace.
@@ -880,6 +931,10 @@ async fn run_demo(
                     let _ = updates.send(Update::File {
                         path: demo.editor.path.clone(),
                         text: demo.editor.lines.join("\n"),
+                        // The fixture is not a file: no version to replace, and the
+                        // repository its gutter was designed against is not read here.
+                        etag: String::new(),
+                        marks: Vec::new(),
                     });
                 } else {
                     let _ = updates.send(Update::Status(format!(

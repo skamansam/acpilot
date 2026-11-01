@@ -39,6 +39,8 @@ pub enum Focus {
     Prompt,
     /// A terminal the user is typing into.
     Terminal,
+    /// The open buffer's definitions, when the outline panel is up.
+    Outline,
 }
 
 impl Focus {
@@ -46,13 +48,127 @@ impl Focus {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Files => "files",
+            Self::Files => "file manager",
             Self::Editor => "editor",
-            Self::Sessions => "sessions",
+            Self::Sessions => "assistant",
             Self::Transcript => "transcript",
             Self::Prompt => "prompt",
             Self::Terminal => "terminal",
+            Self::Outline => "outline",
         }
+    }
+}
+
+/// A pane the shell can put on either side of the editor.
+///
+/// The editor is not one: it is the middle, and a shell whose text could be moved
+/// off the centre would be a shell that had lost the argument about what the window
+/// is for. These are the two the person arranges — where the workspace is read and
+/// where the agent is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    /// The workspace tree, which is also the file finder.
+    FileManager,
+    /// The open buffer's definitions, in the order they appear in the file.
+    Outline,
+    /// The sessions, the transcript and the composer: the agent's half.
+    Assistant,
+}
+
+impl Panel {
+    /// What the menu and the status line call it.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FileManager => "File manager",
+            Self::Outline => "Outline",
+            Self::Assistant => "Assistant",
+        }
+    }
+}
+
+/// Which side of the editor a panel sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// Left of the editor.
+    Left,
+    /// Right of the editor.
+    Right,
+}
+
+impl Side {
+    /// What the menu and the status line call it.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+/// Where the two movable panels are.
+///
+/// Two sides rather than two panes: a panel that moved has to be *somewhere*, and
+/// a shell that could only swap them would have three arrangements for two panes.
+/// Both on one side is allowed and stacks them, which is what makes the answer a
+/// place rather than a choice between two fixed columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Panels {
+    /// Where the file manager is.
+    pub files: Side,
+    /// Where the outline is, while it is shown.
+    pub outline: Side,
+    /// Where the assistant is.
+    pub assistant: Side,
+}
+
+impl Default for Panels {
+    fn default() -> Self {
+        Self {
+            files: Side::Left,
+            // Beside the tree it describes, and already closed on a first launch:
+            // `show_outline` is what puts it on screen.
+            outline: Side::Left,
+            assistant: Side::Right,
+        }
+    }
+}
+
+impl Panels {
+    /// Which side a panel is on.
+    #[must_use]
+    pub fn side(&self, panel: Panel) -> Side {
+        match panel {
+            Panel::FileManager => self.files,
+            Panel::Outline => self.outline,
+            Panel::Assistant => self.assistant,
+        }
+    }
+
+    /// Whether a panel is on `side`.
+    #[must_use]
+    pub fn on(&self, panel: Panel, side: Side) -> bool {
+        self.side(panel) == side
+    }
+
+    /// Put a panel on a side.
+    pub fn move_to(&mut self, panel: Panel, side: Side) {
+        match panel {
+            Panel::FileManager => self.files = side,
+            Panel::Outline => self.outline = side,
+            Panel::Assistant => self.assistant = side,
+        }
+    }
+
+    /// The panels on one side, in the order they are stacked: the workspace above
+    /// the agent, because a person opens a file to show it to an agent.
+    #[must_use]
+    pub fn stack(&self, side: Side) -> Vec<Panel> {
+        [Panel::FileManager, Panel::Outline, Panel::Assistant]
+            .into_iter()
+            .filter(|panel| self.on(*panel, side))
+            .collect()
     }
 }
 
@@ -94,6 +210,14 @@ pub enum MenuAction {
     NewSession,
     /// Cancel the turn in flight.
     Cancel,
+    /// Put a panel on a side of the editor.
+    ///
+    /// One row per panel per side rather than a toggle, because the row is a place: a
+    /// person reading a menu can see where the pane will land, and a row that said
+    /// "move" would be a row that only made sense once it had been used.
+    MovePanel(Panel, Side),
+    /// Show the outline panel, or put it away.
+    ToggleOutline,
     /// Ask to leave.
     Quit,
 }
@@ -154,7 +278,7 @@ pub const MENUS: &[MenuDef] = &[
             // The panes are reached by cycling, so the rows that move the keyboard
             // there name no chord a person could press from anywhere.
             MenuRow {
-                label: "Files",
+                label: "File manager",
                 keys: "",
                 action: MenuAction::Files,
             },
@@ -164,7 +288,7 @@ pub const MENUS: &[MenuDef] = &[
                 action: MenuAction::Editor,
             },
             MenuRow {
-                label: "Sessions",
+                label: "Assistant",
                 keys: "",
                 action: MenuAction::Sessions,
             },
@@ -177,6 +301,49 @@ pub const MENUS: &[MenuDef] = &[
                 label: "Terminal Pane",
                 keys: "ctrl-t",
                 action: MenuAction::Terminal,
+            },
+        ],
+    },
+    MenuDef {
+        title: "Panels",
+        mnemonic: 'p',
+        items: &[
+            // Where each panel goes, not where it is: the same row moves it whether or
+            // not it is already there, so a person who forgets does not have to look.
+            MenuRow {
+                label: "File manager on the left",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::FileManager, Side::Left),
+            },
+            MenuRow {
+                label: "File manager on the right",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::FileManager, Side::Right),
+            },
+            MenuRow {
+                label: "Assistant on the left",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::Assistant, Side::Left),
+            },
+            MenuRow {
+                label: "Assistant on the right",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::Assistant, Side::Right),
+            },
+            MenuRow {
+                label: "Outline on the left",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::Outline, Side::Left),
+            },
+            MenuRow {
+                label: "Outline on the right",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::Outline, Side::Right),
+            },
+            MenuRow {
+                label: "Show outline",
+                keys: "",
+                action: MenuAction::ToggleOutline,
             },
         ],
     },
@@ -1398,6 +1565,21 @@ pub struct App {
     /// for the same directories with `include_ignored`, and the rows come back marked
     /// so the pane can draw them as the hidden ones they are.
     pub show_ignored: bool,
+    /// Where the two movable panels are.
+    ///
+    /// The shell's arrangement rather than a preference: it is one row away in the
+    /// Panels menu, and a window that opened with the panes somewhere other than
+    /// where they were left would be a window that hid itself.
+    pub panels: Panels,
+    /// Whether the outline panel is on screen.
+    ///
+    /// Apart from the side it is on: a panel that is put away has not moved, and the
+    /// Panels menu can put it back where it was.
+    pub show_outline: bool,
+    /// The open buffer's definitions, as the outline panel lists them.
+    pub outline: Vec<acpilot_text::outline::Symbol>,
+    /// Which of them `Enter` goes to.
+    pub outline_selected: usize,
     /// The rows a workspace search found, when one is up.
     pub found: Vec<FileNode>,
     /// The query being typed in the files pane's search, when it is.
@@ -1601,6 +1783,21 @@ pub struct GrepSearch {
     pub selected: usize,
 }
 
+/// The first row a pane of `height` rows shows when `selected` is chosen.
+///
+/// A pure function of the selection rather than a scroll offset the pane remembers:
+/// the tree has no scroll of its own, and one that could disagree with the cursor
+/// would be a second answer to “which row is where”. The mouse reads a click back
+/// through the same function the drawing placed the rows with.
+#[must_use]
+pub fn first_visible(selected: usize, len: usize, height: usize) -> usize {
+    let height = height.max(1);
+    selected
+        .saturating_add(1)
+        .saturating_sub(height)
+        .min(len.saturating_sub(height))
+}
+
 impl App {
     /// A TUI pointed at `daemon`, with nothing loaded yet.
     #[must_use]
@@ -1613,6 +1810,10 @@ impl App {
             files: Vec::new(),
             file_selected: 0,
             show_ignored: false,
+            panels: Panels::default(),
+            show_outline: false,
+            outline: Vec::new(),
+            outline_selected: 0,
             found: Vec::new(),
             search: None,
             pending: Vec::new(),
@@ -2177,15 +2378,38 @@ impl App {
                     };
                 }
             }
-            Update::File { path, text } => {
+            Update::File {
+                path,
+                text,
+                etag,
+                marks,
+            } => {
                 let lines = text.lines().count();
-                let marks = acpilot_git::line_changes("", &path);
-                self.editor = Some(EditorPane::from_text(
-                    &path,
-                    &text,
-                    marks,
-                    &mut self.grammars,
-                ));
+                // The gutter is the daemon's git, answered with the text: the client is
+                // not where the repository is, and a `git` run here would be a second
+                // opinion about a workspace this process may not even be on.
+                let marks: acpilot_git::LineChanges = marks
+                    .iter()
+                    .map(|mark| {
+                        let line = usize::try_from(mark.line.saturating_sub(1)).unwrap_or(0);
+                        let change = match mark.change {
+                            acpilot_proto::file::LineChange::Added => {
+                                acpilot_git::LineChange::Added
+                            }
+                            acpilot_proto::file::LineChange::Modified => {
+                                acpilot_git::LineChange::Modified
+                            }
+                            acpilot_proto::file::LineChange::Deleted => {
+                                acpilot_git::LineChange::Deleted
+                            }
+                        };
+                        (line, change)
+                    })
+                    .collect();
+                let mut pane = EditorPane::from_text(&path, &text, marks, &mut self.grammars);
+                pane.set_etag(etag);
+                self.editor = Some(pane);
+                self.refresh_outline();
                 if let Some(line) = self.pending_line.take()
                     && let Some(editor) = &mut self.editor
                 {
@@ -2196,6 +2420,17 @@ impl App {
                 }
                 self.set_focus(Focus::Editor);
                 self.status = format!("opened {path} · {lines} lines");
+            }
+            Update::Saved { path, etag } => {
+                // Only the pane the answer is about: a save that landed while another
+                // file was opened must not clear the new buffer's unsaved changes.
+                if let Some(editor) = &mut self.editor
+                    && editor.path() == path
+                {
+                    editor.set_etag(etag);
+                    editor.mark_saved();
+                    self.status = format!("saved {path}");
+                }
             }
             Update::Status(message) => self.status = message,
             Update::Theme(theme) => {
@@ -2573,7 +2808,9 @@ impl App {
             // is skipped too when there is nothing in it or a terminal covers it,
             // rather than being a step that goes nowhere.
             let next = match self.focus {
+                Focus::Files if self.show_outline => Focus::Outline,
                 Focus::Files => Focus::Editor,
+                Focus::Outline => Focus::Editor,
                 Focus::Editor => Focus::Sessions,
                 Focus::Sessions if self.readable_transcript() => Focus::Transcript,
                 Focus::Sessions => Focus::Prompt,
@@ -2591,6 +2828,7 @@ impl App {
 
         match self.focus {
             Focus::Files => self.files_key(key),
+            Focus::Outline => self.outline_key(key),
             Focus::Editor => self.editor_key(key),
             Focus::Sessions => self.sessions_key(key),
             Focus::Transcript => self.transcript_key(key),
@@ -2623,17 +2861,7 @@ impl App {
             }
             KeyCode::Left | KeyCode::Char('h') => return self.set_expanded(false),
             KeyCode::Right | KeyCode::Char('l') => return self.set_expanded(true),
-            KeyCode::Enter => {
-                let Some(node) = self.visible_files().get(self.file_selected).cloned() else {
-                    self.notice("the tree has no rows to open");
-                    return None;
-                };
-                if node.dir {
-                    return self.set_expanded(!node.expanded);
-                }
-                self.status = format!("opening {}…", node.path);
-                return Some(Request::OpenFile(node.path));
-            }
+            KeyCode::Enter => return self.activate_row(),
             // The workspace's paths are the daemon's to walk, for the same reason its
             // directories are: the ignore rules and the disk are on that side, and a
             // find here must not see what the tree cannot.
@@ -2648,6 +2876,23 @@ impl App {
             _ => {}
         }
         None
+    }
+
+    /// The row the keyboard or the pointer is on, acted on: a directory opens or
+    /// closes, a file is read.
+    ///
+    /// One method because `Enter` and a click are the same verb. Two copies would be
+    /// two answers to what a row means, and the one that drifted would be the mouse's.
+    fn activate_row(&mut self) -> Option<Request> {
+        let Some(node) = self.visible_files().get(self.file_selected).cloned() else {
+            self.notice("the tree has no rows to open");
+            return None;
+        };
+        if node.dir {
+            return self.set_expanded(!node.expanded);
+        }
+        self.status = format!("opening {}…", node.path);
+        Some(Request::OpenFile(node.path))
     }
 
     /// Open or close the directory the tree's selection is on.
@@ -2738,9 +2983,10 @@ impl App {
                 dir: entry.is_dir,
                 expanded: false,
                 ignored: entry.ignored,
-                // Git decoration is P6-6's remaining half: the listing says what
-                // is there, and nothing in it knows what changed.
-                status: acpilot_demo::GitStatus::Clean,
+                // Git's own answer, asked in the daemon: the client is not where
+                // the files are, and a second `git` here would be a second opinion
+                // about a workspace this process may not even be on.
+                status: entry.status,
             })
             .collect();
         // A directory before a file in the same directory, and then by name: a
@@ -2971,6 +3217,88 @@ impl App {
         std::mem::take(&mut self.pending)
     }
 
+    /// Re-read the open buffer's definitions.
+    ///
+    /// The parse tree is the outline, so this runs when a buffer arrives rather than
+    /// on every keystroke: a list that re-parsed on each character would charge a
+    /// parse per character, and a definition's line only moves when text above it
+    /// changes.
+    fn refresh_outline(&mut self) {
+        let Some(editor) = &self.editor else {
+            self.outline.clear();
+            self.outline_selected = 0;
+            return;
+        };
+        let text = editor.document().text();
+        self.outline = acpilot_text::outline::symbols(editor.language(), &text);
+        self.outline_selected = self
+            .outline_selected
+            .min(self.outline.len().saturating_sub(1));
+    }
+
+    /// The outline's keys: choose a definition, and go to it.
+    ///
+    /// A row is a place, like every other list in this client: `Enter` puts the caret
+    /// on the line the definition starts at and gives the keys back to the buffer,
+    /// because the reason to pick a definition is to read or edit it.
+    fn outline_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.outline_selected = self.outline_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.outline_selected + 1 < self.outline.len() {
+                    self.outline_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let Some(symbol) = self.outline.get(self.outline_selected) else {
+                    self.notice("the outline has no rows to go to");
+                    return None;
+                };
+                let line = u32::try_from(symbol.line + 1).unwrap_or(u32::MAX);
+                let name = symbol.name.clone();
+                if let Some(editor) = &mut self.editor {
+                    editor.goto_line(line);
+                } else {
+                    self.notice("no file is open · the outline lists one buffer");
+                    return None;
+                }
+                self.set_focus(Focus::Editor);
+                self.status = format!("{name} · line {line}");
+            }
+            KeyCode::Esc => self.set_focus(Focus::Editor),
+            _ => {}
+        }
+        None
+    }
+
+    /// Write the open buffer back through the daemon.
+    ///
+    /// The buffer is not written here: the daemon serialises writes per file with the
+    /// `if_match` token the read came with, and a client that wrote the disk itself
+    /// would be the second writer that token exists to prevent. A buffer with nothing
+    /// to save says so rather than sending a write that would replace a file with what
+    /// it already contains.
+    fn save(&mut self) -> Option<Request> {
+        let Some(editor) = &self.editor else {
+            self.notice("no file is open · nothing to save");
+            return None;
+        };
+        if !editor.dirty() {
+            self.notice("the buffer matches the file · nothing to save");
+            return None;
+        }
+        let Some(etag) = editor.etag().map(str::to_owned) else {
+            self.notice("this buffer did not come from a file · nothing to save");
+            return None;
+        };
+        let path = editor.path().to_owned();
+        let text = editor.document().text();
+        self.status = format!("saving {path}…");
+        Some(Request::SaveFile { path, text, etag })
+    }
+
     /// The editor's keys, over the document the pane holds.
     ///
     /// A prompt takes every key while it is up, because a find box is text and
@@ -2990,6 +3318,11 @@ impl App {
     fn editor_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        // A save is the pane's rather than the buffer's: the write goes through the
+        // daemon, so the key is answered before the document is borrowed.
+        if control && key.code == KeyCode::Char('s') {
+            return self.save();
+        }
         let Some(editor) = self.editor.as_mut() else {
             self.notice("no file is open · pick one in the files pane");
             return None;
@@ -3099,9 +3432,6 @@ impl App {
                 }
             }
             KeyCode::Esc => editor.clear_selection(),
-            KeyCode::Char('s') if control => {
-                planned = Some(("P7-10", "saving through the daemon"));
-            }
             // The way into insert mode, and where the caret lands when it does:
             // `i` here, `a` after it, `I` and `A` at the ends of the line, `o` and
             // `O` on a line of their own. Six keys for one mode because a caret is
@@ -3268,19 +3598,27 @@ impl App {
     /// the indentation are drawn inside the row, so the row the pointer is over is the
     /// row it means. A click past the last file is still the pane's — it takes the
     /// keyboard and moves nothing.
-    fn click_files(&mut self, column: u16, row: u16) -> bool {
-        let Some(area) = self.files_area else {
-            return false;
-        };
+    fn click_files(&mut self, column: u16, row: u16) -> Option<Option<Request>> {
+        let area = self.files_area?;
         if !area.holds(column, row) {
-            return false;
+            return None;
         }
         self.set_focus(Focus::Files);
-        let index = usize::from(row.saturating_sub(area.y));
-        if index < self.visible_files().len() {
-            self.file_selected = index;
+        // The row a cell is, through the same window the drawing used: the pane shows
+        // the selection and the rows around it, so a click's own row is the drawn one
+        // plus the row it was drawn at.
+        let height = usize::from(area.height).max(1);
+        let len = self.visible_files().len();
+        let first = first_visible(self.file_selected, len, height);
+        let index = first + usize::from(row.saturating_sub(area.y));
+        if index >= len {
+            return Some(None);
         }
-        true
+        self.file_selected = index;
+        // A click runs the row's own verb, the same one `Enter` runs: a pointer is a
+        // second way to say what the keyboard says, and a click that only moved the
+        // cursor would be half of a file manager's job.
+        Some(self.activate_row())
     }
 
     /// Focus the session list, on the session a click landed on, and open it.
@@ -3311,10 +3649,37 @@ impl App {
     /// panes with something to scroll; over anything else it is a no-op rather than
     /// a guess.
     fn scroll_under_pointer(&mut self, column: u16, row: u16, up: i32) {
+        if self.scroll_files(column, row, up) {
+            return;
+        }
         if self.scroll_editor(column, row, -up) {
             return;
         }
         self.scroll_terminal(column, row, up);
+    }
+
+    /// Walk the file manager's selection with the wheel.
+    ///
+    /// The pane is a list of rows rather than a document, so the wheel moves what is
+    /// chosen and the window follows it. That keeps one answer to "where is the
+    /// cursor": a remembered scroll offset could disagree with the selection it is
+    /// drawn around, which is how a tree ends up with a highlighted row nobody can
+    /// see.
+    fn scroll_files(&mut self, column: u16, row: u16, up: i32) -> bool {
+        let Some(area) = self.files_area else {
+            return false;
+        };
+        if !area.holds(column, row) {
+            return false;
+        }
+        let last = self.visible_files().len().saturating_sub(1);
+        let step = usize::try_from(up.unsigned_abs()).unwrap_or(1).max(1);
+        self.file_selected = if up > 0 {
+            self.file_selected.saturating_sub(step)
+        } else {
+            self.file_selected.saturating_add(step).min(last)
+        };
+        true
     }
 
     /// Scroll the pane a drag is resting against, and grow the selection with it.
@@ -3565,6 +3930,21 @@ impl App {
             MenuAction::Sessions => self.set_focus(Focus::Sessions),
             MenuAction::Transcript => self.focus_transcript(),
             MenuAction::Terminal => return self.toggle_terminal(),
+            MenuAction::MovePanel(panel, side) => {
+                self.panels.move_to(panel, side);
+                self.status = format!("{} · {}", panel.label(), side.label());
+            }
+            MenuAction::ToggleOutline => {
+                self.show_outline = !self.show_outline;
+                if self.show_outline {
+                    self.refresh_outline();
+                }
+                self.status = if self.show_outline {
+                    format!("outline · {} symbols", self.outline.len())
+                } else {
+                    "outline closed".to_owned()
+                };
+            }
             MenuAction::NewSession => {
                 return self
                     .agents
@@ -3601,12 +3981,19 @@ impl App {
                     self.files_width.saturating_sub(STEP).max(MIN_FILES)
                 };
             }
-            _ => {
+            Focus::Sessions | Focus::Transcript | Focus::Prompt | Focus::Terminal => {
                 self.sidebar_width = if grow {
                     (self.sidebar_width + STEP).min(MAX_SIDEBAR)
                 } else {
                     self.sidebar_width.saturating_sub(STEP).max(MIN_SIDEBAR)
                 };
+            }
+            // The outline's column is a fixed width, so an arrow here has nothing to
+            // widen. Falling through to the assistant's width — which the `_` arm did
+            // — would have been an arrow in one pane resizing another.
+            Focus::Outline => {
+                self.status = "the outline's column is fixed · Panels moves it".to_owned();
+                return;
             }
         }
         self.status = format!(
@@ -3689,8 +4076,8 @@ impl App {
                     self.drag_at = None;
                     return None;
                 }
-                if self.click_files(event.column, event.row) {
-                    return None;
+                if let Some(request) = self.click_files(event.column, event.row) {
+                    return request;
                 }
                 if let Some(request) = self.click_sessions(event.column, event.row) {
                     return request;
@@ -4946,7 +5333,7 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_moves_its_caret_and_saving_names_the_task_that_would_write() {
+    fn the_editor_moves_its_caret_and_a_fixture_has_no_file_to_save() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.files = acpilot_demo::tree::files();
         // The gutter's markers are git's, so a test buffer has the marks a patch
@@ -4971,11 +5358,59 @@ mod tests {
             (start.0 + 1, start.1 + 1)
         );
 
-        // A save goes through the daemon's files API; a UI that wrote the file
-        // itself would be the second writer the daemon cannot serialise.
+        // The seed is the design pass's own text rather than a file's, so an edited
+        // buffer's save says which world it came from instead of writing a version it
+        // does not have.
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.editor.as_ref().expect("a buffer").dirty());
         let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
-        app.handle_key(save);
-        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P7-10"));
+        assert_eq!(app.handle_key(save), None);
+        assert!(
+            app.status.contains("did not come from a file"),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn a_saved_buffer_goes_through_the_daemon_with_its_token() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_focus(Focus::Editor);
+
+        // A buffer nobody touched has nothing to write.
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.handle_key(save), None);
+        assert!(app.status.contains("matches the file"), "{}", app.status);
+
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+        let request = app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let Some(Request::SaveFile { path, text, etag }) = request else {
+            panic!("a save is a request: {request:?}");
+        };
+        assert_eq!(path, "src/main.rs");
+        assert_eq!(etag, "\"v1\"", "the version the read returned");
+        assert!(text.starts_with('x'), "the whole buffer, as edited: {text}");
+        assert!(app.editor.as_ref().expect("a pane").dirty());
+
+        // The answer is the new baseline: the next save has nothing to send.
+        app.apply(Update::Saved {
+            path: "src/main.rs".to_owned(),
+            etag: "\"v2\"".to_owned(),
+        });
+        let pane = app.editor.as_ref().expect("a pane");
+        assert!(!pane.dirty(), "the buffer and the file agree now");
+        assert_eq!(pane.etag(), Some("\"v2\""));
+        assert_eq!(app.status, "saved src/main.rs");
     }
 
     #[test]
@@ -5162,6 +5597,7 @@ mod tests {
             size: 0,
             modified: None,
             ignored: false,
+            status: None,
         }
     }
 
@@ -5223,6 +5659,8 @@ mod tests {
         app.apply(Update::File {
             path: "src/app.rs".to_owned(),
             text: "one\ntwo\nthree".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
         });
         let editor = app.editor.as_ref().expect("a buffer");
         assert_eq!(
@@ -5386,6 +5824,119 @@ mod tests {
     }
 
     #[test]
+    fn the_outline_lists_the_open_files_definitions_and_goes_to_one() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn first() {}\n\nstruct Second {\n    field: u8,\n}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.run_menu(MenuAction::ToggleOutline);
+        assert!(app.show_outline);
+        let names: Vec<&str> = app
+            .outline
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["first", "Second"], "in source order");
+
+        app.set_focus(Focus::Outline);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.outline_selected, 1);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Editor, "the keys go back to the buffer");
+        assert_eq!(
+            app.editor.as_ref().expect("a pane").position().0,
+            3,
+            "the struct's own line, counted from one"
+        );
+    }
+
+    #[test]
+    fn a_panel_moves_to_the_side_the_menu_names() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        // The outline is in the arrangement from the first launch and drawn only while
+        // it is shown: where a panel belongs and whether it is up are two answers.
+        assert_eq!(
+            app.panels.stack(Side::Left),
+            vec![Panel::FileManager, Panel::Outline]
+        );
+        assert_eq!(app.panels.stack(Side::Right), vec![Panel::Assistant]);
+        assert!(!app.show_outline);
+
+        assert_eq!(
+            app.run_menu(MenuAction::MovePanel(Panel::Assistant, Side::Left)),
+            None
+        );
+        assert_eq!(
+            app.panels.stack(Side::Left),
+            vec![Panel::FileManager, Panel::Outline, Panel::Assistant],
+            "the workspace above the agent"
+        );
+        assert!(app.panels.stack(Side::Right).is_empty());
+        assert_eq!(app.status, "Assistant · left");
+
+        // The editor is not a panel and cannot be moved: the middle is the window's
+        // argument about what it is for.
+        // The assistant stayed where the earlier row put it, so the right column is the
+        // tree alone: a row moves one panel and leaves the rest where they were.
+        app.run_menu(MenuAction::MovePanel(Panel::FileManager, Side::Right));
+        assert_eq!(app.panels.stack(Side::Right), vec![Panel::FileManager]);
+        assert_eq!(
+            app.panels.stack(Side::Left),
+            vec![Panel::Outline, Panel::Assistant]
+        );
+    }
+
+    #[test]
+    fn the_tree_window_follows_the_row_it_is_on() {
+        assert_eq!(first_visible(0, 10, 5), 0);
+        assert_eq!(first_visible(4, 10, 5), 0, "the last row of a full pane");
+        assert_eq!(first_visible(5, 10, 5), 1, "one past it scrolls one line");
+        assert_eq!(first_visible(9, 10, 5), 5);
+        assert_eq!(
+            first_visible(2, 3, 5),
+            0,
+            "a list shorter than the pane cannot scroll"
+        );
+        assert_eq!(first_visible(0, 0, 0), 0, "an empty tree is the first row");
+    }
+
+    #[test]
+    fn a_listing_brings_gits_letters_into_the_rows() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let mut main = entry("src/main.rs", false);
+        main.status = Some(acpilot_proto::file::FileChange::Modified);
+        let mut notes = entry("notes.txt", false);
+        notes.status = Some(acpilot_proto::file::FileChange::Untracked);
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![main, notes, entry("Cargo.toml", false)],
+        });
+        // The letters are the daemon's answer and the client adds nothing: a row the
+        // listing did not mark draws no letter, which is a different claim from a row
+        // that is clean.
+        assert_eq!(
+            app.files
+                .iter()
+                .map(|node| (node.path.as_str(), node.status))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Cargo.toml", None),
+                (
+                    "notes.txt",
+                    Some(acpilot_proto::file::FileChange::Untracked)
+                ),
+                (
+                    "src/main.rs",
+                    Some(acpilot_proto::file::FileChange::Modified)
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn opening_a_directory_splices_its_children_under_it_and_closing_takes_them_away() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.focus = Focus::Files;
@@ -5446,6 +5997,8 @@ mod tests {
         app.apply(Update::File {
             path: "src/main.rs".to_owned(),
             text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
         });
         let editor = app.editor.as_ref().expect("the file is open");
         assert_eq!(editor.path(), "src/main.rs");
@@ -5713,12 +6266,12 @@ mod tests {
         );
 
         // The bar is up, so another `Alt` letter moves to that title rather than
-        // closing what is open.
+        // closing what is open. Help is the last of the five.
         app.handle_key(alt('h'));
         assert_eq!(
             app.menu,
             Some(MenuState {
-                open: 3,
+                open: MENUS.len() - 1,
                 items: true,
                 at: 0
             })

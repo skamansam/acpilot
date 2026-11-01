@@ -748,12 +748,30 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "FileChange": {
+        "description": "What happened to a path since the last commit.\n\nOne letter per path, not git's two columns: a tree row is a name, and which half\nof a change is staged is a question for the source-control pane, which reads the\nindex and the working tree separately.",
+        "enum": [
+          "modified",
+          "added",
+          "untracked",
+          "deleted",
+          "conflicted"
+        ],
+        "type": "string"
+      },
       "FileContent": {
         "description": "File contents plus the token needed to write them back.",
         "properties": {
           "etag": {
             "description": "Opaque validator; send it back as `if_match` to write.",
             "type": "string"
+          },
+          "marks": {
+            "description": "The lines that differ from the last commit, for a gutter.\n\nWith the text rather than behind its own route: a pane opens a file once, and\na gutter that asked a second question about the same file would be a second\nround trip whose answer could disagree with the text it is drawn beside. Empty\nfor a file git does not track, for a workspace that is not a repository, and on\na host with no `git`.",
+            "items": {
+              "$ref": "#/components/schemas/LineMark"
+            },
+            "type": "array"
           },
           "path": {
             "description": "Workspace-relative path.",
@@ -798,6 +816,17 @@ expression: canonical(document)
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FileChange",
+                "description": "How this path differs from the last commit, when it does.\n\nAbsent for a clean path, for a workspace that is not a repository, and for a\nhost with no `git` on it. A tree whose letters are unknowable draws no\nletters rather than claiming everything is committed, and the field travels\nwith the row so a listing is one answer rather than a listing plus a second\nquestion about the same directory."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -995,6 +1024,35 @@ expression: canonical(document)
           "kind",
           "label",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "LineChange": {
+        "description": "What happened to one line since the last commit, for a gutter.",
+        "enum": [
+          "added",
+          "modified",
+          "deleted"
+        ],
+        "type": "string"
+      },
+      "LineMark": {
+        "description": "One marked line, as a gutter counts them.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/LineChange",
+            "description": "What changed on it."
+          },
+          "line": {
+            "description": "1-based line number in the file as it is now.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line",
+          "change"
         ],
         "type": "object"
       },

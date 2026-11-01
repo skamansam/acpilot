@@ -39,6 +39,10 @@ acpilot-web = { workspace = true }
 # The web page is the third surface drawn from the same theme tokens: the daemon
 # resolves the palette once at startup rather than serving a page with its own.
 acpilot-extensions = { workspace = true }
+# The tree's letters are git's answer, asked once per listing on the host where
+# the files are. Shelling out keeps the daemon agreeing with the command line
+# about what is staged, and the crate's absence is a tree without letters.
+acpilot-git = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and

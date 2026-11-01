@@ -304,14 +304,32 @@ required.
 
 ## Files
 
-`GET /v1/files?workspace=&path=` returns `FileContent { path, text, etag }` for a
-file; a directory is `409 conflict` with the message pointing at `/v1/files/list`.
+`GET /v1/files?workspace=&path=` returns `FileContent { path, text, etag, marks? }`
+for a file; a directory is `409 conflict` with the message pointing at
+`/v1/files/list`. `marks` is what the gutter draws — `{ line, change }` with
+`change` one of `added`, `modified`, `deleted` and `line` counted from one in the
+text as it is now — and it is absent when nothing changed, when the workspace is not
+a repository, and when the host has no `git`. It travels with the text rather than
+behind its own route because a second question about the same file could answer about
+a different version of it. `PUT /v1/files` answers with the same shape, its marks
+computed from what is now on disk.
 
 `GET /v1/files/list?workspace=&path=` returns `FileEntry[]`
-(`{ path, is_dir, size, modified?, ignored? }`), paths relative to the workspace
-root with `/` as the separator on every host. `include_ignored=true` returns the
-rows a `.gitignore` hides, each with `ignored: true`; the flag is absent from an
-ordinary row, so a client can tell an exception from a file.
+(`{ path, is_dir, size, modified?, ignored?, status? }`), paths relative to the
+workspace root with `/` as the separator on every host. `include_ignored=true`
+returns the rows a `.gitignore` hides, each with `ignored: true`; the flag is absent
+from an ordinary row, so a client can tell an exception from a file.
+
+`status` is what git says changed about that path — `modified`, `added`,
+`untracked`, `deleted` or `conflicted` — and it is absent when nothing changed, when
+the workspace is not a repository, and when the host has no `git`. A directory
+carries the most urgent change beneath it, so a closed row still says something
+inside it changed; the order is `conflicted` > `deleted` > `added` > `modified` >
+`untracked`, because an edit to a tracked file is what a commit is about. The letter
+a tree draws (`M`, `A`, `?`, `D`, `!`) is a client's rendering of the state, not a
+second field. One path a listing cannot mark is a deleted one: a listing is the
+filesystem, so a file that is gone has no row, and the source-control routes
+(P6.5-2) are where a deleted file is listed as deleted.
 
 `GET /v1/files/search?workspace=&q=` returns `FileEntry[]` of the files whose
 paths answer `q`, ignoring case, best match first, at most 200 of them. A query is

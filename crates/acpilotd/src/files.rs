@@ -21,13 +21,17 @@
 //! for read, list and write with an ETag; the editor phase (P6) is where a
 //! buffer meets a file, and it will say what else a save needs.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use acpilot_core::AcpilotError;
+use acpilot_git::{ChangeKind, Repo, StatusEntry};
 use acpilot_proto::ErrorBody;
-use acpilot_proto::file::{FileContent, FileEntry, FileWriteRequest, GrepMatch};
+use acpilot_proto::file::{
+    FileChange, FileContent, FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark,
+};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -111,11 +115,54 @@ async fn read(
     }
     let etag = etag(&metadata, &bytes);
     let text = text_of(bytes, requested)?;
+    let path = display_path(&root, &resolved);
+    let marks = line_marks(&root, &path);
     Ok(Json(FileContent {
-        path: display_path(&root, &resolved),
+        path,
         text,
         etag,
+        marks,
     }))
+}
+
+/// The lines of one file that differ from the last commit, for a gutter.
+///
+/// Asked here rather than in the client for the same reason the tree's letters are:
+/// git reads a repository on the host the files are on, and a client that ran `git`
+/// itself would be answering about a different machine. Nothing is an error: a file
+/// git does not track, a workspace that is not a repository and a host with no `git`
+/// are all a gutter with no marks, which is what an untouched file draws too.
+fn line_marks(root: &Path, path: &str) -> Vec<LineMark> {
+    let Ok(repo) = Repo::discover(root) else {
+        return Vec::new();
+    };
+    // `git diff` speaks paths from the repository's root, which is not always the
+    // workspace's: a package opened inside a monorepo is the ordinary case.
+    let (Ok(workspace), Ok(top)) = (root.canonicalize(), repo.root().canonicalize()) else {
+        return Vec::new();
+    };
+    let Ok(prefix) = workspace.strip_prefix(&top) else {
+        return Vec::new();
+    };
+    let relative = if prefix.as_os_str().is_empty() {
+        path.to_owned()
+    } else {
+        format!("{}/{path}", prefix.to_string_lossy().replace('\\', "/"))
+    };
+    let Ok(changes) = repo.line_changes(&relative) else {
+        return Vec::new();
+    };
+    changes
+        .iter()
+        .map(|(line, change)| LineMark {
+            line: u32::try_from(line + 1).unwrap_or(u32::MAX),
+            change: match change {
+                acpilot_git::LineChange::Added => LineChange::Added,
+                acpilot_git::LineChange::Modified => LineChange::Modified,
+                acpilot_git::LineChange::Deleted => LineChange::Deleted,
+            },
+        })
+        .collect()
 }
 
 /// `GET /v1/files/list?workspace=&path=`.
@@ -149,6 +196,10 @@ async fn list(
     // to a client that never saw the pattern.
     let rules = honour.then(|| ignore_rules(&root, &resolved));
     let include_ignored = query.include_ignored.unwrap_or(false);
+    // Asked once for the whole directory rather than once per row: git answers
+    // about paths, and a row that asked its own question would be one `git status`
+    // per file.
+    let changed = changes(&root);
 
     let entries = std::fs::read_dir(&resolved).map_err(|source| io_error(&resolved, source))?;
     let mut listing = Vec::new();
@@ -179,12 +230,15 @@ async fn list(
         if honour && path.file_name().is_some_and(|name| name == ".git") {
             continue;
         }
+        let relative = display_path(&root, &path);
+        let change = changed.get(&relative).copied();
         listing.push(FileEntry {
-            path: display_path(&root, &path),
+            path: relative,
             is_dir,
             size: if is_dir { 0 } else { metadata.len() },
             modified: modified(&metadata),
             ignored,
+            status: change,
         });
     }
     listing.sort_by(|left, right| left.path.cmp(&right.path));
@@ -246,6 +300,10 @@ async fn search(
                 modified: modified(&metadata),
                 // A search never returns a hidden row: the walk did not enter one.
                 ignored: false,
+                // And no letters: a find is a list of paths rather than a tree of a
+                // directory, so its cost is the walk rather than one `git status`
+                // per keystroke.
+                status: None,
             },
         ));
         if found.len() == MAX_SEARCH_CANDIDATES {
@@ -332,6 +390,109 @@ async fn grep(
     }
     found.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
     Ok(Json(found))
+}
+
+/// Every changed path under `root`, as the letter a tree row draws.
+///
+/// Asked once per listing, on the host the files are on, so a client cannot be
+/// wrong about a workspace it cannot see. Two things are deliberately not errors:
+/// a workspace that is not a repository, and a host with no `git` on it. Both are a
+/// tree without letters, and the file routes' job is to list what is there — the
+/// commit writer is where a missing `git` is worth reporting, because it is where
+/// something was supposed to happen.
+///
+/// A directory takes the most urgent change beneath it, so a collapsed row is not a
+/// row that hides what is inside it. A path git reports that is no longer on disk
+/// cannot appear: the listing is the filesystem, and a deleted file has no row to
+/// mark (the source-control pane, P6.5, is where it does).
+fn changes(root: &Path) -> BTreeMap<String, FileChange> {
+    let Ok(repo) = Repo::discover(root) else {
+        return BTreeMap::new();
+    };
+    let Ok(status) = repo.status() else {
+        return BTreeMap::new();
+    };
+    // The repository can sit above the workspace — one package of a monorepo — and
+    // then git speaks paths the workspace cannot name. Canonicalised on both sides
+    // because the two spellings came from different tools.
+    let prefix = root
+        .canonicalize()
+        .ok()
+        .zip(repo.root().canonicalize().ok())
+        .and_then(|(root, top)| {
+            root.strip_prefix(top)
+                .ok()
+                .map(|prefix| prefix.to_string_lossy().replace('\\', "/"))
+        })
+        .filter(|prefix| !prefix.is_empty());
+
+    let mut changes: BTreeMap<String, FileChange> = BTreeMap::new();
+    for entry in &status.files {
+        let Some(relative) = workspace_relative(&entry.path, prefix.as_deref()) else {
+            continue;
+        };
+        let change = change_of(entry);
+        let mut path = Some(relative.as_str());
+        while let Some(current) = path {
+            let slot = changes.entry(current.to_owned()).or_insert(change);
+            if urgency(change) > urgency(*slot) {
+                *slot = change;
+            }
+            path = current.rfind('/').map(|at| &current[..at]);
+        }
+    }
+    changes
+}
+
+/// A repository-relative path as this workspace spells it, or `None` when the
+/// change is outside the workspace (the repository is bigger than the workspace it
+/// was opened from).
+fn workspace_relative(path: &str, prefix: Option<&str>) -> Option<String> {
+    let Some(prefix) = prefix else {
+        return Some(path.to_owned());
+    };
+    let rest = path.strip_prefix(prefix)?.strip_prefix('/')?;
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+/// One path's change, from the two halves git reports.
+///
+/// A conflict outranks everything: git will not commit through one, and a row that
+/// said `M` would hide the only state that has to be resolved by hand. After that a
+/// file git has never seen is untracked whatever its contents say, an added path is
+/// added whether or not it has been edited since, and anything else that changed
+/// changed.
+fn change_of(entry: &StatusEntry) -> FileChange {
+    let sides = [entry.index, entry.worktree];
+    if sides.contains(&ChangeKind::Unmerged) {
+        FileChange::Conflicted
+    } else if sides.contains(&ChangeKind::Untracked) {
+        // Either side, because porcelain reports an untracked path as `?.` — the
+        // working tree's answer with nothing in the index — and a check on the index
+        // alone read every such file as modified.
+        FileChange::Untracked
+    } else if sides.contains(&ChangeKind::Added) {
+        FileChange::Added
+    } else if sides.contains(&ChangeKind::Deleted) {
+        FileChange::Deleted
+    } else {
+        FileChange::Modified
+    }
+}
+
+/// How much a change asks to be seen first, for a directory's one letter.
+///
+/// An edit to a tracked file outranks an untracked one because a change to a tracked
+/// file is what a commit is about; the untracked file is not part of the project
+/// yet.
+fn urgency(change: FileChange) -> u8 {
+    match change {
+        FileChange::Conflicted => 5,
+        FileChange::Deleted => 4,
+        FileChange::Added => 3,
+        FileChange::Modified => 2,
+        FileChange::Untracked => 1,
+    }
 }
 
 /// A walk of the workspace that follows what the tree follows.
@@ -508,10 +669,15 @@ async fn write(
     let etag = etag(&metadata, &bytes);
     let text = String::from_utf8(bytes)
         .map_err(|_| ApiError::new(AcpilotError::invalid("the text is not UTF-8")))?;
+    let path = display_path(&root, &target);
+    // Asked again after the write: what is on disk is now this text, so the marks are
+    // this text's, not the version the buffer was edited from.
+    let marks = line_marks(&root, &path);
     Ok(Json(FileContent {
-        path: display_path(&root, &target),
+        path,
         text,
         etag,
+        marks,
     }))
 }
 

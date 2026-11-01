@@ -38,26 +38,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -65,7 +75,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -80,7 +90,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 3
           }
         ],
@@ -1724,26 +1734,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -1751,7 +1771,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -1766,7 +1786,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 3
           }
         ],
@@ -2990,26 +3010,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -3017,7 +3047,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -3032,7 +3062,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 13
           }
         ],
@@ -4189,7 +4219,7 @@
         [
           {
             "column": 0,
-            "text": "┌ sessions keys · any key closes ────────────┐",
+            "text": "┌ assistant keys · any key closes ───────────┐",
             "style": 13
           },
           {
@@ -4549,21 +4579,21 @@
           },
           {
             "column": 26,
-            "text": "sessions ",
+            "text": "assistant ",
             "style": 13
           },
           {
-            "column": 35,
+            "column": 36,
             "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 60,
+            "column": 61,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 88,
+            "column": 89,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -4686,26 +4716,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -4713,7 +4753,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files ·",
+            "text": "┌ File ma",
             "style": 3
           },
           {
@@ -4728,7 +4768,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 13
           }
         ],
@@ -6275,21 +6315,21 @@
           },
           {
             "column": 26,
-            "text": "sessions ",
+            "text": "assistant ",
             "style": 13
           },
           {
-            "column": 35,
+            "column": 36,
             "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 60,
+            "column": 61,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 88,
+            "column": 89,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -6407,26 +6447,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -6434,7 +6484,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -6449,7 +6499,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 13
           }
         ],
@@ -7391,21 +7441,21 @@
           },
           {
             "column": 26,
-            "text": "sessions ",
+            "text": "assistant ",
             "style": 13
           },
           {
-            "column": 35,
+            "column": 36,
             "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 60,
+            "column": 61,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 88,
+            "column": 89,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -7523,26 +7573,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -7550,7 +7610,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -7565,7 +7625,7 @@
           },
           {
             "column": 76,
-            "text": "┌ Sessions · 3 ────────────────────────────┐",
+            "text": "┌ Assistant · 3 ───────────────────────────┐",
             "style": 13
           }
         ],
@@ -8592,21 +8652,21 @@
           },
           {
             "column": 26,
-            "text": "sessions ",
+            "text": "assistant ",
             "style": 13
           },
           {
-            "column": 35,
+            "column": 36,
             "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 60,
+            "column": 61,
             "text": "2 terminals · Enter opens · Esc closes",
             "style": 1
           },
           {
-            "column": 98,
+            "column": 99,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -8724,26 +8784,36 @@
           },
           {
             "column": 24,
-            "text": "S",
+            "text": "P",
             "style": 2
           },
           {
             "column": 25,
+            "text": "anels ",
+            "style": 1
+          },
+          {
+            "column": 33,
+            "text": "S",
+            "style": 2
+          },
+          {
+            "column": 34,
             "text": "ession ",
             "style": 1
           },
           {
-            "column": 34,
+            "column": 43,
             "text": "H",
             "style": 2
           },
           {
-            "column": 35,
+            "column": 44,
             "text": "elp ",
             "style": 1
           },
           {
-            "column": 39,
+            "column": 48,
             "text": "   f9 menus · acpilot.night-flight ",
             "style": 3
           }
@@ -8751,7 +8821,7 @@
         [
           {
             "column": 0,
-            "text": "┌ Files · acpilot ───────┐",
+            "text": "┌ File manager · acpilot ┐",
             "style": 3
           },
           {
@@ -8852,7 +8922,7 @@
           },
           {
             "column": 27,
-            "text": "  cargo clippy --workspace --all-targets -- -D warnings                                     ",
+            "text": "  cargo clippy --workspace --all-targets -- -D w                                            ",
             "style": 1
           },
           {
@@ -8884,7 +8954,7 @@
           },
           {
             "column": 27,
-            "text": "  cargo nextest run --workspace --no-fail-fast                                              ",
+            "text": "arnings                                                                                     ",
             "style": 1
           },
           {
@@ -8913,6 +8983,11 @@
             "column": 26,
             "text": "│",
             "style": 13
+          },
+          {
+            "column": 27,
+            "text": "  cargo nextest run --workspace --no-fail-fast                                              ",
+            "style": 1
           },
           {
             "column": 119,
@@ -8945,16 +9020,6 @@
             "column": 26,
             "text": "│",
             "style": 13
-          },
-          {
-            "column": 35,
-            "text": "PASS",
-            "style": 30
-          },
-          {
-            "column": 39,
-            "text": " [   0.31s] acpilot-tui::app::yanking_a_line_puts_it_on_the_clipboard           ",
-            "style": 1
           },
           {
             "column": 119,
@@ -8995,7 +9060,7 @@
           },
           {
             "column": 39,
-            "text": " [   0.28s] acpilot-tui::ui::copy_mode_announces_itself_in_the_pane             ",
+            "text": " [   0.31s] acpilot-tui::app::yankin                                            ",
             "style": 1
           },
           {
@@ -9031,13 +9096,8 @@
             "style": 13
           },
           {
-            "column": 35,
-            "text": "PASS",
-            "style": 30
-          },
-          {
-            "column": 39,
-            "text": " [   0.44s] acpilotd::agent_terminals::typing_into_the_pane_reaches_the_agents_p",
+            "column": 27,
+            "text": "g_a_line_puts_it_on_the_clipboard                                                           ",
             "style": 1
           },
           {
@@ -9068,8 +9128,13 @@
             "style": 13
           },
           {
-            "column": 27,
-            "text": "rocess                                                                                      ",
+            "column": 35,
+            "text": "PASS",
+            "style": 30
+          },
+          {
+            "column": 39,
+            "text": " [   0.28s] acpilot-tui::ui::copy_mo                                            ",
             "style": 1
           },
           {
@@ -9100,13 +9165,8 @@
             "style": 13
           },
           {
-            "column": 32,
-            "text": "Summary",
-            "style": 28
-          },
-          {
-            "column": 39,
-            "text": " [   4.82s] 158 tests run: 158 passed, 0 skipped                                ",
+            "column": 27,
+            "text": "de_announces_itself_in_the_pane                                                             ",
             "style": 1
           },
           {
@@ -9137,6 +9197,16 @@
             "style": 13
           },
           {
+            "column": 35,
+            "text": "PASS",
+            "style": 30
+          },
+          {
+            "column": 39,
+            "text": " [   0.44s] acpilotd::agent_terminal                                            ",
+            "style": 1
+          },
+          {
             "column": 119,
             "text": "│",
             "style": 13
@@ -9165,7 +9235,7 @@
           },
           {
             "column": 27,
-            "text": "$ ",
+            "text": "s::typing_into_the_pane_reaches_the_agents_proce                                            ",
             "style": 1
           },
           {
@@ -9194,6 +9264,11 @@
             "column": 26,
             "text": "│",
             "style": 13
+          },
+          {
+            "column": 27,
+            "text": "ss                                                                                          ",
+            "style": 1
           },
           {
             "column": 119,
@@ -9228,6 +9303,43 @@
             "style": 13
           },
           {
+            "column": 32,
+            "text": "Summary",
+            "style": 28
+          },
+          {
+            "column": 39,
+            "text": " [   4.82s] 158 tests run: 158 passe                                            ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 13
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 25,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 26,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 27,
+            "text": "d, 0 skipped                                                                                ",
+            "style": 1
+          },
+          {
             "column": 119,
             "text": "│",
             "style": 13
@@ -9272,26 +9384,9 @@
             "style": 13
           },
           {
-            "column": 119,
-            "text": "│",
-            "style": 13
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 25,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 26,
-            "text": "│",
-            "style": 13
+            "column": 27,
+            "text": "$ ",
+            "style": 1
           },
           {
             "column": 119,

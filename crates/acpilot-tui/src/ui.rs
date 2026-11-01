@@ -19,8 +19,15 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{
     App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneArea,
-    PaneMode, TerminalPane, Toast, Viewports, about_lines, menu_title,
+    PaneMode, Panel, Side, TerminalPane, Toast, Viewports, about_lines, first_visible, menu_title,
 };
+
+/// How wide the outline's column is.
+///
+/// Narrower than the tree and fixed: a definition's name and its kind are short, and a
+/// column that could be dragged would be a third divider for a panel that is mostly
+/// read rather than browsed.
+const OUTLINE_WIDTH: u16 = 30;
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
 
@@ -86,74 +93,125 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
 
     viewports
 }
-
-/// The panels, or the terminal in place of the editor and the sidebar.
+/// The panels, or the terminal in place of the editor.
 ///
-/// Three panels is the product's mental model — files, text, agents — and it is
-/// the same three in every frontend. The tree needs a column of its own, so below
-/// a hundred columns it folds away rather than squeezing the editor to a slit;
-/// the centre and the sidebar are what a session is actually read in.
+/// Three panels is the product's mental model — the workspace, the text, the agent —
+/// and it is the same three in every frontend. Two of them can be on either side of
+/// the editor (the Panels menu moves them), so the body is built out of two optional
+/// columns with the editor in the middle, rather than a fixed tree-editor-sidebar
+/// split. A panel that moved keeps the width it was dragged to, and two panels on one
+/// side share the column, the workspace above the agent.
+///
+/// Below a hundred columns both columns fold away rather than squeezing the editor to
+/// a slit: the editor is what a session is read in.
 ///
 /// Returns the size a program in the pane should be told, and the transcript's own
 /// when it is the pane on screen: the cells inside each, because that is what the
 /// next attach uses and what a copy cursor walks.
 fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
     let wide = area.width >= 100;
-    // The two dividers are the two widths in `app`: the tree's column and the
-    // sidebar's, both clamped to what the panes beside them can spare. A layout that
-    // obeyed the number instead of the window would put the editor at zero columns.
-    let tree = if wide {
-        app.files_width.min(area.width.saturating_sub(40)).max(16)
-    } else {
-        app.files_width
+    // Each side's column is as wide as the widest panel on it, both widths clamped to
+    // what the editor beside them can spare. A layout that obeyed the number instead
+    // of the window would put the editor at zero columns.
+    let files_width = app.files_width.min(area.width.saturating_sub(40)).max(16);
+    let assistant_width = app
+        .sidebar_width
+        .min(if wide { 80 } else { 34 })
+        .min(area.width.saturating_sub(40))
+        .max(20);
+    // Below a hundred columns the file manager folds away and the assistant stays: a
+    // tree would squeeze the editor to a slit, and the editor is what a session is
+    // read in. The assistant is the pane a person is watching, so it is the one that
+    // keeps its column.
+    let column = |side: Side| -> u16 {
+        let mut width = 0;
+        if wide && app.panels.on(Panel::FileManager, side) {
+            width = width.max(files_width);
+        }
+        if wide && app.show_outline && app.panels.on(Panel::Outline, side) {
+            width = width.max(OUTLINE_WIDTH);
+        }
+        if app.panels.on(Panel::Assistant, side) {
+            width = width.max(assistant_width);
+        }
+        width
     };
-    let (files, rest) = if wide {
-        let [files, rest] =
-            Layout::horizontal([Constraint::Length(tree), Constraint::Min(40)]).areas(area);
-        (Some(files), rest)
+    let (left, rest) = if column(Side::Left) > 0 {
+        let [left, rest] =
+            Layout::horizontal([Constraint::Length(column(Side::Left)), Constraint::Min(40)])
+                .areas(area);
+        (Some(left), rest)
     } else {
         (None, area)
     };
-    let files_area = files.map(|files| draw_files(frame, app, files));
-    let sidebar = app
-        .sidebar_width
-        .min(if wide { 80 } else { 34 })
-        .min(rest.width.saturating_sub(20))
-        .max(20);
+    // A terminal is a keyboard, and a shell at forty columns is a shell nobody can
+    // use: it takes the editor's place and the column beside it, so the right column
+    // is not split off while one is up. The session panes are behind it until it
+    // closes, which is the trade the pane has always made.
+    let (centre, right) = if app.terminal.is_none() && column(Side::Right) > 0 {
+        let [centre, right] =
+            Layout::horizontal([Constraint::Min(20), Constraint::Length(column(Side::Right))])
+                .areas(rest);
+        (centre, Some(right))
+    } else {
+        (rest, None)
+    };
+
+    let mut files_area = None;
+    let mut sessions_area = None;
+    let mut transcript = None;
+    for (column, side) in [(left, Side::Left), (right, Side::Right)] {
+        // Nothing on the right while a terminal is up: `right` is already `None` for
+        // the default arrangement, and an assistant moved to the left is drawn beside
+        // the shell rather than hidden under it.
+        let Some(column) = column else {
+            continue;
+        };
+        for (slot, panel) in panels_on(app, column, side, wide) {
+            match panel {
+                Panel::FileManager => files_area = Some(draw_files(frame, app, slot)),
+                Panel::Outline => {
+                    draw_outline(frame, app, slot);
+                }
+                Panel::Assistant => {
+                    let (size, sessions) = draw_agents(frame, app, slot);
+                    sessions_area = Some(sessions);
+                    transcript = Some(size);
+                }
+            }
+        }
+    }
+
     let dividers = Dividers {
-        tree: files.map(|files| files.x + files.width.saturating_sub(1)),
-        // The sidebar is behind the terminal when one is attached, so there is no
+        // A column is grabbable only where the shell has always put it. A panel that
+        // moved to the far side is resized with the arrow keys instead, because a
+        // divider whose meaning depended on the day would be one nobody could learn.
+        tree: left
+            .filter(|_| app.panels.on(Panel::FileManager, Side::Left))
+            .map(|left| left.x + left.width.saturating_sub(1)),
+        // The assistant is behind the terminal when one is attached, so there is no
         // divider to grab there either.
-        sidebar: app
-            .terminal
-            .is_none()
-            .then(|| rest.x + rest.width.saturating_sub(sidebar)),
+        sidebar: right
+            .filter(|_| app.panels.on(Panel::Assistant, Side::Right) && app.terminal.is_none())
+            .map(|right| right.x),
         left: area.x,
         right: area.right(),
     };
 
     let mut editor_area = None;
     let mut terminal_area = None;
-    let mut sessions_area = None;
-    let transcript = match &app.terminal {
+    match &app.terminal {
         Some(pane) => {
-            terminal_area = Some(draw_terminal(frame, pane, rest, &app.theme));
+            terminal_area = Some(draw_terminal(frame, pane, centre, &app.theme));
             // The transcript is behind the terminal, so there is no viewport for a
             // copy cursor to walk.
-            None
+            transcript = None;
         }
-        None => {
-            let [editor, agents] =
-                Layout::horizontal([Constraint::Min(20), Constraint::Length(sidebar)]).areas(rest);
-            editor_area = draw_editor(frame, app, editor);
-            let (transcript, sessions) = draw_agents(frame, app, agents);
-            sessions_area = Some(sessions);
-            Some(transcript)
-        }
+        None => editor_area = draw_editor(frame, app, centre),
     };
 
     Viewports {
-        terminal: inner_size(rest),
+        terminal: inner_size(centre),
         transcript,
         dividers,
         // The bar is drawn before the body, and the list after it: `draw` fills
@@ -380,8 +438,8 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         // question, and the words a person typed belong on screen.
         Some(query) => format!(" Find · {query} "),
         None => match app.workspace.rsplit('/').next() {
-            Some(workspace) if !workspace.is_empty() => format!(" Files · {workspace} "),
-            _ => " Files ".to_owned(),
+            Some(workspace) if !workspace.is_empty() => format!(" File manager · {workspace} "),
+            _ => " File manager ".to_owned(),
         },
     };
     let block = Block::default()
@@ -407,10 +465,17 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         return pane_area(inner);
     }
 
-    let items: Vec<ListItem> = app
-        .visible_files()
+    // The window follows the selection, and only says what fits: a chosen row that
+    // walked off the bottom of the pane would be a pane with no cursor, and one that
+    // kept drawing past the border would draw over the footer.
+    let visible = app.visible_files();
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.file_selected, visible.len(), height);
+    let items: Vec<ListItem> = visible
         .iter()
         .enumerate()
+        .skip(first)
+        .take(height)
         .map(|(index, node)| {
             let chosen = index == app.file_selected;
             let marker = if chosen { "▸" } else { " " };
@@ -434,7 +499,9 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
             } else {
                 Style::default()
             };
-            let status = node.status.letter().unwrap_or(" ");
+            let status = node
+                .status
+                .map_or(" ", acpilot_proto::file::FileChange::letter);
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{marker}{indent}{icon}{}", node.label()), row),
                 Span::styled(
@@ -646,7 +713,94 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
     })
 }
 
-/// The agent sidebar: sessions over a transcript over a composer.
+/// The panels drawn in one column, each with the cells it may fill.
+///
+/// A column with one panel gives it everything. A column with two halves it: the
+/// workspace above the agent, because a person opens a file to show it to the agent,
+/// and the two have different jobs — a tree is scanned a row at a time, a transcript
+/// is read in paragraphs, and neither wants the other's room.
+fn panels_on(app: &App, column: Rect, side: Side, wide: bool) -> Vec<(Rect, Panel)> {
+    // A narrow window is the file manager's exception, not the assistant's: the tree
+    // folds away and the agent keeps its column.
+    let stack: Vec<Panel> = app
+        .panels
+        .stack(side)
+        .into_iter()
+        .filter(|panel| wide || *panel != Panel::FileManager)
+        .filter(|panel| app.show_outline || *panel != Panel::Outline)
+        .collect();
+    if stack.is_empty() {
+        return Vec::new();
+    }
+    // Equal shares however many panels are on the side: a column is a place, and a
+    // pane that is on screen gets a third of it rather than nothing.
+    let count = u32::try_from(stack.len()).unwrap_or(1);
+    let slots: Vec<Rect> = Layout::vertical(std::iter::repeat_n(
+        Constraint::Ratio(1, count),
+        stack.len(),
+    ))
+    .split(column)
+    .to_vec();
+    slots.into_iter().zip(stack).collect()
+}
+
+/// The outline panel: one row per definition in the open buffer.
+///
+/// The kind is beside the name rather than instead of it: `fn` and `struct` are what a
+/// person is scanning for, and a list of bare names is a list nobody can skip down.
+fn draw_outline(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Outline · {} ", app.outline.len()))
+        .border_style(border_style(app.focus == Focus::Outline, &app.theme));
+    let inner = block.inner(area);
+    if app.outline.is_empty() {
+        let message = if app.editor.is_some() {
+            "no symbols in this file\nthe grammar it parses with defines none"
+        } else {
+            "no file is open\nEnter in the file manager reads one"
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(app.theme.text_muted()))
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.outline_selected, app.outline.len(), height);
+    let items: Vec<ListItem> = app
+        .outline
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, symbol)| {
+            let chosen = index == app.outline_selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let indent = "  ".repeat(usize::from(symbol.depth));
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{indent}{}", symbol.name), row),
+                Span::styled(
+                    format!("  {}", symbol.kind),
+                    Style::default().fg(app.theme.text_muted()),
+                ),
+            ]))
+        })
+        .collect();
+    frame.render_widget(List::new(items).block(block), area);
+    pane_area(inner)
+}
+
+/// The agent panel: sessions over a transcript over a composer.
 ///
 /// Returns the transcript's cells, because that is the viewport a copy cursor
 /// walks and nothing outside this function measures it.
@@ -826,7 +980,7 @@ fn colour(colour: vt100::Color) -> Option<Color> {
 }
 
 fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
-    let title = format!(" Sessions · {} ", app.sessions.len());
+    let title = format!(" Assistant · {} ", app.sessions.len());
     let items: Vec<ListItem> = app
         .sessions
         .iter()
@@ -1638,6 +1792,11 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-p", "commands"),
             ("f4", "where the stats came from"),
         ],
+        Focus::Outline => &[
+            ("j / k", "choose a definition"),
+            ("enter", "go to its line"),
+            ("esc", "back to the buffer"),
+        ],
         Focus::Terminal => &[
             ("ctrl-t", "leave the pane"),
             ("f2", "copy mode"),
@@ -1648,14 +1807,18 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
 }
 
 /// A git status as the tree's gutter colour.
-fn git_colour(status: acpilot_demo::GitStatus, theme: &Theme) -> Color {
+///
+/// A clean row's letter is a blank, and the blank is muted like the rest of the
+/// furniture rather than unset: a column that changes colour per row is a column
+/// that reads as five different things instead of one.
+fn git_colour(status: Option<acpilot_proto::file::FileChange>, theme: &Theme) -> Color {
     match status {
-        acpilot_demo::GitStatus::Clean => theme.text_muted(),
-        acpilot_demo::GitStatus::Modified => theme.warning(),
-        acpilot_demo::GitStatus::Added => theme.success(),
-        acpilot_demo::GitStatus::Untracked => theme.accent(),
-        acpilot_demo::GitStatus::Deleted => theme.danger(),
-        acpilot_demo::GitStatus::Conflicted => theme.accent_high(),
+        None => theme.text_muted(),
+        Some(acpilot_proto::file::FileChange::Modified) => theme.warning(),
+        Some(acpilot_proto::file::FileChange::Added) => theme.success(),
+        Some(acpilot_proto::file::FileChange::Untracked) => theme.accent(),
+        Some(acpilot_proto::file::FileChange::Deleted) => theme.danger(),
+        Some(acpilot_proto::file::FileChange::Conflicted) => theme.accent_high(),
     }
 }
 
@@ -2056,7 +2219,7 @@ mod tests {
     #[test]
     fn the_shell_shows_the_panes_it_promises() {
         let text = render(&mut app_with_session());
-        assert!(text.contains("Sessions · 1"), "{text}");
+        assert!(text.contains("Assistant · 1"), "{text}");
         assert!(text.contains("wire the tui"), "{text}");
         assert!(text.contains("the daemon has the turn"), "{text}");
         assert!(text.contains("Prompt"), "{text}");
@@ -2720,9 +2883,9 @@ mod tests {
         let text = render(&mut app);
 
         // Files, text, agents — the same three in every frontend.
-        assert!(text.contains("Files · acpilot"), "{text}");
+        assert!(text.contains("File manager · acpilot"), "{text}");
         assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
-        assert!(text.contains("Sessions · 3"), "{text}");
+        assert!(text.contains("Assistant · 3"), "{text}");
         assert!(text.contains("wire the terminal pane"), "{text}");
         assert!(
             text.contains("seeded"),
@@ -2849,7 +3012,7 @@ mod tests {
         let mut app = App::demo(&acpilot_demo::demo());
         let text = render_at(&mut app, 80, 24);
         assert!(!text.contains("Files ·"), "the tree folds away: {text}");
-        assert!(text.contains("Sessions · 3"), "{text}");
+        assert!(text.contains("Assistant · 3"), "{text}");
         assert!(text.contains("Prompt · Enter sends"), "{text}");
     }
 

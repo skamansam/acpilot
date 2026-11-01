@@ -97,6 +97,162 @@ async fn a_gitignore_keeps_its_paths_out_of_the_tree() {
     );
 }
 
+/// Run `git` in `directory`, with an identity in the environment so a machine with
+/// no global one still commits.
+fn git(directory: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .expect("git is installed");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The `(path, status)` pairs a listing returned, for asserting on the letters.
+fn letters(body: &serde_json::Value) -> Vec<(String, Option<String>)> {
+    body.as_array()
+        .expect("a list")
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"].as_str().expect("a path").to_owned(),
+                entry["status"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_row_says_what_git_says_changed() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("README.md"), "# app\n").expect("readme");
+    git(directory.path(), &["init", "-q"]);
+    git(directory.path(), &["add", "-A"]);
+    git(directory.path(), &["commit", "-q", "-m", "start"]);
+
+    // One of each state a listing can show: an edit to a tracked file, a staged new
+    // one, a file git has never seen, and a tracked file that is gone.
+    fs::write(directory.path().join("src/main.rs"), "fn main() { }\n").expect("edit");
+    fs::write(directory.path().join("src/new.rs"), "pub fn new() {}\n").expect("new");
+    git(directory.path(), &["add", "src/new.rs"]);
+    fs::write(directory.path().join("notes.txt"), "scratch\n").expect("notes");
+    fs::remove_file(directory.path().join("README.md")).expect("delete");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        letters(&body),
+        vec![
+            ("notes.txt".to_owned(), Some("untracked".to_owned())),
+            // One row for the directory, saying the most urgent thing inside it.
+            ("src".to_owned(), Some("added".to_owned())),
+        ],
+        "a deleted file has no row, because a listing is the filesystem: {body}"
+    );
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list?path=src",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        letters(&body),
+        vec![
+            ("src/main.rs".to_owned(), Some("modified".to_owned())),
+            ("src/new.rs".to_owned(), Some("added".to_owned())),
+        ],
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_read_says_which_lines_changed() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    println!(\"one\");\n}\n",
+    )
+    .expect("main");
+    git(directory.path(), &["init", "-q"]);
+    git(directory.path(), &["add", "-A"]);
+    git(directory.path(), &["commit", "-q", "-m", "start"]);
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    println!(\"two\");\n}\n",
+    )
+    .expect("edit");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files?path=src/main.rs",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["marks"],
+        serde_json::json!([{"line": 2, "change": "modified"}]),
+        "the gutter is the daemon's git, in the text's own line numbers: {body}"
+    );
+
+    // A file nobody changed has nothing to mark, and the field is absent rather than
+    // an empty list per read.
+    git(directory.path(), &["checkout", "--", "src/main.rs"]);
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files?path=src/main.rs",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("marks").is_none(), "an unchanged file: {body}");
+}
+
+#[tokio::test]
+async fn a_workspace_that_is_not_a_repository_has_no_letters() {
+    let directory = workspace();
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    assert!(
+        !rows.is_empty(),
+        "the tree still lists what is there: {body}"
+    );
+    assert!(
+        rows.iter().all(|entry| entry.get("status").is_none()),
+        "no repository is no letters, not a listing that fails: {body}"
+    );
+}
+
 #[tokio::test]
 async fn asking_for_hidden_rows_marks_them_instead_of_dropping_them() {
     let directory = tempfile::tempdir().expect("a workspace");

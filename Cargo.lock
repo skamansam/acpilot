@@ -296,6 +296,7 @@ dependencies = [
  "acpilot-client",
  "acpilot-core",
  "acpilot-extensions",
+ "acpilot-git",
  "acpilot-host",
  "acpilot-profile",
  "acpilot-proto",

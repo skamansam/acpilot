@@ -150,6 +150,12 @@ pub struct EditorPane {
     anchor: Option<usize>,
     /// Which mode the keys are in.
     mode: Mode,
+    /// The token the file was read with, so a save can say which version it replaces.
+    ///
+    /// Absent for a buffer that did not come from the daemon — the design pass's seed,
+    /// and a term where the file has been deleted underneath the pane — and a save of
+    /// one is refused rather than guessed at.
+    etag: Option<String>,
 }
 
 /// A pane's debug shape: the file, the caret and the window.
@@ -211,6 +217,7 @@ impl EditorPane {
             bracket: None,
             anchor: None,
             mode: Mode::Normal,
+            etag: None,
         };
         pane.document.set_caret(0);
         pane.settle();
@@ -221,6 +228,33 @@ impl EditorPane {
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// The token this buffer was read with, for the save that replaces it.
+    #[must_use]
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+
+    /// Remember the version the buffer now matches.
+    ///
+    /// Called when a file is opened and again after a save answers with the new
+    /// token: the next save has to name the version it is replacing, and the one the
+    /// read returned is no longer it.
+    pub fn set_etag(&mut self, etag: impl Into<String>) {
+        self.etag = Some(etag.into());
+    }
+
+    /// Forget the undo history: the buffer and the file agree again.
+    pub fn mark_saved(&mut self) {
+        self.document.mark_saved();
+        self.message = "saved".to_owned();
+    }
+
+    /// Replace the gutter's marks, for a diff that changed under the pane.
+    pub fn set_marks(&mut self, marks: LineChanges) {
+        self.marks = marks;
+        self.rebuild();
     }
 
     /// The tab's label: the file's own name.

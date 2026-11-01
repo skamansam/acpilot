@@ -49,6 +49,53 @@ solves a palette around them, so the terminal UI can match the shell it was open
 in rather than the other way round; a terminal that will not answer keeps the named
 theme.
 
+## Panels
+
+The editor is the middle of the window and the columns either side hold panels.
+`Alt-P` opens the Panels menu, which says which panel is on which side: a row is a
+place (`File manager on the right`), two panels on one side share the column, and
+the arrangement is remembered with the divider widths. Three panels exist today.
+
+| Panel | What it answers | State |
+| --- | --- | --- |
+| **File manager** | where the files are, what git says changed about them, and a find over paths and contents | built |
+| **Outline** | what the open buffer defines, from the grammar it is highlighted with; `Enter` on a row puts the caret on the definition's line | built |
+| **Assistant** | the sessions, the open transcript and the composer — the agent's half of the window | built |
+| **Project map** | what the workspace is *for*: which package owns which idea and how they depend on each other | <span class="pill pill--hangar">hangar</span> |
+| **Wiki** | one linked page per subsystem, written from the code so the repository explains itself | <span class="pill pill--hangar">hangar</span> |
+| **References** | every real use of the identifier under the caret, without the language's own noise | <span class="pill pill--hangar">hangar</span> |
+
+The three in the hangar are panels rather than screens because that is the unit a
+person arranges: each answers a question about *this* workspace while a file is
+open, each is read in a column, and each can be put on either side or put away.
+
+**Project map** is a document the agent writes into the workspace — under
+`.acpilot/`, beside the settings — saying what each directory is for, which crate
+or package owns which idea, and which parts depend on which. The panel draws it as
+a tree with the current file's neighbourhood picked out, so the map is read the way
+the code is browsed. Regenerating it is a prompt with the tree and the README as
+its input rather than a model of its own, and because the result is a file in the
+repository it is versioned and reviewable: a wrong statement about the
+architecture is a diff somebody can argue with instead of a hedge in a chat log.
+
+**Wiki** is the same idea at a larger size: one page per subsystem, written from
+the code and the map, kept in the workspace and read in a pane. What makes it a
+wiki rather than generated documentation is that pages are linked, and a link to a
+page nobody has written yet is the prompt to write it. The pane needs a page list,
+a reader and a jump — not an editor, because the agent is the author and the
+repository is the store.
+
+**References** is the question a person asks about a name: where else is this used?
+It excludes the language's own furniture — keywords, stdlib names, the text inside
+comments and strings — so the list is uses of *that* function or variable. Where a
+language server is running it is `textDocument/references` (P7-4); before that it is
+a word-bounded search over the workspace's own files, filtered by the parse tree,
+which is the same trick that keeps the outline from listing an `fn` inside a string.
+A row is a place: `Enter` jumps, the way the content search's rows do.
+
+All three are planned in `TODO.md`, which is where their state is kept honest; this
+page describes what they are for so the shape is agreed before they are built.
+
 ## What it is built on
 
 | Need | Choice |
@@ -106,7 +153,18 @@ while a shell still gets `Alt` and a letter as the two bytes it has always meant
 does the same thing, so the tree, the editor and the sidebar are the widths the
 person reading them wants rather than the widths a constant guessed — and those
 widths are remembered for the next launch, in the data directory rather than in a
-settings file somebody may hand-edit. The editor
+settings file somebody may hand-edit.
+
+The **Panels** menu (`Alt-P`) arranges the window. Each row names a panel and a
+side — `File manager on the left`, `Assistant on the right`, `Outline on the right`
+— and runs by putting that pane there, so the row says where the pane will be
+rather than which way it will move; a row moves one panel and leaves the others
+where they were. Two or three panels on one side share the column, the editor keeps
+the middle, and a panel that moved keeps the width it was dragged to, with its
+divider grabbable on the side it started on and the arrow keys resizing it from
+anywhere. `Show outline` puts the open buffer's definitions up or away, and below a
+hundred columns the file manager folds away so the editor keeps enough room to read.
+`Tab` walks the panes that are on screen, the outline included. The editor
 answers the pointer where a pointer is quicker than a key: a click on the text puts
 the caret on the cell it landed on and gives the pane the keyboard, and the wheel
 scrolls the buffer under it three lines at a time without moving the caret — a pane
@@ -127,8 +185,18 @@ keeps scrolling the view and keeps growing the selection, which is how a run lon
 than one screen gets marked at all. Mouse reporting costs the terminal its own
 drag-to-select, so `acpilot tui --no-mouse` turns it off and the terminal keeps that
 gesture; every action the pointer has is also a key. The gutter beside the numbers is
-git's: its markers are parsed from the same patch the permission card shows, so the
-`~` next to a line and the hunk in the review are one edit, not two lists.
+git's, asked on the host the files are on: `GET /v1/files` answers the text with the
+lines that differ from `HEAD`, so the `~` next to a line is the working tree against
+the last commit rather than something the client guessed at, and a file git does not
+track is left unmarked because the whole of it is new.
+
+`Ctrl-S` is the write. The buffer goes back through the daemon's `PUT /v1/files`
+with the `etag` the read returned, so a file that changed underneath the pane is a
+`409` on the status line rather than a silent overwrite, and the answer's token
+becomes the next save's baseline — which is what clears the `+` on the tab. A buffer
+nobody has touched says there is nothing to save, and the seeded one in `--demo`
+says it has no file behind it, because a save is a write to a workspace and the
+design pass has none.
 
 `acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
 sidebar, command palette, which-key hints and the stats bar — with no daemon and

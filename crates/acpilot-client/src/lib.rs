@@ -292,6 +292,20 @@ impl Client {
             .await
     }
 
+    /// `PUT /v1/files`.
+    ///
+    /// The write half of the read, and the reason the read returns a token: a save
+    /// that found the file changed underneath it is a `409`, never a silent overwrite.
+    /// The daemon serialises writes per file, so this is the only way a buffer becomes
+    /// a file.
+    pub async fn write_file(
+        &self,
+        request: &acpilot_proto::file::FileWriteRequest,
+    ) -> Result<acpilot_proto::file::FileContent, ClientError> {
+        let builder = self.http.put(self.request_url("/v1/files")).json(request);
+        self.send(builder, "/v1/files").await
+    }
+
     /// `GET /v1/files?path=`.
     ///
     /// The text plus the ETag a save sends back as `if_match`: the read half of the

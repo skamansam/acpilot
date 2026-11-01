@@ -27,6 +27,49 @@ pub struct FileEntry {
     /// one rather than pretending it was never ignored.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ignored: bool,
+    /// How this path differs from the last commit, when it does.
+    ///
+    /// Absent for a clean path, for a workspace that is not a repository, and for a
+    /// host with no `git` on it. A tree whose letters are unknowable draws no
+    /// letters rather than claiming everything is committed, and the field travels
+    /// with the row so a listing is one answer rather than a listing plus a second
+    /// question about the same directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<FileChange>,
+}
+
+/// What happened to a path since the last commit.
+///
+/// One letter per path, not git's two columns: a tree row is a name, and which half
+/// of a change is staged is a question for the source-control pane, which reads the
+/// index and the working tree separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChange {
+    /// Tracked, with edits.
+    Modified,
+    /// In the index and not in the last commit.
+    Added,
+    /// Not tracked and not ignored.
+    Untracked,
+    /// Gone from the working tree.
+    Deleted,
+    /// A merge conflict, which git will not commit through.
+    Conflicted,
+}
+
+impl FileChange {
+    /// The letter a row shows, which is git's own letter for the same state.
+    #[must_use]
+    pub fn letter(self) -> &'static str {
+        match self {
+            Self::Modified => "M",
+            Self::Added => "A",
+            Self::Untracked => "?",
+            Self::Deleted => "D",
+            Self::Conflicted => "!",
+        }
+    }
 }
 
 /// Serde's `skip_serializing_if` for an absent flag: a listing of ordinary files
@@ -50,6 +93,27 @@ pub struct GrepMatch {
     pub text: String,
 }
 
+/// What happened to one line since the last commit, for a gutter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LineChange {
+    /// A line the committed file did not have.
+    Added,
+    /// A line that replaced something.
+    Modified,
+    /// The line above a gap: lines were removed here.
+    Deleted,
+}
+
+/// One marked line, as a gutter counts them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LineMark {
+    /// 1-based line number in the file as it is now.
+    pub line: u32,
+    /// What changed on it.
+    pub change: LineChange,
+}
+
 /// File contents plus the token needed to write them back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileContent {
@@ -59,6 +123,15 @@ pub struct FileContent {
     pub text: String,
     /// Opaque validator; send it back as `if_match` to write.
     pub etag: String,
+    /// The lines that differ from the last commit, for a gutter.
+    ///
+    /// With the text rather than behind its own route: a pane opens a file once, and
+    /// a gutter that asked a second question about the same file would be a second
+    /// round trip whose answer could disagree with the text it is drawn beside. Empty
+    /// for a file git does not track, for a workspace that is not a repository, and on
+    /// a host with no `git`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<LineMark>,
 }
 
 /// Request body for `PUT /v1/files`.

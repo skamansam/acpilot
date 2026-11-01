@@ -227,6 +227,16 @@ impl Document {
         self.history.can_undo()
     }
 
+    /// Forget the undo history, because the text now matches a file.
+    ///
+    /// What a save means is that the buffer and the file agree, so the steps that got
+    /// here are no longer differences to report — and [`Self::can_undo`] is exactly
+    /// how a pane knows there is something to save. The text does not move, and the
+    /// edit that is still on screen is still the person's; only the baseline is new.
+    pub fn mark_saved(&mut self) {
+        self.history.clear();
+    }
+
     /// Whether there is a step to put back.
     #[must_use]
     pub fn can_redo(&self) -> bool {

@@ -960,7 +960,7 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   - **`/` ranks initials, and `Ctrl-Shift-F` greps contents into a jump list (the same day).** `GET /v1/files/search` no longer asks `contains`: `fuzzy_score` matches the query's characters in order and scores a character at a segment start (`/`, `_`, `-`, `.`) above one inside a word, and a run of consecutive characters above both, minus a length penalty — so `aptui` finds `crates/acpilot-tui/src/app.rs`, which no substring matches, and `src/app.rs` beats `examples/old/src/app.rs` for `app.rs`. The walk is ranked as a whole and truncated afterwards, because an initials match can be met late and a cap applied first would make the answer depend on directory order; the collection is bounded at 6 000 candidates so one keystroke cannot remember a monorepo. `GET /v1/files/grep` is the other half of a find: the matching lines of every text file the tree would show, with their 1-based numbers and their own text, at most 200, sorted by path and line, skipping binaries (the NUL test a read uses) and files over the read cap rather than reading around a route's limit. Both routes are one `walk`, so the ignore rules cannot become two answers to one preference.
   - **The jump list is a card, and every row leads somewhere.** `Ctrl-Shift-F` — the palette's **Search file contents**, which is no longer a `planned` row — opens a query line and a row per match (`path:line` beside its text). Typing asks again, the arrows choose, `Enter` asks for the file and remembers the line, and an answer to a query that has been typed past is discarded by comparing the query. `EditorPane::goto_line` takes the jump once the text exists, clamping a line past the end to the last one: the file may have changed since the search read it, and the end of it is a better place to be than nowhere. `Ctrl-F` stays the editor's own find, which is why the chord needs the shift.
   - **Tests:** four in `app` (a listing becoming a tree with directories first, opening a directory splicing its children in and closing dropping them, `Enter` on a file asking the daemon and the answer opening a buffer with its path, language and focus, plus the empty-tree and status-line cases inside those), three in `editor` (a file opening at its start with the grammar its path names and an unknown extension still opening, the extension map, and the mode and undo tests from P6-5 still passing against the new constructor), and two in the client (the query encoding, including a multi-byte path, and the two route strings). The toggle and the search added three more in `app` (a re-list that asks for the root and every open directory, a `/` query answered with `Esc` putting the tree back, and the status line summing the sessions' tokens) and three in the daemon's file tests (a nested `.gitignore` applying to the directory it sits in, the marked hidden rows, and a walk that follows the same rules), plus the wire contract's round trips of a row that is hidden and of a matched line. The content search added one in `app` (typing, the answer, a jump that names the file and the line, and the file arriving with the caret on it) and one drawing test (a row per match, with its path and number); the ranking added one in the daemon's file tests (initials first, the shorter path for the same letters, and a letter that is not there being no match) and the grep added two (lines with their numbers, case ignored and a binary skipped; and no workspace being a conflict).
-  - **Open:** the git decorations on the rows are all that is left of P6-6, and they are not this task's to invent: `GET /v1/files/list` says what is there and nothing in it knows what changed, so the letters want the version-control phase's status (`P6.5-2`) rather than a second `git` invocation from the TUI. Both searches walk the workspace per query and keep no index, which is fine for a repository and would not be for a monorepo; neither has been measured. A content search reads every file it walks, so its cost is the workspace's size rather than the query's length, and the candidate cap is what stops a keystroke paying for all of it.
+  - **The letters on the rows are git's, asked in the daemon (2026-11-01).** `GET /v1/files/list` marks every entry with `status` — `modified`, `added`, `untracked`, `deleted`, `conflicted`, from `acpilot-git`'s `status()` — one `git status` per listing on the host where the files are, and a directory with the most urgent change beneath it so a closed row is not a row that hides what is inside. The wire carries the state and the tree derives the letter, so `M` exists in one place. A workspace that is not a repository, or a host without `git`, answers with no letters at all rather than a listing that fails or a tree that claims everything is committed; a path git reports that is no longer on disk has no row, because a listing is the filesystem, and the deleted case belongs to the source-control pane. P6-6 closes here. Both searches walk the workspace per query and keep no index, which is fine for a repository and would not be for a monorepo; neither has been measured. A content search reads every file it walks, so its cost is the workspace's size rather than the query's length, and the candidate cap is what stops a keystroke paying for all of it.
 - [ ] **P6-7** Agent panel: session picker, live transcript (markdown → styled lines, collapsible tool calls), streaming cursor, token/cost line, cancel keybinding, prompt composer with multiline editing and `@file` completion.
 - [ ] **P6-8** Permission modal: title, tool, diff preview for writes, `once|session|always|deny` choices, keyboard-only, audited. Must render even while the transcript is streaming.
 - [x] **P6-9** Diff review: split/inline diff of agent edits (`imara-diff`), accept/reject hunks → `fs/write_text_file` decision or revert. — **done 2026-11-01**
@@ -1020,6 +1020,12 @@ what needs an editor shell waits for the editor shell.
 - [ ] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
   proto types mirroring `acpilot-git`; `404 not_found` for "not a repository" and a clear
   `host_unavailable` when `git` is missing on the host.
+  - **The tree's letters needed none of those routes (2026-11-01).** `GET /v1/files/list`
+    marks each row with a `FileChange`, so the decoration P6-6 was waiting on is done: one
+    `git status` per listing, a directory summarised by the most urgent change beneath it,
+    and silence rather than an error when there is no repository or no `git`. What is left
+    here is the routes themselves and the source-control pane that reads both halves of a
+    change.
 - [ ] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
   prompt (Conventional Commits with the gitmoji inside the description), the gitmoji table, and
   strict validation of the model's answer. Still open: per-profile prompt storage, a route that
@@ -1892,3 +1898,51 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] A theme and a language-server preset arrive through an extension, activated per profile, with the built-ins themselves shipped as extensions.
 - [ ] A remote driver pairs over the ACP bridge, prompts that agent, and **cannot** answer the permission prompt it raises — the human does.
 - [ ] Docs cover install, agents, profiles, hosts, policy, LSP, local models, remote drivers, API; OpenAPI published.
+
+### Panels: the shell the file manager and the assistant live in
+
+- [x] **Arrangement** — the Panels menu (Alt-P) puts the file manager and the
+  assistant on either side of the editor: one row per panel per side, because a row
+  is a place and a person reading a menu can see where the pane will land. Both on
+  one side is allowed and stacks them, the workspace above the agent. The editor is
+  not movable: the middle is the window's argument about what it is for. A moved
+  panel keeps the width it was dragged to, and only the default-side divider is
+  grabbable — the arrow keys resize the rest.
+- [x] **Names** — `Files` is the **File manager** and the right column is the
+  **Assistant**, in the bar, the View menu, the pane titles and the status line.
+- [x] **Outline panel** — `acpilot_text::outline` parses the buffer with the grammar
+  the pane highlights with and collects the definitions, each with its grammar's name
+  field: `function_item`, `struct_item`, `enum_item`, `trait_item`, `union_item`,
+  `impl_item` (named by its `type`), `mod_item`, `const_item`, `static_item`,
+  `type_item` and `macro_definition` for Rust, `function_definition` and
+  `class_definition` for Python. Depth is counted in definitions rather than blocks, so
+  a `let` is not a level, and a language this build ships no grammar for is an empty
+  panel that says so. It is a panel like the other two — the Panels menu moves it, and
+  **Show outline** puts it up — and a row is a place: `Enter` puts the caret on the
+  definition's line and gives the keys back to the buffer. The list is as of the last
+  read rather than re-parsed per keystroke, which is the trade named in the source.
+- [x] **A real gutter and a real save (2026-11-01)** — `GET /v1/files` answers with
+  `marks`, so the editor's gutter is the daemon's git rather than an empty patch, and
+  `Ctrl-S` writes the buffer back through `PUT /v1/files` with the `etag` the read
+  returned: a stale token is the daemon's `409`, and the answer's token becomes the new
+  baseline (`Document::mark_saved`), which is what clears the title's `+`. A buffer that
+  did not come from a file — the design pass's seed — says so rather than writing a
+  version it does not have.
+- [ ] **Project map** — the agent writes a map of the workspace: what each directory
+  is for, which crate or package owns which idea, and how they depend on each other,
+  as a file under `.acpilot/` that a person can read and correct. The panel draws it
+  as a tree with the current file's neighbourhood highlighted. Regeneration is a
+  prompt with the tree and the README as its input, not a model of its own; the map
+  is a document in the repository, versioned with everything else, so a wrong
+  statement is a diff somebody can argue with.
+- [ ] **Wiki panel** — the agent builds a wiki about the codebase: one page per
+  subsystem, written from the code and the map, kept in the workspace and served
+  read-only in a pane. What makes it a wiki is that pages are linked and that a link
+  to something nobody has written yet is a prompt to write it, so the panel needs a
+  page list, a reader and a jump — not an editor, because the agent writes it.
+- [ ] **References panel** — every real use of the identifier under the caret:
+  functions, types, constants and variables, excluding the language's own keywords and
+  stdlib names. That is a language server's `textDocument/references` where one is
+  running (P7-4), and the grep-shaped fallback before it: word-bounded matches in the
+  workspace's own files, filtered by the parse tree so a comment or a string is not a
+  reference. Rows jump to the line, like the content search's do.

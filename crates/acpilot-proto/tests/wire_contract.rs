@@ -248,6 +248,16 @@ fn file_documents() {
         "ignored": true
     }));
 
+    // A row git says has changed. The wire carries the state, never the letter a
+    // tree draws for it: one spelling is derived from the other, and a snapshot of
+    // `"M"` would be a client's business in the contract.
+    round_trip::<acpilot_proto::file::FileEntry>(json!({
+        "path": "src/lib.rs",
+        "is_dir": false,
+        "size": 42,
+        "status": "modified"
+    }));
+
     // A line a content search matched: the number is 1-based because it is a line
     // an editor would go to, and the text travels so the list can be read.
     round_trip::<acpilot_proto::file::GrepMatch>(json!({
@@ -266,6 +276,20 @@ fn file_documents() {
         "path": "src/lib.rs",
         "text": "fn main() {}\n",
         "etag": "\"mtime-1-size-12\""
+    }));
+
+    // A read that a gutter can draw from: the marks travel with the text, because a
+    // second question about the same file could answer about a different version of
+    // it.
+    round_trip::<acpilot_proto::file::FileContent>(json!({
+        "path": "src/lib.rs",
+        "text": "fn main() {}\n",
+        "etag": "\"mtime-1-size-12\"",
+        "marks": [
+            {"line": 1, "change": "modified"},
+            {"line": 4, "change": "added"},
+            {"line": 9, "change": "deleted"}
+        ]
     }));
 
     round_trip::<acpilot_proto::file::FileWriteRequest>(json!({

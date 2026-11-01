@@ -36,7 +36,7 @@ pub mod tree;
 pub use editor::{Diff, DiffKind, DiffLine, EditorBuffer, Hunk};
 pub use palette::{Command, CommandAction, Run};
 
-pub use tree::{FileNode, GitStatus};
+pub use tree::FileNode;
 
 /// One session and the transcript it replays.
 ///

@@ -44,6 +44,7 @@ pub mod document;
 pub mod edit;
 pub mod highlight;
 pub mod history;
+pub mod outline;
 pub mod pane;
 pub mod selection;
 

@@ -774,6 +774,10 @@ expression: canonical(document)
       "FileEntry": {
         "description": "One directory entry.",
         "properties": {
+          "ignored": {
+            "description": "Whether an ignore rule hides this entry.\n\nNever true unless the caller asked for hidden rows (`include_ignored` on the\nlist route): a tree's \"show hidden\" toggle is the only thing that asks, and\nthe flag travels with the row because a pane draws a hidden file as a hidden\none rather than pretending it was never ignored.",
+            "type": "boolean"
+          },
           "is_dir": {
             "description": "Whether this is a directory.",
             "type": "boolean"
@@ -1369,6 +1373,10 @@ expression: canonical(document)
               "string",
               "null"
             ]
+          },
+          "tree_respect_gitignore": {
+            "description": "Leave paths a `.gitignore` excludes out of the file tree.\n\nOn, the tree is the project as git sees it: `target/`, `.venv/` and every\nother ignored directory are not rows, which is the difference between a\ntree a person can read and a listing of a directory. The daemon answers the\nlisting, so the matching happens where the ignore files are — a client that\nfiltered a listing it did not read would be guessing at patterns it has not\nseen.\n\nOff, every entry is a row. A workspace that is not a repository has no\n`.gitignore` to honour, so the key changes nothing there.",
+            "type": "boolean"
           },
           "trim_trailing_whitespace": {
             "description": "Strip trailing whitespace on save.",

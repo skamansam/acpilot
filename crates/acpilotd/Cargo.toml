@@ -45,6 +45,10 @@ clap = { workspace = true }
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }
 jiff = { workspace = true }
+# `.gitignore` matching for the file tree. The daemon answers the listing, so the
+# patterns are read where the ignore files are rather than guessed at by a client
+# that never saw them — which is also what keeps a remote workspace's tree honest.
+ignore = { workspace = true }
 serde = { workspace = true }
 # The `etag` is a hash of the bytes as well as a timestamp, so an edit that kept
 # the mtime and the size is still visible as a change.

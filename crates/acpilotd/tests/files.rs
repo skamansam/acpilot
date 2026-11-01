@@ -64,6 +64,158 @@ fn workspace() -> tempfile::TempDir {
 }
 
 #[tokio::test]
+async fn a_gitignore_keeps_its_paths_out_of_the_tree() {
+    // A workspace with the three things a tree has to get right: an ignored
+    // directory, an ignored file, and `.git` itself.
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("target")).expect("target");
+    fs::write(directory.path().join("target/app.bin"), "built").expect("target file");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".gitignore"), "target/\n*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: Vec<&str> = body
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        vec![".gitignore", "src"],
+        "an ignored directory, an ignored file and .git are not rows: {body}"
+    );
+}
+
+#[tokio::test]
+async fn asking_for_hidden_rows_marks_them_instead_of_dropping_them() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("target")).expect("target");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".gitignore"), "target/\n*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list?include_ignored=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    let paths: Vec<&str> = rows
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![".gitignore", "notes.log", "src", "target"],
+        "the ignored rows are back: {body}"
+    );
+    assert_eq!(rows[1]["ignored"], true, "a hidden file says so: {body}");
+    assert_eq!(rows[3]["ignored"], true, "and so does a hidden directory");
+    assert!(
+        rows[2]["ignored"].is_null(),
+        "an ordinary row carries no flag at all: {body}"
+    );
+    assert!(
+        !paths.contains(&".git"),
+        "the repository's own bookkeeping is still not a row: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir_all(directory.path().join("src/deep")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("src/deep/main_helper.rs"), "").expect("helper");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::write(directory.path().join(".env"), "TOKEN=1\n").expect("env");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".git/HEAD"), "ref: refs/heads/main\n").expect("head");
+    fs::write(directory.path().join(".gitignore"), "*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=main",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let paths: Vec<&str> = body
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["src/deep/main_helper.rs", "src/main.rs"],
+        "a search walks the whole workspace, sorted: {body}"
+    );
+
+    // An ignored path is not findable, and a hidden file that is *not* ignored is:
+    // the rule is the preference, not the leading dot.
+    let (_, ignored) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=log",
+        None,
+    )
+    .await;
+    assert_eq!(ignored.as_array().map(Vec::len), Some(0), "{ignored}");
+    let (_, hidden) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=.env",
+        None,
+    )
+    .await;
+    assert_eq!(hidden[0]["path"], ".env", "{hidden}");
+
+    // A repository's own directory is not walked: no `HEAD`, no `objects`.
+    let (_, git) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=HEAD",
+        None,
+    )
+    .await;
+    assert_eq!(git.as_array().map(Vec::len), Some(0), "{git}");
+
+    // Nothing typed matches nothing rather than walking the repository.
+    let (status, empty) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_search_with_no_workspace_is_a_conflict() {
+    let (status, body) = send(app(AppState::new()), "GET", "/v1/files/search?q=main", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
 async fn a_read_returns_the_text_and_a_token() {
     let directory = workspace();
     let (status, body) = send(
@@ -391,4 +543,5 @@ async fn the_contract_lists_the_file_routes() {
     assert!(body["paths"]["/v1/files"]["get"].is_object());
     assert!(body["paths"]["/v1/files"]["put"].is_object());
     assert!(body["paths"]["/v1/files/list"]["get"].is_object());
+    assert!(body["paths"]["/v1/files/search"]["get"].is_object());
 }

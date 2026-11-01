@@ -19,6 +19,20 @@ pub struct FileEntry {
     /// RFC 3339 modification time, when the host reports one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<String>,
+    /// Whether an ignore rule hides this entry.
+    ///
+    /// Never true unless the caller asked for hidden rows (`include_ignored` on the
+    /// list route): a tree's "show hidden" toggle is the only thing that asks, and
+    /// the flag travels with the row because a pane draws a hidden file as a hidden
+    /// one rather than pretending it was never ignored.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ignored: bool,
+}
+
+/// Serde's `skip_serializing_if` for an absent flag: a listing of ordinary files
+/// costs no bytes saying that none of them is hidden.
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 /// File contents plus the token needed to write them back.

@@ -35,8 +35,9 @@
 //! question: which rows are on screen at all, what survived the horizontal
 //! scroll, where the caret lands in cells, and what `/` found — the arithmetic
 //! the terminal, the window and the browser would otherwise each get wrong
-//! differently. What is not here yet is diffing (the editor phase's task P6-9),
-//! which is why `imara-diff` is not a dependency.
+//! differently. What is not here yet is diffing a buffer against an edited copy
+//! of it, which is why `imara-diff` is not a dependency. The diff review (P6-9)
+//! draws the diff the daemon and git already produce rather than computing one.
 
 pub mod buffer;
 pub mod document;

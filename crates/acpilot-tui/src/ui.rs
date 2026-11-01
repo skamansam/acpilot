@@ -49,9 +49,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     draw_stats(frame, app, stats);
 
     // Overlays, back to front: the picker and the palette are questions, the card
-    // is an interruption, and the toast is a note about the last key. The menu's
-    // list is drawn first because a bar with a list open is still the lowest thing
-    // over the panes.
+    // is an interruption, the review covers the card it answers, and the toast is
+    // a note about the last key. The menu's list is drawn first because a bar with
+    // a list open is still the lowest thing over the panes.
     let list = app
         .menu
         .filter(|state| state.items)
@@ -73,6 +73,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
         && let Some(request) = app.permissions.first()
     {
         draw_permission(frame, request, app.diff.as_ref(), body, &app.theme);
+    }
+    if app.review.is_some() {
+        draw_review(frame, app, body);
     }
     if let Some(toast) = &app.toast {
         draw_toast(frame, toast, body, &app.theme);
@@ -369,9 +372,14 @@ fn draw_about(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     // The tree's own name, not the path: the column is 26 cells and a home
     // directory with the workspace in it is longer than the pane that holds it.
-    let title = match app.workspace.rsplit('/').next() {
-        Some(workspace) if !workspace.is_empty() => format!(" Files · {workspace} "),
-        _ => " Files ".to_owned(),
+    let title = match &app.search {
+        // The query is the title while one is up: the pane is answering that
+        // question, and the words a person typed belong on screen.
+        Some(query) => format!(" Find · {query} "),
+        None => match app.workspace.rsplit('/').next() {
+            Some(workspace) if !workspace.is_empty() => format!(" Files · {workspace} "),
+            _ => " Files ".to_owned(),
+        },
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -381,9 +389,14 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     // frame is a click on the frame, not on the first file.
     let inner = block.inner(area);
 
-    if app.files.is_empty() {
+    if app.visible_files().is_empty() {
+        let message = if app.search.is_some() {
+            "no path matches\ntype more of it · Esc puts the tree back"
+        } else {
+            "no rows yet\nthe daemon serves the workspace"
+        };
         frame.render_widget(
-            Paragraph::new("the tree is P6-6\nseeded by --demo")
+            Paragraph::new(message)
                 .style(Style::default().fg(app.theme.text_muted()))
                 .block(block),
             area,
@@ -392,7 +405,7 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     }
 
     let items: Vec<ListItem> = app
-        .files
+        .visible_files()
         .iter()
         .enumerate()
         .map(|(index, node)| {
@@ -409,6 +422,12 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
                     .bg(app.theme.bg_panel())
                     .fg(app.theme.accent_high())
                     .add_modifier(Modifier::BOLD)
+            } else if node.ignored {
+                // A row an ignore rule hides, shown because someone asked to see
+                // it: greyed and italic, so it never reads as an ordinary file.
+                Style::default()
+                    .fg(app.theme.text_muted())
+                    .add_modifier(Modifier::ITALIC)
             } else {
                 Style::default()
             };
@@ -447,7 +466,6 @@ fn pane_area(inner: Rect) -> PaneArea {
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorArea> {
     let [strip, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     let theme = app.theme.clone();
-    let demo = app.demo;
     let focused = app.focus == Focus::Editor;
     let Some(editor) = app.editor.as_mut() else {
         let block = Block::default()
@@ -501,7 +519,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
         None => {
             let tab = Line::from(vec![
                 Span::styled(
-                    format!(" {} ", editor.tab()),
+                    // A `+` while the buffer holds edits that are not in the file,
+                    // which is the history's answer rather than a flag's: undo back
+                    // to what was opened and the mark goes away by itself.
+                    format!(
+                        " {}{} ",
+                        editor.tab(),
+                        if editor.dirty() { " +" } else { "" }
+                    ),
                     Style::default()
                         .bg(theme.bg_panel())
                         .fg(theme.accent_high())
@@ -521,12 +546,18 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
     } else {
         format!(" · /{}", editor.find().query())
     };
+    // The mode is the title's, not the status line's: it is the one fact about the
+    // pane that changes what every key does, and a person reading the text should
+    // not have to look somewhere else to find out whether they can type. The design
+    // pass's `seeded` marker gave up its room here for it — the status line still
+    // says `demo · seeded`, and a title that clipped the running search to say the
+    // buffer is a fixture would keep the smaller fact and lose the larger one.
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(
             " {} · {}{title} ",
             editor.path(),
-            if demo { "seeded" } else { "read-only" }
+            editor.mode().label()
         ))
         .border_style(border_style(focused, &theme));
     let inner = block.inner(body);
@@ -1014,6 +1045,16 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         let (line, column) = editor.position();
         spans.push(Span::styled(format!("· {line}:{column} "), dim));
     }
+    // What the sessions hold, from the same readings the bar draws. A `~` is the
+    // daemon's own count rather than an agent's report, and an absent total is
+    // silence instead of a zero nobody measured.
+    if let Some(tokens) = app.used_tokens {
+        let mark = if app.tokens_estimated { "~" } else { "" };
+        spans.push(Span::styled(
+            format!("· {mark}{} tokens ", acpilot_stats::tokens(tokens)),
+            dim,
+        ));
+    }
     spans.push(Span::styled("· ", dim));
     spans.push(Span::raw(app.status.clone()));
     // The address is the one thing on the bar that rarely changes, so a narrow
@@ -1400,6 +1441,10 @@ fn keys_for(app: &App) -> (&'static str, &'static [(&'static str, &'static str)]
     if reading {
         return ("copy mode", &COPY_KEYS);
     }
+    // No insert-mode list here: `?` is a character in insert mode, so the panel
+    // cannot open while those keys are the pane's. The way in is on the normal-mode
+    // list and the insert keys are in `docs/notes/tui-shell.md`, which is the one
+    // place a person reading the settings can find them.
     (app.focus.label(), pane_keys(app.focus))
 }
 
@@ -1410,7 +1455,8 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("j / k", "move"),
             ("h / l", "collapse / expand"),
             ("enter", "open"),
-            ("/", "fuzzy open"),
+            ("/", "find a file"),
+            ("H", "hidden files"),
             ("tab", "next pane"),
             ("ctrl-←/→", "narrower / wider"),
             ("?", "these keys"),
@@ -1424,7 +1470,11 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-g", "go to line"),
             ("ctrl-s", "save"),
             ("ctrl-←/→", "narrower / wider"),
-            ("i", "insert mode"),
+            ("i a I A", "insert here / after / line ends"),
+            ("o / O", "a line below / above"),
+            ("u / ctrl-z", "undo"),
+            ("ctrl-y", "redo"),
+            ("x", "delete a character"),
             ("f12", "go to definition"),
         ],
         Focus::Sessions => &[
@@ -1547,6 +1597,160 @@ fn draw_permission(
             .wrap(Wrap { trim: false }),
         card,
     );
+}
+
+/// The diff review: the agent's edit, hunk by hunk, with a decision on each.
+///
+/// Drawn over the permission card rather than beside it, because the card is the
+/// question and this is how it is answered: a review in a pane of its own would be
+/// a review nobody reads before pressing `y`. The hunks are scrolled by the cursor
+/// rather than by an offset — the hunk under the keyboard is the top of the box, so
+/// moving the cursor is the only scrolling there is.
+fn draw_review(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(review) = &app.review else {
+        return;
+    };
+    let card = middle(area, 96, 84);
+    if card.width < 34 || card.height < 8 || review.diff.hunks.is_empty() {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let total = review.diff.hunks.len();
+    let accepted = review.accepted_hunks();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Review · {} ", review.diff.path))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, keys_row] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+
+    let height = usize::from(body.height);
+    // The hunks are drawn from the top whenever the ones up to the cursor fit, so
+    // that deciding a hunk does not scroll the hunk just decided out of sight. Past
+    // that the cursor's hunk is the top of the box, which is the only scrolling
+    // there is.
+    let up_to_cursor: usize = review
+        .diff
+        .hunks
+        .iter()
+        .take(review.cursor + 1)
+        .map(|hunk| 1 + hunk.lines.len())
+        .sum();
+    let start = if up_to_cursor > height {
+        review.cursor
+    } else {
+        0
+    };
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, hunk) in review.diff.hunks.iter().enumerate().skip(start) {
+        if lines.len() >= height {
+            break;
+        }
+        let chosen = index == review.cursor;
+        let agreed = review.accepted.get(index).copied().unwrap_or(true);
+        let (word, colour) = if agreed {
+            ("accepted", app.theme.success())
+        } else {
+            ("rejected", app.theme.danger())
+        };
+        let marker = if chosen { "▸" } else { " " };
+        let mut heading = Style::default().fg(app.theme.accent());
+        if chosen {
+            heading = heading.add_modifier(Modifier::BOLD);
+        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), heading),
+            Span::styled(hunk.header.clone(), Style::default().fg(app.theme.accent())),
+            Span::styled(format!("  · {word}"), Style::default().fg(colour)),
+        ]));
+        if review.split {
+            split_hunk(&mut lines, hunk, body.width, height, &app.theme);
+        } else {
+            for change in &hunk.lines {
+                if lines.len() >= height {
+                    break;
+                }
+                lines.push(inline_change(change, &app.theme));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), body);
+
+    let next = if review.split { "inline" } else { "split" };
+    let footer = Line::from(Span::styled(
+        format!(
+            " hunk {}/{total} · {accepted} accepted · a accept · x reject · A all · X none · s {next} · y answer · n decline · esc close ",
+            review.cursor + 1
+        ),
+        Style::default().fg(app.theme.warning()),
+    ));
+    frame.render_widget(Paragraph::new(footer), keys_row);
+}
+
+/// One line of a unified diff: the sigil is the diff's, the colour is the kind's.
+fn inline_change(change: &acpilot_demo::DiffLine, theme: &Theme) -> Line<'static> {
+    let (sign, colour) = match change.kind {
+        DiffKind::Added => ("+", theme.success()),
+        DiffKind::Removed => ("-", theme.danger()),
+        DiffKind::Context => (" ", theme.text_muted()),
+    };
+    Line::from(vec![
+        Span::styled(format!("  {sign} "), Style::default().fg(colour)),
+        Span::raw(change.text.clone()),
+    ])
+}
+
+/// A hunk as two columns, old on the left and new on the right.
+///
+/// Aligned the way a diff aligns them rather than as two independent lists: a
+/// context line is on both sides, a removal only on the left and an addition only
+/// on the right, so the same row of the card is the same place in the file.
+fn split_hunk(
+    lines: &mut Vec<Line<'static>>,
+    hunk: &acpilot_demo::Hunk,
+    width: u16,
+    height: usize,
+    theme: &Theme,
+) {
+    let column = usize::from(width.saturating_sub(1)) / 2;
+    for change in &hunk.lines {
+        if lines.len() >= height {
+            return;
+        }
+        let (left, right) = match change.kind {
+            DiffKind::Removed => (Some(change.text.as_str()), None),
+            DiffKind::Added => (None, Some(change.text.as_str())),
+            DiffKind::Context => (Some(change.text.as_str()), Some(change.text.as_str())),
+        };
+        let (left_colour, right_colour) = match change.kind {
+            DiffKind::Removed => (theme.danger(), theme.text_muted()),
+            DiffKind::Added => (theme.text_muted(), theme.success()),
+            DiffKind::Context => (theme.text_muted(), theme.text_muted()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(cell(left, column), Style::default().fg(left_colour)),
+            Span::styled("│", Style::default().fg(theme.border())),
+            Span::styled(cell(right, column), Style::default().fg(right_colour)),
+        ]));
+    }
+}
+
+/// Text padded or cut to `width` characters, so that two columns line up.
+///
+/// Characters rather than cells: a diff of code is ASCII in the overwhelming
+/// case, and the alternative — measuring every glyph in a card — would make the
+/// review's drawing answer a question the editor already answers properly.
+fn cell(text: Option<&str>, width: usize) -> String {
+    let mut out: String = text
+        .unwrap_or_default()
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect();
+    let len = out.chars().count();
+    out.push_str(&" ".repeat(width.saturating_sub(len)));
+    out
 }
 
 /// The list of a session's terminals, when there is more than one.
@@ -2519,26 +2723,103 @@ mod tests {
     fn the_palette_marks_every_row_that_is_not_built_with_its_task() {
         let mut app = App::demo(&acpilot_demo::demo());
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        for character in "symbol".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        let text = render(&mut app);
+        assert!(text.contains("Rename symbol"), "{text}");
+        assert!(text.contains("· P7-5"), "{text}");
+    }
+
+    #[test]
+    fn the_diff_rows_are_built_rather_than_promised() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         for character in "diff".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
         let text = render(&mut app);
         assert!(text.contains("Commands · 3"), "{text}");
         assert!(text.contains("Review diff"), "{text}");
-        assert!(text.contains("P6-9"), "{text}");
+        assert!(
+            !text.contains("P6-9"),
+            "a built row carries no task tag: {text}"
+        );
+    }
+
+    #[test]
+    fn the_editor_says_which_mode_it_is_in_and_marks_an_edited_buffer() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.focus = Focus::Editor;
+        let normal = render(&mut app);
+        assert!(normal.contains("· normal"), "{normal}");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let insert = render(&mut app);
+        assert!(insert.contains("· insert"), "{insert}");
+        assert!(
+            !insert.contains("app.rs +"),
+            "nothing has been typed yet: {insert}"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let edited = render(&mut app);
+        assert!(
+            edited.contains("app.rs +"),
+            "an edited buffer says it is not in the file: {edited}"
+        );
     }
 
     #[test]
     fn a_planned_action_names_the_task_in_a_toast() {
         let mut app = App::demo(&acpilot_demo::demo());
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "review".chars() {
+        // A row that is still planned: reading file contents is the daemon's walk
+        // and has no listing route to answer it.
+        for character in "contents".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let text = render(&mut app);
-        assert!(text.contains("planned · P6-9"), "{text}");
+        assert!(text.contains("planned · P6-6"), "{text}");
         assert!(text.contains("not implemented"), "{text}");
+    }
+
+    #[test]
+    fn the_review_draws_each_hunk_with_its_decision() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let text = render(&mut app);
+        assert!(
+            text.contains("Review · crates/acpilot-tui/src/app.rs"),
+            "{text}"
+        );
+        assert!(text.contains("@@ -8,6 +8,12 @@"), "{text}");
+        assert!(text.contains("accepted"), "{text}");
+        assert!(text.contains("hunk 1/2"), "{text}");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert!(text.contains("rejected"), "{text}");
+        assert!(text.contains("hunk 2/2"), "{text}");
+    }
+
+    #[test]
+    fn a_split_review_draws_both_sides_of_a_hunk() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert_eq!(
+            text.matches("pub exit: Option<Option<i32>>,").count(),
+            2,
+            "a context line is on both sides: {text}"
+        );
+        assert_eq!(
+            text.matches("pub mode: PaneMode,").count(),
+            1,
+            "an addition is on one: {text}"
+        );
     }
 
     #[test]

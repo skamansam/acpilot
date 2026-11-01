@@ -382,6 +382,13 @@ fn event_loop(
             }
         }
 
+        // A key can ask for more than one thing — the hidden-files toggle re-lists
+        // the root and every open directory — and the queue is how it says so
+        // without a second return value for one rare key.
+        for request in app.take_pending() {
+            worker.send(request);
+        }
+
         // A copy leaves as OSC 52 here rather than from the app: the escape goes
         // to the terminal a person is looking at, and the drawing loop is the only
         // thing in this process that owns that stream.

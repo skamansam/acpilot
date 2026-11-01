@@ -32,6 +32,8 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
+use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use utoipa::openapi::path::{HttpMethod, Operation};
@@ -45,6 +47,13 @@ use crate::{ApiError, AppState};
 /// for the terminal or a future upload route, not for a route whose contract is
 /// "here is the text".
 pub const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The most paths a search returns.
+///
+/// A query that matches half a repository is the wrong query, not a listing: the
+/// cap keeps one keystroke from walking a monorepo into a status line, and the walk
+/// stops where it does rather than reading everything and throwing it away.
+pub const MAX_SEARCH_RESULTS: usize = 200;
 
 /// `GET /v1/files?workspace=&path=`.
 ///
@@ -113,6 +122,18 @@ async fn list(
         ))));
     }
 
+    // The preference is the daemon's, so a tree looks the same in every client and
+    // the patterns are matched where the ignore files are. No preferences means an
+    // older or bare daemon, which honours `defaults.toml`'s answer.
+    let honour = state
+        .preferences()
+        .is_none_or(|preferences| preferences.tree_respect_gitignore);
+    // Built even when the caller asked for the hidden rows: a row an ignore rule
+    // hides comes back *marked*, and that answer belongs to the matcher rather than
+    // to a client that never saw the pattern.
+    let rules = honour.then(|| ignore_rules(&root, &resolved));
+    let include_ignored = query.include_ignored.unwrap_or(false);
+
     let entries = std::fs::read_dir(&resolved).map_err(|source| io_error(&resolved, source))?;
     let mut listing = Vec::new();
     for entry in entries {
@@ -127,15 +148,111 @@ async fn list(
         if !inside(&root, &path) {
             continue;
         }
+        let is_dir = metadata.is_dir();
+        let ignored = rules
+            .as_ref()
+            .is_some_and(|rules| rules.matched_path_or_any_parents(&path, is_dir).is_ignore());
+        if ignored && !include_ignored {
+            continue;
+        }
+        // Git never lists its own directory and no `.gitignore` has to say so: the
+        // objects, the refs and the index are the repository's bookkeeping, not the
+        // project's files, and a tree that showed them would bury the project.
+        // Showing the hidden rows does not change that: `.git` is not a file an
+        // ignore rule hides, it is the repository itself.
+        if honour && path.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
         listing.push(FileEntry {
             path: display_path(&root, &path),
-            is_dir: metadata.is_dir(),
-            size: if metadata.is_dir() { 0 } else { metadata.len() },
+            is_dir,
+            size: if is_dir { 0 } else { metadata.len() },
             modified: modified(&metadata),
+            ignored,
         });
     }
     listing.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(Json(listing))
+}
+
+/// `GET /v1/files/search?workspace=&q=`.
+///
+/// The same ignore rules the tree follows, for the same reason twice over: a find
+/// that returned what the tree hides would be a second answer to
+/// `tree_respect_gitignore`, and the paths a person cannot see in the tree are not
+/// the ones they are looking for. `.git` is never walked into, and hidden files
+/// *are*: `.env` is a file a person searches for by name.
+///
+/// # Errors
+///
+/// No workspace to walk (`409`). A directory that cannot be read is skipped rather
+/// than failing the search: the rest of the workspace is still findable.
+async fn search(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<FileEntry>>, ApiError> {
+    let root = workspace_root(&state, query.workspace.as_deref())?;
+    let needle = query.q.as_deref().unwrap_or_default().trim().to_lowercase();
+    if needle.is_empty() {
+        // Nothing typed is nothing matched; a walk for "" would walk the repository.
+        return Ok(Json(Vec::new()));
+    }
+    let honour = state
+        .preferences()
+        .is_none_or(|preferences| preferences.tree_respect_gitignore);
+    let mut builder = WalkBuilder::new(&root);
+    builder
+        // The one preference that matters, and the three files that are not it:
+        // `.ignore` and the two per-machine excludes are not what the tree follows,
+        // so a search does not follow them either.
+        .git_ignore(honour)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .parents(false)
+        // Hidden files are findable, `.git` is not walked: a search for `env` that
+        // could not find `.env` would be a search of half the workspace.
+        .hidden(false)
+        .follow_links(false)
+        // A `.gitignore` means the same thing in a directory that is not a checkout
+        // yet, which is exactly the workspace before its first commit.
+        .require_git(false)
+        .filter_entry(|entry| {
+            !(entry.file_type().is_some_and(|kind| kind.is_dir())
+                && entry.file_name() == std::ffi::OsStr::new(".git"))
+        });
+
+    let mut found = Vec::new();
+    for entry in builder.build() {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if !inside(&root, path) {
+            continue;
+        }
+        let relative = display_path(&root, path);
+        if !relative.to_lowercase().contains(&needle) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        found.push(FileEntry {
+            path: relative,
+            is_dir: false,
+            size: metadata.len(),
+            modified: modified(&metadata),
+            // A search never returns a hidden row: the walk did not enter one.
+            ignored: false,
+        });
+        if found.len() == MAX_SEARCH_RESULTS {
+            break;
+        }
+    }
+    found.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(Json(found))
 }
 
 /// `PUT /v1/files`.
@@ -248,6 +365,34 @@ async fn write(
     }))
 }
 
+/// The ignore rules that apply to one directory.
+///
+/// The root's `.gitignore` and every `.gitignore` between it and the directory being
+/// listed, because rules are usually nested: the root says `target/` and a vendored
+/// directory three levels down has its own.
+///
+/// `.git/info/exclude` and the global excludes file are deliberately not read: they
+/// are per-machine settings, and a tree that differed between two people reading the
+/// same repository would be a tree nobody could describe.
+fn ignore_rules(root: &Path, listed: &Path) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(root);
+    let mut directory = Some(listed);
+    while let Some(current) = directory {
+        let file = current.join(".gitignore");
+        if file.is_file() {
+            // A pattern that does not parse is skipped by the builder rather than
+            // failing the listing: a tree that refused to draw over one bad line
+            // would hide the working tree behind a typo.
+            let _ = builder.add(&file);
+        }
+        if current == root {
+            break;
+        }
+        directory = current.parent().filter(|parent| parent.starts_with(root));
+    }
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
 /// The query string both read routes take.
 #[derive(Debug, Deserialize)]
 struct FileQuery {
@@ -255,6 +400,20 @@ struct FileQuery {
     workspace: Option<String>,
     /// Workspace-relative path. Empty or absent means the root, for a listing.
     path: Option<String>,
+    /// Whether to return the rows an ignore rule hides, marked with `ignored`.
+    ///
+    /// Absent is off: a tree asks for the working tree, and one toggle in the TUI is
+    /// the only thing that asks for the rest.
+    include_ignored: Option<bool>,
+}
+
+/// The search route's query string.
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    workspace: Option<String>,
+    /// What a path has to contain, ignoring case. Empty matches nothing.
+    q: Option<String>,
 }
 
 /// The root, checked against the id the client named.
@@ -427,6 +586,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/files", get(read).put(write))
         .route("/v1/files/list", get(list))
+        .route("/v1/files/search", get(search))
 }
 
 #[allow(dead_code)]
@@ -470,6 +630,23 @@ fn list_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
+    get,
+    path = "/v1/files/search",
+    tag = "files",
+    summary = "Find files by path",
+    params(
+        ("workspace" = Option<String>, Query, description = "Workspace id; empty or absent means the one this daemon serves"),
+        ("q" = String, Query, description = "Substring a path has to contain, ignoring case")
+    ),
+    responses(
+        (status = 200, description = "Matching files, sorted by path, at most MAX_SEARCH_RESULTS of them", body = Vec<FileEntry>),
+        (status = 409, description = "This daemon has no workspace to walk", body = ErrorBody)
+    )
+)]
+fn search_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
     put,
     path = "/v1/files",
     tag = "files",
@@ -504,12 +681,18 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             HttpMethod::Get,
             <__path_list_doc as Path>::operation(),
         ),
+        (
+            "/v1/files/search",
+            HttpMethod::Get,
+            <__path_search_doc as Path>::operation(),
+        ),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn a_dot_dot_path_is_refused_before_it_is_joined() {
@@ -532,6 +715,27 @@ mod tests {
         assert_eq!(
             relative_path("./src/./lib.rs").expect("relative"),
             PathBuf::from("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn a_nested_gitignore_applies_to_the_directory_it_sits_in() {
+        let root = tempfile::tempdir().expect("a root");
+        fs::create_dir_all(root.path().join("vendor/pkg")).expect("dirs");
+        fs::write(root.path().join("vendor/pkg/.gitignore"), "*.min.js\n").expect("ignore");
+
+        let rules = ignore_rules(root.path(), &root.path().join("vendor/pkg"));
+        assert!(
+            rules.matched("vendor/pkg/app.min.js", false).is_ignore(),
+            "the nested file's rule applies to the directory it sits in"
+        );
+        assert!(
+            !rules.matched("vendor/pkg/app.js", false).is_ignore(),
+            "and nothing else"
+        );
+        assert!(
+            !rules.matched("src/main.js", false).is_ignore(),
+            "a nested file does not reach outside its directory"
         );
     }
 

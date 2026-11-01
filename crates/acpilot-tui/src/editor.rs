@@ -22,8 +22,11 @@
 //!   the editor's, and while one is up every key is text: a find box that let `j`
 //!   through would move the caret out from under the query being typed.
 //!
-//! Insert mode, saving through the daemon and the diff review are P6-5, P7-10 and
-//! P6-9; the pane is read-only until then, and says so rather than pretending.
+//! Insert mode is the first half of P6-5 and saving through the daemon is P7-10:
+//! the buffer can be typed into and undone in this build, and a save is a notice
+//! that names the task which would write it. The pane says which mode it is in,
+//! because a keyboard that silently stopped typing is indistinguishable from one
+//! that broke.
 
 use acpilot_demo::EditorBuffer;
 use acpilot_git::{LineChange, LineChanges};
@@ -32,10 +35,40 @@ use acpilot_git::{LineChange, LineChanges};
 // to. `acpilot-extensions` re-exports the palette's, so this is the same type
 // `Highlights` answers with.
 use acpilot_extensions::theme::SyntaxToken;
+use acpilot_text::buffer::Buffer;
+use acpilot_text::edit::{IndentMode, IndentStyle};
 use acpilot_text::highlight::{Grammars, Highlights, Span};
 use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
 use acpilot_text::{Document, LineColumn, Selection, Selections};
 use std::ops::Range;
+use std::time::Instant;
+
+/// Which mode the pane's keys are in.
+///
+/// Two, because one is not enough: a pane that is always insert cannot move with
+/// `hjkl`, and a pane that is always normal cannot be typed into. Which spelling
+/// the commands take — Vim's, or a modeless editor's — is the keymap layer's
+/// question, which is the half of P6-5 still open; what the pane knows is only
+/// that one mode's keys are text and the other's are commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Keys are commands: motion, search, and the way into the others.
+    #[default]
+    Normal,
+    /// Keys are text.
+    Insert,
+}
+
+impl Mode {
+    /// What the status line and the pane's title call it.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Insert => "insert",
+        }
+    }
+}
 
 /// Which prompt is up, and what has been typed into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +148,8 @@ pub struct EditorPane {
     /// lives in the document, where an edit would move it: the anchor is the one end
     /// that must not move, and the caret is the other.
     anchor: Option<usize>,
+    /// Which mode the keys are in.
+    mode: Mode,
 }
 
 /// A pane's debug shape: the file, the caret and the window.
@@ -145,15 +180,27 @@ impl EditorPane {
     /// the buffer's opinion about itself.
     #[must_use]
     pub fn seeded(seed: &EditorBuffer, marks: LineChanges, grammars: &mut Grammars) -> Self {
-        let text: Vec<&str> = seed.lines.iter().map(String::as_str).collect();
-        let document = Document::from_bytes(text.join("\n").as_bytes())
-            .expect("the seeded buffer is text the demo wrote");
-        let highlights = grammars.get(&seed.language).map(Highlights::new);
-        let caret = LineColumn::new(seed.cursor.0, seed.cursor.1);
+        let mut pane = Self::from_text(&seed.path, &seed.lines.join("\n"), marks, grammars);
+        let at = pane.offset(LineColumn::new(seed.cursor.0, seed.cursor.1));
+        pane.document.set_caret(at);
+        pane.settle();
+        pane
+    }
+
+    /// A pane over a file the daemon sent, with the caret at its start.
+    ///
+    /// The language is read off the path, so the caller does not have to know which
+    /// grammar a file wants: an extension this build ships no grammar for draws
+    /// plain text rather than refusing the file, which is the same answer the
+    /// highlighter already gives for an unknown language.
+    #[must_use]
+    pub fn from_text(path: &str, text: &str, marks: LineChanges, grammars: &mut Grammars) -> Self {
+        let language = language_for(path).to_owned();
+        let highlights = grammars.get(&language).map(Highlights::new);
         let mut pane = Self {
-            path: seed.path.clone(),
-            language: seed.language.clone(),
-            document,
+            path: path.to_owned(),
+            language,
+            document: Document::new(Buffer::from_text(text)),
             highlights,
             viewport: Viewport::new(0, 0),
             marks,
@@ -163,9 +210,9 @@ impl EditorPane {
             rows: Vec::new(),
             bracket: None,
             anchor: None,
+            mode: Mode::Normal,
         };
-        let at = pane.offset(caret);
-        pane.document.set_caret(at);
+        pane.document.set_caret(0);
         pane.settle();
         pane
     }
@@ -478,6 +525,134 @@ impl EditorPane {
         self.offset(LineColumn::new(line, column))
     }
 
+    /// Which mode the keys are in.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Change mode, and say so.
+    ///
+    /// Said out loud because the two modes take the same keys differently, and a
+    /// mode change nobody noticed is a pane whose keyboard appears to have stopped
+    /// working: the status line says `insert`, and so does the pane's title.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.message = match mode {
+            Mode::Insert => "insert · Esc leaves".to_owned(),
+            Mode::Normal => "normal".to_owned(),
+        };
+    }
+
+    /// Type text at the caret, replacing whatever is selected.
+    ///
+    /// The one path every inserted character takes, so the parse and the caret are
+    /// brought up to date in one place — an edit that did not settle would paint
+    /// yesterday's colours over today's text.
+    pub fn type_text(&mut self, text: &str, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.insert(text, now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Take the character before the caret out, or the selection covering it.
+    pub fn backspace(&mut self, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.delete_backward(now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Take the character after the caret out — `Delete`, and `x` in normal mode.
+    pub fn delete_forward(&mut self, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.delete_forward(now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Indent the lines the selection touches, or the caret's line.
+    ///
+    /// The style is the caller's, not a setting read here: the tab width and the
+    /// spaces-or-tabs answer come from the settings cascade (P4-7), and a pane that
+    /// read a config file would be a pane the browser cannot use.
+    pub fn indent(&mut self, mode: IndentMode, style: IndentStyle, now: Instant) -> bool {
+        let edited = self.document.indent(mode, style, now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Put an empty line below the caret's, and leave the caret on it in insert
+    /// mode — the whole of what `o` means.
+    pub fn open_line_below(&mut self, now: Instant) {
+        self.line_edge(true);
+        if self.document.insert("\n", now) {
+            self.settle();
+        }
+        self.set_mode(Mode::Insert);
+    }
+
+    /// Put an empty line above the caret's, and leave the caret on *it*: the
+    /// newline lands at the line's start, which pushes the old line down, so the
+    /// caret has to walk back up one to be on the new one.
+    pub fn open_line_above(&mut self, now: Instant) {
+        self.line_edge(false);
+        if self.document.insert("\n", now) {
+            self.move_caret(-1, 0);
+            self.settle();
+        }
+        self.set_mode(Mode::Insert);
+    }
+
+    /// Take the last step back.
+    ///
+    /// A motion collapses a selection on the way, the same as any other motion: an
+    /// undo that left a highlight behind would be a pane still asking a question
+    /// about text that is no longer there.
+    pub fn undo(&mut self) -> bool {
+        let undone = self.document.undo();
+        if undone {
+            self.anchor = None;
+            self.settle();
+            self.message = format!("undo · {} step(s) left", self.document.undo_depth());
+        }
+        undone
+    }
+
+    /// Put the last undone step back.
+    pub fn redo(&mut self) -> bool {
+        let redone = self.document.redo();
+        if redone {
+            self.anchor = None;
+            self.settle();
+            self.message = "redo".to_owned();
+        }
+        redone
+    }
+
+    /// Whether the buffer holds edits that are not in the file.
+    ///
+    /// Read off the history rather than kept as a flag: the history started empty
+    /// when the file was opened, so "there is a step to take back" is exactly "this
+    /// text is not the text that was opened" — including after undoing all the way
+    /// back to it, which a flag would get wrong.
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.document.can_undo()
+    }
+
     /// Put the caret at the start or the end of its line.
     pub fn line_edge(&mut self, end: bool) {
         let caret = self.caret();
@@ -682,6 +857,22 @@ impl EditorPane {
     }
 }
 
+/// The language a path's extension names, as the grammar registry spells it.
+///
+/// The registry is the authority on which grammars exist; this only maps a suffix to
+/// the name one is registered under. An unknown suffix is `""`, which
+/// [`Grammars::get`] answers with `None`.
+#[must_use]
+pub fn language_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("json") => "json",
+        Some("toml") => "toml",
+        _ => "",
+    }
+}
+
 /// One row's cells, joined into runs of one token and one state.
 fn runs(
     row: &Row,
@@ -782,6 +973,97 @@ mod tests {
 
     fn text(pane: &EditorPane) -> String {
         pane.document().text()
+    }
+
+    #[test]
+    fn a_file_opens_as_a_document_with_the_language_its_path_names() {
+        let mut grammars = Grammars::new();
+        let pane = EditorPane::from_text(
+            "src/main.rs",
+            "fn main() {}",
+            LineChanges::default(),
+            &mut grammars,
+        );
+        assert_eq!(pane.path(), "src/main.rs");
+        assert_eq!(pane.tab(), "main.rs");
+        assert_eq!(pane.language(), "rust");
+        assert_eq!(pane.document().text(), "fn main() {}");
+        assert_eq!(pane.position(), (1, 1), "a file opens at its start");
+        assert!(!pane.dirty(), "nothing has been done to it yet");
+
+        let mut grammars = Grammars::new();
+        let unknown =
+            EditorPane::from_text("NOTES", "prose", LineChanges::default(), &mut grammars);
+        assert_eq!(unknown.language(), "", "no extension, no grammar");
+        assert_eq!(unknown.document().text(), "prose", "and it still opens");
+    }
+
+    #[test]
+    fn an_extension_maps_to_one_language_and_nothing_else() {
+        assert_eq!(language_for("a/b/c.rs"), "rust");
+        assert_eq!(language_for("main.py"), "python");
+        assert_eq!(language_for("Cargo.toml"), "toml");
+        assert_eq!(language_for("package.json"), "json");
+        assert_eq!(language_for("Makefile"), "");
+        assert_eq!(language_for("dir.d/file"), "");
+    }
+
+    #[test]
+    fn typing_lands_in_the_document_and_undo_is_the_text_that_was_opened() {
+        let mut pane = pane(&["one two"], (0, 0));
+        assert_eq!(pane.mode(), Mode::Normal, "keys are commands until asked");
+        pane.set_mode(Mode::Insert);
+        assert!(pane.type_text("X", Instant::now()));
+        assert_eq!(pane.document().text(), "Xone two");
+        assert_eq!(pane.position(), (1, 2), "the caret is past what it typed");
+        assert!(pane.dirty(), "typing is a step to take back");
+        assert!(pane.undo());
+        assert_eq!(pane.document().text(), "one two");
+        assert!(!pane.dirty(), "the history is how dirty is answered");
+        assert!(pane.redo());
+        assert_eq!(pane.document().text(), "Xone two");
+    }
+
+    #[test]
+    fn backspace_and_delete_take_a_character_from_either_side() {
+        let mut pane = pane(&["one two"], (0, 4));
+        assert!(pane.backspace(Instant::now()));
+        assert_eq!(pane.document().text(), "onetwo");
+        assert!(pane.delete_forward(Instant::now()));
+        assert_eq!(pane.document().text(), "onewo");
+    }
+
+    #[test]
+    fn opening_a_line_below_and_above_leave_the_caret_on_the_new_one() {
+        let mut below = pane(&["one", "two"], (0, 0));
+        below.open_line_below(Instant::now());
+        assert_eq!(below.document().text(), "one\n\ntwo");
+        assert_eq!(below.position(), (2, 1));
+        assert_eq!(below.mode(), Mode::Insert, "o leaves you typing on it");
+
+        let mut above = pane(&["one", "two"], (1, 0));
+        above.open_line_above(Instant::now());
+        assert_eq!(above.document().text(), "one\n\ntwo");
+        assert_eq!(above.position(), (2, 1), "the empty line is the one above");
+    }
+
+    #[test]
+    fn a_tab_is_one_indent_level_and_its_undo_is_one_step() {
+        let mut pane = pane(&["one"], (0, 0));
+        assert!(pane.indent(IndentMode::In, IndentStyle::Spaces(4), Instant::now()));
+        assert_eq!(pane.document().text(), "    one");
+        assert!(pane.indent(IndentMode::Out, IndentStyle::Spaces(4), Instant::now()));
+        assert_eq!(pane.document().text(), "one");
+    }
+
+    #[test]
+    fn a_mode_change_says_so_because_a_silent_one_looks_broken() {
+        let mut pane = pane(&["one"], (0, 0));
+        pane.set_mode(Mode::Insert);
+        assert_eq!(pane.mode(), Mode::Insert);
+        assert!(pane.message().contains("insert"), "{}", pane.message());
+        pane.set_mode(Mode::Normal);
+        assert_eq!(pane.message(), "normal");
     }
 
     #[test]

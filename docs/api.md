@@ -308,8 +308,17 @@ required.
 file; a directory is `409 conflict` with the message pointing at `/v1/files/list`.
 
 `GET /v1/files/list?workspace=&path=` returns `FileEntry[]`
-(`{ path, is_dir, size, modified? }`), paths relative to the workspace root with
-`/` as the separator on every host.
+(`{ path, is_dir, size, modified?, ignored? }`), paths relative to the workspace
+root with `/` as the separator on every host. `include_ignored=true` returns the
+rows a `.gitignore` hides, each with `ignored: true`; the flag is absent from an
+ordinary row, so a client can tell an exception from a file.
+
+`GET /v1/files/search?workspace=&q=` returns `FileEntry[]` of the files whose
+paths contain `q`, ignoring case, sorted, at most 200 of them. The walk follows
+the same ignore rules the listing does — `.gitignore` files are read when
+`tree_respect_gitignore` is on — so a find cannot return what the tree hides.
+Hidden files that no rule names (`.env`) are found, `.git` is never walked, and an
+empty `q` matches nothing rather than walking the repository.
 
 `PUT /v1/files` takes `FileWriteRequest { path, text, if_match? }`. `if_match` is
 the `etag` last read; a mismatch is `409 conflict`, never a silent overwrite.

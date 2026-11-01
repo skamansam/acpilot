@@ -49,6 +49,7 @@ trim_trailing_whitespace = true
 wrap = false
 theme = "acpilot.night-flight"
 # theme_follow_terminal = true      # solve the terminal's palette from the terminal itself
+tree_respect_gitignore = true     # the file tree hides what the workspace's .gitignore hides
 diagnostics_min_severity = "warning"
 ```
 
@@ -91,6 +92,31 @@ palette on its next load. A file that does not parse, or that names a theme no
 loaded extension provides, leaves the running client on the colours it already
 has — a half-written file is not a reason to go blank — and the next save is read
 normally.
+
+### The file tree
+
+`tree_respect_gitignore` decides whether the files pane shows the working tree or
+the project. On, a path a `.gitignore` names is not a row: no `target/`, no build
+output, no editor droppings, and no `.git` directory either — git never lists its
+own bookkeeping, so the tree does not either. Nested `.gitignore` files are read
+where they are, so a vendored directory's own rules apply to it and stop there.
+
+Off, the tree is the directory: everything on disk, which is what you want when
+the thing you are looking for is a build artefact.
+
+The daemon answers the listing and does the matching, not the client, so every
+client shows the same tree and a remote workspace's ignore files are read on the
+machine that has them. `.git/info/exclude` and the global excludes file are not
+read: those are per-machine, and two people looking at one repository should see
+the same tree. Changing the setting is picked up by the next listing — `Ctrl-R` in
+the files pane, in the terminal UI.
+
+The tree also has a key for the other answer, so looking at a build directory once
+does not mean editing a setting and remembering to change it back: `H` in the files
+pane asks the daemon for the same directories with the hidden rows marked, draws
+them greyed and italic, and keeps every directory that was open open. `H` again
+puts the tree back. `/` in the same pane searches the whole workspace by path, and
+it follows this setting too: on, a find cannot return what the tree hides.
 
 ## Project config
 

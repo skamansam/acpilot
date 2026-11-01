@@ -102,7 +102,7 @@
           },
           {
             "column": 25,
-            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐│",
+            "text": "│┌ crates/acpilot-tui/src/app.rs · normal ────────┐│",
             "style": 3
           },
           {
@@ -1597,16 +1597,16 @@
           },
           {
             "column": 33,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 42,
+            "column": 58,
             "text": "design pass · seeded · no daemon",
             "style": 1
           },
           {
-            "column": 74,
+            "column": 90,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -1788,7 +1788,7 @@
           },
           {
             "column": 25,
-            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐│",
+            "text": "│┌ crates/acpilot-tui/src/app.rs · normal ────────┐│",
             "style": 3
           },
           {
@@ -2378,12 +2378,12 @@
           },
           {
             "column": 19,
-            "text": "Quit",
+            "text": "Review diff",
             "style": 1
           },
           {
-            "column": 23,
-            "text": "  ctrl-q",
+            "column": 30,
+            "text": "  ctrl-d",
             "style": 3
           },
           {
@@ -2410,18 +2410,13 @@
           },
           {
             "column": 19,
-            "text": "Open file…",
+            "text": "Accept this diff",
             "style": 1
           },
           {
-            "column": 29,
-            "text": "  ctrl-o",
+            "column": 35,
+            "text": "  ctrl-enter",
             "style": 3
-          },
-          {
-            "column": 37,
-            "text": "  · P6-6",
-            "style": 6
           },
           {
             "column": 101,
@@ -2452,18 +2447,13 @@
           },
           {
             "column": 19,
-            "text": "Search workspace",
+            "text": "Reject this diff",
             "style": 1
           },
           {
             "column": 35,
-            "text": "  ctrl-shift-f",
+            "text": "  ctrl-backspace",
             "style": 3
-          },
-          {
-            "column": 49,
-            "text": "  · P6-6",
-            "style": 6
           },
           {
             "column": 101,
@@ -2494,18 +2484,13 @@
           },
           {
             "column": 19,
-            "text": "Go to definition",
+            "text": "Quit",
             "style": 1
           },
           {
-            "column": 35,
-            "text": "  f12",
+            "column": 23,
+            "text": "  ctrl-q",
             "style": 3
-          },
-          {
-            "column": 40,
-            "text": "  · P7-4",
-            "style": 6
           },
           {
             "column": 101,
@@ -2536,18 +2521,13 @@
           },
           {
             "column": 19,
-            "text": "Review diff",
+            "text": "Find a file…",
             "style": 1
           },
           {
-            "column": 30,
-            "text": "  ctrl-d",
+            "column": 31,
+            "text": "  ctrl-o",
             "style": 3
-          },
-          {
-            "column": 38,
-            "text": "  · P6-9",
-            "style": 6
           },
           {
             "column": 101,
@@ -2578,17 +2558,17 @@
           },
           {
             "column": 19,
-            "text": "Accept this diff",
+            "text": "Search file contents",
             "style": 1
           },
           {
-            "column": 35,
-            "text": "  ctrl-enter",
+            "column": 39,
+            "text": "  ctrl-shift-f",
             "style": 3
           },
           {
-            "column": 47,
-            "text": "  · P6-9",
+            "column": 53,
+            "text": "  · P6-6",
             "style": 6
           },
           {
@@ -2620,17 +2600,17 @@
           },
           {
             "column": 19,
-            "text": "Reject this diff",
+            "text": "Go to definition",
             "style": 1
           },
           {
             "column": 35,
-            "text": "  ctrl-backspace",
+            "text": "  f12",
             "style": 3
           },
           {
-            "column": 51,
-            "text": "  · P6-9",
+            "column": 40,
+            "text": "  · P7-4",
             "style": 6
           },
           {
@@ -2888,16 +2868,16 @@
           },
           {
             "column": 33,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 42,
+            "column": 58,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 70,
+            "column": 86,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -3079,7 +3059,7 @@
           },
           {
             "column": 25,
-            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "text": "│┌ crates/acpilot-tui/src/app.rs · normal ────────┐",
             "style": 3
           },
           {
@@ -4579,16 +4559,16 @@
           },
           {
             "column": 35,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 44,
+            "column": 60,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 72,
+            "column": 88,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -4790,7 +4770,7 @@
           },
           {
             "column": 37,
-            "text": "pilot-tui/src/app.rs · seeded ────────┐",
+            "text": "pilot-tui/src/app.rs · normal ────────┐",
             "style": 3
           },
           {
@@ -6305,16 +6285,16 @@
           },
           {
             "column": 35,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 44,
+            "column": 60,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 72,
+            "column": 88,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -6496,7 +6476,7 @@
           },
           {
             "column": 25,
-            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "text": "│┌ crates/acpilot-tui/src/app.rs · normal ────────┐",
             "style": 3
           },
           {
@@ -7421,16 +7401,16 @@
           },
           {
             "column": 35,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 44,
+            "column": 60,
             "text": "21 commands · type to filter",
             "style": 1
           },
           {
-            "column": 72,
+            "column": 88,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -7612,7 +7592,7 @@
           },
           {
             "column": 25,
-            "text": "│┌ crates/acpilot-tui/src/app.rs · seeded ────────┐",
+            "text": "│┌ crates/acpilot-tui/src/app.rs · normal ────────┐",
             "style": 3
           },
           {
@@ -8622,16 +8602,16 @@
           },
           {
             "column": 35,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 44,
+            "column": 60,
             "text": "2 terminals · Enter opens · Esc closes",
             "style": 1
           },
           {
-            "column": 82,
+            "column": 98,
             "text": "  demo · seeded ",
             "style": 3
           }
@@ -9623,17 +9603,17 @@
           },
           {
             "column": 35,
-            "text": "· 17:9 · ",
+            "text": "· 17:9 · ~64.5k tokens · ",
             "style": 3
           },
           {
-            "column": 44,
+            "column": 60,
             "text": "/bin/sh -c make check attached · 525 bytes of screen",
             "style": 1
           },
           {
-            "column": 96,
-            "text": "  demo · seeded ",
+            "column": 112,
+            "text": "  demo ·",
             "style": 3
           }
         ],

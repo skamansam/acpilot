@@ -16,7 +16,7 @@ use acpilot_text::highlight::Grammars;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::backend::{Request, Update};
-use crate::editor::EditorPane;
+use crate::editor::{EditorPane, Mode};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
@@ -1293,6 +1293,88 @@ pub struct Viewports {
     pub terminal_area: Option<PaneArea>,
 }
 
+/// A diff review: the agent's edit, hunk by hunk, before the write is answered.
+///
+/// P6-9 asks for a review that can disagree with part of an edit. What an answer
+/// can say is coarser than that: the agent asked to write one file, and the
+/// permission protocol offers allow or deny, not "these hunks but not those". A
+/// file written in part would be a file nobody asked for, so the decision is per
+/// hunk and the answer is read off the hunks — every hunk accepted allows the
+/// write, one rejected declines it, and the status line names the hunk that did
+/// it. The per-hunk part is still the review's real work: it is how the one wrong
+/// hunk is found without re-reading the whole edit.
+#[derive(Debug)]
+pub struct Review {
+    /// The diff under review.
+    pub diff: Diff,
+    /// Whether each hunk is accepted, in the diff's order.
+    pub accepted: Vec<bool>,
+    /// Which hunk the keyboard is on.
+    pub cursor: usize,
+    /// Whether the two sides are drawn side by side rather than as one column.
+    pub split: bool,
+}
+
+impl Review {
+    /// A review of `diff` with nothing objected to yet.
+    ///
+    /// Every hunk starts accepted, because the common answer is yes and a review
+    /// that starts by refusing would make the person argue for the write rather
+    /// than against it.
+    fn new(diff: Diff) -> Self {
+        let accepted = vec![true; diff.hunks.len()];
+        Self {
+            diff,
+            accepted,
+            cursor: 0,
+            split: false,
+        }
+    }
+
+    /// How many hunks are accepted.
+    #[must_use]
+    pub fn accepted_hunks(&self) -> usize {
+        self.accepted.iter().filter(|accept| **accept).count()
+    }
+
+    /// The hunks that were rejected, counted from 1 the way a person counts.
+    #[must_use]
+    pub fn rejected_hunks(&self) -> Vec<usize> {
+        self.accepted
+            .iter()
+            .enumerate()
+            .filter(|(_, accept)| !**accept)
+            .map(|(index, _)| index + 1)
+            .collect()
+    }
+
+    /// Decide the hunk the keyboard is on, and move to the next.
+    ///
+    /// One keystroke is one decision, so a long diff is read in one pass instead
+    /// of a decision followed by a navigation per hunk.
+    fn decide(&mut self, accept: bool) {
+        if let Some(slot) = self.accepted.get_mut(self.cursor) {
+            *slot = accept;
+        }
+        self.step(1);
+    }
+
+    /// Decide every hunk the same way.
+    fn decide_all(&mut self, accept: bool) {
+        self.accepted.fill(accept);
+    }
+
+    /// Move the cursor, stopping at either end rather than wrapping.
+    fn step(&mut self, delta: i32) {
+        let last = self.accepted.len().saturating_sub(1);
+        self.cursor = if delta < 0 {
+            self.cursor.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            (self.cursor + delta as usize).min(last)
+        };
+    }
+}
+
 /// Everything the terminal draws, plus the state the keys act on.
 #[derive(Debug)]
 pub struct App {
@@ -1304,11 +1386,34 @@ pub struct App {
     pub workspace: String,
     /// Whether the daemon answered a health check.
     pub connected: bool,
-    /// The workspace tree, flattened. Empty until P6-6 reads the filesystem; the
+    /// The workspace tree, flattened. Empty until the daemon's listing arrives; the
     /// design pass seeds it.
     pub files: Vec<FileNode>,
     /// Which row of the tree is selected.
     pub file_selected: usize,
+    /// Whether the tree draws the paths an ignore rule hides.
+    ///
+    /// A toggle rather than a second setting: `tree_respect_gitignore` is what a
+    /// tree normally is, and this is the exception for one look. The daemon is asked
+    /// for the same directories with `include_ignored`, and the rows come back marked
+    /// so the pane can draw them as the hidden ones they are.
+    pub show_ignored: bool,
+    /// The rows a workspace search found, when one is up.
+    pub found: Vec<FileNode>,
+    /// The query being typed in the files pane's search, when it is.
+    pub search: Option<String>,
+    /// Requests the last key press asked for beyond the one it returned.
+    ///
+    /// A toggle has to re-list the root and every open directory, and one return
+    /// value cannot say that; the loop drains this after each event.
+    pub pending: Vec<Request>,
+    /// Tokens the conversations behind the sessions hold, summed.
+    ///
+    /// [`None`] when nobody has had a turn: zero would be a measured zero, which is
+    /// a different claim, and the status line stays quiet instead.
+    pub used_tokens: Option<u32>,
+    /// Whether any of those figures is this daemon's estimate rather than a report.
+    pub tokens_estimated: bool,
     /// The editor pane's document, when a file is open.
     ///
     /// A real [`acpilot_text::Document`] rather than a mock: the rope, the caret
@@ -1321,8 +1426,14 @@ pub struct App {
     /// the expensive half of highlighting, and a second editor tab on a `.rs`
     /// file should reuse the first one's.
     pub grammars: Grammars,
-    /// The diff review, when one is up.
+    /// The diff the permission card previews, and the review opens on.
     pub diff: Option<Diff>,
+    /// The diff review, when one is up.
+    ///
+    /// Apart from [`App::diff`] because the diff is what the agent asked for and
+    /// the review is what a person has said about it so far: answering a hunk must
+    /// not rewrite the diff the gutter's marks were parsed from.
+    pub review: Option<Review>,
     /// The palette, when it is up.
     pub palette: Option<Palette>,
     /// The menu bar, when it has the keyboard.
@@ -1477,9 +1588,16 @@ impl App {
             connected: false,
             files: Vec::new(),
             file_selected: 0,
+            show_ignored: false,
+            found: Vec::new(),
+            search: None,
+            pending: Vec::new(),
+            used_tokens: None,
+            tokens_estimated: false,
             editor: None,
             grammars: Grammars::new(),
             diff: None,
+            review: None,
             palette: None,
             menu: None,
             menu_areas: MenuAreas::default(),
@@ -1557,6 +1675,7 @@ impl App {
         // The seeded rows go through the same conversion the daemon's do: a design
         // pass that drew a different bar from the product's would be a screenshot
         // of something nobody will see.
+        app.note_tokens(&demo.integrations);
         app.integrations = acpilot_stats::rows_now(&demo.integrations);
         app.terminals = demo.terminals.clone();
         app.permissions = vec![demo.permission.clone()];
@@ -1885,7 +2004,12 @@ impl App {
                 self.status = format!("connected · acpilotd {version}");
             }
             Update::Agents(agents) => self.agents = agents,
-            Update::Stats(stats) => self.integrations = acpilot_stats::rows_now(&stats),
+            Update::Stats(stats) => {
+                // The status line's total comes from the same readings the bar draws,
+                // so the two cannot disagree about what a conversation costs.
+                self.note_tokens(&stats);
+                self.integrations = acpilot_stats::rows_now(&stats);
+            }
             Update::Sessions(sessions) => {
                 // Keep pointing at the same session when the list is reordered by
                 // a new one arriving; an index alone would jump to a stranger.
@@ -1985,6 +2109,43 @@ impl App {
                 first_seq, turn_id, ..
             } => {
                 self.status = format!("turn {turn_id} accepted at {first_seq}");
+            }
+            Update::Workspace(workspace) => self.workspace = workspace,
+            Update::Listing { path, entries } => {
+                let count = entries.len();
+                self.apply_listing(&path, entries);
+                self.status = if path.is_empty() {
+                    format!("workspace · {count} entries")
+                } else {
+                    format!("{path} · {count} entries")
+                };
+            }
+            Update::Found { query, entries } => {
+                // An answer to the query before this one is an answer to a question
+                // nobody is asking: a person types faster than a walk finishes, and
+                // the words on screen are the newest question.
+                if self.search.as_deref() == Some(query.as_str()) {
+                    let total = entries.len();
+                    self.found = Self::rows_from(entries);
+                    self.file_selected = 0;
+                    self.status = match total {
+                        0 => format!("no file matches {query}"),
+                        1 => "1 file matches".to_owned(),
+                        total => format!("{total} files match"),
+                    };
+                }
+            }
+            Update::File { path, text } => {
+                let lines = text.lines().count();
+                let marks = acpilot_git::line_changes("", &path);
+                self.editor = Some(EditorPane::from_text(
+                    &path,
+                    &text,
+                    marks,
+                    &mut self.grammars,
+                ));
+                self.set_focus(Focus::Editor);
+                self.status = format!("opened {path} · {lines} lines");
             }
             Update::Status(message) => self.status = message,
             Update::Theme(theme) => {
@@ -2141,6 +2302,15 @@ impl App {
             }
         }
 
+        // The review owns the keyboard while it is up, and it is checked above
+        // the terminal for the same reason the picker is: it is a question with a
+        // decision in it, and a keystroke aimed at a pane nobody can see would be
+        // lost. Above the terminal on purpose — a review that could not be left
+        // while a shell was behind it would be a mode with no exit.
+        if self.review.is_some() {
+            return self.review_key(key);
+        }
+
         // Ctrl-T is the way in and out of the terminal pane, and it outranks the
         // permission card: a shell that could not be left because an agent was
         // waiting would be a pane that traps the session.
@@ -2210,6 +2380,15 @@ impl App {
             return terminal_bytes(key).map(Request::TerminalWrite);
         }
 
+        // `Ctrl-D` is the review. It comes after the terminal has had its chance
+        // to swallow it, because `Ctrl-D` in a shell is end-of-file and a pane
+        // being typed into must keep it; from behind a terminal the review is one
+        // `Ctrl-P` away instead.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
+            self.toggle_review();
+            return None;
+        }
+
         // F3 is the transcript's way in, the sibling of the terminal's F2, and the
         // way back out: a function key on purpose, so no pane whose keys are text
         // has to give one up. `Tab` reaches the same pane without it.
@@ -2247,7 +2426,11 @@ impl App {
                     self.should_quit = true;
                     return Some(Request::Quit);
                 }
-                KeyCode::Char('r') => return Some(Request::Refresh),
+                KeyCode::Char('r') => {
+                    return Some(Request::Refresh {
+                        include_ignored: self.show_ignored,
+                    });
+                }
                 _ => {}
             }
         }
@@ -2296,10 +2479,26 @@ impl App {
             return self.editor_key(key);
         }
 
+        // Insert mode is a text field, so the keys that would otherwise be the
+        // app's — `?` and `Tab` — are the buffer's while it is up. The chords above
+        // still work: a pane that could not be left with `Ctrl-T` would be a pane
+        // with no way out.
+        if self.focus == Focus::Editor
+            && self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.mode() == Mode::Insert)
+        {
+            return self.editor_key(key);
+        }
+
         // Global from here down: the pane cycle and the key list. Everything else
         // belongs to the pane that has the keyboard. `?` is a question mark in the
         // composer, though — it is the one pane whose keys are text.
-        if key.code == KeyCode::Char('?') && self.focus != Focus::Prompt {
+        // The files pane's find is a text box too: `?` is a character in a path, and a
+        // box that opened the key list on one would be a box nobody could type into.
+        let editing_a_query = self.search.is_some() && self.focus == Focus::Files;
+        if key.code == KeyCode::Char('?') && self.focus != Focus::Prompt && !editing_a_query {
             self.which_key = true;
             return None;
         }
@@ -2339,46 +2538,290 @@ impl App {
 
     /// The file tree's keys.
     ///
-    /// Movement is local: a tree that can be walked is part of the design even
-    /// before the filesystem is read, and the rows here are the seeded ones.
+    /// Movement is local; what the rows mean is the daemon's. `Enter` on a directory
+    /// asks for its children and on a file reads it, `H` shows what an ignore rule
+    /// hides, and `/` searches the whole workspace by path.
     fn files_key(&mut self, key: KeyEvent) -> Option<Request> {
+        // A search is a text field while it is up: `j` is a letter in a path and `H`
+        // is a capital, so every printable key belongs to the query.
+        if self.search.is_some() {
+            return self.search_key(key);
+        }
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.file_selected = self.file_selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.file_selected + 1 < self.files.len() {
+                if self.file_selected + 1 < self.visible_files().len() {
                     self.file_selected += 1;
                 }
             }
-            KeyCode::Left | KeyCode::Char('h') => self.set_expanded(false),
-            KeyCode::Right | KeyCode::Char('l') => self.set_expanded(true),
+            KeyCode::Left | KeyCode::Char('h') => return self.set_expanded(false),
+            KeyCode::Right | KeyCode::Char('l') => return self.set_expanded(true),
             KeyCode::Enter => {
-                let Some(node) = self.files.get(self.file_selected) else {
-                    self.planned("P6-6", "the file tree");
+                let Some(node) = self.visible_files().get(self.file_selected).cloned() else {
+                    self.notice("the tree has no rows to open");
                     return None;
                 };
                 if node.dir {
-                    let expanded = !node.expanded;
-                    self.set_expanded(expanded);
-                } else {
-                    let label = node.label().to_owned();
-                    self.planned("P6-6", format!("open {label} in the editor"));
+                    return self.set_expanded(!node.expanded);
                 }
+                self.status = format!("opening {}…", node.path);
+                return Some(Request::OpenFile(node.path));
             }
-            KeyCode::Char('/') => self.planned("P6-6", "fuzzy file open"),
+            // The workspace's paths are the daemon's to walk, for the same reason its
+            // directories are: the ignore rules and the disk are on that side, and a
+            // find here must not see what the tree cannot.
+            KeyCode::Char('/') => self.find_file(),
+            // The other answer to `tree_respect_gitignore`, for one look: every open
+            // directory is asked again so the tree keeps its shape while the hidden
+            // rows appear.
+            KeyCode::Char('H') => {
+                self.show_ignored = !self.show_ignored;
+                self.relist();
+            }
             _ => {}
         }
         None
     }
 
     /// Open or close the directory the tree's selection is on.
-    fn set_expanded(&mut self, expanded: bool) {
-        if let Some(node) = self.files.get_mut(self.file_selected)
-            && node.dir
-        {
-            node.expanded = expanded;
+    ///
+    /// Opening asks the daemon, because the children are not in the client: the
+    /// client is not where the files are, and a tree that read a disk would be a
+    /// tree that cannot show a workspace on another machine. Closing is local —
+    /// a row nobody is looking at costs nothing to forget.
+    fn set_expanded(&mut self, expanded: bool) -> Option<Request> {
+        let node = self.files.get(self.file_selected).cloned()?;
+        if !node.dir {
+            return None;
         }
+        if !expanded {
+            self.collapse(&node.path);
+            return None;
+        }
+        if node.expanded {
+            return None;
+        }
+        self.status = format!("opening {}…", node.path);
+        Some(Request::ListDir {
+            path: node.path,
+            include_ignored: self.show_ignored,
+        })
+    }
+
+    /// Drop the rows under a directory, and mark it closed.
+    fn collapse(&mut self, path: &str) {
+        let Some(index) = self.files.iter().position(|node| node.path == path) else {
+            return;
+        };
+        let depth = self.files[index].depth;
+        let end = self.files[index + 1..]
+            .iter()
+            .position(|node| node.depth <= depth)
+            .map_or(self.files.len(), |offset| index + 1 + offset);
+        self.files.drain(index + 1..end);
+        self.files[index].expanded = false;
+        if self.file_selected >= self.files.len() {
+            self.file_selected = self.files.len().saturating_sub(1);
+        }
+    }
+
+    /// Put a listing into the tree.
+    ///
+    /// The root replaces every row; a subdirectory is spliced in under its own, with
+    /// the parent's depth plus one, because the list is flat and `depth` is the only
+    /// thing the renderer indents by. A directory that was already open is closed
+    /// first, so a second listing of the same place does not double its rows.
+    fn apply_listing(&mut self, path: &str, entries: Vec<acpilot_proto::file::FileEntry>) {
+        let mut rows = Self::rows_from(entries);
+
+        if path.is_empty() {
+            self.files = rows;
+            self.file_selected = 0;
+            return;
+        }
+        let Some(index) = self.files.iter().position(|node| node.path == path) else {
+            // The row went away between the question and the answer — a refresh
+            // replaced the tree. The listing is still the truth about that path, so
+            // it becomes the tree rather than being dropped.
+            self.files = rows;
+            self.file_selected = 0;
+            return;
+        };
+        self.collapse(path);
+        let depth = self.files[index].depth + 1;
+        let opened = !rows.is_empty();
+        for row in &mut rows {
+            row.depth = depth;
+        }
+        let insert_at = index + 1;
+        self.files.splice(insert_at..insert_at, rows);
+        if opened {
+            self.files[index].expanded = true;
+            self.file_selected = insert_at;
+        }
+    }
+
+    /// A listing's rows, before they are placed in the tree.
+    fn rows_from(entries: Vec<acpilot_proto::file::FileEntry>) -> Vec<FileNode> {
+        let mut rows: Vec<FileNode> = entries
+            .into_iter()
+            .map(|entry| FileNode {
+                path: entry.path,
+                depth: 0,
+                dir: entry.is_dir,
+                expanded: false,
+                ignored: entry.ignored,
+                // Git decoration is P6-6's remaining half: the listing says what
+                // is there, and nothing in it knows what changed.
+                status: acpilot_demo::GitStatus::Clean,
+            })
+            .collect();
+        // A directory before a file in the same directory, and then by name: a
+        // tree that interleaved them would be a tree nobody could scan.
+        rows.sort_by(|left, right| right.dir.cmp(&left.dir).then(left.path.cmp(&right.path)));
+        rows
+    }
+
+    /// The rows the files pane draws: a workspace search's results while one is up,
+    /// and the tree otherwise.
+    ///
+    /// One accessor because the pane, the keys and the mouse all have to agree on
+    /// which list is on screen, and an index into the wrong one is a file opened by
+    /// accident.
+    #[must_use]
+    pub fn visible_files(&self) -> &[FileNode] {
+        if self.search.is_some() {
+            &self.found
+        } else {
+            &self.files
+        }
+    }
+
+    /// Note what the conversations behind the sessions cost.
+    ///
+    /// The readings are one per agent — the newest conversation that agent had —
+    /// which is what `GET /v1/stats` reports, so the status line and the bar are the
+    /// same figures rather than two counts that drift apart.
+    fn note_tokens(&mut self, stats: &[acpilot_proto::stats::IntegrationStats]) {
+        let readings: Vec<&acpilot_proto::stats::ContextStats> = stats
+            .iter()
+            .filter_map(|row| row.context.as_ref())
+            .collect();
+        self.used_tokens = (!readings.is_empty())
+            .then(|| readings.iter().map(|context| context.used_tokens).sum());
+        self.tokens_estimated = readings
+            .iter()
+            .any(|context| context.source == acpilot_proto::stats::StatSource::Estimated);
+    }
+
+    /// Ask for the tree again, with the rows the current toggle allows.
+    ///
+    /// The root first, then every open directory in tree order: the worker answers in
+    /// the order it was asked, so each listing is spliced under a parent that is
+    /// already there. That is what keeps the tree's shape across a toggle, and a
+    /// toggle is exactly when a person wants to see what appeared.
+    fn relist(&mut self) {
+        let open: Vec<String> = self
+            .files
+            .iter()
+            .filter(|node| node.dir && node.expanded)
+            .map(|node| node.path.clone())
+            .collect();
+        self.pending.push(Request::ListDir {
+            path: String::new(),
+            include_ignored: self.show_ignored,
+        });
+        for path in open {
+            self.pending.push(Request::ListDir {
+                path,
+                include_ignored: self.show_ignored,
+            });
+        }
+        self.status = if self.show_ignored {
+            "hidden files shown, greyed · H hides them".to_owned()
+        } else {
+            "hidden files hidden · H shows them".to_owned()
+        };
+    }
+
+    /// The files pane's search, while it is being typed.
+    ///
+    /// Letters are text here, so movement is the arrows and nothing else — a query
+    /// that could not contain a `j` would be a query nobody could type. `Esc` puts the
+    /// tree back exactly as the toggle left it.
+    fn search_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let query = self.search.clone().unwrap_or_default();
+        match key.code {
+            KeyCode::Esc => {
+                self.search = None;
+                self.found.clear();
+                self.file_selected = 0;
+                self.relist();
+                self.status = "the tree is back".to_owned();
+            }
+            KeyCode::Up => {
+                self.file_selected = self.file_selected.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if self.file_selected + 1 < self.found.len() {
+                    self.file_selected += 1;
+                }
+            }
+            KeyCode::Backspace => {
+                let mut shorter = query;
+                shorter.pop();
+                return self.ask_for_files(shorter);
+            }
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let mut longer = query;
+                longer.push(character);
+                return self.ask_for_files(longer);
+            }
+            KeyCode::Enter => {
+                let Some(node) = self.found.get(self.file_selected).cloned() else {
+                    self.notice("nothing matches to open");
+                    return None;
+                };
+                self.status = format!("opening {}…", node.path);
+                return Some(Request::OpenFile(node.path));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Record the query and ask the daemon to walk the workspace for it.
+    fn ask_for_files(&mut self, query: String) -> Option<Request> {
+        self.status = format!("/{query}");
+        self.search = Some(query.clone());
+        if query.is_empty() {
+            // A walk for nothing is a walk of the repository: the list clears instead,
+            // and the next character is the question.
+            self.found.clear();
+            self.file_selected = 0;
+            return None;
+        }
+        Some(Request::SearchFiles(query))
+    }
+
+    /// Open the tree's find, the box `/` opens in the pane.
+    ///
+    /// The palette row cannot type into a pane, so it moves the keyboard there
+    /// first: a text field that appeared in a pane nobody was looking at would take
+    /// the next keystroke from the one they were in.
+    fn find_file(&mut self) {
+        self.set_focus(Focus::Files);
+        self.search = Some(String::new());
+        self.found.clear();
+        self.file_selected = 0;
+        self.status = "find · type a path · Enter opens · Esc puts the tree back".to_owned();
+    }
+
+    /// Requests a key asked for beyond the one it returned.
+    pub(crate) fn take_pending(&mut self) -> Vec<Request> {
+        std::mem::take(&mut self.pending)
     }
 
     /// The editor's keys, over the document the pane holds.
@@ -2389,13 +2832,19 @@ impl App {
     /// business, P6-5), `/` and `Ctrl-F` for a search that runs as it is typed,
     /// `Ctrl-G` for a line, `n`/`N` to walk the matches.
     ///
-    /// What is not here is not here on purpose: there is nothing to edit until
-    /// insert mode (P6-5), and a save goes through the daemon's files API rather
-    /// than writing the file from a UI (P7-10 serialises writes per file).
+    /// Insert mode is the other half: `i`, `a`, `I`, `A`, `o` and `O` enter it,
+    /// every printable key is text once there, and `Esc` comes back. Undo is `u` or
+    /// `Ctrl-Z` and redo is `Ctrl-Y` — not vim's `Ctrl-R`, which is the client's
+    /// refresh from every pane, and a chord that means two things is a bug report.
+    ///
+    /// What is still not here is not here on purpose: a save goes through the
+    /// daemon's files API rather than writing the file from a UI (P7-10 serialises
+    /// writes per file), so an edited buffer says so and `Ctrl-S` names the task.
     fn editor_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let Some(editor) = self.editor.as_mut() else {
-            self.planned("P6-6", "opening a file from the tree");
+            self.notice("no file is open · pick one in the files pane");
             return None;
         };
         if editor.is_prompting() {
@@ -2410,6 +2859,64 @@ impl App {
             }
             let message = editor.message().to_owned();
             self.status = message;
+            return None;
+        }
+
+        // Insert mode: the keys are text, and the ones that are not are the ones
+        // that mean something to a text field — a new line, a character gone, an
+        // indent, a caret moved. Everything else is a character, including the
+        // keys that are commands in normal mode.
+        if editor.mode() == Mode::Insert {
+            match key.code {
+                KeyCode::Esc => editor.set_mode(Mode::Normal),
+                KeyCode::Enter => {
+                    editor.type_text("\n", std::time::Instant::now());
+                }
+                KeyCode::Backspace => {
+                    editor.backspace(std::time::Instant::now());
+                }
+                KeyCode::Delete => {
+                    editor.delete_forward(std::time::Instant::now());
+                }
+                // One level is four spaces because nothing in this build reads a
+                // tab width yet; the settings cascade's answer is P4-7's.
+                KeyCode::Tab => {
+                    editor.indent(
+                        acpilot_text::edit::IndentMode::In,
+                        acpilot_text::edit::IndentStyle::Spaces(4),
+                        std::time::Instant::now(),
+                    );
+                }
+                KeyCode::BackTab => {
+                    editor.indent(
+                        acpilot_text::edit::IndentMode::Out,
+                        acpilot_text::edit::IndentStyle::Spaces(4),
+                        std::time::Instant::now(),
+                    );
+                }
+                KeyCode::Up => editor.move_caret(-1, 0),
+                KeyCode::Down => editor.move_caret(1, 0),
+                KeyCode::Left => editor.move_caret(0, -1),
+                KeyCode::Right => editor.move_caret(0, 1),
+                KeyCode::Home => editor.line_edge(false),
+                KeyCode::End => editor.line_edge(true),
+                KeyCode::Char('z') if control => {
+                    editor.undo();
+                }
+                KeyCode::Char('y') if control => {
+                    editor.redo();
+                }
+                KeyCode::Char(character)
+                    if !control && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    editor.type_text(&character.to_string(), std::time::Instant::now());
+                }
+                _ => {}
+            }
+            let message = editor.message().to_owned();
+            if !message.is_empty() {
+                self.status = message;
+            }
             return None;
         }
 
@@ -2433,6 +2940,12 @@ impl App {
             // A selection is marked first and copied second, the same contract the
             // terminal's copy mode keeps: a gesture that only moved a pointer does not
             // put anything on a clipboard.
+            // The chord, before the plain key: `Ctrl-Y` is redo and `y` alone is
+            // the copy a drag's selection is waiting for, and a match arm without
+            // a modifier would swallow the first.
+            KeyCode::Char('y') if control => {
+                editor.redo();
+            }
             KeyCode::Char('y') => {
                 if let Some(text) = editor.yank() {
                     self.clipboard = Some(text);
@@ -2442,7 +2955,40 @@ impl App {
             KeyCode::Char('s') if control => {
                 planned = Some(("P7-10", "saving through the daemon"));
             }
-            KeyCode::Char('i') => planned = Some(("P6-5", "insert mode")),
+            // The way into insert mode, and where the caret lands when it does:
+            // `i` here, `a` after it, `I` and `A` at the ends of the line, `o` and
+            // `O` on a line of their own. Six keys for one mode because a caret is
+            // a position and a person has an opinion about which one to start at.
+            KeyCode::Char('i') => editor.set_mode(Mode::Insert),
+            KeyCode::Char('a') => {
+                editor.move_caret(0, 1);
+                editor.set_mode(Mode::Insert);
+            }
+            KeyCode::Char('I') => {
+                editor.line_edge(false);
+                editor.set_mode(Mode::Insert);
+            }
+            KeyCode::Char('A') => {
+                editor.line_edge(true);
+                editor.set_mode(Mode::Insert);
+            }
+            KeyCode::Char('o') => editor.open_line_below(std::time::Instant::now()),
+            KeyCode::Char('O') => editor.open_line_above(std::time::Instant::now()),
+            KeyCode::Char('x') => {
+                editor.delete_forward(std::time::Instant::now());
+            }
+            // `u` is vim's undo and `Ctrl-Z` is everyone else's; `Ctrl-Z` typed in
+            // insert mode reaches the same place, so the hand that learned one
+            // editor is not the hand that has to learn this one.
+            KeyCode::Char('u') => {
+                editor.undo();
+            }
+            KeyCode::Char('z') if control && shift => {
+                editor.redo();
+            }
+            KeyCode::Char('z') if control => {
+                editor.undo();
+            }
             KeyCode::F(12) => planned = Some(("P7-4", "go to definition")),
             _ => {}
         }
@@ -2584,7 +3130,7 @@ impl App {
         }
         self.set_focus(Focus::Files);
         let index = usize::from(row.saturating_sub(area.y));
-        if index < self.files.len() {
+        if index < self.visible_files().len() {
             self.file_selected = index;
         }
         true
@@ -2862,7 +3408,11 @@ impl App {
             MenuAction::About => self.about = true,
             MenuAction::Palette => self.toggle_palette(),
             MenuAction::Keys => self.which_key = true,
-            MenuAction::Refresh => return Some(Request::Refresh),
+            MenuAction::Refresh => {
+                return Some(Request::Refresh {
+                    include_ignored: self.show_ignored,
+                });
+            }
             MenuAction::Files => self.set_focus(Focus::Files),
             MenuAction::Editor => self.set_focus(Focus::Editor),
             MenuAction::Sessions => self.set_focus(Focus::Sessions),
@@ -3320,7 +3870,7 @@ impl App {
                         editor.search();
                         self.status = editor.message().to_owned();
                     }
-                    None => self.planned("P6-6", "opening a file from the tree"),
+                    None => self.notice("no file is open · pick one in the files pane"),
                 }
                 None
             }
@@ -3331,11 +3881,25 @@ impl App {
                         editor.go_to_line();
                         self.status = editor.message().to_owned();
                     }
-                    None => self.planned("P6-6", "opening a file from the tree"),
+                    None => self.notice("no file is open · pick one in the files pane"),
                 }
                 None
             }
-            Run::Refresh => Some(Request::Refresh),
+            Run::FindFile => {
+                self.find_file();
+                None
+            }
+            Run::ReviewDiff => {
+                self.toggle_review();
+                None
+            }
+            // The two answers are the review's, reached without opening it: the
+            // row is for the person who has already read the card.
+            Run::AcceptDiff => self.accept_review(),
+            Run::RejectDiff => self.reject_review(),
+            Run::Refresh => Some(Request::Refresh {
+                include_ignored: self.show_ignored,
+            }),
             Run::WhichKey => {
                 self.which_key = true;
                 None
@@ -3361,6 +3925,166 @@ impl App {
     /// Say something that needs no task id.
     fn notice(&mut self, message: &str) {
         self.status = message.to_owned();
+    }
+
+    /// Open the review of the diff that is up, or close the one that is open.
+    fn toggle_review(&mut self) {
+        if self.review.take().is_some() {
+            self.close_review();
+            return;
+        }
+        self.open_review();
+    }
+
+    /// Put the diff on the screen a hunk at a time, every hunk accepted.
+    ///
+    /// [`false`] when there is nothing to review, which is a state worth saying
+    /// out loud: a review with no diff would be an empty card over a question it
+    /// did not answer.
+    fn open_review(&mut self) -> bool {
+        let Some(diff) = self.diff.clone() else {
+            self.notice("there is no diff to review");
+            return false;
+        };
+        if diff.hunks.is_empty() {
+            self.notice("this diff has no hunks to review");
+            return false;
+        }
+        let count = diff.hunks.len();
+        self.review = Some(Review::new(diff));
+        self.status = format!("review · {count} hunks · a accepts · x rejects · y answers");
+        true
+    }
+
+    /// Leave the review without answering anything.
+    ///
+    /// The permission stays pending: a review that closed the card would be a way
+    /// to make an agent's question disappear by looking at it.
+    fn close_review(&mut self) {
+        self.review = None;
+        self.notice("review closed · nothing answered");
+    }
+
+    /// The review's keys.
+    ///
+    /// `a` and `x` decide the hunk under the keyboard and move on; `y` answers the
+    /// write from what the hunks say and `n` declines it whatever they say, so the
+    /// two decisions a person actually makes are one keystroke each.
+    fn review_key(&mut self, key: KeyEvent) -> Option<Request> {
+        use KeyCode::{Char, Down, Enter, Esc, Up};
+        if key.code == Esc || key.code == Char('q') {
+            self.close_review();
+            return None;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == Char('d') {
+            self.close_review();
+            return None;
+        }
+
+        // The decisions are the review's and the answer is the app's, so the
+        // borrow ends before the request is built.
+        let mut answer: Option<bool> = None;
+        {
+            let review = self.review.as_mut()?;
+            match key.code {
+                Up | Char('k') => review.step(-1),
+                Down | Char('j') => review.step(1),
+                Char('a') => review.decide(true),
+                Char('x') => review.decide(false),
+                Char('A') => review.decide_all(true),
+                Char('X') => review.decide_all(false),
+                Char('s') => review.split = !review.split,
+                Char('y') | Enter => answer = Some(true),
+                Char('n') => answer = Some(false),
+                _ => return None,
+            }
+        }
+        if let Some(accept) = answer {
+            return if accept {
+                self.accept_review()
+            } else {
+                self.reject_review()
+            };
+        }
+
+        // The card stays a picture of the diff; where the keyboard is and what it
+        // has decided is the status line's job.
+        if let Some(review) = &self.review {
+            let total = review.accepted.len();
+            self.status = format!(
+                "review · hunk {}/{total} · {} accepted · a/x decide · y answers",
+                review.cursor + 1,
+                review.accepted_hunks()
+            );
+        }
+        None
+    }
+
+    /// Answer the write from the hunk decisions.
+    ///
+    /// With no review open this takes the diff as it stands and accepts all of it,
+    /// which is what the palette's "Accept this diff" means — the row is the fast
+    /// path for the person who has already read the card.
+    fn accept_review(&mut self) -> Option<Request> {
+        let review = self
+            .review
+            .take()
+            .or_else(|| self.diff.clone().map(Review::new));
+        let Some(review) = review else {
+            self.notice("there is no diff to accept");
+            return None;
+        };
+        let path = review.diff.path.clone();
+        let total = review.accepted.len();
+        let rejected = review.rejected_hunks();
+        match rejected.first() {
+            Some(first) => {
+                let others = rejected.len().saturating_sub(1);
+                let more = if others > 0 {
+                    format!(" and {others} more")
+                } else {
+                    String::new()
+                };
+                let message = format!(
+                    "review · hunk {first}{more} rejected · the write was declined · {path}"
+                );
+                self.resolve_review(PermissionOption::Deny, message)
+            }
+            None => {
+                let message =
+                    format!("review · {total} hunks accepted · the write was allowed · {path}");
+                self.resolve_review(PermissionOption::AllowOnce, message)
+            }
+        }
+    }
+
+    /// Decline the write, whatever the hunks say.
+    fn reject_review(&mut self) -> Option<Request> {
+        let path = self
+            .review
+            .take()
+            .map(|review| review.diff.path)
+            .or_else(|| self.diff.as_ref().map(|diff| diff.path.clone()));
+        let message = match path {
+            Some(path) => format!("review · declined · {path} was not written"),
+            None => "review · declined".to_owned(),
+        };
+        self.resolve_review(PermissionOption::Deny, message)
+    }
+
+    /// Answer the request that asked for the write.
+    ///
+    /// Nothing pending is not a failure: a diff can be reviewed when the request
+    /// was answered on another client, or before the daemon has polled, and saying
+    /// so is better than an answer nobody asked for.
+    fn resolve_review(&mut self, option: PermissionOption, message: String) -> Option<Request> {
+        let Some(id) = self.permissions.first().map(|request| request.id.clone()) else {
+            self.notice(&format!("{message} · nothing was waiting for an answer"));
+            return None;
+        };
+        self.permission_card = false;
+        self.status = message;
+        Some(Request::Resolve { id, option })
     }
 
     /// Open a terminal for the open session, or leave the one that is open.
@@ -3980,14 +4704,14 @@ mod tests {
         assert_eq!(app.handle_key(palette), None);
         assert!(app.palette.is_some(), "Ctrl-P opens it");
 
-        for character in "review".chars() {
+        for character in "rename".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         assert_eq!(app.matches().len(), 1, "the query filters the list");
         app.handle_key(key(KeyCode::Enter));
         assert!(app.palette.is_none(), "running a command closes it");
         let toast = app.toast.as_ref().expect("a planned command says so");
-        assert_eq!(toast.task, "P6-9");
+        assert_eq!(toast.task, "P7-5");
         assert!(app.status.contains("planned"), "{}", app.status);
     }
 
@@ -4018,7 +4742,7 @@ mod tests {
     fn the_next_key_dismisses_a_notice() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "review".chars() {
+        for character in "model".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         app.handle_key(key(KeyCode::Enter));
@@ -4031,7 +4755,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_moves_and_a_file_names_the_task_that_would_open_it() {
+    fn the_tree_moves_toggles_a_directory_and_asks_the_daemon_for_a_file() {
         let mut app = App::new("http://127.0.0.1:7777");
         app.files = acpilot_demo::tree::files();
         app.focus = Focus::Files;
@@ -4039,16 +4763,35 @@ mod tests {
         app.handle_key(key(KeyCode::Char('j')));
         assert_eq!(app.file_selected, 1);
 
-        // The second row is `crates`, a directory: opening it is local, not
-        // planned, because the rows are here and the toggle is the pane's.
-        let before = app.files[1].expanded;
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.files[1].expanded, !before);
+        // The second row is `crates`, a directory and open: Enter closes it, and
+        // closing is local — the rows nobody is looking at cost nothing to forget.
+        assert!(app.files[1].expanded);
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert!(!app.files[1].expanded);
+        assert!(
+            app.files
+                .iter()
+                .all(|node| !node.path.starts_with("crates/")),
+            "its children went with it"
+        );
 
-        // A file needs the tree to read the filesystem, which is P6-6.
+        // Opening it again is the daemon's question: the children are not in the
+        // client, because the client is not where the files are.
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::ListDir {
+                path: "crates".to_owned(),
+                include_ignored: false,
+            })
+        );
+
+        // A file is a read, and the editor is where the answer lands.
         app.file_selected = 0;
-        app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.toast.as_ref().map(|toast| toast.task), Some("P6-6"));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::OpenFile("Cargo.toml".to_owned()))
+        );
+        assert_eq!(app.status, "opening Cargo.toml…");
     }
 
     #[test]
@@ -4123,6 +4866,470 @@ mod tests {
         let editor = app.editor.as_ref().expect("a buffer");
         assert_eq!(editor.position(), (18, 5));
         assert_eq!(app.status, "line 18");
+    }
+
+    #[test]
+    fn the_review_opens_over_a_pending_question_and_leaves_it_pending() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let review = app.review.as_ref().expect("the review is up");
+        assert_eq!(review.accepted, vec![true, true], "nothing objected to yet");
+        assert_eq!(review.cursor, 0);
+        assert_eq!(app.permissions.len(), 1, "the question is still waiting");
+
+        // Escape leaves the review and answers nothing: a question that vanished
+        // because it had been looked at would be a way to lose an agent's request.
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.review.is_none(), "esc closes the review");
+        assert_eq!(app.permissions.len(), 1, "and leaves the question open");
+        assert!(
+            !app.permission_card,
+            "reading a diff does not put the card up either"
+        );
+    }
+
+    #[test]
+    fn a_rejected_hunk_declines_the_write_and_names_itself() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.permission_card = true;
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(
+            app.review.as_ref().expect("a review").accepted,
+            vec![false, true],
+            "x decides the hunk it is on, and moves on"
+        );
+        assert_eq!(app.review.as_ref().expect("a review").cursor, 1);
+
+        let id = app.permissions[0].id.clone();
+        let request = app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            request,
+            Some(Request::Resolve {
+                id,
+                option: PermissionOption::Deny,
+            }),
+            "a file written in part is a file nobody asked for"
+        );
+        assert!(app.review.is_none(), "answering closes the review");
+        assert!(!app.permission_card, "and the question is answered");
+        assert!(
+            app.status.contains("hunk 1 rejected"),
+            "the status names the hunk: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn accepting_every_hunk_allows_the_write_once() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        // Reject one, go back, and change the answer: a review whose decision
+        // cannot be undone would be a review that punishes reading it twice.
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Char('k')));
+        app.handle_key(key(KeyCode::Char('a')));
+        assert!(
+            app.review
+                .as_ref()
+                .expect("a review")
+                .rejected_hunks()
+                .is_empty(),
+            "a is the decision the keyboard is on, and it undoes the x"
+        );
+
+        let id = app.permissions[0].id.clone();
+        let request = app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            request,
+            Some(Request::Resolve {
+                id,
+                option: PermissionOption::AllowOnce,
+            })
+        );
+        assert!(app.status.contains("2 hunks accepted"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_review_with_nothing_to_answer_says_so_instead_of_asking() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.permissions.clear();
+        app.permission_card = false;
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('A')));
+        assert_eq!(app.handle_key(key(KeyCode::Char('y'))), None);
+        assert!(app.review.is_none());
+        assert!(
+            app.status.contains("nothing was waiting"),
+            "an answer nobody asked for is not sent: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn a_split_review_is_the_same_decisions_drawn_differently() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('s')));
+        let review = app.review.as_ref().expect("a review");
+        assert!(review.split, "s is the two-column view");
+        assert_eq!(
+            review.accepted,
+            vec![true, true],
+            "how a hunk is drawn is not what was decided about it"
+        );
+    }
+
+    #[test]
+    fn the_palette_answers_the_write_without_opening_the_review() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let command = *app
+            .commands
+            .iter()
+            .find(|command| command.title == "Accept this diff")
+            .expect("the palette has the row");
+        assert!(
+            command.planned().is_none(),
+            "P6-9 is built, so the row must not still say it is not"
+        );
+        let id = app.permissions[0].id.clone();
+        assert_eq!(
+            app.run_command(command),
+            Some(Request::Resolve {
+                id,
+                option: PermissionOption::AllowOnce,
+            }),
+            "the fast path for a person who already read the card"
+        );
+        assert!(app.review.is_none(), "and it need not open the review");
+    }
+
+    fn entry(path: &str, dir: bool) -> acpilot_proto::file::FileEntry {
+        acpilot_proto::file::FileEntry {
+            path: path.to_owned(),
+            is_dir: dir,
+            size: 0,
+            modified: None,
+            ignored: false,
+        }
+    }
+
+    fn integration(
+        id: &str,
+        context: Option<(u32, acpilot_proto::stats::StatSource)>,
+    ) -> acpilot_proto::stats::IntegrationStats {
+        acpilot_proto::stats::IntegrationStats {
+            id: id.to_owned(),
+            kind: acpilot_proto::stats::IntegrationKind::Agent,
+            label: id.to_owned(),
+            context: context.map(|(used_tokens, source)| acpilot_proto::stats::ContextStats {
+                used_tokens,
+                window_tokens: None,
+                source,
+            }),
+            credits: None,
+            updated_at: "2026-10-30T12:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_hidden_toggle_asks_for_the_root_and_every_open_directory() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src", true), entry("docs", true)],
+        });
+        // `docs` sorts before `src`, so the second row is the one to open.
+        app.file_selected = 1;
+        app.handle_key(key(KeyCode::Enter));
+        app.apply(Update::Listing {
+            path: "src".to_owned(),
+            entries: vec![entry("src/main.rs", false)],
+        });
+        assert!(app.files[1].expanded);
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('H'))),
+            None,
+            "the queue answers, not the return value"
+        );
+        assert!(app.show_ignored);
+        assert_eq!(
+            app.pending,
+            vec![
+                Request::ListDir {
+                    path: String::new(),
+                    include_ignored: true
+                },
+                Request::ListDir {
+                    path: "src".to_owned(),
+                    include_ignored: true
+                },
+            ],
+            "the root first, then what was open, so each child lands under its parent"
+        );
+        assert!(app.status.contains("greyed"), "{}", app.status);
+    }
+
+    #[test]
+    fn an_ignored_row_is_kept_and_marked() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let mut target = entry("target", true);
+        target.ignored = true;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![target, entry("src", true)],
+        });
+        // Directories first, then by name: `src` is the row above `target`.
+        assert_eq!(app.files[1].path, "target");
+        assert!(app.files[1].ignored, "the pane draws it as hidden");
+        assert!(!app.files[0].ignored);
+    }
+
+    #[test]
+    fn slash_searches_the_workspace_and_esc_puts_the_tree_back() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src", true)],
+        });
+        assert_eq!(app.handle_key(key(KeyCode::Char('/'))), None);
+        assert_eq!(app.search.as_deref(), Some(""));
+
+        // A letter is a letter here: no `j` motion, no `H` toggle.
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('m'))),
+            Some(Request::SearchFiles("m".to_owned()))
+        );
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('a'))),
+            Some(Request::SearchFiles("ma".to_owned()))
+        );
+        app.apply(Update::Found {
+            query: "ma".to_owned(),
+            entries: vec![entry("src/main.rs", false)],
+        });
+        assert_eq!(app.visible_files().len(), 1);
+
+        // An answer to the query before this one is dropped.
+        app.apply(Update::Found {
+            query: "m".to_owned(),
+            entries: vec![entry("src/lib.rs", false)],
+        });
+        assert_eq!(app.visible_files()[0].path, "src/main.rs");
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::OpenFile("src/main.rs".to_owned()))
+        );
+
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.search.is_none());
+        assert_eq!(app.files.len(), 1, "the tree is what the toggle left");
+        assert!(
+            !app.pending.is_empty(),
+            "and it is re-listed, not remembered"
+        );
+    }
+
+    #[test]
+    fn the_status_line_adds_up_what_the_sessions_hold() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Stats(vec![
+            integration(
+                "mock",
+                Some((1_200, acpilot_proto::stats::StatSource::Estimated)),
+            ),
+            integration(
+                "claude",
+                Some((800, acpilot_proto::stats::StatSource::Server)),
+            ),
+            integration("quiet", None),
+        ]));
+        assert_eq!(app.used_tokens, Some(2_000));
+        assert!(app.tokens_estimated, "one of the two is an estimate");
+
+        // Nobody has had a turn: the line says nothing rather than "0".
+        app.apply(Update::Stats(vec![integration("quiet", None)]));
+        assert_eq!(app.used_tokens, None);
+    }
+
+    #[test]
+    fn a_listing_becomes_a_tree_with_directories_first() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![
+                entry("src/main.rs", false),
+                entry("docs", true),
+                entry("Cargo.toml", false),
+            ],
+        });
+        let rows: Vec<(&str, u8, bool)> = app
+            .files
+            .iter()
+            .map(|node| (node.path.as_str(), node.depth, node.dir))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("docs", 0, true),
+                ("Cargo.toml", 0, false),
+                ("src/main.rs", 0, false)
+            ],
+            "a directory sorts before the files beside it"
+        );
+        assert_eq!(app.files[0].label(), "docs");
+        assert_eq!(app.status, "workspace · 3 entries");
+    }
+
+    #[test]
+    fn opening_a_directory_splices_its_children_under_it_and_closing_takes_them_away() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src", true), entry("README.md", false)],
+        });
+        app.file_selected = 0;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::ListDir {
+                path: "src".to_owned(),
+                include_ignored: false,
+            }),
+            "the children are the daemon's to send"
+        );
+
+        app.apply(Update::Listing {
+            path: "src".to_owned(),
+            entries: vec![entry("src/main.rs", false), entry("src/lib.rs", false)],
+        });
+        let under: Vec<(&str, u8)> = app
+            .files
+            .iter()
+            .map(|node| (node.path.as_str(), node.depth))
+            .collect();
+        assert_eq!(
+            under,
+            vec![
+                ("src", 0),
+                ("src/lib.rs", 1),
+                ("src/main.rs", 1),
+                ("README.md", 0)
+            ]
+        );
+        assert!(app.files[0].expanded);
+        assert_eq!(app.file_selected, 1, "the first child is selected");
+
+        app.file_selected = 0;
+        app.handle_key(key(KeyCode::Char('h')));
+        assert_eq!(app.files.len(), 2, "closing drops the rows under it");
+        assert!(!app.files[0].expanded);
+    }
+
+    #[test]
+    fn enter_on_a_file_asks_the_daemon_and_the_answer_opens_a_buffer() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src/main.rs", false)],
+        });
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::OpenFile("src/main.rs".to_owned()))
+        );
+
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+        });
+        let editor = app.editor.as_ref().expect("the file is open");
+        assert_eq!(editor.path(), "src/main.rs");
+        assert_eq!(editor.tab(), "main.rs");
+        assert_eq!(editor.language(), "rust", "the path chose the grammar");
+        assert_eq!(editor.document().text(), "fn main() {}\n");
+        assert_eq!(app.focus, Focus::Editor, "the keyboard follows the file");
+        assert!(
+            !editor.dirty(),
+            "a file that was just opened has nothing to undo"
+        );
+    }
+
+    #[test]
+    fn insert_mode_types_into_the_buffer_and_esc_gives_the_motions_back() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        let before = app.editor.as_ref().expect("a buffer").document().text();
+
+        app.handle_key(key(KeyCode::Char('i')));
+        assert_eq!(app.editor.as_ref().expect("a buffer").mode(), Mode::Insert);
+        app.handle_key(key(KeyCode::Char('!')));
+        // `?` is the key list everywhere else, and a character here: insert mode
+        // is a text field, and a text field that opened a panel would be a pane
+        // arguing with itself.
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(!app.which_key, "insert mode is a text field");
+
+        let text = app.editor.as_ref().expect("a buffer").document().text();
+        assert_ne!(text, before, "the keystrokes reached the buffer");
+        assert!(text.contains("!?"), "{text}");
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.editor.as_ref().expect("a buffer").mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn tab_indents_in_insert_mode_and_cycles_the_panes_otherwise() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Editor, "tab is an indent here");
+        let text = app.editor.as_ref().expect("a buffer").document().text();
+        assert!(
+            text.starts_with("    ") || text.contains("\n    "),
+            "{text:?}"
+        );
+
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sessions, "and a pane away in normal mode");
+    }
+
+    #[test]
+    fn undo_and_redo_walk_the_edits_and_the_dirty_mark_with_them() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        let opened = app.editor.as_ref().expect("a buffer").document().text();
+        assert!(!app.editor.as_ref().expect("a buffer").dirty());
+
+        app.handle_key(key(KeyCode::Char('i')));
+        for character in "abc".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert!(app.editor.as_ref().expect("a buffer").dirty());
+
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").document().text(),
+            opened,
+            "a word typed without a pause is one undo"
+        );
+        assert!(
+            !app.editor.as_ref().expect("a buffer").dirty(),
+            "back at the text that was opened"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert!(
+            app.editor.as_ref().expect("a buffer").dirty(),
+            "redo put the word back"
+        );
     }
 
     #[test]

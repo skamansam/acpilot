@@ -22,8 +22,16 @@ pub enum Run {
     Palette,
     /// Show the permission card for whatever is waiting.
     Permission,
+    /// Open, or leave, the review of the agent's diff.
+    ReviewDiff,
+    /// Answer the pending write with the diff as it stands.
+    AcceptDiff,
+    /// Decline the pending write.
+    RejectDiff,
     /// Search the open buffer, from the editor it belongs to.
     Find,
+    /// Find a file in the workspace, from the tree that opens one.
+    FindFile,
     /// Go to a line and column of the open buffer.
     GoToLine,
     /// Leave.
@@ -95,13 +103,23 @@ pub fn commands() -> Vec<Command> {
         // keys that do the same thing.
         run("Find in file", "ctrl-f", Run::Find),
         run("Go to line…", "ctrl-g", Run::GoToLine),
+        // The diff's three rows answer the same question the card asks, so they
+        // moved out of the planned list when P6-9 landed rather than staying a
+        // second way to reach a decision that already exists. They sit last of the
+        // working rows because the list is read top down and the first rows are
+        // the ones a person reaches for without thinking.
+        run("Review diff", "ctrl-d", Run::ReviewDiff),
+        run("Accept this diff", "ctrl-enter", Run::AcceptDiff),
+        run("Reject this diff", "ctrl-backspace", Run::RejectDiff),
         run("Quit", "ctrl-q", Run::Quit),
-        planned("Open file…", "ctrl-o", "P6-6"),
-        planned("Search workspace", "ctrl-shift-f", "P6-6"),
+        // `Find a file…` was `planned("Open file…", "P6-6")` until the tree could
+        // open one. It is the tree's own find now, because a file is opened by
+        // picking it out of a list rather than by typing a name into nothing.
+        run("Find a file…", "ctrl-o", Run::FindFile),
+        // Paths are searched; contents are still a walk that reads every file, which
+        // is a different answer from the tree's listing and not built yet.
+        planned("Search file contents", "ctrl-shift-f", "P6-6"),
         planned("Go to definition", "f12", "P7-4"),
-        planned("Review diff", "ctrl-d", "P6-9"),
-        planned("Accept this diff", "ctrl-enter", "P6-9"),
-        planned("Reject this diff", "ctrl-backspace", "P6-9"),
         planned("Rename symbol", "f2", "P7-5"),
         planned("Split editor", "ctrl-\\", "P6-3"),
         planned("Switch profile…", "ctrl-k p", "P4-6"),
@@ -132,6 +150,12 @@ mod tests {
                 .filter_map(Command::planned)
                 .all(|task| task.starts_with('P')),
             "every planned row names a phase task"
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| "ctrl-o" == command.keys && command.planned().is_none()),
+            "finding a file is a command: the tree does it"
         );
     }
 }

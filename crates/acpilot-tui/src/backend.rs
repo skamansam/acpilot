@@ -44,7 +44,12 @@ const STATS_POLL: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// Re-read sessions, agents and pending permissions.
-    Refresh,
+    Refresh {
+        /// Whether the tree is showing the paths an ignore rule hides. The root is
+        /// listed again on a refresh, and a refresh that quietly dropped those rows
+        /// would leave the toggle claiming they are on screen.
+        include_ignored: bool,
+    },
     /// Open a session, replaying its transcript from the beginning.
     Select(String),
     /// Send a prompt to the open session.
@@ -55,6 +60,21 @@ pub enum Request {
     New(String),
     /// End a session.
     Delete(String),
+    /// List a directory of the workspace, by workspace-relative path.
+    ///
+    /// Empty is the root. The tree asks for a directory when it is opened rather
+    /// than reading the whole workspace, because a walk of a large repository is a
+    /// request whose cost is the repository's.
+    ListDir {
+        /// The directory, relative to the workspace root; empty is the root.
+        path: String,
+        /// Whether to return the rows an ignore rule hides, marked as hidden.
+        include_ignored: bool,
+    },
+    /// Walk the workspace for paths containing a query, for the files pane's find.
+    SearchFiles(String),
+    /// Read a file, by workspace-relative path.
+    OpenFile(String),
     /// Attach to one of the open session's terminals, by id.
     OpenTerminal {
         /// The terminal to attach to, as the daemon listed it.
@@ -87,6 +107,33 @@ pub enum Update {
     },
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
+    /// The workspace root the daemon serves, for the tree's title.
+    Workspace(String),
+    /// One directory, as the daemon listed it.
+    Listing {
+        /// The workspace-relative path that was listed; empty is the root.
+        path: String,
+        /// Its entries, already sorted by the daemon.
+        entries: Vec<acpilot_proto::file::FileEntry>,
+    },
+    /// A workspace search's answer.
+    ///
+    /// The query comes back with the rows because a person types faster than a walk
+    /// finishes: an answer to the query before this one is an answer to a question
+    /// nobody is asking any more, and the app can only tell by the words.
+    Found {
+        /// The query that was asked.
+        query: String,
+        /// The files whose paths contain it, sorted by the daemon.
+        entries: Vec<acpilot_proto::file::FileEntry>,
+    },
+    /// A file's text, for the editor.
+    File {
+        /// The path the daemon answered with, which is the one to show.
+        path: String,
+        /// The UTF-8 contents.
+        text: String,
+    },
     /// The integrations the bar draws, as the daemon reported them.
     Stats(Vec<IntegrationStats>),
     /// The session list.
@@ -218,6 +265,9 @@ async fn run(
 ) {
     match client.health().await {
         Ok(health) => {
+            if let Some(workspace) = &health.workspace {
+                let _ = updates.send(Update::Workspace(workspace.clone()));
+            }
             let _ = updates.send(Update::Health {
                 version: health.version,
             });
@@ -229,7 +279,7 @@ async fn run(
             )));
         }
     }
-    refresh(&client, &updates).await;
+    refresh(&client, false, &updates).await;
 
     // The profile-wide stream is what raises a permission card without the user
     // pressing anything, and what says the settings changed when this client
@@ -308,7 +358,45 @@ async fn run(
                         let _ = link.commands.send(TerminalCommand::Close);
                     }
                 }
-                Some(Request::Refresh) => refresh(&client, &updates).await,
+                Some(Request::Refresh { include_ignored }) => {
+                    refresh(&client, include_ignored, &updates).await;
+                }
+                Some(Request::ListDir {
+                    path,
+                    include_ignored,
+                }) => {
+                    match client.files(&path, include_ignored).await {
+                        Ok(entries) => {
+                            let _ = updates.send(Update::Listing { path, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::SearchFiles(query)) => {
+                    match client.search_files(&query).await {
+                        Ok(entries) => {
+                            let _ = updates.send(Update::Found { query, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::OpenFile(path)) => {
+                    match client.file(&path).await {
+                        Ok(content) => {
+                            let _ = updates.send(Update::File {
+                                path: content.path,
+                                text: content.text,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::Select(id)) => {
                     if let Some((existing, _)) = &open
                         && existing == &id
@@ -428,7 +516,7 @@ async fn run(
 }
 
 /// Re-read everything the UI shows at startup.
-async fn refresh(client: &Client, updates: &UnboundedSender<Update>) {
+async fn refresh(client: &Client, include_ignored: bool, updates: &UnboundedSender<Update>) {
     match client.agents().await {
         Ok(agents) => {
             let _ = updates.send(Update::Agents(agents));
@@ -440,6 +528,26 @@ async fn refresh(client: &Client, updates: &UnboundedSender<Update>) {
     refresh_sessions(client, updates).await;
     refresh_permissions(client, updates).await;
     refresh_stats(client, updates).await;
+    refresh_files(client, include_ignored, updates).await;
+}
+
+/// Read the workspace root, so the tree has rows before a key is pressed.
+///
+/// The root only: its children arrive when a directory is opened. A daemon with no
+/// workspace answers `409` and the status line says so, which is the honest answer
+/// to a tree with nothing behind it.
+async fn refresh_files(client: &Client, include_ignored: bool, updates: &UnboundedSender<Update>) {
+    match client.files("", include_ignored).await {
+        Ok(entries) => {
+            let _ = updates.send(Update::Listing {
+                path: String::new(),
+                entries,
+            });
+        }
+        Err(error) => {
+            let _ = updates.send(Update::Status(describe(&error)));
+        }
+    }
 }
 
 async fn refresh_sessions(client: &Client, updates: &UnboundedSender<Update>) {
@@ -717,6 +825,31 @@ async fn run_demo(
     while let Some(request) = requests.recv().await {
         match request {
             Request::Quit => return,
+            // The design pass has one tree and one file, and says so rather than
+            // pretending a fixture is a workspace.
+            Request::ListDir { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the tree is the fixture's".to_owned(),
+                ));
+            }
+            Request::SearchFiles(query) => {
+                let _ = updates.send(Update::Status(format!(
+                    "design pass · no workspace to walk for {query}"
+                )));
+            }
+            Request::OpenFile(path) => {
+                if path == demo.editor.path {
+                    let _ = updates.send(Update::File {
+                        path: demo.editor.path.clone(),
+                        text: demo.editor.lines.join("\n"),
+                    });
+                } else {
+                    let _ = updates.send(Update::Status(format!(
+                        "design pass · only {} is behind this tree",
+                        demo.editor.path
+                    )));
+                }
+            }
             Request::Select(id) => {
                 let Some(fixture) = demo
                     .sessions
@@ -782,7 +915,7 @@ async fn run_demo(
                 )));
                 let _ = updates.send(Update::Permissions(Vec::new()));
             }
-            Request::Refresh => announce(&demo, &updates),
+            Request::Refresh { .. } => announce(&demo, &updates),
             // A keystroke into the fixture's shell is not answered: the screen it
             // shows is the one it kept, and pretending to run it would be the one
             // thing a design pass must not do.

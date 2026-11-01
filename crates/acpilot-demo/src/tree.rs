@@ -49,6 +49,8 @@ pub struct FileNode {
     pub dir: bool,
     /// For a directory, whether its children follow it. Ignored for a file.
     pub expanded: bool,
+    /// Whether an ignore rule hides this row, which the tree draws greyed.
+    pub ignored: bool,
     /// How it differs from the last commit.
     pub status: GitStatus,
 }
@@ -91,6 +93,7 @@ fn file(path: &str, depth: u8, status: GitStatus) -> FileNode {
         depth,
         dir: false,
         expanded: false,
+        ignored: false,
         status,
     }
 }
@@ -101,6 +104,7 @@ fn dir(path: &str, depth: u8, expanded: bool) -> FileNode {
         depth,
         dir: true,
         expanded,
+        ignored: false,
         status: GitStatus::Clean,
     }
 }

@@ -89,8 +89,31 @@ pub struct Preferences {
     /// change appearance depending on where it was started from.
     #[serde(default)]
     pub theme_follow_terminal: bool,
+    /// Leave paths a `.gitignore` excludes out of the file tree.
+    ///
+    /// On, the tree is the project as git sees it: `target/`, `.venv/` and every
+    /// other ignored directory are not rows, which is the difference between a
+    /// tree a person can read and a listing of a directory. The daemon answers the
+    /// listing, so the matching happens where the ignore files are — a client that
+    /// filtered a listing it did not read would be guessing at patterns it has not
+    /// seen.
+    ///
+    /// Off, every entry is a row. A workspace that is not a repository has no
+    /// `.gitignore` to honour, so the key changes nothing there.
+    #[serde(default = "default_true")]
+    pub tree_respect_gitignore: bool,
     /// Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.
     pub diagnostics_min_severity: String,
+}
+
+/// `true`, for a preference whose default is on.
+///
+/// Spelled out rather than `#[serde(default)]`, which would default a `bool` to
+/// `false`: a field added to the defaults file still needs the answer for a client
+/// that sends a `Preferences` without it, and "the tree hides ignored paths" is a
+/// default that must survive an older sender.
+fn default_true() -> bool {
+    true
 }
 
 impl Preferences {

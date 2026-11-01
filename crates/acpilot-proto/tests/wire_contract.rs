@@ -238,6 +238,16 @@ fn file_documents() {
         "modified": "2026-10-21T09:31:12Z"
     }));
 
+    // A row an ignore rule hides, as a tree that asked for it is answered: the
+    // flag is present only when it is true, so an ordinary listing costs no bytes
+    // saying that none of its rows is hidden.
+    round_trip::<acpilot_proto::file::FileEntry>(json!({
+        "path": "target/debug/app",
+        "is_dir": false,
+        "size": 0,
+        "ignored": true
+    }));
+
     round_trip::<acpilot_proto::file::FileEntry>(json!({
         "path": "src",
         "is_dir": true,
@@ -297,6 +307,7 @@ fn profile_documents() {
         "wrap": false,
         "theme": "acpilot.night-flight",
         "theme_follow_terminal": false,
+        "tree_respect_gitignore": true,
         "diagnostics_min_severity": "warning"
     }));
 }

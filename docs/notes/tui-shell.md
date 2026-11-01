@@ -77,7 +77,7 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
   money, latency. A provider that stopped answering is drawn hollow, not hidden.
 
 Overlays, back to front: the terminal picker, the key list, the palette, the
-permission card, the toast.
+permission card, the diff review that answers it, the toast.
 
 ## What is real, and what is not
 
@@ -85,12 +85,13 @@ permission card, the toast.
 | --- | --- | --- |
 | Menu bar, About | real, and every row is an existing path | — |
 | Sessions, transcript, composer | real, over the daemon; the transcript is a pane (`Tab`, `F3`) with scroll, find and copy | P6-7 refines the composer |
-| Permission card | real answer path, seeded diff preview | P6-8, P6-9 |
+| Permission card | real answer path, seeded diff preview | P6-8 |
+| Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
-| File tree | seeded rows; movement and collapsing work | P6-6 |
-| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. The buffer is the seeded one, because reading a file is P6-6, and it is read-only until P6-5 | P6-5 (insert mode), P6-6 (opening a file), P7-10 (saving) |
+| File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which walks with the same ignore rules, so a find cannot see what the tree cannot. Rows carry no git letters yet | P6-6 (workspace grep, jump list), P6.5-2 (decorations) |
+| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. The buffer is whatever the tree opened — or the seeded one in `--demo` — and a `+` on the tab says the text is not the file's | P6-5 (the keymap layer: `keymap.toml`, visual mode and a goal column), P7-10 (saving) |
 | Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a roster, plus an estimated context for an agent with a conversation behind it and no window unless the agent names one, so a live bar before any session is rows that say so; the seeded rows in `--demo` exercise all four sources | P4.5-12 (provider rows and balances) |
 
 ## Keys
@@ -100,12 +101,14 @@ permission card, the toast.
 | anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means |
-| files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` fuzzy open · a click focuses the tree on that row |
-| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `y` copy the selection · `Esc` clear it · `Ctrl-S` save · `i` insert · `F12` definition · click puts the caret · drag selects · wheel scrolls the view |
+| files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |
+| editor | `h`/`j`/`k`/`l` cursor · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `y` copy the selection · `Esc` clear it · `Ctrl-S` save (P7-10) · `i`/`a` insert at the caret or after it · `I`/`A` at the line's start or end · `o`/`O` a line below or above · `u`/`Ctrl-Z` undo · `Ctrl-Y` redo · `x` delete a character · `F12` definition · click puts the caret · drag selects · wheel scrolls the view |
+| insert mode | any key is text · `Enter` a line · `Backspace`/`Delete` a character · `Tab`/`Shift-Tab` indent/outdent · arrows and `Home`/`End` move · `Ctrl-Z` undo · `Esc` normal mode |
 | sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel · a click focuses the list on that session and opens it |
 | prompt | `Enter` send · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
+| review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
 
 `Tab` never lands in the terminal: a shell wants the byte. The pane is entered and
 left with `Ctrl-T`, and the copy mode's own keys take over while it is up. The
@@ -220,8 +223,8 @@ review cannot disagree about what the agent did.
 
 ## When a feature is not built
 
-A palette row is tagged with its task (`Review diff · P6-9`). Running it raises a
-toast naming the task and the intent — "planned · P6-9 · Review diff", "not
+A palette row is tagged with its task (`Open file · P6-6`). Running it raises a
+toast naming the task and the intent — "planned · P6-6 · Open file", "not
 implemented in this build" — and the same sentence goes on the status line. The
 notice belongs to the keystroke that raised it: the next key dismisses it.
 
@@ -248,8 +251,11 @@ events at 45 ms a chunk.
    pane or a full-width tree are the alternatives.
 2. **The terminal's shape.** It takes the editor and the sidebar, keeping the tree.
    A tab beside the buffer, or a split under it, are both plausible.
-3. **The diff.** It lives inside the permission card, because that is where the
-   decision is made. P6-9 may want a review pane of its own.
+3. **The diff.** Answered for a card-sized diff: the card draws it, and `Ctrl-D`
+   opens the review over that card — still the place the decision is made, with
+   room for the hunks and a decision on each. Whether a long review wants a pane
+   of its own is open, and so is how much diff a card should hold before it
+   scrolls.
 4. **The transcript's scrollback.** Answered: `F3` gives it the terminal's copy
    mode, including a yank over OSC 52. What is still open is whether a transcript
    that can be read is a pane with a focus of its own, rather than a mode entered

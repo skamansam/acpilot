@@ -244,6 +244,50 @@ impl Client {
         self.get("/v1/stats").await
     }
 
+    /// `GET /v1/files/list?path=&include_ignored=`.
+    ///
+    /// One directory per call: the daemon serves a listing of a path, not a walk of
+    /// the workspace, so a tree that opens a directory asks for exactly that one and
+    /// pays for what a person is looking at.
+    ///
+    /// `include_ignored` asks for the rows an ignore rule hides, each marked with
+    /// its `ignored` flag: a tree's "show hidden" toggle is the only caller that
+    /// sends it, and the marking is what lets a pane draw those rows as the
+    /// exception they are.
+    pub async fn files(
+        &self,
+        path: &str,
+        include_ignored: bool,
+    ) -> Result<Vec<acpilot_proto::file::FileEntry>, ClientError> {
+        self.get(&format!(
+            "/v1/files/list?path={}&include_ignored={include_ignored}",
+            query_value(path)
+        ))
+        .await
+    }
+
+    /// `GET /v1/files/search?q=`.
+    ///
+    /// Every file in the workspace whose path contains `q`, as the daemon walked
+    /// it: the ignore rules are the daemon's, so a find cannot see what the tree
+    /// hides — one `tree_respect_gitignore` decides both.
+    pub async fn search_files(
+        &self,
+        query: &str,
+    ) -> Result<Vec<acpilot_proto::file::FileEntry>, ClientError> {
+        self.get(&format!("/v1/files/search?q={}", query_value(query)))
+            .await
+    }
+
+    /// `GET /v1/files?path=`.
+    ///
+    /// The text plus the ETag a save sends back as `if_match`: the read half of the
+    /// write, which is P7-10's.
+    pub async fn file(&self, path: &str) -> Result<acpilot_proto::file::FileContent, ClientError> {
+        self.get(&format!("/v1/files?path={}", query_value(path)))
+            .await
+    }
+
     /// `GET /v1/terminals?session=`.
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger
@@ -465,6 +509,24 @@ impl Client {
     }
 }
 
+/// A query-string value, percent-encoded.
+///
+/// Hand-rolled for the same reason the clipboard's base64 is: one escape is not
+/// worth a dependency, and a path with a space, a `#` or a `?` in it has to survive
+/// the round trip. `/` stays as it is — a path reads better in a log than `%2F`.
+fn query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn status_code(status: StatusCode) -> &'static str {
     status.canonical_reason().unwrap_or("unknown")
 }
@@ -546,6 +608,36 @@ mod tests {
         assert_eq!(
             Client::new("http://127.0.0.1:7777").base(),
             "http://127.0.0.1:7777"
+        );
+    }
+
+    #[test]
+    fn a_path_survives_the_query_string() {
+        assert_eq!(
+            query_value("crates/acpilot-tui/src/app.rs"),
+            "crates/acpilot-tui/src/app.rs"
+        );
+        assert_eq!(query_value("docs/a b.md"), "docs/a%20b.md");
+        assert_eq!(query_value("a#b?c=d"), "a%23b%3Fc%3Dd");
+        assert_eq!(
+            query_value("caf\u{e9}.rs"),
+            "caf%C3%A9.rs",
+            "a byte, not a char"
+        );
+    }
+
+    #[test]
+    fn the_listing_and_read_routes_are_where_the_daemon_serves_them() {
+        // The paths are the contract: a typo here is a 404 the daemon answers
+        // perfectly correctly, so the strings are asserted rather than assumed.
+        let client = Client::new("http://127.0.0.1:7777");
+        assert_eq!(
+            client.url("/v1/files/list?path=src"),
+            "http://127.0.0.1:7777/v1/files/list?path=src"
+        );
+        assert_eq!(
+            client.url("/v1/files?path=src/main.rs"),
+            "http://127.0.0.1:7777/v1/files?path=src/main.rs"
         );
     }
 

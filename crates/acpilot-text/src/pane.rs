@@ -28,7 +28,8 @@
 //! What is not here: colours (a [`Cell`] carries the char offset and the pane
 //! asks the highlighter), wrapping (long lines scroll, they do not fold — a soft
 //! wrap is a layout a pane chooses, and it changes what "one row" means), and
-//! diffing, which is P6-9.
+//! diffing: a review is drawn from the hunks it was given, not from a diff the
+//! pane computes.
 
 use std::ops::Range;
 

@@ -290,15 +290,29 @@ pub fn locations(answer: &Value) -> Vec<Location> {
 mod tests {
     use super::*;
 
+    /// The `file://` spelling of an absolute path, as a server sends one.
+    ///
+    /// Built rather than written out: `file:///work/...` is not a path Windows can turn
+    /// back into one, and these tests are about the conversion rather than about a
+    /// Unix spelling of it.
+    fn uri_of(path: &std::path::Path) -> String {
+        url::Url::from_file_path(path)
+            .expect("an absolute path")
+            .to_string()
+    }
+
     #[test]
     fn both_documented_shapes_are_read() {
+        let directory = std::env::temp_dir().join("acpilot-lsp-shapes").join("src");
+        let lib = directory.join("lib.rs");
+        let main = directory.join("main.rs");
         let answer = json!([
             {
-                "uri": "file:///work/app/src/lib.rs",
+                "uri": uri_of(&lib),
                 "range": { "start": { "line": 4, "character": 8 }, "end": { "line": 4, "character": 12 } }
             },
             {
-                "targetUri": "file:///work/app/src/main.rs",
+                "targetUri": uri_of(&main),
                 "targetRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
                 "targetSelectionRange": { "start": { "line": 9, "character": 3 }, "end": { "line": 9, "character": 7 } }
             }
@@ -308,12 +322,12 @@ mod tests {
             found,
             vec![
                 Location {
-                    path: PathBuf::from("/work/app/src/lib.rs"),
+                    path: lib,
                     line: 4,
                     character: 8
                 },
                 Location {
-                    path: PathBuf::from("/work/app/src/main.rs"),
+                    path: main,
                     line: 9,
                     character: 3
                 },
@@ -324,13 +338,23 @@ mod tests {
 
     #[test]
     fn percent_encoding_and_spaces_survive_the_trip() {
+        let file = std::env::temp_dir()
+            .join("acpilot lsp")
+            .join("ünïcode")
+            .join("lib.rs");
         let answer = json!([{
-            "uri": "file:///work/my%20app/%C3%BCn%C3%AFcode/lib.rs",
+            "uri": uri_of(&file),
             "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 3 } }
         }]);
+        assert!(
+            !uri_of(&file).contains(' '),
+            "the space really is percent-encoded, which is what the test is about: {}",
+            uri_of(&file)
+        );
         assert_eq!(
             locations(&answer)[0].path,
-            PathBuf::from("/work/my app/ünïcode/lib.rs")
+            file,
+            "and the URI decodes back to the path it came from"
         );
     }
 

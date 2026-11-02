@@ -142,6 +142,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "url",
@@ -298,6 +299,7 @@ dependencies = [
  "acpilot-extensions",
  "acpilot-git",
  "acpilot-host",
+ "acpilot-lsp",
  "acpilot-profile",
  "acpilot-proto",
  "acpilot-stats",
@@ -317,6 +319,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tower",
  "tower-http 0.7.1",
  "tracing",

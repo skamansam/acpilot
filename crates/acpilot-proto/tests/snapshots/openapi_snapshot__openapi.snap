@@ -1134,6 +1134,36 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "MapArea": {
+        "description": "One part of the workspace, with what it is for and what it depends on.",
+        "properties": {
+          "depends_on": {
+            "description": "The areas and packages this one leans on, as the agent wrote them.\n\nNames rather than resolved edges: a map is a document, and a dependency the\nmap gets wrong is a sentence to argue with rather than a build to break.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "What the area is called in a sentence: `TUI shell`, `Daemon`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The directory this area owns, workspace-relative. Empty or `.` is the whole\nworkspace, which is how a map describes a repository that is not split up.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "What the area is for, in the agent's words. One paragraph rather than a list\nof files: the tree already lists files.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "summary"
+        ],
+        "type": "object"
+      },
       "MetadataSource": {
         "description": "Where a fact about a model came from.\n\nThe lab is explicit about this because the alternative — a plausible default\ncontext window — silently truncates prompts.",
         "enum": [
@@ -1516,6 +1546,38 @@ expression: canonical(document)
           "active",
           "agent_count",
           "workspace_count"
+        ],
+        "type": "object"
+      },
+      "ProjectMap": {
+        "description": "The workspace map, as `GET /v1/project/map` serves it.",
+        "properties": {
+          "areas": {
+            "description": "The areas, in the order the agent wrote them.\n\nAlways on the wire, empty included: this is the list the answer is about, and\n`written: false` is the field that says nobody has written one — a client\nshould not have to read absence as emptiness as well.",
+            "items": {
+              "$ref": "#/components/schemas/MapArea"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Where the map was read from, workspace-relative.\n\nAlways the same path today, and on the wire so a client can say where to look\nrather than have the location of the file compiled into two places.",
+            "type": "string"
+          },
+          "updated": {
+            "description": "When the agent says it wrote the map, as it wrote it.\n\nA string rather than a timestamp for the reason every timestamp on this wire\nis: the format should not track a library choice, and the map is the agent's\ndocument rather than the daemon's clock.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "written": {
+            "description": "Whether the file is there at all.\n\nA map nobody has written yet is the normal first state, not an error, so the\nanswer is an empty map with this false: a panel can say \"the agent has not\nwritten one\" without a 404 standing in for a sentence.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "written"
         ],
         "type": "object"
       },

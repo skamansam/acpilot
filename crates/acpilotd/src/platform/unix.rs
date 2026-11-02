@@ -14,6 +14,16 @@ pub(crate) fn default_target() -> Target {
     Target::Socket(PathBuf::from(acpilot_host::default_endpoint()))
 }
 
+/// The names a program may have on this platform's `PATH`.
+///
+/// One name, as typed: unix has no executable extension, and `rust-analyzer` on
+/// `PATH` is that exact file. The Windows half of this pair is why it lives here —
+/// a `cfg!(windows)` in the middle of the daemon compiles on the platform it was
+/// written for and never runs on the other.
+pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
+    vec![PathBuf::from(program)]
+}
+
 /// Bind `target` and serve until `shutdown` resolves.
 ///
 /// # Errors
@@ -125,5 +135,26 @@ fn prepare(path: &Path) -> io::Result<bool> {
             std::fs::remove_file(path)?;
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_names_are_the_program_as_typed() {
+        assert_eq!(
+            executable_names("rust-analyzer"),
+            vec![PathBuf::from("rust-analyzer")],
+            "unix has no executable extension"
+        );
+    }
+
+    #[test]
+    fn a_program_on_the_path_is_installed() {
+        // `sh` is on every unix this ships to. The daemon's detector is asked rather
+        // than a second copy of the scan, because the scan is the thing under test.
+        assert!(crate::lsp::installed("sh"));
     }
 }

@@ -1930,13 +1930,37 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
   baseline (`Document::mark_saved`), which is what clears the title's `+`. A buffer that
   did not come from a file — the design pass's seed — says so rather than writing a
   version it does not have.
-- [ ] **Project map** — the agent writes a map of the workspace: what each directory
-  is for, which crate or package owns which idea, and how they depend on each other,
-  as a file under `.acpilot/` that a person can read and correct. The panel draws it
-  as a tree with the current file's neighbourhood highlighted. Regeneration is a
-  prompt with the tree and the README as its input, not a model of its own; the map
-  is a document in the repository, versioned with everything else, so a wrong
-  statement is a diff somebody can argue with.
+- [x] **Project map (2026-11-01)** — the agent writes the map of the workspace: what
+  each area is for, which path it owns, and what it depends on, as
+  `.acpilot/project-map.toml` — `updated`, then one `[[areas]]` block per area with
+  `name`, `path`, `summary` and an optional `depends_on`. It is TOML (D23) because it
+  is a document a person reads, corrects and reviews, and `.gitignore` names it as the
+  one exception under `.acpilot/` so a wrong statement about the architecture is a diff
+  somebody argues with. `crates/acpilot-proto/src/project.rs` carries `ProjectMap {
+  path, written, updated?, areas }` and `MapArea { name, path, summary, depends_on? }`,
+  plus `ProjectMap::area_for`, which answers the panel's only clever question — which
+  area owns the open file — by the deepest `path` that is a prefix of it, compared
+  segment by segment so `crates/tui` is not the parent of `crates/tui-tools`, with the
+  earlier area winning a tie. `GET /v1/project/map` (`crates/acpilotd/src/project.rs`)
+  parses the file where the workspace is rather than shipping it as text, so a remote
+  workspace (P8) works; absence is `written: false` with no areas because an unmapped
+  repository is a state and not a `404`, while a file that exists and does not parse is
+  a `400` naming the file, because "no map" over a file sitting right there sends the
+  person looking for the wrong problem. The panel (`Panel::ProjectMap`, in the Panels
+  menu on either side and **Show project map**) lists areas in the agent's order, marks
+  the open file's area and opens its summary, wraps that summary to the column, `j`/`k`
+  choose, `Enter` reads a summary onto the status line, `r` re-reads, and the panel asks
+  the daemon once when it comes up (or on `r`) rather than once a frame, because a
+  document that changes when somebody asks the agent is not a view of moving state.
+  Regeneration is still a prompt over the tree and the README — the panel reads the map
+  rather than writing it, which is what keeps the agent the author.
+  **Tests:** three in `acpilot-proto` (the deepest area owns a file, a name prefix is
+  not a parent, an empty map matches nothing), three in the daemon module (absent is an
+  empty answer, written order preserved with a leaf area, a bad file is a `400`) and
+  four in the daemon's route tests through the router (absent, served in written order,
+  the parse error naming the file, no workspace is a `409`), plus one in the TUI
+  (the panel asking once, the label's status, the file's area marked, `Enter` reading a
+  summary, `r` asking again, and an unwritten map saying so).
 - [ ] **Wiki panel** — the agent builds a wiki about the codebase: one page per
   subsystem, written from the code and the map, kept in the workspace and served
   read-only in a pane. What makes it a wiki is that pages are linked and that a link
@@ -1961,7 +1985,36 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
   buffer, `Esc` returns them, and an answer about a name the caret has left is dropped
   by comparing the name, the way the two searches compare their queries. A language
   server's `textDocument/references` replaces the search where one runs (P7-4): scope is
-  unresolved here, so two functions called `new` are one name.
+  unresolved here, so two functions called `new` are one name. The list follows the
+  caret: `App::follow_references` runs from `App::tick`, reads the word under the caret
+  while the buffer holds the keys, and asks about a name that is still there on the
+  next frame — the frame is the debounce, so a typed identifier costs no walks and one
+  arrow into a word costs a single ask, while the previous rows stay up until the
+  answer lands. The question is the word *and* the buffer's `revision`, so a use typed
+  while the caret rests on the name re-lists without the caret moving. Between two words the list clears instead of naming a word the caret is
+  beside, and nothing is asked while the keys are in another pane, which is what keeps
+  `Enter` on a row from re-asking about the word the caret lands on.
+  **Language servers (2026-11-01):** `GET /v1/files/references?q=&path=&offset=` asks a
+  server first. `crates/acpilot-lsp/src/session.rs` is the protocol above the P0-7
+  transport: `initialize` advertising `general.positionEncodings`, `didOpen`/`didChange`
+  with the file the daemon reads, `textDocument/references` with `includeDeclaration`,
+  and both `Location` and `LocationLink` answers accepted. `crates/acpilotd/src/lsp.rs`
+  detects `rust-analyzer`, `pyright-langserver` and `typescript-language-server` on
+  `PATH`, keeps one session per language, and believes an empty answer only once the
+  session has answered with something or five seconds of quarter-second retries have
+  passed — measured: rust-analyzer answers `[]` to a references request sent straight
+  after `didOpen`, so the first question pays for the index. Rows keep their shape, the
+  server's encoding is converted to a character column, and locations outside the
+  workspace are dropped. The grammar search is now the `parse-references` feature
+  (default on), so `--no-default-features` links no grammar at all — which is the point
+  of this work. **The buffer travels with the question (2026-11-01):**
+  `POST /v1/files/references` takes a `ReferencesRequest` — the name, the file, the
+  caret's offset and the open file's own text — and the text is what the search runs
+  over, for the server (opened as the document) and for the grammar fallback in place
+  of that one file's disk read, so an edit nobody has saved is the text the panel is
+  about. Nothing is written and every other file is still read where it is, because a
+  client for a remote daemon does not have them. `GET`, with a name and no buffer, is
+  unchanged.
   **Tests:** five in `acpilot-text` (the word under a caret and the one before it, a
   number not being an identifier, comment and string excluded with character columns
   counted past a multi-byte glyph, a keyword never a use, Python's own kinds, and a

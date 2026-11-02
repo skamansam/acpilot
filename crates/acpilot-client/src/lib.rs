@@ -292,17 +292,46 @@ impl Client {
             .await
     }
 
-    /// `GET /v1/files/references?q=`.
+    /// Where the name is used in code.
     ///
-    /// Where the name is used in code, as the daemon's parse trees read it: a comment
-    /// that mentions the name and a string that spells it are not uses, and a file this
-    /// build has no grammar for is not searched rather than searched as prose.
+    /// With a caret — the file, the byte `offset` and the buffer's own `text` — this is
+    /// `POST /v1/files/references`, and the daemon asks a language server where one is
+    /// installed, so the list is scoped: two functions called `new` are two functions.
+    /// The text travels because an edited buffer is not the file on disk, and a panel
+    /// that listed the saved file's uses would answer about a version nobody is
+    /// reading. Without a caret this is the spelling search,
+    /// `GET /v1/files/references?q=`, which is what a symbol with no server behind it
+    /// still deserves.
     pub async fn references(
         &self,
         name: &str,
+        at: Option<(&str, usize, &str)>,
     ) -> Result<Vec<acpilot_proto::file::Reference>, ClientError> {
-        self.get(&format!("/v1/files/references?q={}", query_value(name)))
-            .await
+        let Some((path, offset, text)) = at else {
+            let url = format!("/v1/files/references?q={}", query_value(name));
+            return self.get(&url).await;
+        };
+        let body = acpilot_proto::file::ReferencesRequest {
+            workspace: None,
+            q: name.to_owned(),
+            path: path.to_owned(),
+            offset: Some(offset),
+            text: Some(text.to_owned()),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/references"))
+            .json(&body);
+        self.send(request, "/v1/files/references").await
+    }
+
+    /// `GET /v1/project/map`.
+    ///
+    /// The map the agent wrote under `.acpilot/`, as areas with a summary and the
+    /// areas they lean on. `written` is false when nobody has written one yet, which
+    /// is the panel's first state rather than an error.
+    pub async fn project_map(&self) -> Result<acpilot_proto::project::ProjectMap, ClientError> {
+        self.get("/v1/project/map").await
     }
 
     /// `PUT /v1/files`.

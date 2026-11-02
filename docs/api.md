@@ -362,7 +362,36 @@ offset; `text` is the line, so a row can be read before it is chosen. Same walk 
 ignore rules as the other two searches, the same cap on file size, and a `q` that is
 empty or not one word matches nothing. It is a search with a parser's help rather than
 `textDocument/references`: scope is unresolved, so two different functions called
-`new` are one name until a language server answers (P7-4).
+`new` are one name until a language server answers.
+
+With `path` and `offset` — the file the caret is in and the caret's offset in it,
+counted in **characters** — the daemon asks a language server first. The server is
+the one installed for that language (`rust-analyzer`, `pyright-langserver`,
+`typescript-language-server`), detected on `PATH`, started once per language and
+kept; the file is sent with `didOpen` (and `didChange` after that) so the answer is
+about the text that is there, and `textDocument/references` is asked with
+`includeDeclaration`. That answer is **scoped** rather than spelled: two functions
+called `new` are two functions, and a field named `id` is not every `id` in the
+workspace. Rows come back in the same shape, with the server's line and its
+negotiated encoding converted to a character column, and locations outside the
+workspace are dropped because the tree cannot open them.
+
+A language with no server, no server installed, one that will not start, or one that
+does not answer falls back to the parse-tree search above. That fallback is the
+`parse-references` feature of `acpilotd`, on by default: a build with
+`--no-default-features` links no grammar at all and answers references only from a
+server.
+
+`POST /v1/files/references` is the same question with the **open buffer** attached:
+`ReferencesRequest { q, path, offset, text?, workspace? }`. `text` is the file as the
+editor holds it, for the file `path` names, and it is what the search runs over — for
+the server, which is handed that text as the document it opens, so the caret's offset
+resolves against what the pane shows, and for the parse-tree fallback in place of the
+disk read of that one file. Nothing is written: it is a read that names its own
+version, and it is what makes the list right about an edit that has not been saved.
+Every other file is still read where it is, because a client for a remote daemon does
+not have them, so a use in a *second* edited buffer is listed as its last save. An
+absent `text` makes this the disk question the `GET` form asks.
 
 `PUT /v1/files` takes `FileWriteRequest { path, text, if_match? }`. `if_match` is
 the `etag` last read; a mismatch is `409 conflict`, never a silent overwrite.
@@ -382,6 +411,44 @@ not there is `404`: this route saves files, it does not build trees.
 
 None of this is on the keystroke path: the editor owns its buffer and saves
 through this route.
+
+## Project map
+
+`GET /v1/project/map?workspace=` returns `ProjectMap { path, written, updated?, areas[] }`,
+where each `MapArea` is `{ name, path, summary, depends_on? }`: what a directory is for,
+and which parts of the workspace it leans on.
+
+The map is a document the agent writes, not state the daemon derives. It lives at
+`.acpilot/project-map.toml` in the workspace — versioned with the code, so a wrong
+statement about the architecture is a diff somebody argues with — and reads as:
+
+```toml
+updated = "2026-11-01"
+
+[[areas]]
+name = "TUI shell"
+path = "crates/acpilot-tui"
+summary = "The terminal frontend: app state, keys, drawing."
+depends_on = ["acpilot-proto", "acpilot-client"]
+```
+
+`path` is a workspace-relative directory and an empty one (or `.`) is the whole
+workspace; `summary` is one paragraph; `depends_on` is optional and names things
+rather than resolving them, because a map is a document. Areas come back in the order
+the file lists them — a map that sorted itself would be one whose order nobody chose.
+
+A map that is not there is **not** an error: the answer is `written: false` with no
+areas, which is what a repository nobody has mapped yet looks like, and a panel says
+so instead of a `404` standing in for a sentence. A file that is not UTF-8, or not
+TOML, or missing a `name` or `summary`, is `400 invalid_request` naming
+`.acpilot/project-map.toml`: a file that exists and cannot be read is a fact the
+person editing it needs. Parsing happens in the daemon rather than in each client
+because the file is where the workspace is, which may not be where the client is.
+
+The panel's "which area am I in" question — the open file's neighbourhood — is
+answered by the deepest `path` that is a prefix of the file, compared segment by
+segment so `crates/tui` is not a parent of `crates/tui-tools`, with the earlier area
+winning a tie.
 
 ## Terminals
 

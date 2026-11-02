@@ -152,6 +152,41 @@ pub struct FileContent {
     pub marks: Vec<LineMark>,
 }
 
+/// Request body for `POST /v1/files/references`.
+///
+/// The query-string form of the same question, plus the buffer the editor is holding.
+/// A file edited and not saved is the file the person is reading, so the search has
+/// to run over the text that was sent rather than over what the last save left on
+/// disk — otherwise a use typed a moment ago is missing from the list and a use
+/// deleted a moment ago is still in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ReferencesRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The identifier to look for: one word.
+    pub q: String,
+    /// The file the caret is in, workspace-relative.
+    pub path: String,
+    /// The caret's offset in that file, counted in characters, which is what a server
+    /// resolves a name to a symbol with.
+    ///
+    /// Characters rather than bytes because a caret is a glyph: the daemon converts to
+    /// the server's own unit, and a byte offset would drift left of the caret the first
+    /// time a line held a `日`. Absent means no caret: the text is still the version the
+    /// search reads, and no server is asked, because resolving a name needs a place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+    /// The buffer as the editor holds it, for the file `path` names.
+    ///
+    /// Sent for the open file only: the rest of the workspace is read where it is,
+    /// because a client for a remote daemon does not have it. Sending it is not a
+    /// save — nothing here writes — and the daemon never asks for a second copy of a
+    /// file it can read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
 /// Request body for `PUT /v1/files`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileWriteRequest {

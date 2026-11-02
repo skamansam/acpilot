@@ -43,6 +43,8 @@ pub enum Focus {
     Outline,
     /// The uses of one name, when the references panel is up.
     References,
+    /// The workspace map the agent wrote, when the project map is up.
+    ProjectMap,
 }
 
 impl Focus {
@@ -58,6 +60,7 @@ impl Focus {
             Self::Terminal => "terminal",
             Self::Outline => "outline",
             Self::References => "references",
+            Self::ProjectMap => "project map",
         }
     }
 }
@@ -76,6 +79,8 @@ pub enum Panel {
     Outline,
     /// Where the name under the caret is used, across the workspace.
     References,
+    /// What the workspace is for, as the agent wrote it under `.acpilot/`.
+    ProjectMap,
     /// The sessions, the transcript and the composer: the agent's half.
     Assistant,
 }
@@ -88,6 +93,7 @@ impl Panel {
             Self::FileManager => "File manager",
             Self::Outline => "Outline",
             Self::References => "References",
+            Self::ProjectMap => "Project map",
             Self::Assistant => "Assistant",
         }
     }
@@ -127,6 +133,8 @@ pub struct Panels {
     pub outline: Side,
     /// Where the references list is, while it is shown.
     pub references: Side,
+    /// Where the project map is, while it is shown.
+    pub map: Side,
     /// Where the assistant is.
     pub assistant: Side,
 }
@@ -139,6 +147,7 @@ impl Default for Panels {
             // `show_outline` is what puts it on screen.
             outline: Side::Left,
             references: Side::Left,
+            map: Side::Left,
             assistant: Side::Right,
         }
     }
@@ -152,6 +161,7 @@ impl Panels {
             Panel::FileManager => self.files,
             Panel::Outline => self.outline,
             Panel::References => self.references,
+            Panel::ProjectMap => self.map,
             Panel::Assistant => self.assistant,
         }
     }
@@ -168,6 +178,7 @@ impl Panels {
             Panel::FileManager => self.files = side,
             Panel::Outline => self.outline = side,
             Panel::References => self.references = side,
+            Panel::ProjectMap => self.map = side,
             Panel::Assistant => self.assistant = side,
         }
     }
@@ -180,6 +191,7 @@ impl Panels {
             Panel::FileManager,
             Panel::Outline,
             Panel::References,
+            Panel::ProjectMap,
             Panel::Assistant,
         ]
         .into_iter()
@@ -236,6 +248,8 @@ pub enum MenuAction {
     ToggleOutline,
     /// Show the references panel, or put it away.
     ToggleReferences,
+    /// Show the project map, or put it away.
+    ToggleProjectMap,
     /// List where the name under the caret is used.
     FindReferences,
     /// Ask to leave.
@@ -384,6 +398,21 @@ pub const MENUS: &[MenuDef] = &[
                 label: "Show references",
                 keys: "",
                 action: MenuAction::ToggleReferences,
+            },
+            MenuRow {
+                label: "Project map on the left",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::ProjectMap, Side::Left),
+            },
+            MenuRow {
+                label: "Project map on the right",
+                keys: "",
+                action: MenuAction::MovePanel(Panel::ProjectMap, Side::Right),
+            },
+            MenuRow {
+                label: "Show project map",
+                keys: "",
+                action: MenuAction::ToggleProjectMap,
             },
         ],
     },
@@ -1633,6 +1662,35 @@ pub struct App {
     pub references_name: String,
     /// Which use `Enter` opens.
     pub references_selected: usize,
+    /// The document revision the list was last asked about.
+    ///
+    /// A revision rather than a flag: an edit can add or remove a use of the name the
+    /// caret is resting on without the name itself changing, and a panel that follows
+    /// the text has to re-list for that too.
+    pub references_revision: u64,
+    /// What the caret said at the previous frame: the word it was on, and the revision
+    /// it was on it at, whether or not that was asked about.
+    ///
+    /// A question has to be the same on two frames running before it is sent, which is
+    /// what keeps typing from costing a workspace walk per keystroke: a word that
+    /// changes every frame is a word still being typed, and a buffer that changes every
+    /// frame is a buffer still being written.
+    pub references_seen: Option<(String, u64)>,
+    /// Whether the project map panel is on screen.
+    ///
+    /// Apart from the side it is on, like the other panels: a map that is put away has
+    /// not moved, and the Panels menu can put it back where it was.
+    pub show_map: bool,
+    /// The map the agent wrote, once the daemon has read it.
+    pub map: Option<acpilot_proto::project::ProjectMap>,
+    /// Which area `Enter` reads out.
+    pub map_selected: usize,
+    /// Whether the daemon has been asked for the map since the panel came up.
+    ///
+    /// A flag rather than asking every frame: the map is a file on disk, and a panel
+    /// that re-read it each frame would be a file read per 120 ms for a document that
+    /// changes when somebody asks the agent to rewrite it. `r` in the panel clears it.
+    pub map_asked: bool,
     /// The rows a workspace search found, when one is up.
     pub found: Vec<FileNode>,
     /// The query being typed in the files pane's search, when it is.
@@ -1872,6 +1930,12 @@ impl App {
             references: Vec::new(),
             references_name: String::new(),
             references_selected: 0,
+            references_revision: 0,
+            references_seen: None,
+            show_map: false,
+            map: None,
+            map_selected: 0,
+            map_asked: false,
             found: Vec::new(),
             search: None,
             pending: Vec::new(),
@@ -2450,6 +2514,19 @@ impl App {
                     };
                 }
             }
+            Update::ProjectMap(map) => {
+                let areas = map.areas.len();
+                self.status = if !map.written {
+                    format!("no project map yet · the agent writes {}", map.path)
+                } else {
+                    match areas {
+                        1 => "project map · 1 area".to_owned(),
+                        areas => format!("project map · {areas} areas"),
+                    }
+                };
+                self.map = Some(map);
+                self.map_selected = 0;
+            }
             Update::File {
                 path,
                 text,
@@ -2882,9 +2959,11 @@ impl App {
             let next = match self.focus {
                 Focus::Files if self.show_outline => Focus::Outline,
                 Focus::Outline if self.show_references => Focus::References,
+                Focus::References if self.show_map => Focus::ProjectMap,
                 Focus::Files => Focus::Editor,
                 Focus::Outline => Focus::Editor,
                 Focus::References => Focus::Editor,
+                Focus::ProjectMap => Focus::Editor,
                 Focus::Editor => Focus::Sessions,
                 Focus::Sessions if self.readable_transcript() => Focus::Transcript,
                 Focus::Sessions => Focus::Prompt,
@@ -2904,6 +2983,7 @@ impl App {
             Focus::Files => self.files_key(key),
             Focus::Outline => self.outline_key(key),
             Focus::References => self.references_key(key),
+            Focus::ProjectMap => self.map_key(key),
             Focus::Editor => self.editor_key(key),
             Focus::Sessions => self.sessions_key(key),
             Focus::Transcript => self.transcript_key(key),
@@ -3320,6 +3400,22 @@ impl App {
     /// it is drawn beside implies.
     pub fn tick(&mut self) {
         self.refresh_outline_if_stale();
+        self.follow_references();
+        self.ask_for_map();
+    }
+
+    /// Ask the daemon for the map once, when the panel has opened or been told to
+    /// re-read.
+    ///
+    /// The map is a document rather than a view of state that moves, so it is read
+    /// when somebody asks — the panel coming up, or `r` in it — and not once a frame
+    /// the way the outline follows a buffer that is being typed into.
+    fn ask_for_map(&mut self) {
+        if !self.show_map || self.map_asked {
+            return;
+        }
+        self.map_asked = true;
+        self.pending.push(Request::ProjectMap);
     }
 
     /// Re-read the outline when the buffer has changed since the last read.
@@ -3337,6 +3433,66 @@ impl App {
             return;
         }
         self.refresh_outline();
+    }
+
+    /// Keep the list on the word under the caret, and on the text as it changes.
+    ///
+    /// The panel is about a word, and the caret is how a person points at one, so the
+    /// list follows rather than waiting for `Shift-F12` again. It also follows the
+    /// buffer: a use typed while the caret rests on the name is a use the list is
+    /// missing, so a changed revision is a new question even when the word is the same.
+    ///
+    /// Four rules keep that from being one workspace walk per frame: the question is
+    /// only asked while the buffer holds the keys; a word about the revision already
+    /// listed is not asked about again; the question has to be the same on two frames
+    /// running before it is sent; and between two words nothing is asked at all. The
+    /// frame is the clock, so a word that changes every frame is a word still being
+    /// typed and a buffer that changes every frame is a buffer still being written.
+    ///
+    /// Between words the list goes rather than lying about a word nobody is pointing
+    /// at. Clearing is local and free, so it happens on the frame the caret leaves the
+    /// word, while the old rows stay up until the next answer arrives rather than
+    /// blinking empty in between.
+    fn follow_references(&mut self) {
+        if !self.show_references || self.focus != Focus::Editor {
+            return;
+        }
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        let text = editor.document().text();
+        let revision = editor.document().revision();
+        let caret = editor.caret_offset();
+        let path = editor.path().to_owned();
+        let Some((name, _)) = acpilot_text::references::identifier_at(&text, caret) else {
+            self.references_seen = None;
+            if !self.references_name.is_empty() {
+                self.references_name.clear();
+                self.references.clear();
+                self.references_selected = 0;
+            }
+            return;
+        };
+        if name == self.references_name && revision == self.references_revision {
+            // The list already answers this word about this text.
+            self.references_seen = None;
+            return;
+        }
+        if self.references_seen.as_ref() != Some(&(name.clone(), revision)) {
+            self.references_seen = Some((name, revision));
+            return;
+        }
+        self.references_name.clone_from(&name);
+        self.references_revision = revision;
+        self.references.clear();
+        self.references_selected = 0;
+        self.status = format!("references · {name}\u{2026}");
+        self.pending.push(Request::References {
+            name,
+            path,
+            offset: caret,
+            text,
+        });
     }
 
     /// The outline's keys: choose a definition, and go to it.
@@ -3382,6 +3538,9 @@ impl App {
     /// request naming a line and a column would make the daemon open the file to find
     /// out what the person meant. The answer arrives as [`Update::References`], and the
     /// panel is put up first so the list has somewhere to land.
+    ///
+    /// Asking is also the panel's opening move, and after it [`App::follow_references`]
+    /// keeps the list on whatever word the caret is standing on.
     fn find_references(&mut self) -> Option<Request> {
         let Some(editor) = &self.editor else {
             self.notice("no file is open · the caret names the word");
@@ -3389,16 +3548,64 @@ impl App {
         };
         let text = editor.document().text();
         let caret = editor.caret_offset();
+        let path = editor.path().to_owned();
         let Some((name, _)) = acpilot_text::references::identifier_at(&text, caret) else {
             self.notice("the caret is not on a word");
             return None;
         };
         self.show_references = true;
-        self.references_name = name.clone();
+        self.references_name.clone_from(&name);
+        self.references_revision = editor.document().revision();
+        // The chord asked about this word already, so the frame behind it does not ask
+        // a second time for the name it put up.
+        self.references_seen = None;
         self.references.clear();
         self.references_selected = 0;
         self.status = format!("references · {name}\u{2026}");
-        Some(Request::References(name))
+        Some(Request::References {
+            name,
+            path,
+            offset: caret,
+            text,
+        })
+    }
+
+    /// The project map's keys: choose an area, and read what it says.
+    ///
+    /// A map is a document, not a list of places: `Enter` puts the area's summary on
+    /// the status line rather than opening anything, because the row is already the
+    /// answer to "what is this for". `r` asks the daemon again, which is how a map the
+    /// agent has just rewritten appears without hiding and showing the panel.
+    fn map_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.map_selected = self.map_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let last = self.map.as_ref().map_or(0, |map| map.areas.len());
+                if self.map_selected + 1 < last {
+                    self.map_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let Some(area) = self
+                    .map
+                    .as_ref()
+                    .and_then(|map| map.areas.get(self.map_selected))
+                else {
+                    self.notice("the map has no areas to read");
+                    return None;
+                };
+                self.status = format!("{} · {}", area.name, area.summary);
+            }
+            KeyCode::Char('r') => {
+                self.map_asked = false;
+                self.status = "project map · reading it…".to_owned();
+            }
+            KeyCode::Esc => self.set_focus(Focus::Editor),
+            _ => {}
+        }
+        None
     }
 
     /// The references panel's keys: choose a use, and go to it.
@@ -4120,6 +4327,17 @@ impl App {
                     "references closed".to_owned()
                 };
             }
+            MenuAction::ToggleProjectMap => {
+                self.show_map = !self.show_map;
+                // Either way the next frame may ask: opened, it has no map yet;
+                // closed and opened again, the file on disk may have been rewritten.
+                self.map_asked = false;
+                self.status = if self.show_map {
+                    "project map · reading it…".to_owned()
+                } else {
+                    "project map closed".to_owned()
+                };
+            }
             MenuAction::FindReferences => return self.find_references(),
             MenuAction::NewSession => {
                 return self
@@ -4167,7 +4385,7 @@ impl App {
             // The outline's column is a fixed width, so an arrow here has nothing to
             // widen. Falling through to the assistant's width — which the `_` arm did
             // — would have been an arrow in one pane resizing another.
-            Focus::Outline | Focus::References => {
+            Focus::Outline | Focus::References | Focus::ProjectMap => {
                 self.status = "a panel's column is fixed · Panels moves it".to_owned();
                 return;
             }
@@ -6036,7 +6254,12 @@ mod tests {
         // it is shown: where a panel belongs and whether it is up are two answers.
         assert_eq!(
             app.panels.stack(Side::Left),
-            vec![Panel::FileManager, Panel::Outline, Panel::References]
+            vec![
+                Panel::FileManager,
+                Panel::Outline,
+                Panel::References,
+                Panel::ProjectMap
+            ]
         );
         assert_eq!(app.panels.stack(Side::Right), vec![Panel::Assistant]);
         assert!(!app.show_outline);
@@ -6052,6 +6275,7 @@ mod tests {
                 Panel::FileManager,
                 Panel::Outline,
                 Panel::References,
+                Panel::ProjectMap,
                 Panel::Assistant
             ],
             "the workspace above the agent"
@@ -6067,7 +6291,12 @@ mod tests {
         assert_eq!(app.panels.stack(Side::Right), vec![Panel::FileManager]);
         assert_eq!(
             app.panels.stack(Side::Left),
-            vec![Panel::Outline, Panel::References, Panel::Assistant]
+            vec![
+                Panel::Outline,
+                Panel::References,
+                Panel::ProjectMap,
+                Panel::Assistant
+            ]
         );
     }
 
@@ -6124,11 +6353,24 @@ mod tests {
         }
         let mut chord = key(KeyCode::F(12));
         chord.modifiers = KeyModifiers::SHIFT;
-        assert_eq!(
-            app.handle_key(chord),
-            Some(Request::References("first".to_owned())),
-            "the pane names the word rather than a position"
-        );
+        let asked = app.handle_key(chord).expect("the chord asks the daemon");
+        match asked {
+            Request::References {
+                name,
+                path,
+                offset,
+                text,
+            } => {
+                assert_eq!(name, "first", "the pane names the word");
+                assert_eq!(path, "src/main.rs", "and the file the caret is in");
+                assert_eq!(offset, 3, "the caret's offset, which a server resolves");
+                assert!(
+                    text.contains("fn second() { first(); }"),
+                    "and the buffer as it reads, which is what an edit changes"
+                );
+            }
+            other => panic!("the chord asked {other:?}"),
+        }
         assert!(app.show_references, "the panel is up for the answer");
 
         app.apply(Update::References {
@@ -6149,6 +6391,194 @@ mod tests {
             "a row is a place"
         );
         assert_eq!(app.pending_line, Some(2), "the line travels with the read");
+    }
+
+    #[test]
+    fn the_references_panel_follows_the_caret_from_word_to_word() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn first() {}\nfn second() { first(); }\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_focus(Focus::Editor);
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('l')));
+        }
+        let mut chord = key(KeyCode::F(12));
+        chord.modifiers = KeyModifiers::SHIFT;
+        let asked = app.handle_key(chord).expect("the chord asks");
+        assert!(
+            matches!(asked, Request::References { ref name, .. } if name == "first"),
+            "{asked:?}"
+        );
+        app.apply(Update::References {
+            name: "first".to_owned(),
+            hits: vec![acpilot_proto::file::Reference {
+                path: "src/main.rs".to_owned(),
+                line: 2,
+                column: 15,
+                text: "fn second() { first(); }".to_owned(),
+            }],
+        });
+        assert_eq!(app.status, "1 use of first");
+
+        // Onto the `second` on the line below. The first frame that sees it is a
+        // keystroke in flight, not a word the person has stopped on.
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('l')));
+        }
+        app.handle_key(key(KeyCode::Char('j')));
+        app.take_pending();
+        app.tick();
+        assert_eq!(
+            app.take_pending(),
+            Vec::new(),
+            "a name one frame old is still being typed"
+        );
+        assert_eq!(
+            app.references_name, "first",
+            "the old rows stay up in between"
+        );
+
+        // The second frame is the person having stopped on it.
+        app.tick();
+        let asked = app.take_pending();
+        assert!(
+            matches!(&asked[..], [Request::References { name, .. }] if name == "second"),
+            "the word the caret moved to is asked about without the chord: {asked:?}"
+        );
+        assert_eq!(app.references_name, "second");
+        assert_eq!(app.status, "references · second\u{2026}");
+
+        app.apply(Update::References {
+            name: "second".to_owned(),
+            hits: Vec::new(),
+        });
+        assert_eq!(app.status, "no code uses second");
+
+        // The text can change without the caret leaving the word: deleting the `(`
+        // after the name keeps `second` under the caret and changes the revision, and
+        // the uses of a word in a buffer that changed are a different question.
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('l')));
+        }
+        app.handle_key(key(KeyCode::Char('x')));
+        app.tick();
+        app.take_pending();
+        assert_eq!(app.references_name, "second", "the same word, still listed");
+        app.tick();
+        let asked = app.take_pending();
+        assert!(
+            matches!(&asked[..], [Request::References { name, .. }] if name == "second"),
+            "a use typed while the caret rests on the name is not in the list yet: {asked:?}"
+        );
+
+        // Between two words there is no name, so the list goes rather than naming a
+        // word the caret is beside. A caret after a word is still on it, so the space
+        // left by the deleted bracket is the only place that is on neither.
+        app.handle_key(key(KeyCode::Char('l')));
+        app.tick();
+        assert!(app.references_name.is_empty());
+        assert!(app.references.is_empty());
+    }
+
+    #[test]
+    fn the_references_panel_does_not_follow_a_caret_the_keys_are_not_in() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn first() {}\nfn second() { first(); }\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_focus(Focus::Editor);
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Char('l')));
+        }
+        let mut chord = key(KeyCode::F(12));
+        chord.modifiers = KeyModifiers::SHIFT;
+        app.handle_key(chord);
+        app.take_pending();
+
+        // A row opens a file at its use, and the keys are on the list while that read
+        // is in flight: the caret must not re-ask about whatever word it lands on and
+        // replace the list the person is reading.
+        app.set_focus(Focus::References);
+        app.tick();
+        app.tick();
+        assert_eq!(app.take_pending(), Vec::new());
+        assert_eq!(app.references_name, "first");
+    }
+
+    #[test]
+    fn the_project_map_panel_reads_the_map_once_and_marks_the_files_own_area() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "crates/acpilot-tui/src/app.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        assert_eq!(app.run_menu(MenuAction::ToggleProjectMap), None);
+        assert!(app.show_map, "the row puts the panel up");
+
+        // A map is a document rather than a view of state that moves: the panel asks
+        // when it opens, and the frame after that has nothing new to ask.
+        app.tick();
+        assert_eq!(app.take_pending(), vec![Request::ProjectMap]);
+        app.tick();
+        assert_eq!(app.take_pending(), Vec::new());
+
+        app.apply(Update::ProjectMap(acpilot_proto::project::ProjectMap {
+            path: ".acpilot/project-map.toml".to_owned(),
+            written: true,
+            updated: Some("2026-11-01".to_owned()),
+            areas: vec![
+                acpilot_proto::project::MapArea {
+                    name: "Workspace".to_owned(),
+                    path: String::new(),
+                    summary: "everything".to_owned(),
+                    depends_on: Vec::new(),
+                },
+                acpilot_proto::project::MapArea {
+                    name: "TUI shell".to_owned(),
+                    path: "crates/acpilot-tui".to_owned(),
+                    summary: "the terminal frontend".to_owned(),
+                    depends_on: vec!["acpilot-proto".to_owned()],
+                },
+            ],
+        }));
+        assert_eq!(app.status, "project map · 2 areas");
+        let map = app.map.as_ref().expect("a map");
+        assert_eq!(
+            map.area_for("crates/acpilot-tui/src/app.rs"),
+            Some(1),
+            "the deepest area owns the open file"
+        );
+
+        app.set_focus(Focus::ProjectMap);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.map_selected, 1);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.status, "TUI shell · the terminal frontend");
+
+        // `r` is how a map the agent has just rewritten appears without hiding and
+        // showing the panel.
+        app.handle_key(key(KeyCode::Char('r')));
+        app.tick();
+        assert_eq!(app.take_pending(), vec![Request::ProjectMap]);
+
+        // And a workspace nobody has mapped answers with a sentence rather than an
+        // empty list that reads as a workspace with nothing in it.
+        app.apply(Update::ProjectMap(acpilot_proto::project::ProjectMap {
+            path: ".acpilot/project-map.toml".to_owned(),
+            written: false,
+            updated: None,
+            areas: Vec::new(),
+        }));
+        assert!(app.status.contains("no project map yet"), "{}", app.status);
     }
 
     #[test]

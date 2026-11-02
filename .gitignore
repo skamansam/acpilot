@@ -33,8 +33,10 @@ HISTORY.md
 __pycache__/
 *.pyc
 
-# local runtime state
-.acpilot/
+# local runtime state — except the project map, which is a document about the
+# repository and is reviewed with everything else in it (TODO: Panels).
+.acpilot/*
+!.acpilot/project-map.toml
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

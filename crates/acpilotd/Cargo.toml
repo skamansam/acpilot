@@ -13,10 +13,16 @@ name = "acpilotd"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["parse-references"]
 # Serves a Swagger UI page at /docs. Off by default: the page loads its assets
 # from a CDN, which is fine for development and wrong to assume in production.
 docs = []
+# The parse-tree fallback for `GET /v1/files/references`, for a workspace whose
+# language has no server installed. On by default so references keep working
+# anywhere; `--no-default-features` builds a daemon that links no grammar at all,
+# which is the 2.2 MB of static parser tables measured on 2026-11-01 and worth it
+# only where a language server is always running (P7-4).
+parse-references = ["dep:acpilot-text"]
 
 [dependencies]
 acpilot-agent = { workspace = true }
@@ -36,7 +42,10 @@ acpilot-stats = { workspace = true }
 # The references search parses the files it reads: the filter that tells a use from a
 # mention is the parse tree, and it has to run where the text is. The grammars are the
 # ones the editor links, so one crate answers both surfaces.
-acpilot-text = { workspace = true }
+acpilot-text = { workspace = true, optional = true }
+# References come from a language server where one is installed: scope is the
+# server's answer rather than the parse tree's guess.
+acpilot-lsp = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }
@@ -62,6 +71,10 @@ serde = { workspace = true }
 # the mtime and the size is still visible as a change.
 sha2 = { workspace = true }
 serde_json = { workspace = true }
+# The project map is a document the agent writes and a person can correct, so it
+# is TOML like every file a person maintains (D23) — parsed here, where the file
+# is, rather than shipped to a client as text to interpret.
+toml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }

@@ -21,6 +21,7 @@ pub mod lsp;
 pub mod model;
 pub mod permission;
 pub mod profile;
+pub mod project;
 pub mod session;
 pub mod stats;
 pub mod terminal;
@@ -78,6 +79,8 @@ pub const API_PREFIX: &str = "/v1";
         file::LineChange,
         file::LineMark,
         file::Reference,
+        project::ProjectMap,
+        project::MapArea,
         terminal::TerminalSize,
         terminal::TerminalSummary,
         terminal::CreateTerminalRequest,

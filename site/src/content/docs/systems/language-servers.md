@@ -53,10 +53,22 @@ lookup.
 
 ## Status
 
-The engine arrives in the language intelligence phase (P7); the design phase's P0-7 probe is done. Framing, negotiation, and the
-UTF-8/UTF-16 conversion are already in `acpilot-lsp`, tested over emoji, CJK,
-combining marks, and CRLF, and were proven end-to-end against `rust-analyzer`,
-`typescript-language-server`, and `pyright`. The numbers and the capability
-table live in the design phase's P0-7 notes; the short version is that two of the
-three servers say nothing about encoding and mean UTF-16, so the daemon
-negotiates and honours whatever the server answers.
+The first thing a server is used for is **references**. `POST /v1/files/references`
+takes the file, the caret's offset and the buffer's own text alongside the name,
+starts the server installed for that language — `rust-analyzer`,
+`pyright-langserver` or `typescript-language-server`, detected on `PATH` — and asks
+`textDocument/references`, having opened the buffer as the document the caret is in.
+That is what makes an edit nobody has saved yet the text the answer is about. The list
+is then **scoped** rather than spelled: two functions called `new` are two functions.
+A language with no server falls back to a parse-tree search, which is a feature of the
+daemon (`parse-references`, on by default) rather than a second client: a build
+without it links no grammar at all. The `GET` form, a name and no buffer, is the
+spelling search.
+
+The rest of the engine arrives in the language intelligence phase (P7); the design
+phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16 conversion are
+in `acpilot-lsp`, tested over emoji, CJK, combining marks, and CRLF, and were proven
+end-to-end against `rust-analyzer`, `typescript-language-server`, and `pyright`. The
+numbers and the capability table live in the design phase's P0-7 notes; the short
+version is that two of the three servers say nothing about encoding and mean UTF-16,
+so the daemon negotiates and honours whatever the server answers.

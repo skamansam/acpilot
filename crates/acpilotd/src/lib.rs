@@ -35,10 +35,12 @@ use utoipa::OpenApi as _;
 
 mod auth;
 mod files;
+mod lsp;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
 mod platform;
+mod project;
 mod sessions;
 mod stats;
 mod terminals;
@@ -242,6 +244,13 @@ pub struct AppState {
     /// only way to tell those two apart, and it is the daemon's to remember:
     /// the broker's job is to answer, not to be a history.
     decided: Arc<Mutex<HashMap<String, PermissionDecision>>>,
+    /// The language servers this daemon may ask about a file, one per language and
+    /// started on demand.
+    ///
+    /// One registry rather than one per request: a server indexes a project once, and
+    /// a daemon that spawned one per references request would pay that index every
+    /// keystroke.
+    language_servers: Arc<lsp::Servers>,
 }
 
 impl Default for AppState {
@@ -261,6 +270,7 @@ impl Default for AppState {
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
+            language_servers: Arc::new(lsp::Servers::new()),
         }
     }
 }
@@ -297,6 +307,15 @@ impl AppState {
     /// The broker behind the permission routes, when the daemon has one.
     pub fn broker(&self) -> Option<&Arc<Broker>> {
         self.broker.as_ref()
+    }
+
+    /// The language servers behind `GET /v1/files/references`.
+    ///
+    /// A registry rather than a server: which language server a file wants, and
+    /// whether one is installed, is decided per request, and the sessions it has
+    /// started are the daemon's for as long as it runs.
+    pub fn language_servers(&self) -> &lsp::Servers {
+        &self.language_servers
     }
 
     /// Serve this workspace, and open every session in it.
@@ -1050,6 +1069,7 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
         .into_iter()
         .chain(terminals::operations())
         .chain(files::operations())
+        .chain(project::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
@@ -1325,6 +1345,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(files::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
+        .merge(project::routes())
         .merge(terminals::routes())
         .with_state(state);
 

@@ -54,29 +54,38 @@ theme.
 The editor is the middle of the window and the columns either side hold panels.
 `Alt-P` opens the Panels menu, which says which panel is on which side: a row is a
 place (`File manager on the right`), two panels on one side share the column, and
-the arrangement is remembered with the divider widths. Four panels exist today.
+the arrangement is remembered with the divider widths. Five panels are built today.
 
 | Panel | What it answers | State |
 | --- | --- | --- |
 | **File manager** | where the files are, what git says changed about them, and a find over paths and contents | built |
 | **Outline** | what the open buffer defines, from the grammar it is highlighted with; `Enter` on a row puts the caret on the definition's line | built |
 | **Assistant** | the sessions, the open transcript and the composer — the agent's half of the window | built |
-| **Project map** | what the workspace is *for*: which package owns which idea and how they depend on each other | <span class="pill pill--hangar">hangar</span> |
+| **Project map** | what the workspace is *for*: what each area is for, which path it owns, and what it depends on; the area the open file is in is opened under the list | built |
 | **Wiki** | one linked page per subsystem, written from the code so the repository explains itself | <span class="pill pill--hangar">hangar</span> |
 | **References** | every real use of the identifier under the caret, without the language's own noise; `Enter` on a row opens the file at the use | built |
 
-The two in the hangar are panels rather than screens because that is the unit a
-person arranges: each answers a question about *this* workspace while a file is
-open, each is read in a column, and each can be put on either side or put away.
+The one still in the hangar is a panel rather than a screen for the same reason the
+others are: it answers a question about *this* workspace while a file is open, it is
+read in a column, and it can be put on either side or put away.
 
-**Project map** is a document the agent writes into the workspace — under
-`.acpilot/`, beside the settings — saying what each directory is for, which crate
-or package owns which idea, and which parts depend on which. The panel draws it as
-a tree with the current file's neighbourhood picked out, so the map is read the way
-the code is browsed. Regenerating it is a prompt with the tree and the README as
-its input rather than a model of its own, and because the result is a file in the
-repository it is versioned and reviewable: a wrong statement about the
-architecture is a diff somebody can argue with instead of a hedge in a chat log.
+**Project map** is a document the agent writes into the workspace —
+`.acpilot/project-map.toml`, beside the settings — saying what each area is for,
+which path it owns, and which parts it depends on. `GET /v1/project/map` parses it
+where the workspace is, so the panel works the same when the files are on another
+machine, and the areas come back in the order the agent wrote them: a map that
+sorted itself would be one whose order nobody chose. The panel marks the area the
+open file belongs to — the deepest path that is a prefix of it, so a map can
+describe the workspace and then refine it — and opens that area's summary and edges,
+which is the neighbourhood you are standing in. `j`/`k` choose, `Enter` reads a
+summary onto the status line, and `r` re-reads a map that was just rewritten. A
+repository with no map yet says so rather than drawing an empty list that would read
+as a workspace with nothing in it.
+
+Regenerating a map is a prompt with the tree and the README as its input rather than
+a model of its own, and because the result is a file in the repository it is
+versioned and reviewable: a wrong statement about the architecture is a diff
+somebody can argue with instead of a hedge in a chat log.
 
 **Wiki** is the same idea at a larger size: one page per subsystem, written from
 the code and the map, kept in the workspace and read in a pane. What makes it a
@@ -93,9 +102,25 @@ parse tree: a row is a leaf the grammar calls a name, so the comment that mentio
 it, the string that spells it and the documentation page that explains it are not
 uses. It is `GET /v1/files/references`, walking the workspace under the same ignore
 rules as the tree and the content search, and it is a search rather than a language
-server's `textDocument/references` until one is running (P7-4): scope is unresolved,
-so two functions called `new` are one name. A row is a place — `Enter` opens the file
-at the use — and the keys go back to the buffer with it.
+server's `textDocument/references` until one is running: scope is unresolved there, so
+two functions called `new` are one name. Where a language server *is* installed, the
+daemon asks it first — `rust-analyzer`, `pyright-langserver` or
+`typescript-language-server`, detected on `PATH` — and the answer is scoped, so the
+same two `new`s are two functions. The grammar search is then the fallback for a
+language with no server, which is what lets a build drop it entirely and stop linking
+the parser. A row is a place — `Enter` opens the file at the use — and the keys go back
+to the buffer with it.
+
+The list follows the caret rather than waiting to be asked again. While the buffer
+holds the keys, each frame reads the word under the caret, and a name that is still
+there on the next frame is searched for — so walking a file renames the panel as you
+go, and typing an identifier costs nothing, because a word that changes every frame
+is a word still being typed. It follows the text as well as the caret: a use you
+type while the caret rests on the name is a use the list did not have, so a changed
+buffer is a new question under the same one-frame rule. Between two words the list
+empties rather than name a word the caret is merely beside. It stops following while the keys are in another
+pane, which is what lets `Enter` open a use without the caret it lands on replacing
+the list you were reading.
 
 Project map and wiki are planned in `TODO.md`, which is where their state is kept
 honest; this page describes what they are for so the shape is agreed before they are

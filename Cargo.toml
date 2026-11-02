@@ -37,6 +37,9 @@ acpilot-palette = { version = "0.1.0", path = "crates/acpilot-palette" }
 # `ratatui`, no `gpui`, so the terminal, the window and the browser share one
 # answer to what a keystroke means.
 acpilot-text = { version = "0.1.0", path = "crates/acpilot-text" }
+# The language-server client: the daemon asks it for scoped references, and the
+# grammar search is only the fallback (P7-4).
+acpilot-lsp = { version = "0.1.0", path = "crates/acpilot-lsp" }
 # The daemon API as a library: every UI (CLI, TUI, later the GUI and web) calls
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.

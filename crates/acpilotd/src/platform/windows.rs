@@ -2,6 +2,8 @@
 
 use std::io;
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use axum::Router;
 use tokio::net::TcpListener;
@@ -20,6 +22,18 @@ pub(crate) fn default_target() -> Target {
             .trim_start_matches("http://")
             .to_owned(),
     )
+}
+
+/// The names a program may have on this platform's `PATH`.
+///
+/// Windows resolves `rust-analyzer` to `rust-analyzer.exe`, and a package manager's
+/// shim is a `.cmd` beside it, so both are tried before the program is declared
+/// absent. Nothing here launches a shell to find out.
+pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from(format!("{program}.exe")),
+        PathBuf::from(format!("{program}.cmd")),
+    ]
 }
 
 /// Resolve when the daemon should stop: Ctrl-C, which is what a console window
@@ -72,4 +86,29 @@ where
     axum::serve(listener, crate::auth::protect(router, path))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_names_carry_the_extensions_windows_resolves() {
+        assert_eq!(
+            executable_names("rust-analyzer"),
+            vec![
+                PathBuf::from("rust-analyzer.exe"),
+                PathBuf::from("rust-analyzer.cmd"),
+            ],
+            "the binary and a package manager's shim, and nothing else"
+        );
+    }
+
+    #[test]
+    fn a_program_on_the_path_is_installed() {
+        assert!(
+            crate::lsp::installed("cmd"),
+            "cmd.exe is on every Windows PATH"
+        );
+    }
 }

@@ -34,6 +34,12 @@ const OUTLINE_WIDTH: u16 = 30;
 /// Wider than the outline because a row is a path and a line of code rather than a
 /// name: the same reason the content search's rows carry their text.
 const REFERENCES_WIDTH: u16 = 44;
+
+/// How wide the project map's column is.
+///
+/// The references list's width, for the same reason: a row is a name and a path, and
+/// the summary under the area the caret's file is in needs room to be a sentence.
+const PROJECT_MAP_WIDTH: u16 = 44;
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
 
@@ -140,6 +146,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         if wide && app.show_references && app.panels.on(Panel::References, side) {
             width = width.max(REFERENCES_WIDTH);
         }
+        if wide && app.show_map && app.panels.on(Panel::ProjectMap, side) {
+            width = width.max(PROJECT_MAP_WIDTH);
+        }
         if app.panels.on(Panel::Assistant, side) {
             width = width.max(assistant_width);
         }
@@ -184,6 +193,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
                 }
                 Panel::References => {
                     draw_references(frame, app, slot);
+                }
+                Panel::ProjectMap => {
+                    draw_map(frame, app, slot);
                 }
                 Panel::Assistant => {
                     let (size, sessions) = draw_agents(frame, app, slot);
@@ -741,6 +753,7 @@ fn panels_on(app: &App, column: Rect, side: Side, wide: bool) -> Vec<(Rect, Pane
         .filter(|panel| wide || *panel != Panel::FileManager)
         .filter(|panel| app.show_outline || *panel != Panel::Outline)
         .filter(|panel| app.show_references || *panel != Panel::References)
+        .filter(|panel| app.show_map || *panel != Panel::ProjectMap)
         .collect();
     if stack.is_empty() {
         return Vec::new();
@@ -834,10 +847,19 @@ fn draw_references(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         .border_style(border_style(app.focus == Focus::References, &app.theme));
     let inner = block.inner(area);
     if app.references.is_empty() {
-        let message = if app.editor.is_some() {
-            "no uses yet\nshift-f12 names the word under the caret"
+        // Three different empty panels, because they ask for three different things: a
+        // buffer, a caret on a name, or nothing at all. A panel that said "no uses"
+        // while the caret stood between two words would be an answer to a question
+        // nobody asked.
+        let message = if app.editor.is_none() {
+            "no file is open\nEnter in the file manager reads one".to_owned()
+        } else if app.references_name.is_empty() {
+            "the caret is not on a word\nmove it onto a name".to_owned()
         } else {
-            "no file is open\nEnter in the file manager reads one"
+            format!(
+                "no code uses {}\nshift-f12 names the word under the caret",
+                app.references_name
+            )
         };
         frame.render_widget(
             Paragraph::new(message)
@@ -889,6 +911,136 @@ fn draw_references(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         .collect();
     frame.render_widget(Paragraph::new(rows).block(block), area);
     pane_area(inner)
+}
+
+/// The project map: one row per area the agent named, with the caret's area opened.
+///
+/// The map is a document about the workspace rather than a listing of it, so a row is
+/// a name and a path and nothing else until it is worth reading: the area the open
+/// file belongs to is marked and opened, because that is the neighbourhood the person
+/// is standing in, and the selected row opens too, because `j` is how they ask.
+fn draw_map(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let title = match &app.map {
+        Some(map) if map.written => format!(" Project map · {} areas ", map.areas.len()),
+        _ => " Project map ".to_owned(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style(app.focus == Focus::ProjectMap, &app.theme));
+    let inner = block.inner(area);
+    let muted = Style::default().fg(app.theme.text_muted());
+    let Some(map) = &app.map else {
+        frame.render_widget(
+            Paragraph::new("reading the map…").style(muted).block(block),
+            area,
+        );
+        return pane_area(inner);
+    };
+    if !map.written {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "no map yet\nthe agent writes {}\nfrom the tree and the README",
+                map.path
+            ))
+            .style(muted)
+            .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    if map.areas.is_empty() {
+        frame.render_widget(
+            Paragraph::new(format!("{} names no areas", map.path))
+                .style(muted)
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let here = app
+        .editor
+        .as_ref()
+        .and_then(|editor| map.area_for(editor.path()));
+    let height = usize::from(inner.height).max(1);
+    let width = usize::from(inner.width).saturating_sub(2).max(8);
+    let first = first_visible(app.map_selected, map.areas.len(), height);
+    let mut lines: Vec<Line> = Vec::new();
+    for (index, area) in map.areas.iter().enumerate().skip(first) {
+        if lines.len() >= height {
+            break;
+        }
+        let chosen = index == app.map_selected;
+        let standing = here == Some(index);
+        let row = if chosen {
+            Style::default()
+                .bg(app.theme.bg_panel())
+                .fg(app.theme.accent_high())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let bullet = if standing {
+            Span::styled("● ", Style::default().fg(app.theme.accent()))
+        } else {
+            Span::styled("  ", muted)
+        };
+        let path = if area.path.is_empty() || area.path == "." {
+            String::new()
+        } else {
+            format!("  {}", area.path)
+        };
+        lines.push(Line::from(vec![
+            bullet,
+            Span::styled(area.name.clone(), row),
+            Span::styled(path, if chosen { row } else { muted }),
+        ]));
+        // The summary belongs to the area being read, not to every row: a map where
+        // all the prose is always on screen is a map nobody can scan.
+        if chosen || standing {
+            for line in wrap_text(&area.summary, width) {
+                if lines.len() >= height {
+                    break;
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("    {line}"),
+                    Style::default().fg(app.theme.text()),
+                )));
+            }
+            if !area.depends_on.is_empty() && lines.len() < height {
+                lines.push(Line::from(Span::styled(
+                    format!("    → {}", area.depends_on.join(", ")),
+                    muted,
+                )));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+    pane_area(inner)
+}
+
+/// `text` as lines no wider than `width` columns, breaking at spaces.
+///
+/// A paragraph widget would wrap the rows too, and a path wrapped mid-word reads as
+/// two paths. A word longer than the column is cut rather than left to overflow.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if line.is_empty() {
+                line = word.chars().take(width).collect();
+            } else if line.chars().count() + 1 + word.chars().count() <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut line));
+                line = word.chars().take(width).collect();
+            }
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 /// The agent panel: sessions over a transcript over a composer.
@@ -1894,6 +2046,12 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
         Focus::Outline => &[
             ("j / k", "choose a definition"),
             ("enter", "go to its line"),
+            ("esc", "back to the buffer"),
+        ],
+        Focus::ProjectMap => &[
+            ("j / k", "choose an area"),
+            ("enter", "read its summary"),
+            ("r", "read the map again"),
             ("esc", "back to the buffer"),
         ],
         Focus::Terminal => &[

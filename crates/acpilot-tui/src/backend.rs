@@ -77,10 +77,23 @@ pub enum Request {
     Grep(String),
     /// Find the code uses of an identifier, for the references panel.
     ///
-    /// The name rather than a position: the pane read the word off its own buffer, and
-    /// a request that named a line and a column would make the daemon open the file to
-    /// find out what the person meant.
-    References(String),
+    /// The name *and* the caret: the name is what a parse-tree search needs, and the
+    /// file and character offset are what a language server needs to resolve that name
+    /// to a symbol. The pane sends both, and the daemon uses whichever it can.
+    References {
+        /// The identifier under the caret.
+        name: String,
+        /// The file the caret is in, workspace-relative.
+        path: String,
+        /// The caret's offset in that file, counted in characters.
+        offset: usize,
+        /// The buffer as the pane holds it, because an edit that has not been saved is
+        /// still the text the list is about: a use typed a moment ago is missing from
+        /// the file on disk, and a use deleted a moment ago is still in it.
+        text: String,
+    },
+    /// Read the project map the agent wrote under `.acpilot/`.
+    ProjectMap,
     /// Read a file, by workspace-relative path.
     OpenFile(String),
     /// Write a buffer back, with the token the read came with.
@@ -163,6 +176,11 @@ pub enum Update {
         /// Its uses in code, sorted by path, line and column.
         hits: Vec<acpilot_proto::file::Reference>,
     },
+    /// The project map, as the daemon read it.
+    ///
+    /// The map rather than its text: the daemon parsed it, so a client cannot
+    /// disagree with the other one about what the file says.
+    ProjectMap(acpilot_proto::project::ProjectMap),
     /// A file's text, for the editor.
     File {
         /// The path the daemon answered with, which is the one to show.
@@ -459,10 +477,25 @@ async fn run(
                         }
                     }
                 }
-                Some(Request::References(name)) => {
-                    match client.references(&name).await {
+                Some(Request::References {
+                    name,
+                    path,
+                    offset,
+                    text,
+                }) => {
+                    match client.references(&name, Some((&path, offset, &text))).await {
                         Ok(hits) => {
                             let _ = updates.send(Update::References { name, hits });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::ProjectMap) => {
+                    match client.project_map().await {
+                        Ok(map) => {
+                            let _ = updates.send(Update::ProjectMap(map));
                         }
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
@@ -950,7 +983,7 @@ async fn run_demo(
                     .collect();
                 let _ = updates.send(Update::Matches { query, matches });
             }
-            Request::References(name) => {
+            Request::References { name, .. } => {
                 // The design pass parses its one fixture: the same filter over the text
                 // it drew, so the panel can be reviewed without a workspace.
                 let text = demo.editor.lines.join("\n");
@@ -968,6 +1001,13 @@ async fn run_demo(
                     })
                     .collect();
                 let _ = updates.send(Update::References { name, hits });
+            }
+            Request::ProjectMap => {
+                // The design pass has no workspace, so it has no map: the panel is
+                // drawn from its empty state, which is a state worth reviewing.
+                let _ = updates.send(Update::Status(
+                    "design pass · no workspace to map".to_owned(),
+                ));
             }
             Request::OpenFile(path) => {
                 if path == demo.editor.path {

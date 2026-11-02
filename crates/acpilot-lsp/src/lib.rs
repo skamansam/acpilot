@@ -12,6 +12,8 @@
 
 pub mod client;
 pub mod position;
+pub mod session;
 pub mod wire;
 
 pub use position::{LineIndex, Position, PositionEncoding};
+pub use session::{Location, Session, SessionError};

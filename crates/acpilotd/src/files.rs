@@ -21,17 +21,19 @@
 //! for read, list and write with an ETag; the editor phase (P6) is where a
 //! buffer meets a file, and it will say what else a save needs.
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use acpilot_core::AcpilotError;
 use acpilot_git::{ChangeKind, Repo, StatusEntry};
+use acpilot_lsp::position::{LineIndex, Position};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::file::{
     FileChange, FileContent, FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark,
-    Reference,
+    Reference, ReferencesRequest,
 };
 use axum::Json;
 use axum::Router;
@@ -422,12 +424,82 @@ async fn references(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<Reference>>, ApiError> {
-    let root = workspace_root(&state, query.workspace.as_deref())?;
     let needle = query.q.as_deref().unwrap_or_default().trim().to_owned();
+    let at = query.path.as_deref().zip(query.offset);
+    let rows = find_references(&state, query.workspace.as_deref(), &needle, at, None).await?;
+    Ok(Json(rows))
+}
+
+/// `POST /v1/files/references`.
+///
+/// The query-string question with the buffer attached, for the panel that asked it:
+/// a file edited and not saved is the file the person is reading, and a list of uses
+/// read from the last save would miss one typed a moment ago and keep one deleted a
+/// moment ago. The walk is still the walk — every other file is read where it is,
+/// because only the open buffer differs from its file.
+///
+/// The caret is optional here and the text is not: a name and a buffer is a question
+/// worth answering, and it is answered by the parse tree, because a language server
+/// needs a position to resolve.
+///
+/// # Errors
+///
+/// The parse-tree question's errors, plus a body that is not a references request
+/// (`400`) and a path that is absolute or escapes (`400`).
+async fn references_in_buffer(
+    State(state): State<AppState>,
+    body: Result<Json<ReferencesRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Vec<Reference>>, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a references request: {rejection}"
+        )))
+    })?;
+    // Checked here rather than in the core, so a path that escapes is a `400` on every
+    // request that names one — including the one whose text this route was handed.
+    let _ = relative_path(&request.path)?;
+    let buffer = request
+        .text
+        .as_deref()
+        .map(|text| (request.path.as_str(), text));
+    let at = request.offset.map(|offset| (request.path.as_str(), offset));
+    let rows = find_references(
+        &state,
+        request.workspace.as_deref(),
+        request.q.trim(),
+        at,
+        buffer,
+    )
+    .await?;
+    Ok(Json(rows))
+}
+
+/// The answer to both forms of the question: where is this name used.
+///
+/// `at` is the caret, when the caller knows one, and `buffer` is the open file's text
+/// as the editor holds it. Neither is required: a request without a caret is a
+/// spelling search, and one without a buffer is about the files on disk.
+async fn find_references(
+    state: &AppState,
+    workspace: Option<&str>,
+    needle: &str,
+    at: Option<(&str, usize)>,
+    buffer: Option<(&str, &str)>,
+) -> Result<Vec<Reference>, ApiError> {
+    let root = workspace_root(state, workspace)?;
     // An identifier is one word. Anything else cannot be a use of a name, and a walk
     // that read every file to prove it would be a search for nothing.
-    if needle.is_empty() || !needle.chars().all(acpilot_text::is_word) {
-        return Ok(Json(Vec::new()));
+    if !is_identifier(needle) {
+        return Ok(Vec::new());
+    }
+    // A request that names a caret can be answered by a language server, which knows
+    // scope: two functions called `new` are two functions, and a field is not every
+    // `id` in the repository. `None` means nothing answered, and the parse tree below
+    // is the answer for a workspace whose language has no server installed.
+    if let Some((path, offset)) = at
+        && let Some(rows) = ask_server(state, &root, path, offset, buffer).await?
+    {
+        return Ok(rows);
     }
     let honour = state
         .preferences()
@@ -445,35 +517,44 @@ async fn references(
         let relative = display_path(&root, path);
         // A file no grammar parses is prose or data: searching it for a name would
         // list the documentation as if it were code.
-        let language = acpilot_text::language_for(&relative);
+        let language = shipped_language(&relative);
         if language.is_empty() {
             continue;
         }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.len() > MAX_FILE_BYTES {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        if bytes.contains(&0) {
-            continue;
-        }
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
+        // The buffer the caller sent *is* this file, when it names it: a panel answers
+        // about what the pane shows, not about the last save, and the difference is
+        // exactly the edit somebody just made.
+        let text = match buffer.filter(|(buffered, _)| *buffered == relative.as_str()) {
+            Some((_, text)) => Cow::Borrowed(text),
+            None => {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if metadata.len() > MAX_FILE_BYTES {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    continue;
+                };
+                if bytes.contains(&0) {
+                    continue;
+                }
+                let Ok(text) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                Cow::Owned(text)
+            }
         };
         // Split rather than `lines()`: the parser counts rows the way the rope does,
         // and the row a use is on has to be the row whose text the row draws.
         let lines: Vec<&str> = text.split('\n').collect();
-        for hit in acpilot_text::references::uses(language, text, &needle) {
+        for (line, column) in parsed_uses(language, &text, needle) {
             found.push(Reference {
                 path: relative.clone(),
-                line: u32::try_from(hit.line + 1).unwrap_or(u32::MAX),
-                column: u32::try_from(hit.column + 1).unwrap_or(u32::MAX),
+                line: u32::try_from(line + 1).unwrap_or(u32::MAX),
+                column: u32::try_from(column + 1).unwrap_or(u32::MAX),
                 text: lines
-                    .get(hit.line)
+                    .get(line)
                     .map_or_else(String::new, |line| line.trim_end().to_owned()),
             });
             if found.len() == MAX_REFERENCES {
@@ -487,7 +568,160 @@ async fn references(
             .then(left.line.cmp(&right.line))
             .then(left.column.cmp(&right.column))
     });
-    Ok(Json(found))
+    Ok(found)
+}
+
+/// Whether `name` is one identifier.
+///
+/// The daemon's own answer rather than the grammar crate's, because this check has
+/// to run in a build that does not link the grammars: a references request is a
+/// question about one name, and a query that is a sentence or empty is not one.
+fn is_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    matches!(characters.next(), Some(first) if first.is_alphabetic() || first == '_')
+        && characters.all(|character| character.is_alphanumeric() || character == '_')
+}
+
+/// The grammar this build ships for `path`, or empty when the fallback is compiled
+/// out.
+///
+/// A daemon built with `--no-default-features` has no parser at all: references then
+/// come from a language server or not at all, and the dep is what keeps 2.2 MB of
+/// grammar tables out of the binary.
+#[cfg(feature = "parse-references")]
+fn shipped_language(path: &str) -> &'static str {
+    acpilot_text::language_for(path)
+}
+
+#[cfg(not(feature = "parse-references"))]
+fn shipped_language(_path: &str) -> &'static str {
+    ""
+}
+
+/// The parse tree's uses of `needle`, as `(line, character column)`.
+#[cfg(feature = "parse-references")]
+fn parsed_uses(language: &str, text: &str, needle: &str) -> Vec<(usize, usize)> {
+    acpilot_text::references::uses(language, text, needle)
+        .into_iter()
+        .map(|hit| (hit.line, hit.column))
+        .collect()
+}
+
+#[cfg(not(feature = "parse-references"))]
+fn parsed_uses(_language: &str, _text: &str, _needle: &str) -> Vec<(usize, usize)> {
+    Vec::new()
+}
+
+/// Ask a language server where the name at `offset` in `path` is used.
+///
+/// `None` when there is nothing to ask: a language this build has no server for, no
+/// server installed, or one that did not answer. The rows are read from the files the
+/// server named, because a list of `path:line` cannot be chosen from, and a server can
+/// name files outside the workspace — a dependency in a package cache — which are
+/// dropped: a row the tree cannot open is not a row.
+async fn ask_server(
+    state: &AppState,
+    root: &Path,
+    path: &str,
+    offset: usize,
+    buffer: Option<(&str, &str)>,
+) -> Result<Option<Vec<Reference>>, ApiError> {
+    let Some(language) = crate::lsp::language_of(path) else {
+        return Ok(None);
+    };
+    let relative = relative_path(path)?;
+    // The buffer is the document the server opens: asking it about the saved text
+    // while the pane shows an edited one would resolve the caret against a version
+    // nobody is looking at, and the caret's offset is the edited one's.
+    let (resolved, text) = match buffer.filter(|(buffered, _)| *buffered == path) {
+        Some((_, text)) => (
+            // A file that is not on disk yet — a buffer opened before its first save —
+            // is still a document the server can resolve a symbol in. The path has
+            // already been refused if it escapes, so joining it is the whole answer.
+            resolve_existing(root, &relative, path).unwrap_or_else(|_| root.join(&relative)),
+            text.to_owned(),
+        ),
+        None => {
+            let resolved = resolve_existing(root, &relative, path)?;
+            let metadata =
+                std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
+            if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
+                return Ok(None);
+            }
+            let bytes = std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
+            if bytes.contains(&0) {
+                return Ok(None);
+            }
+            let Ok(text) = String::from_utf8(bytes) else {
+                return Ok(None);
+            };
+            (resolved, text)
+        }
+    };
+    let Some(answer) = state
+        .language_servers()
+        .references(language, root, &resolved, &text, offset)
+        .await
+    else {
+        return Ok(None);
+    };
+    tracing::debug!(server = answer.program, "references from a language server");
+    Ok(Some(rows_from(root, &answer)))
+}
+
+/// The server's locations as rows a pane can draw.
+///
+/// The encoding matters twice: the server's `character` is counted in it, and the
+/// row's `column` is a character column because a pane places a caret on a glyph.
+fn rows_from(root: &Path, answer: &crate::lsp::Answer) -> Vec<Reference> {
+    let mut texts: HashMap<std::path::PathBuf, String> = HashMap::new();
+    let mut found: Vec<Reference> = Vec::new();
+    for location in &answer.locations {
+        let Ok(relative) = location.path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() {
+            continue;
+        }
+        let text = texts
+            .entry(location.path.clone())
+            .or_insert_with(|| std::fs::read_to_string(&location.path).unwrap_or_default());
+        let index = LineIndex::new(text);
+        let Some(bytes) = index.offset(
+            text,
+            Position::new(location.line, location.character),
+            answer.encoding,
+        ) else {
+            continue;
+        };
+        let line_start = text[..bytes].rfind('\n').map_or(0, |at| at + 1);
+        let column = u32::try_from(text[line_start..bytes].chars().count() + 1).unwrap_or(u32::MAX);
+        let line = text
+            .split('\n')
+            .nth(location.line as usize)
+            .unwrap_or_default()
+            .trim_end();
+        found.push(Reference {
+            path: relative,
+            line: location.line + 1,
+            column,
+            text: line.to_owned(),
+        });
+        if found.len() == MAX_REFERENCES {
+            break;
+        }
+    }
+    found.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.line.cmp(&right.line))
+            .then(left.column.cmp(&right.column))
+    });
+    found.dedup_by(|left, right| {
+        left.path == right.path && left.line == right.line && left.column == right.column
+    });
+    found
 }
 
 /// Every changed path under `root`, as the letter a tree row draws.
@@ -828,6 +1062,12 @@ struct SearchQuery {
     workspace: Option<String>,
     /// What a path has to contain, ignoring case. Empty matches nothing.
     q: Option<String>,
+    /// The file the caret is in, for a references request that can be answered by a
+    /// language server rather than by spelling.
+    path: Option<String>,
+    /// The caret's offset in that file, counted in characters, which is what a server
+    /// needs to resolve a name to a symbol instead of to a string.
+    offset: Option<usize>,
 }
 
 /// The root, checked against the id the client named.
@@ -836,7 +1076,10 @@ struct SearchQuery {
 /// can usefully send before workspaces are plural. A different id is a `404`
 /// naming both, because a client that thinks it is editing directory A while
 /// the daemon serves B has no way to notice otherwise.
-fn workspace_root(state: &AppState, workspace: Option<&str>) -> Result<PathBuf, ApiError> {
+pub(crate) fn workspace_root(
+    state: &AppState,
+    workspace: Option<&str>,
+) -> Result<PathBuf, ApiError> {
     let served = state.workspace().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon was started without a workspace, so it has no files to serve",
@@ -1002,7 +1245,10 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/files/list", get(list))
         .route("/v1/files/search", get(search))
         .route("/v1/files/grep", get(grep))
-        .route("/v1/files/references", get(references))
+        .route(
+            "/v1/files/references",
+            get(references).post(references_in_buffer),
+        )
 }
 
 #[allow(dead_code)]
@@ -1097,6 +1343,21 @@ fn references_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
+    post,
+    path = "/v1/files/references",
+    tag = "files",
+    summary = "Find the code uses of an identifier in an open buffer",
+    request_body = ReferencesRequest,
+    responses(
+        (status = 200, description = "Uses in code, sorted by path, line and column, at most MAX_REFERENCES of them", body = Vec<Reference>),
+        (status = 400, description = "A body that is not a references request, or a path that escapes", body = ErrorBody),
+        (status = 409, description = "This daemon has no workspace to walk", body = ErrorBody)
+    )
+)]
+fn references_in_buffer_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
     put,
     path = "/v1/files",
     tag = "files",
@@ -1145,6 +1406,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/files/references",
             HttpMethod::Get,
             <__path_references_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files/references",
+            HttpMethod::Post,
+            <__path_references_in_buffer_doc as Path>::operation(),
         ),
     ]
 }

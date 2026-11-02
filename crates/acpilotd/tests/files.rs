@@ -64,6 +64,67 @@ fn workspace() -> tempfile::TempDir {
 }
 
 #[tokio::test]
+async fn a_references_request_searches_the_buffer_it_was_sent() {
+    // The file on disk has one call; the buffer the editor is holding has a second,
+    // typed and not saved. The list is about what the pane shows, so the use only the
+    // buffer has is the one that has to appear.
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn helper() {}\nfn main() { helper(); }\n",
+    )
+    .expect("main");
+    let buffer =
+        "fn helper() {}\nfn main() { helper(); }\n// unsaved below\nfn later() { helper(); }\n";
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "POST",
+        "/v1/files/references",
+        // No caret: the parse tree answers, and the buffer is the text it reads — which
+        // is the half of this that is the same on a machine with a language server and
+        // one without.
+        Some(serde_json::json!({
+            "q": "helper",
+            "path": "src/main.rs",
+            "text": buffer,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    let lines: Vec<u64> = rows.iter().filter_map(|row| row["line"].as_u64()).collect();
+    assert!(
+        lines.contains(&4),
+        "the use that exists only in the buffer is listed: {body}"
+    );
+    assert_eq!(
+        rows.len(),
+        3,
+        "the definition and both calls, and nothing read from the saved file: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_references_request_from_a_buffer_refuses_a_path_that_escapes() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "POST",
+        "/v1/files/references",
+        Some(serde_json::json!({
+            "q": "helper",
+            "path": "../outside.rs",
+            "offset": 0,
+            "text": "helper();\n",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
 async fn a_gitignore_keeps_its_paths_out_of_the_tree() {
     // A workspace with the three things a tree has to get right: an ignored
     // directory, an ignored file, and `.git` itself.
@@ -366,6 +427,7 @@ async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
 }
 
 #[tokio::test]
+#[cfg(feature = "parse-references")]
 async fn a_references_search_lists_code_and_leaves_prose_alone() {
     let directory = tempfile::tempdir().expect("a workspace");
     fs::create_dir(directory.path().join("src")).expect("src");

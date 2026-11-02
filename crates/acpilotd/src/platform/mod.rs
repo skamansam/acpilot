@@ -18,11 +18,11 @@ mod unix;
 mod windows;
 
 #[cfg(unix)]
-pub(crate) use unix::default_target;
+pub(crate) use unix::{default_target, executable_names};
 #[cfg(unix)]
 pub use unix::{serve, shutdown};
 #[cfg(windows)]
-pub(crate) use windows::default_target;
+pub(crate) use windows::{default_target, executable_names};
 #[cfg(windows)]
 pub use windows::{serve, shutdown};
 

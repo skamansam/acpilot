@@ -1474,6 +1474,12 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
                 }),
             ));
         }
+        // A question still in flight is worth a word: the first one waits on a server
+        // being started and an index being built, which is seconds, and a gutter that
+        // has not moved in seconds must not read as a clean file.
+        if app.diagnostics_pending {
+            spans.push(Span::styled("· checking ", dim));
+        }
     }
     // What the sessions hold, from the same readings the bar draws. A `~` is the
     // daemon's own count rather than an agent's report, and an absent total is
@@ -3352,6 +3358,21 @@ mod tests {
             edited.contains("app.rs +"),
             "an edited buffer says it is not in the file: {edited}"
         );
+    }
+
+    #[test]
+    fn a_check_in_flight_says_so_beside_the_position() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.focus = Focus::Editor;
+        let quiet = render(&mut app);
+        assert!(!quiet.contains("checking"), "{quiet}");
+
+        // A question that has been asked and not answered is a fact about the screen: a
+        // gutter that has not moved for the seconds a first index takes must not read as
+        // a clean file.
+        app.diagnostics_pending = true;
+        let asking = render(&mut app);
+        assert!(asking.contains("· checking"), "{asking}");
     }
 
     #[test]

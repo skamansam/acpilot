@@ -1723,6 +1723,13 @@ pub struct App {
     pub diagnostics: Option<acpilot_proto::file::FileDiagnostics>,
     /// The file that answer is about.
     pub diagnostics_path: String,
+    /// Whether a question about the buffer has been asked and not yet answered.
+    ///
+    /// The status line says `checking` while this is true. Not derivable from the
+    /// revision: a first question can wait on a server being started and an index
+    /// being built, which is seconds during which the text is already the version
+    /// that was sent.
+    pub diagnostics_pending: bool,
     /// The buffer revision the last diagnostics request was about.
     ///
     /// The text that has an answer, or is owed one. A buffer whose revision differs
@@ -1973,6 +1980,7 @@ impl App {
             tokens_estimated: false,
             diagnostics: None,
             diagnostics_path: String::new(),
+            diagnostics_pending: false,
             diagnostics_revision: 0,
             diagnostics_seen: 0,
             diagnostics_due: None,
@@ -2562,7 +2570,21 @@ impl App {
                     }
                     self.diagnostics = Some(problems);
                     self.diagnostics_path = path;
+                    self.diagnostics_pending = false;
                 }
+            }
+            Update::DiagnosticsUnanswered { path, message } => {
+                // The question is over either way. What the gutter already holds stays:
+                // an answer from before is still the newest thing anybody knows, and a
+                // transport failure is not evidence the file is clean.
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.path() == path)
+                {
+                    self.diagnostics_pending = false;
+                }
+                self.status = message;
             }
             Update::ProjectMap(map) => {
                 let areas = map.areas.len();
@@ -3492,6 +3514,7 @@ impl App {
         self.diagnostics_revision = revision;
         self.diagnostics_seen = revision;
         self.diagnostics_due = None;
+        self.diagnostics_pending = true;
         self.pending.push(Request::Diagnostics { path, text });
     }
 
@@ -6513,6 +6536,48 @@ mod tests {
         // And nothing further until the text moves again.
         app.tick_at(start + std::time::Duration::from_millis(5_000));
         assert_eq!(app.take_pending(), Vec::new());
+    }
+
+    #[test]
+    fn a_question_that_never_answers_stops_saying_it_is_checking() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        assert!(app.diagnostics_pending, "the open asks");
+
+        // An answer ends the question.
+        app.apply(Update::Diagnostics {
+            path: "src/main.rs".to_owned(),
+            problems: acpilot_proto::file::FileDiagnostics {
+                server: Some("rust-analyzer".to_owned()),
+                encoding: None,
+                items: Vec::new(),
+            },
+        });
+        assert!(!app.diagnostics_pending, "an answer is the question ending");
+
+        // A pause in typing asks again. A question the daemon never gets an answer to
+        // still ends: `checking` for ever would be a claim about work nobody is doing.
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('o')));
+        let start = std::time::Instant::now();
+        app.tick_at(start);
+        app.tick_at(start + std::time::Duration::from_millis(600));
+        assert!(app.diagnostics_pending, "the pause asked");
+        app.apply(Update::DiagnosticsUnanswered {
+            path: "src/main.rs".to_owned(),
+            message: "daemon: no route to host".to_owned(),
+        });
+        assert!(!app.diagnostics_pending);
+        assert_eq!(app.status, "daemon: no route to host");
+        assert!(
+            app.diagnostics.is_some(),
+            "the older answer stays: a failure is not evidence the file is clean"
+        );
     }
 
     #[test]

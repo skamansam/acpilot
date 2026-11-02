@@ -200,6 +200,18 @@ pub enum Update {
         /// The problems, and which server found them — absent when none was asked.
         problems: acpilot_proto::file::FileDiagnostics,
     },
+    /// A question about a buffer was asked and nothing answered it.
+    ///
+    /// Not the same as [`Update::Diagnostics`] naming no server: a server that said
+    /// nothing is an answer, and this is the client never getting one. It exists so a
+    /// question stops reading as still in flight — a client that never hears back has
+    /// to be told that it will not, or the status line would say `checking` for ever.
+    DiagnosticsUnanswered {
+        /// The file the question was about.
+        path: String,
+        /// What went wrong, worded the way the status line should say it.
+        message: String,
+    },
     /// The project map, as the daemon read it.
     ///
     /// The map rather than its text: the daemon parsed it, so a client cannot
@@ -522,7 +534,10 @@ async fn run(
                             let _ = updates.send(Update::Diagnostics { path, problems });
                         }
                         Err(error) => {
-                            let _ = updates.send(Update::Status(describe(&error)));
+                            let _ = updates.send(Update::DiagnosticsUnanswered {
+                                path,
+                                message: describe(&error),
+                            });
                         }
                     }
                 }
@@ -1044,12 +1059,15 @@ async fn run_demo(
                     .collect();
                 let _ = updates.send(Update::References { name, hits });
             }
-            Request::Diagnostics { .. } => {
+            Request::Diagnostics { path, .. } => {
                 // No daemon, no server: the design pass says which world it is in rather
-                // than drawing a clean file, which is a check nobody ran.
-                let _ = updates.send(Update::Status(
-                    "no language server · the design pass reads its own text".to_owned(),
-                ));
+                // than drawing a clean file, which is a check nobody ran. It is an
+                // unanswered question rather than a plain status, so the frame stops
+                // saying `checking` the way it would after a real answer.
+                let _ = updates.send(Update::DiagnosticsUnanswered {
+                    path,
+                    message: "no language server · the design pass reads its own text".to_owned(),
+                });
             }
             Request::LspStatus => {
                 // No daemon, no servers: the design pass says which world it is in

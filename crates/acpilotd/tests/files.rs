@@ -159,18 +159,33 @@ async fn a_gitignore_keeps_its_paths_out_of_the_tree() {
 }
 
 /// Run `git` in `directory`, with an identity in the environment so a machine with
-/// no global one still commits.
+/// no global one still commits, and without the variables a hook exports.
+///
+/// `pre-commit` runs with `GIT_DIR` and `GIT_INDEX_FILE` set, and they override
+/// `-C`: a fixture that initialised its own repository would commit into this one.
 fn git(directory: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .arg("-C")
         .arg(directory)
         .args(args)
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()
-        .expect("git is installed");
+        .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    for key in [
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
+    let output = command.output().expect("git is installed");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",

@@ -354,11 +354,39 @@ pub struct Repo {
     root: PathBuf,
 }
 
+/// `git`, with the variables a hook exports pointing it at another repository
+/// cleared.
+///
+/// A `pre-commit` hook runs with `GIT_DIR`, `GIT_INDEX_FILE` and the worktree
+/// variables set, and every process it starts inherits them — the daemon, and a
+/// test suite the hook runs. Those variables override `-C`, so a command that
+/// means "the repository at this path" instead reads the one that started the
+/// commit: `Repo::status` reports the wrong tree, and two fixtures adding at once
+/// collide on the outer `.git/index.lock`. The variables carry no information a
+/// `-C` does not already name, so dropping them is what makes that `-C` mean what
+/// it says.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for key in [
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 impl Repo {
     /// Find the repository containing `start`.
     pub fn discover(start: impl AsRef<Path>) -> Result<Self, GitError> {
         let start = start.as_ref();
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(start)
             .args(["rev-parse", "--show-toplevel"])
@@ -508,7 +536,7 @@ impl Repo {
     fn has_head(&self) -> Result<bool, GitError> {
         // Capture rather than inherit: `rev-parse` prints the id on success, and
         // the daemon's stdout is not a place for it.
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(&self.root)
             .args(["rev-parse", "--verify", "--quiet", "HEAD"])
@@ -559,7 +587,7 @@ impl Repo {
     }
 
     fn run_owned(&self, args: Vec<String>) -> Result<Vec<u8>, GitError> {
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(&self.root)
             .args(args.iter().map(OsStr::new))
@@ -823,7 +851,6 @@ fn parse_log(bytes: &[u8]) -> Result<Vec<Commit>, GitError> {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
@@ -856,9 +883,11 @@ mod tests {
         }
 
         fn git(&self, args: &[&str]) -> String {
-            let mut command = Command::new("git");
+            // `git_command` clears the variables a hook exports that would point
+            // this at the outer repository.
+            let mut command = git_command();
             command.arg("-C").arg(&self.root).args(args);
-            // Git exports the author and committer identity to hooks. Without
+            // Git also exports the author and committer identity to hooks. Without
             // this, the suite commits as whoever is committing and only fails
             // when run from the pre-commit hook.
             for key in [

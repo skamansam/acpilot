@@ -21,10 +21,17 @@
 //! start must not become a spawn attempt per request, and installing it later asks
 //! for a daemon restart, which is the same trade every supervisor in this product
 //! makes.
+//!
+//! # And stopped by the daemon
+//!
+//! Kept means kept until the process ends, and nothing else ends it: [`Servers::shutdown`]
+//! is what the daemon calls on its way out, because a dropped router is not a dead
+//! child. A language server with an index is tens of megabytes and holds the source
+//! files open; leaving one behind per launch is a leak a person notices in `ps`.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use acpilot_lsp::position::PositionEncoding;
 use acpilot_lsp::session::{Location, Session};
@@ -46,6 +53,26 @@ const COLD_ATTEMPTS: usize = 20;
 
 /// The pause between those attempts.
 const COLD_PAUSE: Duration = Duration::from_millis(250);
+
+/// How long a server may sit without a question before the daemon stops it.
+///
+/// Kept sessions are what make the second references request one round trip, and an
+/// idle one is a process holding its index resident — `rust-analyzer` on this
+/// repository is hundreds of megabytes with the source files open. Five minutes is
+/// longer than the pause between two passes over the same file and shorter than
+/// getting a coffee.
+///
+/// A constant rather than a preference: a server that starts again on the next ask
+/// costs a few seconds, which is a pause, and the number that decides how much RAM a
+/// daemon holds should not need a config file to be safe.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How often the daemon looks for one.
+///
+/// A tenth of [`IDLE_TIMEOUT`], so a server is stopped between five and five and a
+/// half minutes after its last question rather than up to a whole timeout late, and
+/// the sweep is one lock and one timestamp comparison per language.
+pub const IDLE_SWEEP: Duration = Duration::from_secs(30);
 
 pub const SERVERS: &[(&str, &str, &[&str])] = &[
     ("rust", "rust-analyzer", &[]),
@@ -71,7 +98,23 @@ pub struct Answer {
 /// process, and the only fact worth printing is which languages have one running.
 #[derive(Default)]
 pub struct Servers {
-    sessions: Mutex<HashMap<&'static str, Option<Session>>>,
+    sessions: Mutex<HashMap<&'static str, Option<Running>>>,
+}
+
+/// A started server and what the daemon knows about its use.
+///
+/// The clock lives here rather than on [`Session`] because "when was this last
+/// asked" is the registry's question: a session answers, and a registry decides that
+/// a session nobody has asked is a process to stop.
+struct Running {
+    session: Session,
+    last_used: Instant,
+    /// The length of the last `textDocument/references` call that answered, without
+    /// the retries a cold index needs. What a status line reports is the round trip,
+    /// because the index is paid once and the round trip is paid per keystroke.
+    round_trip: Option<Duration>,
+    /// How many questions this session has answered.
+    requests: u64,
 }
 
 impl std::fmt::Debug for Servers {
@@ -131,19 +174,34 @@ impl Servers {
                     tracing::debug!(server = program, %error, "language server did not start");
                 }
             }
-            sessions.insert(language, started.ok());
+            sessions.insert(
+                language,
+                started
+                    .map(|session| Running {
+                        session,
+                        last_used: Instant::now(),
+                        round_trip: None,
+                        requests: 0,
+                    })
+                    .ok(),
+            );
         }
-        let session = sessions.get_mut(language)?.as_mut()?;
+        let running = sessions.get_mut(language)?.as_mut()?;
+        // Marked used before the question rather than after the answer: the first
+        // question is the index, and a sweep that stopped a server in the middle of
+        // one would make the next keystroke pay for it a second time.
+        running.last_used = Instant::now();
+        running.requests += 1;
 
         // The caret's line and column are the server's encoding, and only the server
         // knows which one it picked: the conversion happens here, once it has. The
         // offset arrives counted in characters, because that is the editor's unit for
         // a caret and the request is about the character under it.
-        let encoding = session.encoding();
+        let encoding = running.session.encoding();
         let index = acpilot_lsp::LineIndex::new(text);
         let position = index.position(text, byte_offset(text, offset), encoding)?;
 
-        if let Err(error) = session.open(path, language, text).await {
+        if let Err(error) = running.session.open(path, language, text).await {
             tracing::debug!(server = program, %error, "language server lost the document");
             // A session whose transport broke is not reusable: drop it so the next
             // request starts a fresh one rather than failing forever.
@@ -158,9 +216,12 @@ impl Servers {
         let mut attempts = 0;
         loop {
             attempts += 1;
-            match session.references(path, position).await {
+            let asked = Instant::now();
+            match running.session.references(path, position).await {
                 Ok(locations) if !locations.is_empty() => {
-                    session.mark_warm();
+                    running.session.mark_warm();
+                    running.round_trip = Some(asked.elapsed());
+                    running.last_used = Instant::now();
                     return Some(Answer {
                         program,
                         encoding,
@@ -168,7 +229,9 @@ impl Servers {
                     });
                 }
                 Ok(locations) => {
-                    if session.warm() || attempts == COLD_ATTEMPTS {
+                    if running.session.warm() || attempts == COLD_ATTEMPTS {
+                        running.round_trip = Some(asked.elapsed());
+                        running.last_used = Instant::now();
                         return Some(Answer {
                             program,
                             encoding,
@@ -185,6 +248,154 @@ impl Servers {
             }
         }
     }
+
+    /// Stop every server this daemon started.
+    ///
+    /// A session outlives its last question on purpose, and nothing else ends it:
+    /// dropping the registry when the router goes away looks like it would, and it
+    /// does not — the terminal mirror and the settings watch each hold an [`AppState`]
+    /// clone in a task that outlives `serve`, so the `Arc<Servers>` never reaches zero
+    /// and the child keeps its index resident. Measured on 2026-11-02: every daemon
+    /// that had answered a references request left one `rust-analyzer` behind.
+    ///
+    /// Concurrently, because a stop is a request, a notification and a wait: one
+    /// wedged server must not add its timeout to the one queued behind it. A server
+    /// that will not stop is killed by [`Session::shutdown`], and a `Session` dropped
+    /// without one is killed by the transport's `kill_on_drop`, so this is the polite
+    /// path rather than the only one.
+    ///
+    /// [`AppState`]: crate::AppState
+    pub async fn shutdown(&self) {
+        let started: Vec<(&'static str, Session)> = {
+            let mut sessions = self.sessions.lock().await;
+            sessions
+                .drain()
+                .filter_map(|(language, running)| {
+                    running.map(|running| (language, running.session))
+                })
+                .collect()
+        };
+        if started.is_empty() {
+            return;
+        }
+        futures::future::join_all(
+            started
+                .into_iter()
+                .map(|(language, mut session)| async move {
+                    let server = session.program().to_owned();
+                    session.shutdown().await;
+                    tracing::debug!(server = %server, language, "language server stopped");
+                }),
+        )
+        .await;
+    }
+
+    /// Stop the servers nothing has asked in `idle`.
+    ///
+    /// A session is kept for the next question, and a person who walks away has no
+    /// next question: an idle `rust-analyzer` is its index resident, which is the
+    /// difference between a daemon and a leak with a socket. The entry is removed
+    /// rather than emptied, so the next request starts a fresh server instead of
+    /// finding a hole where one used to be.
+    ///
+    /// Returns what was stopped, in whatever order the map yielded it: a set, for a
+    /// log line and for a test.
+    pub async fn stop_idle(&self, idle: Duration) -> Vec<&'static str> {
+        let now = Instant::now();
+        let stopped: Vec<(&'static str, Running)> = {
+            let mut sessions = self.sessions.lock().await;
+            let idle_now: Vec<&'static str> = sessions
+                .iter()
+                .filter(|(_, slot)| {
+                    slot.as_ref()
+                        .is_some_and(|running| now.duration_since(running.last_used) >= idle)
+                })
+                .map(|(language, _)| *language)
+                .collect();
+            idle_now
+                .into_iter()
+                .filter_map(|language| {
+                    sessions
+                        .remove(language)
+                        .flatten()
+                        .map(|running| (language, running))
+                })
+                .collect()
+        };
+        if stopped.is_empty() {
+            return Vec::new();
+        }
+        let languages: Vec<&'static str> = stopped.iter().map(|(language, _)| *language).collect();
+        futures::future::join_all(
+            stopped
+                .into_iter()
+                .map(|(language, mut running)| async move {
+                    let server = running.session.program().to_owned();
+                    running.session.shutdown().await;
+                    tracing::debug!(server = %server, language, "idle language server stopped");
+                }),
+        )
+        .await;
+        languages
+    }
+
+    /// What this daemon knows about its servers, one row per language it can start.
+    ///
+    /// A language with no session is [`ServerState::running`] `None`, which is a fact
+    /// rather than an error: a server that was never started, one an idle sweep
+    /// stopped, and one that would not start all look the same from outside, and
+    /// `installed` is the one thing that tells the last of those apart.
+    pub async fn status(&self) -> Vec<ServerState> {
+        let now = Instant::now();
+        let sessions = self.sessions.lock().await;
+        SERVERS
+            .iter()
+            .map(|(language, program, _)| {
+                let running =
+                    sessions
+                        .get(language)
+                        .and_then(|slot| slot.as_ref())
+                        .map(|running| RunningState {
+                            encoding: running.session.encoding(),
+                            idle: now.duration_since(running.last_used),
+                            round_trip: running.round_trip,
+                            requests: running.requests,
+                        });
+                ServerState {
+                    language,
+                    program,
+                    installed: installed(program),
+                    running,
+                }
+            })
+            .collect()
+    }
+}
+
+/// One language this build can start, as `GET /v1/lsp/servers` reports it.
+#[derive(Debug, Clone)]
+pub struct ServerState {
+    /// The LSP language id, which is also the key in [`SERVERS`].
+    pub language: &'static str,
+    /// The program that would be spawned.
+    pub program: &'static str,
+    /// Whether that program is on this machine's `PATH`.
+    pub installed: bool,
+    /// The session, when one is running.
+    pub running: Option<RunningState>,
+}
+
+/// A running session, as reported.
+#[derive(Debug, Clone)]
+pub struct RunningState {
+    /// The encoding the server chose, which its columns are counted in.
+    pub encoding: PositionEncoding,
+    /// How long since it was last asked.
+    pub idle: Duration,
+    /// The last `textDocument/references` round trip that answered.
+    pub round_trip: Option<Duration>,
+    /// How many questions it has been asked.
+    pub requests: u64,
 }
 
 /// The byte offset of character `characters` in `text`, or the end of the text.

@@ -92,6 +92,12 @@ pub enum Request {
         /// the file on disk, and a use deleted a moment ago is still in it.
         text: String,
     },
+    /// Read what the daemon's language servers are doing.
+    ///
+    /// A request rather than a local answer: the servers are the daemon's processes,
+    /// and a window that reported its own guess would be a second opinion about which
+    /// servers exist.
+    LspStatus,
     /// Read the project map the agent wrote under `.acpilot/`.
     ProjectMap,
     /// Read a file, by workspace-relative path.
@@ -492,6 +498,14 @@ async fn run(
                         }
                     }
                 }
+                Some(Request::LspStatus) => match client.lsp_servers().await {
+                    Ok(servers) => {
+                        let _ = updates.send(Update::Status(language_servers_line(&servers)));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::Status(describe(&error)));
+                    }
+                },
                 Some(Request::ProjectMap) => {
                     match client.project_map().await {
                         Ok(map) => {
@@ -1002,6 +1016,13 @@ async fn run_demo(
                     .collect();
                 let _ = updates.send(Update::References { name, hits });
             }
+            Request::LspStatus => {
+                // No daemon, no servers: the design pass says which world it is in
+                // rather than reporting an empty list as a fact.
+                let _ = updates.send(Update::Status(
+                    "design pass · there is no daemon to ask".to_owned(),
+                ));
+            }
             Request::ProjectMap => {
                 // The design pass has no workspace, so it has no map: the panel is
                 // drawn from its empty state, which is a state worth reviewing.
@@ -1115,6 +1136,46 @@ fn announce(demo: &acpilot_demo::Demo, updates: &UnboundedSender<Update>) {
             .collect(),
     ));
     let _ = updates.send(Update::Terminals(demo.terminals.clone()));
+}
+
+/// The language servers as one status line.
+///
+/// A line rather than a pane because the question is asked to check something — is
+/// the server running, and is it fast — and a pane would be opened, read and closed
+/// for one glance. A language this build has no server for is not a row, which is
+/// worth knowing when a references list turned out to be the parse tree's answer.
+fn language_servers_line(servers: &[acpilot_proto::lsp::LspServerSummary]) -> String {
+    use acpilot_proto::lsp::{LspServerStatus, PositionEncoding};
+
+    if servers.is_empty() {
+        return "no language server this build can start".to_owned();
+    }
+    let rows: Vec<String> = servers
+        .iter()
+        .map(|server| {
+            let state = match server.status {
+                LspServerStatus::Starting => "starting",
+                LspServerStatus::Ready => "running",
+                LspServerStatus::Indexing => "indexing",
+                LspServerStatus::Crashed => "crashed",
+                LspServerStatus::Stopped => "stopped",
+            };
+            let encoding = match server.encoding {
+                Some(PositionEncoding::Utf8) => " utf-8",
+                Some(PositionEncoding::Utf16) => " utf-16",
+                None => "",
+            };
+            let round_trip = server
+                .round_trip_ms
+                .map_or_else(String::new, |ms| format!(" {ms} ms"));
+            let language = server
+                .languages
+                .first()
+                .map_or(server.id.as_str(), String::as_str);
+            format!("{language} {state}{encoding}{round_trip}")
+        })
+        .collect();
+    format!("lsp · {}", rows.join(" · "))
 }
 
 /// A failure as a status line, with its code when the daemon sent one.

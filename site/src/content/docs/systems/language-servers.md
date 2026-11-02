@@ -65,6 +65,28 @@ daemon (`parse-references`, on by default) rather than a second client: a build
 without it links no grammar at all. The `GET` form, a name and no buffer, is the
 spelling search.
 
+A server kept for the next question is also a process kept after the questions stop,
+so the daemon stops them on its way out: `shutdown`/`exit` from the protocol, and a
+kill for anything that does not take the hint. A dropped router is not a dead child —
+the terminal mirror and the settings watch each hold the state in a task that outlives
+`serve` — and the leak was real: measured on 2026-11-02, one `rust-analyzer` survived
+every daemon that had answered a references request, still holding its index. Embedded
+mode stops them the same way when its listener stops.
+
+A kept session is also a process kept after the questions stop, so a server nothing
+has asked for five minutes is stopped too — swept every thirty seconds, and started
+again by the next question. That is the difference between keeping a session as an
+optimisation and keeping it as a leak: someone who walks away from the editor stops
+paying for an index nobody is reading.
+
+What that machinery is doing is a route rather than a rumour. `GET /v1/lsp/servers`
+answers one row per language this build can start — running or stopped, the encoding it
+negotiated, and the last `textDocument/references` round trip in milliseconds (the
+answer, not the index). A language with no row has no server here, which is what a
+references list answered by the parse tree already said. The TUI prints those rows on
+its status line from the palette's **LSP status** row; there is no `:` command line in
+that frontend yet, so the palette's own query is where `lsp status` sits.
+
 The rest of the engine arrives in the language intelligence phase (P7); the design
 phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16 conversion are
 in `acpilot-lsp`, tested over emoji, CJK, combining marks, and CRLF, and were proven

@@ -199,3 +199,33 @@ error as a readable diagnostic instead of a failed start.
 - Timings are single runs on a warm machine, not a benchmark harness.
 - `didChange` was not exercised; the probe only opens a document. Incremental sync
   (`change: 2` on all three) is the language-intelligence phase's (P7) problem.
+
+## What a kept server costs (measured 2026-11-02)
+
+Asked before the daemon started spawning servers on first use, so the numbers are the
+ones the launch path actually has.
+
+**Launching spawns nothing.** The registry is empty until a request names a language;
+measured to the first successful connect, ten samples each:
+
+| workspace | min | median | max | children at startup |
+| --- | ---: | ---: | ---: | ---: |
+| this repository | 5.63 ms | 6.21 ms | 8.88 ms | 0 |
+| an empty fixture | 4.29 ms | 5.30 ms | 10.32 ms | 0 |
+
+The earlier baseline was 4.6 ms, and both medians sit inside the spread of both
+samples: linking `acpilot-lsp` into the daemon costs the launch path nothing.
+
+**The first question pays for the index.** A fresh daemon, a five-line crate and
+`rust-analyzer` on `PATH`: first references request 2,260 ms, second 2.2 ms, third
+2.1 ms. That 2.26 s is spawn plus index, paid once per language per daemon — and it
+is why the session is kept at all, and why `IDLE_TIMEOUT` is five minutes rather than
+seconds: throwing the index away after a short pause would pay it again.
+
+**A kept server outlives the daemon unless something stops it.** Measured after the
+same run: one `rust-analyzer` still running once `acpilotd` had exited, holding its
+index. The registry is an `Arc` that the terminal mirror and the settings watch each
+keep alive in a task that outlives `serve`, so dropping the router never reaches
+zero. `Servers::shutdown` is the fix and `pgrep -P <daemon>` is the check: empty after
+`SIGTERM`, where before it named the server. Nothing about that is LSP-specific — it
+is what "a value that owns a process" has to say on the way out.

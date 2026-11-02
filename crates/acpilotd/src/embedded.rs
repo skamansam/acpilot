@@ -57,6 +57,10 @@ impl Embedded {
         listener.set_nonblocking(true)?;
         let token = acpilot_host::token::generate()?;
         let (stop, stopped) = oneshot::channel();
+        // A second handle to the same registry, kept for the end of the thread: the
+        // router owns the one it serves with, and dropping it does not end a process
+        // the registry started. This is the embedded half of the same leak.
+        let state_at_exit = state.clone();
         let router = crate::auth::protect_with_token(crate::router_with(state), token.clone());
 
         std::thread::Builder::new()
@@ -74,11 +78,15 @@ impl Embedded {
                 };
                 let served = runtime.block_on(async move {
                     let listener = TcpListener::from_std(listener)?;
-                    axum::serve(listener, router)
+                    let served = axum::serve(listener, router)
                         .with_graceful_shutdown(async move {
                             let _ = stopped.await;
                         })
-                        .await
+                        .await;
+                    // After the listener, not before: a request still being answered
+                    // may be waiting on the very server this stops.
+                    state_at_exit.language_servers().shutdown().await;
+                    served
                 });
                 if let Err(error) = served {
                     tracing::error!(%error, "the embedded listener stopped");

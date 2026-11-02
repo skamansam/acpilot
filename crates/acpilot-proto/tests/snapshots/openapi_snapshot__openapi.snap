@@ -1121,6 +1121,15 @@ expression: canonical(document)
             },
             "type": "array"
           },
+          "round_trip_ms": {
+            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once, and a figure that mixed the two would make every report\nread as slow when only the first question was.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/LspServerStatus",
             "description": "Current state."

@@ -94,7 +94,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidInput, why))?;
     tracing::info!(endpoint = %target, service = acpilotd::SERVICE, "starting");
 
-    acpilotd::serve(acpilotd::router_with(state), target, acpilotd::shutdown()).await?;
+    acpilotd::serve(
+        acpilotd::router_with(state.clone()),
+        target,
+        acpilotd::shutdown(),
+    )
+    .await?;
+
+    // The language servers are processes, and the router's drop is not their end:
+    // a task holding an `AppState` clone keeps the registry alive past `serve`. So
+    // the daemon stops them here, on the way out, with the same `shutdown`/`exit`
+    // pair and the same kill a probe in `acpilot-lsp` uses.
+    state.language_servers().shutdown().await;
 
     Ok(())
 }

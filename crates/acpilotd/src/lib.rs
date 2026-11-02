@@ -515,6 +515,23 @@ impl AppState {
     /// # Panics
     ///
     /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn reap_idle_language_servers(&self) {
+        let servers = Arc::clone(&self.language_servers);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(lsp::IDLE_SWEEP);
+            // An interval's first tick fires immediately, and nothing can be idle
+            // before a server has been started.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let stopped = servers.stop_idle(lsp::IDLE_TIMEOUT).await;
+                if !stopped.is_empty() {
+                    tracing::info!(?stopped, "stopped the language servers nothing had asked");
+                }
+            }
+        });
+    }
+
     pub fn reap_terminals_on_a_timer(&self) {
         let terminals = Arc::clone(&self.agent_terminals);
         tokio::spawn(async move {
@@ -644,6 +661,10 @@ pub fn startup(
     // A terminal is a process; one an agent opened and never released has to end
     // on its own, because `terminal/release` is optional in ACP.
     state.reap_terminals_on_a_timer();
+    // A kept language server is that same trade one layer up: a session is kept for
+    // the next question, and a person who walks away has no next question. A stopped
+    // server starts again on the next ask, so this is a cost, not a behaviour.
+    state.reap_idle_language_servers();
     // And one an agent opened should be watchable: the same PTY, seen through a
     // pane a client can attach to.
     state.mirror_agent_terminals();
@@ -1063,6 +1084,15 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_events_doc as utoipa::Path>::operation(),
         ),
     );
+    // The language servers are the daemon's own processes, so the route is the
+    // registry's report rather than a module's: one row per language, running or not.
+    paths.insert(
+        "/v1/lsp/servers".to_owned(),
+        utoipa::openapi::path::PathItem::new(
+            utoipa::openapi::path::HttpMethod::Get,
+            <__path_lsp_servers_doc as utoipa::Path>::operation(),
+        ),
+    );
     // Sessions, terminals and files add several methods per path, so they append
     // rather than overwrite.
     let module_operations = sessions::operations()
@@ -1321,6 +1351,64 @@ async fn docs() -> Html<&'static str> {
     )
 }
 
+/// `GET /v1/lsp/servers`.
+///
+/// One row per language this build can start, not one per server that happens to be
+/// running: a language with no session is the row that explains why a caret's
+/// question was answered by the parse tree, and a list of only the running ones could
+/// not. Running or stopped, the encoding and the last round trip are here because the
+/// alternative is a client remembering what the daemon did — and a second client
+/// remembering it differently.
+async fn lsp_servers(
+    State(state): State<AppState>,
+) -> Json<Vec<acpilot_proto::lsp::LspServerSummary>> {
+    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
+
+    let rows = state
+        .language_servers()
+        .status()
+        .await
+        .into_iter()
+        .map(|server| LspServerSummary {
+            id: server.program.to_owned(),
+            languages: vec![server.language.to_owned()],
+            command: server.program.to_owned(),
+            status: if server.running.is_some() {
+                LspServerStatus::Ready
+            } else {
+                LspServerStatus::Stopped
+            },
+            encoding: server
+                .running
+                .as_ref()
+                .map(|running| match running.encoding {
+                    acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
+                    acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
+                }),
+            // Milliseconds, because a round trip is a number a person compares with
+            // a keystroke and not with a clock.
+            round_trip_ms: server
+                .running
+                .and_then(|running| running.round_trip)
+                .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
+        })
+        .collect();
+    Json(rows)
+}
+
+/// The `GET /v1/lsp/servers` operation, for the OpenAPI document.
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/lsp/servers",
+    tag = "lsp",
+    summary = "What the language servers are doing",
+    responses(
+        (status = 200, description = "One row per language this build can start: running or stopped, the encoding it negotiated, and the last references round trip", body = Vec<acpilot_proto::lsp::LspServerSummary>)
+    )
+)]
+fn lsp_servers_doc() {}
+
 /// Build the HTTP router with no profile loaded.
 ///
 /// Kept separate from `main` so tests can exercise routes without binding a port.
@@ -1339,6 +1427,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions", get(permissions))
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
+        .route("/v1/lsp/servers", get(lsp_servers))
         .route("/v1/openapi.json", get(openapi))
         .route("/app", get(web_app))
         .route("/app/palette/events", get(web_palette_events))

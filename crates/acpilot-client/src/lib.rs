@@ -292,6 +292,18 @@ impl Client {
             .await
     }
 
+    /// `GET /v1/lsp/servers`.
+    ///
+    /// What the daemon knows about the language servers it can start: which are
+    /// running, the encoding each negotiated, and the last references round trip. A
+    /// language this build has no server for is not a row — the list is the daemon's
+    /// answer to "what could answer a caret", not a catalogue of editors.
+    pub async fn lsp_servers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::lsp::LspServerSummary>, ClientError> {
+        self.get("/v1/lsp/servers").await
+    }
+
     /// Where the name is used in code.
     ///
     /// With a caret — the file, the byte `offset` and the buffer's own `text` — this is

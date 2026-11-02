@@ -36,6 +36,8 @@ pub enum Run {
     SearchContents,
     /// Go to a line and column of the open buffer.
     GoToLine,
+    /// Report what the daemon's language servers are doing.
+    LspStatus,
     /// Leave.
     Quit,
 }
@@ -121,6 +123,11 @@ pub fn commands() -> Vec<Command> {
         // The other half of a find: contents are a walk that reads the files rather
         // than a listing of their names, and the answer is a jump list.
         run("Search file contents", "ctrl-shift-f", Run::SearchContents),
+        // The daemon owns the servers, so the report is a request and not a
+        // setting: what is running, how it counts columns, and how long its last
+        // answer took. The row is here rather than behind a `:` line because this
+        // frontend has no command line yet — the palette's query is the one field.
+        run("LSP status", "", Run::LspStatus),
         planned("Go to definition", "f12", "P7-4"),
         planned("Rename symbol", "f2", "P7-5"),
         planned("Split editor", "ctrl-\\", "P6-3"),

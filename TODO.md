@@ -2022,3 +2022,24 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
   comment, the string and the `.md` not, with the empty and not-one-word queries), and
   one in the TUI (`Shift-F12` naming the word rather than a position, the answer filling
   the list, `Enter` asking for the file and remembering the line).
+  **Stopped on the way out (2026-11-02):** a kept session is a kept process, and the
+  router's drop was assumed to end it — it does not, because the terminal mirror and the
+  settings watch each hold an `AppState` clone in a task that outlives `serve`, so the
+  registry never reached zero and every daemon that had answered a references request
+  left one `rust-analyzer` behind. `Servers::shutdown` drains the registry and stops each
+  session concurrently with the protocol's `shutdown`/`exit` and a kill for one that will
+  not take the hint; `main` calls it after `serve` returns and embedded mode calls it when
+  its listener stops. Verified against a real daemon: `pgrep -P <daemon>` is empty after
+  `SIGTERM`, where before it named the server.
+  **Idle, and visible (2026-11-02):** `Servers::stop_idle` stops any session nothing
+  has asked in `IDLE_TIMEOUT` (five minutes), swept every thirty seconds by a task
+  `startup` spawns the way the terminal reaper is; the entry is removed rather than
+  emptied, so the next question starts a fresh server instead of finding a hole where
+  one used to be. `GET /v1/lsp/servers` serves the rows `LspServerSummary` already
+  described — one per language this build can start, running or stopped, with the
+  negotiated `encoding` and `round_trip_ms` for the last references call that answered
+  — and the TUI reports them on its status line from the palette's `LSP status` row.
+  **Tests:** two in `acpilotd/tests/lsp_status.rs` that need no server (four rows, all
+  stopped, no encoding; the route and its summary in the OpenAPI document) and one
+  ignored one against `rust-analyzer` (asked, counted with a round trip, stopped by a
+  zero idle, and started again by the next question).

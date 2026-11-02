@@ -1971,7 +1971,7 @@
           },
           {
             "column": 18,
-            "text": "┌ Commands · 21 ───────────────────────────────────────────────────────────────────┐",
+            "text": "┌ Commands · 22 ───────────────────────────────────────────────────────────────────┐",
             "style": 13
           },
           {
@@ -2615,6 +2615,38 @@
           },
           {
             "column": 19,
+            "text": "LSP status                                                                        ",
+            "style": 1
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 102,
+            "text": "in a shell is an ",
+            "style": 1
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 19,
             "text": "Go to definition",
             "style": 1
           },
@@ -2635,7 +2667,7 @@
           },
           {
             "column": 102,
-            "text": "in a shell is an ",
+            "text": "e pane is        ",
             "style": 1
           },
           {
@@ -2668,48 +2700,6 @@
           {
             "column": 36,
             "text": "  · P7-5",
-            "style": 6
-          },
-          {
-            "column": 101,
-            "text": "│",
-            "style": 13
-          },
-          {
-            "column": 102,
-            "text": "e pane is        ",
-            "style": 1
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 18,
-            "text": "│",
-            "style": 13
-          },
-          {
-            "column": 19,
-            "text": "Split editor",
-            "style": 1
-          },
-          {
-            "column": 31,
-            "text": "  ctrl-\\",
-            "style": 3
-          },
-          {
-            "column": 39,
-            "text": "  · P6-3",
             "style": 6
           },
           {
@@ -2888,7 +2878,7 @@
           },
           {
             "column": 58,
-            "text": "21 commands · type to filter",
+            "text": "22 commands · type to filter",
             "style": 1
           },
           {
@@ -4589,7 +4579,7 @@
           },
           {
             "column": 61,
-            "text": "21 commands · type to filter",
+            "text": "22 commands · type to filter",
             "style": 1
           },
           {
@@ -6325,7 +6315,7 @@
           },
           {
             "column": 61,
-            "text": "21 commands · type to filter",
+            "text": "22 commands · type to filter",
             "style": 1
           },
           {
@@ -7451,7 +7441,7 @@
           },
           {
             "column": 61,
-            "text": "21 commands · type to filter",
+            "text": "22 commands · type to filter",
             "style": 1
           },
           {

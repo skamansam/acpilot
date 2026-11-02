@@ -4840,6 +4840,10 @@ impl App {
                 self.palette = Some(Palette::default());
                 None
             }
+            // The servers are the daemon's processes, so the report is a request like
+            // the references list is: the status line says what it answered rather
+            // than this window guessing from a list it does not own.
+            Run::LspStatus => Some(Request::LspStatus),
             Run::Quit => {
                 self.should_quit = true;
                 Some(Request::Quit)

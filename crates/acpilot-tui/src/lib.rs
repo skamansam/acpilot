@@ -337,7 +337,8 @@ fn event_loop(
         app.autoscroll();
         // Work that is deferred rather than done on the key that caused it: the outline
         // re-parses a changed buffer once a frame, and this loop's clock is the
-        // debounce.
+        // debounce — the same clock a buffer has to be still on before its problems
+        // are asked about.
         app.tick();
 
         // `draw` reads the layout and hands back the panes' inner sizes, so a

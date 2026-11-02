@@ -20,6 +20,14 @@ use crate::editor::{EditorPane, Mode};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
+/// How long the open buffer has to stop changing before its problems are asked about.
+///
+/// Four frames at the loop's 120 ms: long enough that a sentence of typing is one
+/// request rather than eighty, short enough that somebody who stops to read finds the
+/// gutter already caught up. Shorter than this is a request per word; longer is a
+/// gutter that trails the person's eyes.
+const PROBLEMS_QUIET: std::time::Duration = std::time::Duration::from_millis(480);
+
 /// Which pane has the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -1715,6 +1723,20 @@ pub struct App {
     pub diagnostics: Option<acpilot_proto::file::FileDiagnostics>,
     /// The file that answer is about.
     pub diagnostics_path: String,
+    /// The buffer revision the last diagnostics request was about.
+    ///
+    /// The text that has an answer, or is owed one. A buffer whose revision differs
+    /// from this has been edited since the last question and is a question again once
+    /// it stops moving — that is the whole of [`App::refresh_problems`].
+    diagnostics_revision: u64,
+    /// The revision the last frame saw, which is how an edit is noticed.
+    ///
+    /// Separate from [`Self::diagnostics_revision`] because a frame that sees a new
+    /// revision only restarts the pause: nothing is asked until a frame finds the
+    /// buffer unchanged and the pause ended.
+    diagnostics_seen: u64,
+    /// When the pause after the last edit ends, while one is running.
+    diagnostics_due: Option<std::time::Instant>,
     /// The editor pane's document, when a file is open.
     ///
     /// A real [`acpilot_text::Document`] rather than a mock: the rope, the caret
@@ -1951,6 +1973,9 @@ impl App {
             tokens_estimated: false,
             diagnostics: None,
             diagnostics_path: String::new(),
+            diagnostics_revision: 0,
+            diagnostics_seen: 0,
+            diagnostics_due: None,
             editor: None,
             grammars: Grammars::new(),
             diff: None,
@@ -2603,12 +2628,20 @@ impl App {
             Update::Saved { path, etag } => {
                 // Only the pane the answer is about: a save that landed while another
                 // file was opened must not clear the new buffer's unsaved changes.
+                let mut saved_this = false;
                 if let Some(editor) = &mut self.editor
                     && editor.path() == path
                 {
                     editor.set_etag(etag);
                     editor.mark_saved();
                     self.status = format!("saved {path}");
+                    saved_this = true;
+                }
+                // A save is a version even when the text did not change since the open:
+                // the file on disk is what other files are compiled against, so the
+                // server's opinion of it is worth asking for again.
+                if saved_this {
+                    self.ask_about_problems();
                 }
             }
             Update::Status(message) => self.status = message,
@@ -3429,26 +3462,72 @@ impl App {
     /// folded in and before the frame is painted, so the screen shows the list the text
     /// it is drawn beside implies.
     pub fn tick(&mut self) {
+        self.tick_at(std::time::Instant::now());
+    }
+
+    /// [`App::tick`], with the clock handed in.
+    ///
+    /// The pause [`App::refresh_problems`] keeps is measured in time rather than in
+    /// frames, so a test has to be able to say what time it is; the loop says `now`.
+    fn tick_at(&mut self, now: std::time::Instant) {
         self.refresh_outline_if_stale();
         self.follow_references();
         self.ask_for_map();
+        self.refresh_problems(now);
     }
 
-    /// Ask the daemon about the open buffer's language, when its text is a version.
+    /// Ask the daemon about the open buffer's language.
     ///
-    /// Two moments are versions: the open, and the save. Typing is not — the daemon may
-    /// have to start a server, and a request per keystroke is the one thing the
-    /// language-intelligence phase says never to do on the editing path. A refresh while
-    /// the text is being written is the next step, and it belongs on a debounce in the
-    /// loop rather than in the key that typed.
+    /// Three moments are versions: the open, the save, and a pause in typing.
+    /// [`App::refresh_problems`] owns the last of those, because it is the one with a
+    /// clock; this is the ask itself, and it remembers which revision it was for so a
+    /// frame does not repeat it.
     fn ask_about_problems(&mut self) {
         let Some(editor) = &self.editor else {
             return;
         };
-        self.pending.push(Request::Diagnostics {
-            path: editor.path().to_owned(),
-            text: editor.document().text(),
-        });
+        let path = editor.path().to_owned();
+        let text = editor.document().text();
+        let revision = editor.document().revision();
+        self.diagnostics_revision = revision;
+        self.diagnostics_seen = revision;
+        self.diagnostics_due = None;
+        self.pending.push(Request::Diagnostics { path, text });
+    }
+
+    /// Ask about the buffer once it has stopped changing.
+    ///
+    /// Diagnostics are the one answer worth a request per version of a buffer, and
+    /// typing makes a version per key; the daemon may have to start a server on the
+    /// first question, and the language-intelligence phase's rule is that the editing
+    /// path never waits on one. So the text is asked about only after
+    /// [`PROBLEMS_QUIET`] with no edit, measured on the loop's clock rather than on the
+    /// key that typed: a burst of typing costs one request when it ends, and the gutter
+    /// is at most a frame behind the pause.
+    ///
+    /// The pause restarts on every edit, because a frame that sees a new revision
+    /// pushes the deadline out instead of letting an old one come due. A buffer the
+    /// last ask already covered is left alone: the revision is the question, and a
+    /// tick with nothing new to say is silent.
+    fn refresh_problems(&mut self, now: std::time::Instant) {
+        let Some(editor) = &self.editor else {
+            self.diagnostics_seen = 0;
+            self.diagnostics_due = None;
+            return;
+        };
+        let revision = editor.document().revision();
+        if revision != self.diagnostics_seen {
+            self.diagnostics_seen = revision;
+            self.diagnostics_due = Some(now + PROBLEMS_QUIET);
+            return;
+        }
+        if revision == self.diagnostics_revision {
+            self.diagnostics_due = None;
+            return;
+        }
+        if self.diagnostics_due.is_some_and(|due| now >= due) {
+            self.ask_about_problems();
+        }
     }
 
     /// Ask the daemon for the map once, when the panel has opened or been told to
@@ -6387,6 +6466,53 @@ mod tests {
         app.handle_key(key(KeyCode::Char('u')));
         app.tick();
         assert_eq!(app.outline.len(), 1, "the list follows the text back");
+    }
+
+    #[test]
+    fn the_gutter_asks_about_the_buffer_that_stopped_changing() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        // The open is a version, so it is asked about at once.
+        let opened = app.take_pending();
+        assert!(
+            matches!(opened.last(), Some(Request::Diagnostics { .. })),
+            "the open is asked about: {opened:?}"
+        );
+        app.set_focus(Focus::Editor);
+
+        // Typing is not. The frame that sees the edit starts the pause and asks
+        // nothing, and a frame inside the pause asks nothing either.
+        let start = std::time::Instant::now();
+        app.handle_key(key(KeyCode::Char('o')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.tick_at(start);
+        app.tick_at(start + std::time::Duration::from_millis(200));
+        assert_eq!(app.take_pending(), Vec::new(), "still being written");
+
+        // Another key restarts the pause, so the question is about the text the person
+        // stopped on rather than the one they had typed a moment earlier.
+        app.handle_key(key(KeyCode::Char('y')));
+        app.tick_at(start + std::time::Duration::from_millis(300));
+        app.tick_at(start + std::time::Duration::from_millis(600));
+        assert_eq!(app.take_pending(), Vec::new(), "the pause restarted");
+        app.tick_at(start + std::time::Duration::from_millis(900));
+        let asked = app.take_pending();
+        let Some(Request::Diagnostics { text, .. }) = asked.first() else {
+            panic!("a quiet buffer is asked about: {asked:?}");
+        };
+        assert_eq!(asked.len(), 1, "one question for one pause");
+        // `o` opened a line under the function, and the two keys are in it: the ask is
+        // about the buffer as it reads now, not as it read when the pause began.
+        assert!(text.ends_with("xy\n"), "the text as edited: {text:?}");
+
+        // And nothing further until the text moves again.
+        app.tick_at(start + std::time::Duration::from_millis(5_000));
+        assert_eq!(app.take_pending(), Vec::new());
     }
 
     #[test]

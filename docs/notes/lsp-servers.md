@@ -244,6 +244,7 @@ until a server answers diagnostics only when pulled.
 The answer carries the server's name or nothing at all, because "clean" and "nobody
 checked" are different claims; the TUI draws problems as gutter letters (`E`, `W`,
 `I`, `H`, worst on the line) in the cell the git mark uses, and counts errors and
-warnings in the status line. It asks when a file opens and when it is saved. Asking
-while the text is being typed is the next step and belongs on a debounce in the
-event loop — never on the key that typed, which is the rule the phase starts with.
+warnings in the status line. It asks when a file opens, when one is saved, and once
+the buffer has been still for 480 ms — a pause measured on the event loop's clock, so
+a sentence of typing is one request and every edit restarts the pause. The key that
+types never sends anything, which is the rule the phase starts with.

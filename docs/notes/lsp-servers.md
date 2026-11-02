@@ -229,3 +229,21 @@ keep alive in a task that outlives `serve`, so dropping the router never reaches
 zero. `Servers::shutdown` is the fix and `pgrep -P <daemon>` is the check: empty after
 `SIGTERM`, where before it named the server. Nothing about that is LSP-specific — it
 is what "a value that owns a process" has to say on the way out.
+
+## What the daemon does with this now (2026-11-02)
+
+The publish path above is what `POST /v1/files/diagnostics` answers from.
+`acpilot_lsp::Session::diagnostics` polls the transport for
+`textDocument/publishDiagnostics` for the document it just opened and returns what
+arrived within ten seconds; a `didOpen`/`didChange` drops the previous version's
+problems first, so the wait is for the answer about the text that was sent rather
+than the one already in hand. The pull path (`textDocument/diagnostic`) is not wired:
+finding 3 above is why it is a retry loop and not a call, and one path is enough
+until a server answers diagnostics only when pulled.
+
+The answer carries the server's name or nothing at all, because "clean" and "nobody
+checked" are different claims; the TUI draws problems as gutter letters (`E`, `W`,
+`I`, `H`, worst on the line) in the cell the git mark uses, and counts errors and
+warnings in the status line. It asks when a file opens and when it is saved. Asking
+while the text is being typed is the next step and belongs on a debounce in the
+event loop — never on the key that typed, which is the rule the phase starts with.

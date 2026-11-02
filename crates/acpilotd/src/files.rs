@@ -32,13 +32,13 @@ use acpilot_git::{ChangeKind, Repo, StatusEntry};
 use acpilot_lsp::position::{LineIndex, Position};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::file::{
-    FileChange, FileContent, FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark,
-    Reference, ReferencesRequest,
+    Diagnostic, DiagnosticSeverity, DiagnosticsRequest, FileChange, FileContent, FileDiagnostics,
+    FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark, Reference, ReferencesRequest,
 };
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::Deserialize;
@@ -472,6 +472,111 @@ async fn references_in_buffer(
     )
     .await?;
     Ok(Json(rows))
+}
+
+/// `POST /v1/files/diagnostics`.
+///
+/// What a language server says is wrong with one file. The text travels for the same
+/// reason it does with references: an edited buffer is the file the person is reading,
+/// and problems reported about the last save are problems about a version nobody has
+/// open.
+///
+/// An answer with no `server` is not a clean file: it is a language this build has no
+/// server for, a server that is not installed, or one that would not start. A pane
+/// draws those differently because they are different claims — "nothing is wrong" and
+/// "nobody checked" are not the same sentence.
+///
+/// # Errors
+///
+/// No workspace (`409`), a body that is not a diagnostics request (`400`), and a path
+/// that is absolute or escapes (`400`). A file that cannot be read is answered with no
+/// server rather than an error: the question was about the language, and the file is
+/// the reason it could not be put.
+async fn diagnostics(
+    State(state): State<AppState>,
+    body: Result<Json<DiagnosticsRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<FileDiagnostics>, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a diagnostics request: {rejection}"
+        )))
+    })?;
+    let relative = relative_path(&request.path)?;
+    let root = workspace_root(&state, request.workspace.as_deref())?;
+    let Some(language) = crate::lsp::language_of(&request.path) else {
+        return Ok(Json(nothing_asked()));
+    };
+    let (resolved, text) = match request.text {
+        // A buffer that is not on disk yet is still a document a server can judge:
+        // the path has already been refused if it escapes, so joining it is the whole
+        // answer, and a file being written for the first time is precisely the one
+        // whose problems are worth hearing about.
+        Some(text) => (
+            resolve_existing(&root, &relative, &request.path)
+                .unwrap_or_else(|_| root.join(&relative)),
+            text,
+        ),
+        None => {
+            let resolved = resolve_existing(&root, &relative, &request.path)?;
+            let metadata =
+                std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
+            if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
+                return Ok(Json(nothing_asked()));
+            }
+            let bytes = std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
+            let Ok(text) = String::from_utf8(bytes) else {
+                return Ok(Json(nothing_asked()));
+            };
+            (resolved, text)
+        }
+    };
+    let Some(answer) = state
+        .language_servers()
+        .diagnostics(language, &root, &resolved, &text)
+        .await
+    else {
+        return Ok(Json(nothing_asked()));
+    };
+    tracing::debug!(
+        server = answer.program,
+        "diagnostics from a language server"
+    );
+    Ok(Json(FileDiagnostics {
+        server: Some(answer.program.to_owned()),
+        encoding: Some(match answer.encoding {
+            acpilot_lsp::PositionEncoding::Utf8 => acpilot_proto::lsp::PositionEncoding::Utf8,
+            acpilot_lsp::PositionEncoding::Utf16 => acpilot_proto::lsp::PositionEncoding::Utf16,
+        }),
+        items: answer.items.iter().map(problem_row).collect(),
+    }))
+}
+
+/// The answer when no server was asked, which is not the answer to a clean file.
+fn nothing_asked() -> FileDiagnostics {
+    FileDiagnostics {
+        server: None,
+        encoding: None,
+        items: Vec::new(),
+    }
+}
+
+/// One problem, in the wire's own counting: lines and columns from 1.
+fn problem_row(problem: &acpilot_lsp::session::Problem) -> Diagnostic {
+    Diagnostic {
+        line: problem.line.saturating_add(1),
+        column: problem.character.saturating_add(1),
+        end_line: problem.end_line.saturating_add(1),
+        end_column: problem.end_character.saturating_add(1),
+        severity: match problem.severity {
+            acpilot_lsp::session::Severity::Error => DiagnosticSeverity::Error,
+            acpilot_lsp::session::Severity::Warning => DiagnosticSeverity::Warning,
+            acpilot_lsp::session::Severity::Information => DiagnosticSeverity::Information,
+            acpilot_lsp::session::Severity::Hint => DiagnosticSeverity::Hint,
+        },
+        message: problem.message.clone(),
+        source: problem.source.clone(),
+        code: problem.code.clone(),
+    }
 }
 
 /// The answer to both forms of the question: where is this name used.
@@ -1249,6 +1354,7 @@ pub fn routes() -> Router<AppState> {
             "/v1/files/references",
             get(references).post(references_in_buffer),
         )
+        .route("/v1/files/diagnostics", post(diagnostics))
 }
 
 #[allow(dead_code)]
@@ -1344,6 +1450,21 @@ fn references_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     post,
+    path = "/v1/files/diagnostics",
+    tag = "files",
+    summary = "What the language server says is wrong with a file",
+    request_body = DiagnosticsRequest,
+    responses(
+        (status = 200, description = "The problems, and the server that found them; `server` absent means nothing was asked", body = FileDiagnostics),
+        (status = 400, description = "A body that is not a diagnostics request, or a path that escapes", body = ErrorBody),
+        (status = 409, description = "This daemon has no workspace", body = ErrorBody)
+    )
+)]
+fn diagnostics_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
     path = "/v1/files/references",
     tag = "files",
     summary = "Find the code uses of an identifier in an open buffer",
@@ -1411,6 +1532,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/files/references",
             HttpMethod::Post,
             <__path_references_in_buffer_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files/diagnostics",
+            HttpMethod::Post,
+            <__path_diagnostics_doc as Path>::operation(),
         ),
     ]
 }

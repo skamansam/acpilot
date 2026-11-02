@@ -92,6 +92,17 @@ pub enum Request {
         /// the file on disk, and a use deleted a moment ago is still in it.
         text: String,
     },
+    /// What the daemon's language server says is wrong with a buffer.
+    ///
+    /// The text travels for the same reason it does with references: an edit that has
+    /// not been saved is the file the person is reading, and problems about the saved
+    /// version are problems about a line that has moved.
+    Diagnostics {
+        /// The file, workspace-relative.
+        path: String,
+        /// The buffer as the pane holds it.
+        text: String,
+    },
     /// Read what the daemon's language servers are doing.
     ///
     /// A request rather than a local answer: the servers are the daemon's processes,
@@ -181,6 +192,13 @@ pub enum Update {
         name: String,
         /// Its uses in code, sorted by path, line and column.
         hits: Vec<acpilot_proto::file::Reference>,
+    },
+    /// What a language server said about a buffer.
+    Diagnostics {
+        /// The file the answer is about.
+        path: String,
+        /// The problems, and which server found them — absent when none was asked.
+        problems: acpilot_proto::file::FileDiagnostics,
     },
     /// The project map, as the daemon read it.
     ///
@@ -492,6 +510,16 @@ async fn run(
                     match client.references(&name, Some((&path, offset, &text))).await {
                         Ok(hits) => {
                             let _ = updates.send(Update::References { name, hits });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Diagnostics { path, text }) => {
+                    match client.diagnostics(&path, &text).await {
+                        Ok(problems) => {
+                            let _ = updates.send(Update::Diagnostics { path, problems });
                         }
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
@@ -1015,6 +1043,13 @@ async fn run_demo(
                     })
                     .collect();
                 let _ = updates.send(Update::References { name, hits });
+            }
+            Request::Diagnostics { .. } => {
+                // No daemon, no server: the design pass says which world it is in rather
+                // than drawing a clean file, which is a check nobody ran.
+                let _ = updates.send(Update::Status(
+                    "no language server · the design pass reads its own text".to_owned(),
+                ));
             }
             Request::LspStatus => {
                 // No daemon, no servers: the design pass says which world it is in

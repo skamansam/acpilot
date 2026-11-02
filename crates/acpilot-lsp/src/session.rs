@@ -39,6 +39,21 @@ const INITIALIZE: Duration = Duration::from_secs(20);
 /// How long a `textDocument/references` may take.
 const REQUEST: Duration = Duration::from_secs(10);
 
+/// How long to wait between looks for a server's diagnostics.
+///
+/// A publish is pushed rather than answered, so there is nothing to await: the loop
+/// polls the transport the way `tick` polls a frame, and twenty milliseconds is short
+/// enough that a panel does not appear to be late and long enough that a server which
+/// says nothing costs nothing.
+const POLL: Duration = Duration::from_millis(20);
+
+/// How many problems one file may report before the rest are dropped.
+///
+/// The same cap the design notes put on a diagnostics store (5k per file): a server
+/// that has decided every line is wrong has said enough, and a list that long is not
+/// read but scrolled past.
+const PROBLEMS_CAP: usize = 5_000;
+
 /// Why a session could not be started, or a question not answered.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -65,6 +80,48 @@ pub struct Location {
     pub character: u32,
 }
 
+/// How bad a problem is, in the four levels the protocol defines.
+///
+/// An absent severity is [`Severity::Warning`]: the protocol leaves the choice to the
+/// client, and a problem with no level is a thing the server thought worth saying
+/// rather than a compile error — calling it an error would paint a clean build red.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// The code does not compile.
+    Error,
+    /// It compiles and probably should not.
+    Warning,
+    /// A remark.
+    Information,
+    /// A suggestion.
+    Hint,
+}
+
+/// One problem a server reported about a document.
+///
+/// The lines are zero-based, as the protocol counts them, and the characters are in
+/// the session's negotiated encoding — the same rule [`Location`] follows, because the
+/// caller is the one holding the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// Zero-based line the problem starts on.
+    pub line: u32,
+    /// Zero-based column it starts at, in the negotiated encoding.
+    pub character: u32,
+    /// Zero-based line it ends on.
+    pub end_line: u32,
+    /// Zero-based column it ends at, in the negotiated encoding.
+    pub end_character: u32,
+    /// How bad it is.
+    pub severity: Severity,
+    /// What the server said.
+    pub message: String,
+    /// Who said it, when the server names itself.
+    pub source: Option<String>,
+    /// The server's code for it, when there is one.
+    pub code: Option<String>,
+}
+
 /// A running server, initialized and ready to answer.
 pub struct Session {
     server: Server,
@@ -72,6 +129,12 @@ pub struct Session {
     program: String,
     versions: HashMap<String, i32>,
     warm: bool,
+    /// The last problems the server published, by document URI.
+    ///
+    /// Kept because a publish is pushed and a client asks later: the message that
+    /// carried the answer is consumed by whoever was draining the transport at the
+    /// time, which may have been a different request entirely.
+    published: HashMap<String, Vec<Problem>>,
 }
 
 impl Session {
@@ -118,6 +181,7 @@ impl Session {
             program: program.to_owned(),
             versions: HashMap::new(),
             warm: false,
+            published: HashMap::new(),
         })
     }
 
@@ -163,6 +227,10 @@ impl Session {
     ) -> Result<(), SessionError> {
         let uri = file_uri(path)?;
         let key = uri.to_string();
+        // The previous version's problems are not this version's: dropping them here
+        // is what makes the wait in [`Session::diagnostics`] wait for a publish about
+        // the text that was just sent rather than return the answer to the old one.
+        self.published.remove(&key);
         let version = self.versions.entry(key.clone()).or_insert(0);
         *version += 1;
         let version = *version;
@@ -221,6 +289,61 @@ impl Session {
         Ok(locations(&answer))
     }
 
+    /// Wait for what the server says is wrong with `path`.
+    ///
+    /// A publish is a notification, not an answer, so this polls until one arrives or
+    /// `wait` runs out. An empty list is both a clean file and a server that said
+    /// nothing in time, and the two are told apart by the caller: it knows how long it
+    /// waited and whether a session exists at all.
+    ///
+    /// # Errors
+    ///
+    /// A path that is not on this filesystem. A server that has gone away publishes
+    /// nothing, which is the deadline rather than an error.
+    pub async fn diagnostics(
+        &mut self,
+        path: &Path,
+        wait: Duration,
+    ) -> Result<Vec<Problem>, SessionError> {
+        let uri = file_uri(path)?;
+        let key = uri.to_string();
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            while let Some(message) = self.server.try_next_notification() {
+                self.record(&message);
+            }
+            if let Some(problems) = self.published.get(&key) {
+                return Ok(problems.clone());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(Vec::new());
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// Keep the problems a notification carries, if it carries any.
+    ///
+    /// Every notification the session drains passes through here, because the one
+    /// that matters is whatever arrived while nobody was asking: throwing the rest
+    /// away would make a diagnostics answer depend on which request happened to be
+    /// in flight when the server spoke.
+    fn record(&mut self, message: &serde_json::Value) {
+        if message.get("method").and_then(serde_json::Value::as_str)
+            != Some("textDocument/publishDiagnostics")
+        {
+            return;
+        }
+        let Some(params) = message.get("params") else {
+            return;
+        };
+        let Some(uri) = params.get("uri").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        self.published
+            .insert(uri.to_owned(), problems(params.get("diagnostics")));
+    }
+
     /// Ask the server to stop, then insist.
     pub async fn shutdown(&mut self) {
         self.server.shutdown().await;
@@ -229,6 +352,75 @@ impl Session {
 
 fn file_uri(path: &Path) -> Result<Url, SessionError> {
     Url::from_file_path(path).map_err(|()| SessionError::Uri(path.display().to_string()))
+}
+
+/// The problems in a `publishDiagnostics` params' `diagnostics` array.
+///
+/// Anything without a range is dropped rather than placed at the start of the file: a
+/// problem nobody can point at is a problem the gutter would draw in the wrong place,
+/// and a document-level message is what `window/showMessage` is for.
+#[must_use]
+pub fn problems(answer: Option<&Value>) -> Vec<Problem> {
+    let Some(items) = answer.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for item in items {
+        let Some(range) = item.get("range") else {
+            continue;
+        };
+        let Some(start) = at(range.get("start")) else {
+            continue;
+        };
+        let (end_line, end_character) = at(range.get("end")).unwrap_or(start);
+        let Some(message) = item.get("message").and_then(Value::as_str) else {
+            continue;
+        };
+        found.push(Problem {
+            line: start.0,
+            character: start.1,
+            end_line,
+            end_character,
+            severity: severity(item.get("severity").and_then(Value::as_u64)),
+            message: message.to_owned(),
+            source: item
+                .get("source")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            code: item.get("code").and_then(spelled),
+        });
+        if found.len() == PROBLEMS_CAP {
+            break;
+        }
+    }
+    found
+}
+
+/// A `{ line, character }` pair, when both numbers are there.
+fn at(position: Option<&Value>) -> Option<(u32, u32)> {
+    let position = position?;
+    let line = position.get("line")?.as_u64()?;
+    let character = position.get("character")?.as_u64()?;
+    Some((u32::try_from(line).ok()?, u32::try_from(character).ok()?))
+}
+
+/// The protocol's severity number, with the client's default for an absent one.
+fn severity(level: Option<u64>) -> Severity {
+    match level {
+        Some(1) => Severity::Error,
+        Some(3) => Severity::Information,
+        Some(4) => Severity::Hint,
+        _ => Severity::Warning,
+    }
+}
+
+/// A diagnostic code, which the protocol allows to be a string or a number.
+fn spelled(value: &Value) -> Option<String> {
+    match value {
+        Value::String(code) => Some(code.clone()),
+        Value::Number(code) => Some(code.to_string()),
+        _ => None,
+    }
 }
 
 /// The locations in a `textDocument/references` answer.
@@ -356,6 +548,59 @@ mod tests {
             file,
             "and the URI decodes back to the path it came from"
         );
+    }
+
+    #[test]
+    fn a_publish_is_read_into_problems_with_both_range_ends() {
+        let diagnostics = json!([
+            {
+                "range": { "start": { "line": 2, "character": 4 }, "end": { "line": 2, "character": 9 } },
+                "severity": 1,
+                "message": "cannot find value `nope`",
+                "source": "rust-analyzer",
+                "code": "E0425",
+                "tags": []
+            },
+            {
+                "range": { "start": { "line": 7, "character": 0 } },
+                "message": "unused"
+            },
+            { "message": "nowhere to point at" }
+        ]);
+        let found = problems(Some(&diagnostics));
+        assert_eq!(
+            found.len(),
+            2,
+            "a problem with no range is not placed anywhere"
+        );
+        assert_eq!(found[0].severity, Severity::Error);
+        assert_eq!((found[0].line, found[0].character), (2, 4));
+        assert_eq!((found[0].end_line, found[0].end_character), (2, 9));
+        assert_eq!(found[0].code.as_deref(), Some("E0425"));
+        assert_eq!(found[0].source.as_deref(), Some("rust-analyzer"));
+        assert_eq!(
+            found[1].severity,
+            Severity::Warning,
+            "an absent severity is a remark, not a red line"
+        );
+        assert_eq!(
+            (found[1].end_line, found[1].end_character),
+            (7, 0),
+            "a range with no end is a point"
+        );
+    }
+
+    #[test]
+    fn a_numeric_code_is_spelled_rather_than_dropped() {
+        let diagnostics = json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 3,
+            "message": "hint",
+            "code": 12
+        }]);
+        let found = problems(Some(&diagnostics));
+        assert_eq!(found[0].code.as_deref(), Some("12"));
+        assert_eq!(found[0].severity, Severity::Information);
     }
 
     #[test]

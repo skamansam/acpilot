@@ -673,15 +673,23 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
         } else {
             Style::default()
         };
-        let marker = editor
-            .mark(row.line)
-            .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} "));
+        // One cell, so a problem outranks a change: a line that does not compile is
+        // the fact worth seeing first, and the git mark is still there once it does.
+        let marker = match editor.problem(row.line) {
+            Some(problem) => Span::styled(format!("{problem} "), base.fg(theme.danger())),
+            None => Span::styled(
+                editor
+                    .mark(row.line)
+                    .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} ")),
+                base.fg(theme.warning()),
+            ),
+        };
         let mut spans = vec![
             Span::styled(
                 format!("{:>width$} ", row.line + 1, width = gutter - 3),
                 base.fg(theme.text_muted()),
             ),
-            Span::styled(marker, base.fg(theme.warning())),
+            marker,
         ];
         for run in &row.runs {
             let mut style = base;
@@ -1444,6 +1452,28 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(editor) = &app.editor {
         let (line, column) = editor.position();
         spans.push(Span::styled(format!("· {line}:{column} "), dim));
+        // What the language server says about this file, counted the way the gutter
+        // marks it. Silence when there is nothing wrong, and silence when nothing was
+        // asked: this line has no room to say "unchecked" in a way that reads.
+        let problems = editor.problems();
+        let errors = problems
+            .iter()
+            .filter(|problem| problem.severity == acpilot_proto::file::DiagnosticSeverity::Error)
+            .count();
+        let warnings = problems
+            .iter()
+            .filter(|problem| problem.severity == acpilot_proto::file::DiagnosticSeverity::Warning)
+            .count();
+        if errors + warnings > 0 {
+            spans.push(Span::styled(
+                format!("· {errors}E {warnings}W "),
+                Style::default().fg(if errors > 0 {
+                    app.theme.danger()
+                } else {
+                    app.theme.warning()
+                }),
+            ));
+        }
     }
     // What the sessions hold, from the same readings the bar draws. A `~` is the
     // daemon's own count rather than an agent's report, and an absent total is

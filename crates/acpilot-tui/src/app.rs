@@ -1707,6 +1707,14 @@ pub struct App {
     pub used_tokens: Option<u32>,
     /// Whether any of those figures is this daemon's estimate rather than a report.
     pub tokens_estimated: bool,
+    /// What the daemon's language server said about the open buffer.
+    ///
+    /// [`None`] is "nobody has checked", which is not a clean file: the answer itself
+    /// says whether a server answered, and the gutter draws nothing either way while
+    /// the status line says which of the two it is.
+    pub diagnostics: Option<acpilot_proto::file::FileDiagnostics>,
+    /// The file that answer is about.
+    pub diagnostics_path: String,
     /// The editor pane's document, when a file is open.
     ///
     /// A real [`acpilot_text::Document`] rather than a mock: the rope, the caret
@@ -1941,6 +1949,8 @@ impl App {
             pending: Vec::new(),
             used_tokens: None,
             tokens_estimated: false,
+            diagnostics: None,
+            diagnostics_path: String::new(),
             editor: None,
             grammars: Grammars::new(),
             diff: None,
@@ -2514,6 +2524,21 @@ impl App {
                     };
                 }
             }
+            Update::Diagnostics { path, problems } => {
+                // Only the pane the answer is about: a check that landed while another
+                // file was opened must not put this file's errors in that gutter.
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.path() == path)
+                {
+                    if let Some(editor) = &mut self.editor {
+                        editor.set_problems(problems.items.clone());
+                    }
+                    self.diagnostics = Some(problems);
+                    self.diagnostics_path = path;
+                }
+            }
             Update::ProjectMap(map) => {
                 let areas = map.areas.len();
                 self.status = if !map.written {
@@ -2559,6 +2584,11 @@ impl App {
                 pane.set_etag(etag);
                 self.editor = Some(pane);
                 self.refresh_outline();
+                // A different document has not been checked: the previous file's
+                // problems are not this one's, and this one is asked about now.
+                self.diagnostics = None;
+                self.diagnostics_path.clear();
+                self.ask_about_problems();
                 if let Some(line) = self.pending_line.take()
                     && let Some(editor) = &mut self.editor
                 {
@@ -3402,6 +3432,23 @@ impl App {
         self.refresh_outline_if_stale();
         self.follow_references();
         self.ask_for_map();
+    }
+
+    /// Ask the daemon about the open buffer's language, when its text is a version.
+    ///
+    /// Two moments are versions: the open, and the save. Typing is not — the daemon may
+    /// have to start a server, and a request per keystroke is the one thing the
+    /// language-intelligence phase says never to do on the editing path. A refresh while
+    /// the text is being written is the next step, and it belongs on a debounce in the
+    /// loop rather than in the key that typed.
+    fn ask_about_problems(&mut self) {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        self.pending.push(Request::Diagnostics {
+            path: editor.path().to_owned(),
+            text: editor.document().text(),
+        });
     }
 
     /// Ask the daemon for the map once, when the panel has opened or been told to
@@ -6527,6 +6574,10 @@ mod tests {
         });
         assert_eq!(app.run_menu(MenuAction::ToggleProjectMap), None);
         assert!(app.show_map, "the row puts the panel up");
+
+        // Opening the file asked what is wrong with it, which is a different question
+        // from this one: draining that here keeps the assertion about the panel.
+        app.take_pending();
 
         // A map is a document rather than a view of state that moves: the panel asks
         // when it opens, and the frame after that has nothing new to ask.

@@ -337,6 +337,29 @@ impl Client {
         self.send(request, "/v1/files/references").await
     }
 
+    /// `POST /v1/files/diagnostics`.
+    ///
+    /// What the daemon's language server says is wrong with a file. The text travels
+    /// because an edited buffer is the file the person is reading, and the answer says
+    /// which server answered — an empty list from no server at all is not a clean file,
+    /// and a status line that drew them the same would be claiming a check nobody ran.
+    pub async fn diagnostics(
+        &self,
+        path: &str,
+        text: &str,
+    ) -> Result<acpilot_proto::file::FileDiagnostics, ClientError> {
+        let body = acpilot_proto::file::DiagnosticsRequest {
+            workspace: None,
+            path: path.to_owned(),
+            text: Some(text.to_owned()),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/diagnostics"))
+            .json(&body);
+        self.send(request, "/v1/files/diagnostics").await
+    }
+
     /// `GET /v1/project/map`.
     ///
     /// The map the agent wrote under `.acpilot/`, as areas with a summary and the

@@ -137,6 +137,11 @@ pub struct EditorPane {
     highlights: Option<Highlights>,
     viewport: Viewport,
     marks: LineChanges,
+    /// What a language server last said is wrong with this file.
+    ///
+    /// Beside the git marks rather than mixed into them: a change and a problem are
+    /// two facts about a line, and either can be true without the other.
+    problems: Vec<acpilot_proto::file::Diagnostic>,
     find: Find,
     prompt: Option<Prompt>,
     message: String,
@@ -210,6 +215,7 @@ impl EditorPane {
             highlights,
             viewport: Viewport::new(0, 0),
             marks,
+            problems: Vec::new(),
             find: Find::new(),
             prompt: None,
             message: String::new(),
@@ -255,6 +261,40 @@ impl EditorPane {
     pub fn set_marks(&mut self, marks: LineChanges) {
         self.marks = marks;
         self.rebuild();
+    }
+
+    /// Replace what the language server says about this file.
+    ///
+    /// No rebuild: problems are gutter letters and a status line, neither of which is
+    /// measured into a row, so a frame that repaints is all a fresh answer needs.
+    pub fn set_problems(&mut self, problems: Vec<acpilot_proto::file::Diagnostic>) {
+        self.problems = problems;
+    }
+
+    /// What a language server said about the file, as the status line counts it.
+    #[must_use]
+    pub fn problems(&self) -> &[acpilot_proto::file::Diagnostic] {
+        &self.problems
+    }
+
+    /// The worst problem on a line, as the gutter's letter.
+    ///
+    /// One cell, so one letter — `E`, `W`, `I`, `H` — and the worst problem wins,
+    /// because a line with an error and a hint is a line with an error.
+    #[must_use]
+    pub fn problem(&self, line: usize) -> Option<char> {
+        let number = u32::try_from(line + 1).ok()?;
+        self.problems
+            .iter()
+            .filter(|problem| problem.line == number)
+            .map(|problem| rank(problem.severity))
+            .min()
+            .map(|rank| match rank {
+                0 => 'E',
+                1 => 'W',
+                2 => 'I',
+                _ => 'H',
+            })
     }
 
     /// The tab's label: the file's own name.
@@ -923,6 +963,17 @@ pub fn language_for(path: &str) -> &'static str {
 }
 
 /// One row's cells, joined into runs of one token and one state.
+/// How bad a severity is, as a number a gutter can take the smallest of.
+fn rank(severity: acpilot_proto::file::DiagnosticSeverity) -> u8 {
+    use acpilot_proto::file::DiagnosticSeverity;
+    match severity {
+        DiagnosticSeverity::Error => 0,
+        DiagnosticSeverity::Warning => 1,
+        DiagnosticSeverity::Information => 2,
+        DiagnosticSeverity::Hint => 3,
+    }
+}
+
 fn runs(
     row: &Row,
     spans: &[Span],

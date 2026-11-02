@@ -67,6 +67,15 @@ const COLD_PAUSE: Duration = Duration::from_millis(250);
 /// daemon holds should not need a config file to be safe.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// How long a server may take to publish what is wrong with a document.
+///
+/// A publish is pushed, not answered, and the wait is the index: `rust-analyzer` on
+/// this repository answers in well under a second once it is warm and takes tens of
+/// seconds on a cold cache. Ten is the point where a panel waiting on it is still a
+/// panel rather than a hang, and a file that is genuinely quiet answers empty either
+/// way.
+pub const DIAGNOSTICS_WAIT: Duration = Duration::from_secs(10);
+
 /// How often the daemon looks for one.
 ///
 /// A tenth of [`IDLE_TIMEOUT`], so a server is stopped between five and five and a
@@ -90,6 +99,17 @@ pub struct Answer {
     pub encoding: PositionEncoding,
     /// Where the name is used, in the server's own spelling.
     pub locations: Vec<Location>,
+}
+
+/// What a server said is wrong with a document, and the encoding it said it in.
+#[derive(Debug)]
+pub struct Problems {
+    /// The command that answered, for a log line or a status line.
+    pub program: &'static str,
+    /// The encoding every `character` in [`Problems::items`] is counted in.
+    pub encoding: PositionEncoding,
+    /// The problems themselves, in the server's order.
+    pub items: Vec<acpilot_lsp::session::Problem>,
 }
 
 /// The sessions this daemon has started, one per language.
@@ -154,39 +174,12 @@ impl Servers {
         text: &str,
         offset: usize,
     ) -> Option<Answer> {
-        let (language, program, args) = SERVERS
+        let (language, program) = SERVERS
             .iter()
             .find(|(id, _, _)| *id == language)
-            .map(|(id, program, args)| (*id, *program, *args))?;
-        if !installed(program) {
-            return None;
-        }
-
+            .map(|(id, program, _)| (*id, *program))?;
         let mut sessions = self.sessions.lock().await;
-        if !sessions.contains_key(language) {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            let started = Session::start(program, &args, root).await;
-            match &started {
-                Ok(session) => {
-                    tracing::debug!(server = program, encoding = %session.encoding(), "language server ready");
-                }
-                Err(error) => {
-                    tracing::debug!(server = program, %error, "language server did not start");
-                }
-            }
-            sessions.insert(
-                language,
-                started
-                    .map(|session| Running {
-                        session,
-                        last_used: Instant::now(),
-                        round_trip: None,
-                        requests: 0,
-                    })
-                    .ok(),
-            );
-        }
-        let running = sessions.get_mut(language)?.as_mut()?;
+        let running = running(&mut sessions, language, root).await?;
         // Marked used before the question rather than after the answer: the first
         // question is the index, and a sweep that stopped a server in the middle of
         // one would make the next keystroke pay for it a second time.
@@ -245,6 +238,54 @@ impl Servers {
                     sessions.insert(language, None);
                     return None;
                 }
+            }
+        }
+    }
+
+    /// What the server for `language` says is wrong with `path`.
+    ///
+    /// `None` means nothing answered — no server for the language, none installed, or
+    /// one that failed — which is the same answer [`Servers::references`] gives, and
+    /// for the same reason: a clean file and an unasked question both read as no
+    /// problems, and a file nobody could check is not a file with none.
+    ///
+    /// The document is the text that was handed over, not the file on disk: an editor
+    /// that has typed half a line wants the problems that half a line has.
+    pub async fn diagnostics(
+        &self,
+        language: &str,
+        root: &Path,
+        path: &Path,
+        text: &str,
+    ) -> Option<Problems> {
+        let (language, program) = SERVERS
+            .iter()
+            .find(|(id, _, _)| *id == language)
+            .map(|(id, program, _)| (*id, *program))?;
+        let mut sessions = self.sessions.lock().await;
+        let running = running(&mut sessions, language, root).await?;
+        running.last_used = Instant::now();
+        running.requests += 1;
+        let encoding = running.session.encoding();
+
+        if let Err(error) = running.session.open(path, language, text).await {
+            tracing::debug!(server = program, %error, "language server lost the document");
+            sessions.insert(language, None);
+            return None;
+        }
+        match running.session.diagnostics(path, DIAGNOSTICS_WAIT).await {
+            Ok(items) => {
+                running.last_used = Instant::now();
+                Some(Problems {
+                    program,
+                    encoding,
+                    items,
+                })
+            }
+            Err(error) => {
+                tracing::debug!(server = program, %error, "diagnostics failed");
+                sessions.insert(language, None);
+                None
             }
         }
     }
@@ -370,6 +411,47 @@ impl Servers {
             })
             .collect()
     }
+}
+
+/// The server behind `id`, started if it is not running.
+///
+/// One place rather than one per question, because both questions pay the same index
+/// and both have to make the same three decisions: whether a server exists for the
+/// language, whether it is installed, and whether a failed one is retried (it is not —
+/// see the module note).
+async fn running<'a>(
+    sessions: &'a mut HashMap<&'static str, Option<Running>>,
+    language: &'static str,
+    root: &Path,
+) -> Option<&'a mut Running> {
+    let (_, program, args) = SERVERS.iter().find(|(id, _, _)| *id == language)?;
+    if !installed(program) {
+        return None;
+    }
+    if !sessions.contains_key(language) {
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let started = Session::start(program, &args, root).await;
+        match &started {
+            Ok(session) => {
+                tracing::debug!(server = program, encoding = %session.encoding(), "language server ready");
+            }
+            Err(error) => {
+                tracing::debug!(server = program, %error, "language server did not start");
+            }
+        }
+        sessions.insert(
+            language,
+            started
+                .map(|session| Running {
+                    session,
+                    last_used: Instant::now(),
+                    round_trip: None,
+                    requests: 0,
+                })
+                .ok(),
+        );
+    }
+    sessions.get_mut(language)?.as_mut()
 }
 
 /// One language this build can start, as `GET /v1/lsp/servers` reports it.

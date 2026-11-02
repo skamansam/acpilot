@@ -187,6 +187,86 @@ pub struct ReferencesRequest {
     pub text: Option<String>,
 }
 
+/// How bad a problem a language server reported is.
+///
+/// The protocol's four levels, named rather than numbered: a client that switched on
+/// `2` would be a client that changed meaning when a server did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    /// The code does not compile.
+    Error,
+    /// It compiles and probably should not.
+    Warning,
+    /// A remark.
+    Information,
+    /// A suggestion.
+    Hint,
+}
+
+/// One problem a language server reported about a file.
+///
+/// Lines and columns are 1-based here, as everywhere else on this wire, and the
+/// columns are counted in characters in [`FileDiagnostics::encoding`] — the daemon
+/// converts the server's own numbers once, where the text is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Diagnostic {
+    /// 1-based line the problem starts on.
+    pub line: u32,
+    /// 1-based character column it starts at.
+    pub column: u32,
+    /// 1-based line it ends on.
+    pub end_line: u32,
+    /// 1-based character column it ends at.
+    pub end_column: u32,
+    /// How bad it is.
+    pub severity: DiagnosticSeverity,
+    /// What the server said.
+    pub message: String,
+    /// Who said it, when the server names itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The server's code for it, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// Request body for `POST /v1/files/diagnostics`.
+///
+/// The path is the question; the text is the version it is about. A buffer edited and
+/// not saved is the text the person is reading, and problems reported about the last
+/// save are problems about a file nobody is looking at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticsRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The file to ask about, workspace-relative.
+    pub path: String,
+    /// The buffer as the editor holds it. Absent means the file on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// What a language server says is wrong with a file.
+///
+/// `server` absent means nothing was asked: no server for the language, none
+/// installed, or one that would not start. That is deliberately different from an
+/// empty `items`, which is a server saying the file is clean — a pane that drew both
+/// as "no problems" would be claiming a check that never happened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FileDiagnostics {
+    /// The command that answered, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// The encoding the columns are counted in, when a server answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::lsp::PositionEncoding>,
+    /// The problems, in the server's order.
+    #[serde(default)]
+    pub items: Vec<Diagnostic>,
+}
+
 /// Request body for `PUT /v1/files`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileWriteRequest {

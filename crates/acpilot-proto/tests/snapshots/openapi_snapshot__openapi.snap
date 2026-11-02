@@ -462,6 +462,103 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "Diagnostic": {
+        "description": "One problem a language server reported about a file.\n\nLines and columns are 1-based here, as everywhere else on this wire, and the\ncolumns are counted in characters in [`FileDiagnostics::encoding`] — the daemon\nconverts the server's own numbers once, where the text is.",
+        "properties": {
+          "code": {
+            "description": "The server's code for it, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "column": {
+            "description": "1-based character column it starts at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_column": {
+            "description": "1-based character column it ends at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_line": {
+            "description": "1-based line it ends on.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "description": "1-based line the problem starts on.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "description": "What the server said.",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/DiagnosticSeverity",
+            "description": "How bad it is."
+          },
+          "source": {
+            "description": "Who said it, when the server names itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line",
+          "column",
+          "end_line",
+          "end_column",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
+      "DiagnosticSeverity": {
+        "description": "How bad a problem a language server reported is.\n\nThe protocol's four levels, named rather than numbered: a client that switched on\n`2` would be a client that changed meaning when a server did.",
+        "enum": [
+          "error",
+          "warning",
+          "information",
+          "hint"
+        ],
+        "type": "string"
+      },
+      "DiagnosticsRequest": {
+        "description": "Request body for `POST /v1/files/diagnostics`.\n\nThe path is the question; the text is the version it is about. A buffer edited and\nnot saved is the text the person is reading, and problems reported about the last\nsave are problems about a file nobody is looking at.",
+        "properties": {
+          "path": {
+            "description": "The file to ask about, workspace-relative.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it. Absent means the file on disk.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
       "DiscoveredModel": {
         "description": "A model the provider reported, as returned by `GET /v1/models`.",
         "properties": {
@@ -787,6 +884,37 @@ expression: canonical(document)
           "text",
           "etag"
         ],
+        "type": "object"
+      },
+      "FileDiagnostics": {
+        "description": "What a language server says is wrong with a file.\n\n`server` absent means nothing was asked: no server for the language, none\ninstalled, or one that would not start. That is deliberately different from an\nempty `items`, which is a server saying the file is clean — a pane that drew both\nas \"no problems\" would be claiming a check that never happened.",
+        "properties": {
+          "encoding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PositionEncoding",
+                "description": "The encoding the columns are counted in, when a server answered."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "description": "The problems, in the server's order.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "The command that answered, when one did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "FileEntry": {

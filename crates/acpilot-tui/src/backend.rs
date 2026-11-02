@@ -200,6 +200,14 @@ pub enum Update {
         /// The problems, and which server found them — absent when none was asked.
         problems: acpilot_proto::file::FileDiagnostics,
     },
+    /// Problems a language server pushed about a file without being asked.
+    ///
+    /// Different from [`Update::Diagnostics`] because it is not an answer: a server
+    /// that finishes an index speaks again on its own, and a pane that only knew about
+    /// the problems it had asked for would keep a stale gutter until somebody typed.
+    /// The app applies it to the open buffer when the path matches and leaves the
+    /// question state alone, because the two are about different versions of the text.
+    DiagnosticsPushed(acpilot_proto::file::DiagnosticsNotice),
     /// A question about a buffer was asked and nothing answered it.
     ///
     /// Not the same as [`Update::Diagnostics`] naming no server: a server that said
@@ -928,6 +936,9 @@ async fn follow_permissions(
                             ));
                         }
                     }
+                }
+                Ok(ProfileStream::Diagnostics(notice)) => {
+                    let _ = updates.send(Update::DiagnosticsPushed(notice));
                 }
                 Ok(ProfileStream::Resync) | Ok(ProfileStream::Heartbeat) => {
                     let _ = refresh_permissions(&client, &updates).await;

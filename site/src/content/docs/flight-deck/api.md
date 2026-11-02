@@ -18,7 +18,7 @@ GET /v1/health                  # {"ok":true,"service":"acpilotd","version":"0.1
 GET /v1/agents                  # configured agents, with availability (available | missing)
 GET /v1/permissions?status=pending
 POST /v1/permissions/{id}/resolve
-GET /v1/events                  # text/event-stream: preferences, permission.requested, heartbeat
+GET /v1/events                  # text/event-stream: preferences, permission.requested, diagnostics, heartbeat
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories

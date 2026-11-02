@@ -30,7 +30,7 @@
 //! files open; leaving one behind per launch is a leak a person notices in `ps`.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use acpilot_lsp::position::PositionEncoding;
@@ -83,6 +83,15 @@ pub const DIAGNOSTICS_WAIT: Duration = Duration::from_secs(10);
 /// the sweep is one lock and one timestamp comparison per language.
 pub const IDLE_SWEEP: Duration = Duration::from_secs(30);
 
+/// How often the daemon looks for a publish nobody asked for.
+///
+/// A publish is pushed and costs nothing to look for: the transport's pump fills a
+/// queue whether or not anybody reads it, so this is one lock and one `try_recv` per
+/// running server. A quarter of a second is short enough that a gutter that was
+/// waiting on a background index fills in as it finishes rather than at the next
+/// keystroke, and long enough that an idle daemon is not busy.
+pub const DIAGNOSTICS_POLL: Duration = Duration::from_millis(250);
+
 pub const SERVERS: &[(&str, &str, &[&str])] = &[
     ("rust", "rust-analyzer", &[]),
     ("python", "pyright-langserver", &["--stdio"]),
@@ -107,6 +116,25 @@ pub struct Problems {
     /// The command that answered, for a log line or a status line.
     pub program: &'static str,
     /// The encoding every `character` in [`Problems::items`] is counted in.
+    pub encoding: PositionEncoding,
+    /// The problems themselves, in the server's order.
+    pub items: Vec<acpilot_lsp::session::Problem>,
+}
+
+/// What a server published about a document without being asked.
+///
+/// A path rather than a URI, because a workspace root is a path and the comparison
+/// that matters is whether the document is inside it — the session was handed the path
+/// when it opened the document, so it is the one place the two spellings meet.
+#[derive(Debug, Clone)]
+pub struct Pushed {
+    /// The document, as the daemon opened it.
+    pub path: PathBuf,
+    /// The version the problems are about, when the server names one.
+    pub version: Option<i64>,
+    /// The command that published, for the frame's `server` field.
+    pub program: &'static str,
+    /// The encoding every `character` in [`Pushed::items`] is counted in.
     pub encoding: PositionEncoding,
     /// The problems themselves, in the server's order.
     pub items: Vec<acpilot_lsp::session::Problem>,
@@ -288,6 +316,41 @@ impl Servers {
                 None
             }
         }
+    }
+
+    /// Take what the servers published since this was last called.
+    ///
+    /// The daemon's language server answers a question when it is asked one, and a
+    /// server with an index also speaks on its own: `rust-analyzer` publishes again
+    /// when a background check finishes, and a pane that only heard about problems it
+    /// asked for would keep a stale gutter until the next save. Nothing here asks
+    /// anything — it empties the queue the transport has been filling and hands back
+    /// what was in it.
+    ///
+    /// Concurrent calls are fine: they queue on the registry's lock, and a duplicate
+    /// drain is a drain that finds nothing.
+    pub async fn drain_published(&self) -> Vec<Pushed> {
+        let mut sessions = self.sessions.lock().await;
+        let mut pushed = Vec::new();
+        for (language, slot) in sessions.iter_mut() {
+            let Some(running) = slot.as_mut() else {
+                continue;
+            };
+            let Some((_, program, _)) = SERVERS.iter().find(|(id, _, _)| id == language) else {
+                continue;
+            };
+            let encoding = running.session.encoding();
+            for published in running.session.drain_published() {
+                pushed.push(Pushed {
+                    path: published.path,
+                    version: published.version,
+                    program,
+                    encoding,
+                    items: published.problems,
+                });
+            }
+        }
+        pushed
     }
 
     /// Stop every server this daemon started.

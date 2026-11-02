@@ -122,6 +122,31 @@ pub struct Problem {
     pub code: Option<String>,
 }
 
+/// What a server published about a document this session opened.
+///
+/// The path rather than the URI: a publish names a document the way the protocol
+/// spells one, and the only caller that can turn that back into something a workspace
+/// can compare is the session, which was handed the path when it opened it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Published {
+    /// The document, as this session opened it.
+    pub path: PathBuf,
+    /// The version the problems are about, when the server names one.
+    ///
+    /// Most servers leave it out of the publish — `rust-analyzer` does — so this is a
+    /// fact to pass along rather than one to require.
+    pub version: Option<i64>,
+    /// What is wrong with it.
+    pub problems: Vec<Problem>,
+}
+
+/// One `publishDiagnostics` notification, as the wire spells it.
+struct Announcement {
+    uri: String,
+    version: Option<i64>,
+    problems: Vec<Problem>,
+}
+
 /// A running server, initialized and ready to answer.
 pub struct Session {
     server: Server,
@@ -129,6 +154,12 @@ pub struct Session {
     program: String,
     versions: HashMap<String, i32>,
     warm: bool,
+    /// Where each document this session opened lives, by document URI.
+    ///
+    /// A publish names a URI, and a URI is a spelling rather than a path a workspace
+    /// root can be compared against. Filled by [`Session::open`], which is the only
+    /// way a document comes to exist for a server.
+    documents: HashMap<String, PathBuf>,
     /// The last problems the server published, by document URI.
     ///
     /// Kept because a publish is pushed and a client asks later: the message that
@@ -181,6 +212,7 @@ impl Session {
             program: program.to_owned(),
             versions: HashMap::new(),
             warm: false,
+            documents: HashMap::new(),
             published: HashMap::new(),
         })
     }
@@ -231,6 +263,9 @@ impl Session {
         // is what makes the wait in [`Session::diagnostics`] wait for a publish about
         // the text that was just sent rather than return the answer to the old one.
         self.published.remove(&key);
+        // Remembered because the answers come back naming the URI, and turning one
+        // into a path is this session's job: it is the only place the path was known.
+        self.documents.insert(key.clone(), path.to_path_buf());
         let version = self.versions.entry(key.clone()).or_insert(0);
         *version += 1;
         let version = *version;
@@ -322,32 +357,70 @@ impl Session {
         }
     }
 
+    /// Take every problem the server has pushed since this was last called.
+    ///
+    /// The transport reads whether or not anybody is asking — its pump fills a queue
+    /// — so a server that finishes an index and publishes afterwards has said
+    /// something no request was there to hear. Draining is how a daemon that is not
+    /// asking still learns about it, and the same [`Session::diagnostics`] call later
+    /// finds the answer already in [`Self::published`], because both read the queue
+    /// through [`Session::record`].
+    pub fn drain_published(&mut self) -> Vec<Published> {
+        let mut found = Vec::new();
+        while let Some(message) = self.server.try_next_notification() {
+            let Some(announcement) = self.record(&message) else {
+                continue;
+            };
+            // A publish about a document this session never opened is not something
+            // a caller can place: there is no path to compare it against. Dropping it
+            // is the honest answer to a question nobody asked.
+            let Some(path) = self.documents.get(&announcement.uri) else {
+                continue;
+            };
+            found.push(Published {
+                path: path.clone(),
+                version: announcement.version,
+                problems: announcement.problems,
+            });
+        }
+        found
+    }
+
     /// Keep the problems a notification carries, if it carries any.
     ///
     /// Every notification the session drains passes through here, because the one
     /// that matters is whatever arrived while nobody was asking: throwing the rest
     /// away would make a diagnostics answer depend on which request happened to be
     /// in flight when the server spoke.
-    fn record(&mut self, message: &serde_json::Value) {
-        if message.get("method").and_then(serde_json::Value::as_str)
-            != Some("textDocument/publishDiagnostics")
-        {
-            return;
-        }
-        let Some(params) = message.get("params") else {
-            return;
-        };
-        let Some(uri) = params.get("uri").and_then(serde_json::Value::as_str) else {
-            return;
-        };
+    fn record(&mut self, message: &serde_json::Value) -> Option<Announcement> {
+        let announcement = announcement(message)?;
         self.published
-            .insert(uri.to_owned(), problems(params.get("diagnostics")));
+            .insert(announcement.uri.clone(), announcement.problems.clone());
+        Some(announcement)
     }
 
     /// Ask the server to stop, then insist.
     pub async fn shutdown(&mut self) {
         self.server.shutdown().await;
     }
+}
+
+/// One `publishDiagnostics` notification, read into the pieces a caller places.
+///
+/// Anything that is not one of those is nothing, which is what makes a drained queue
+/// safe to pass through: the protocol lets a server talk about a lot of things, and
+/// only one of them is a problem with a document.
+fn announcement(message: &Value) -> Option<Announcement> {
+    if message.get("method").and_then(Value::as_str) != Some("textDocument/publishDiagnostics") {
+        return None;
+    }
+    let params = message.get("params")?;
+    let uri = params.get("uri").and_then(Value::as_str)?.to_owned();
+    Some(Announcement {
+        uri,
+        version: params.get("version").and_then(Value::as_i64),
+        problems: problems(params.get("diagnostics")),
+    })
 }
 
 fn file_uri(path: &Path) -> Result<Url, SessionError> {
@@ -588,6 +661,51 @@ mod tests {
             (7, 0),
             "a range with no end is a point"
         );
+    }
+
+    #[test]
+    fn a_publish_is_read_as_an_announcement_with_its_version() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": "file:///work/app/src/lib.rs",
+                "version": 7,
+                "diagnostics": [{
+                    "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                    "severity": 1,
+                    "message": "nope"
+                }]
+            }
+        });
+        let announced = announcement(&message).expect("a publish");
+        assert_eq!(announced.uri, "file:///work/app/src/lib.rs");
+        assert_eq!(announced.version, Some(7));
+        assert_eq!(announced.problems.len(), 1);
+
+        // A server that leaves the version out is still saying something, and most
+        // of them do: the number is passed along rather than required.
+        let unversioned = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": { "uri": "file:///work/app/src/lib.rs", "diagnostics": [] }
+        });
+        let announced = announcement(&unversioned).expect("still a publish");
+        assert_eq!(announced.version, None);
+        assert!(announced.problems.is_empty());
+
+        // Everything else a server may say is not this.
+        for other in [
+            json!({ "method": "window/logMessage", "params": { "type": 3 } }),
+            json!({ "method": "textDocument/publishDiagnostics" }),
+            json!({ "result": [] }),
+            json!(null),
+        ] {
+            assert!(
+                announcement(&other).is_none(),
+                "{other} is not a publish about a document"
+            );
+        }
     }
 
     #[test]

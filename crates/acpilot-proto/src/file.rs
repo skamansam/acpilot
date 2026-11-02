@@ -267,6 +267,27 @@ pub struct FileDiagnostics {
     pub items: Vec<Diagnostic>,
 }
 
+/// What a language server pushed about a file, for a client that never asked.
+///
+/// The same answer `POST /v1/files/diagnostics` returns, minus the request: a server
+/// that finishes an index publishes afterwards, and a pane that only heard about the
+/// problems it asked for would draw a stale gutter until somebody typed. `version`
+/// travels because the protocol allows a server to say which text a publish is about,
+/// and a client that knows its own version can tell a late answer from a current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticsNotice {
+    /// Workspace-relative path the problems are about.
+    pub path: String,
+    /// The document version the server named, when it named one.
+    ///
+    /// Absent for the servers that leave it out of the publish, which is most of them;
+    /// a client that needs a version asks, and the answer carries none either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    /// The problems, and the server that found them.
+    pub problems: FileDiagnostics,
+}
+
 /// Request body for `PUT /v1/files`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileWriteRequest {

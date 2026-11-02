@@ -2573,6 +2573,23 @@ impl App {
                     self.diagnostics_pending = false;
                 }
             }
+            Update::DiagnosticsPushed(notice) => {
+                // A push is not the answer to the question this pane asked, so
+                // `checking` is left alone: the two are about different versions of the
+                // text, and a frame that cleared it would claim a check that is still
+                // running.
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.path() == notice.path)
+                {
+                    if let Some(editor) = &mut self.editor {
+                        editor.set_problems(notice.problems.items.clone());
+                    }
+                    self.diagnostics_path = notice.path;
+                    self.diagnostics = Some(notice.problems);
+                }
+            }
             Update::DiagnosticsUnanswered { path, message } => {
                 // The question is over either way. What the gutter already holds stays:
                 // an answer from before is still the newest thing anybody knows, and a
@@ -6578,6 +6595,77 @@ mod tests {
             app.diagnostics.is_some(),
             "the older answer stays: a failure is not evidence the file is clean"
         );
+    }
+
+    #[test]
+    fn a_problem_the_server_finds_later_lands_in_the_gutter_without_asking() {
+        fn notice(path: &str) -> acpilot_proto::file::DiagnosticsNotice {
+            acpilot_proto::file::DiagnosticsNotice {
+                path: path.to_owned(),
+                version: Some(4),
+                problems: acpilot_proto::file::FileDiagnostics {
+                    server: Some("rust-analyzer".to_owned()),
+                    encoding: None,
+                    items: vec![acpilot_proto::file::Diagnostic {
+                        line: 3,
+                        column: 5,
+                        end_line: 3,
+                        end_column: 9,
+                        severity: acpilot_proto::file::DiagnosticSeverity::Error,
+                        message: "cannot find value `nope`".to_owned(),
+                        source: Some("rust-analyzer".to_owned()),
+                        code: Some("E0425".to_owned()),
+                    }],
+                },
+            }
+        }
+
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.apply(Update::Diagnostics {
+            path: "src/main.rs".to_owned(),
+            problems: acpilot_proto::file::FileDiagnostics {
+                server: Some("rust-analyzer".to_owned()),
+                encoding: None,
+                items: Vec::new(),
+            },
+        });
+        assert!(
+            app.editor
+                .as_ref()
+                .expect("an editor")
+                .problems()
+                .is_empty(),
+            "the server said the file was clean"
+        );
+
+        // A publish nobody asked for, arriving while the pane is still open: this is
+        // the background index finishing, and its problems are the current ones.
+        app.apply(Update::DiagnosticsPushed(notice("src/main.rs")));
+        assert_eq!(
+            app.editor.as_ref().expect("an editor").problem(2),
+            Some('E'),
+            "line 3 is red, from a frame the pane never asked for"
+        );
+        assert_eq!(app.diagnostics_path, "src/main.rs");
+        assert!(
+            !app.diagnostics_pending,
+            "a push is not a question, so it neither asks nor unasks one"
+        );
+
+        // A publish about a file that is not on screen changes nothing here.
+        app.apply(Update::DiagnosticsPushed(notice("src/other.rs")));
+        assert_eq!(
+            app.editor.as_ref().expect("an editor").problems().len(),
+            1,
+            "the open buffer keeps the problems that are its own"
+        );
+        assert_eq!(app.diagnostics_path, "src/main.rs");
     }
 
     #[test]

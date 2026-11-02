@@ -151,6 +151,13 @@ pub enum ProfileStream {
     /// which is how a client that cannot read the daemon's files learns the
     /// current preferences at all.
     Preferences(Preferences),
+    /// Problems a language server pushed about a file.
+    ///
+    /// Not an answer to anything the client asked: a server that finishes an index
+    /// speaks again on its own, and this is how a pane hears it without waiting for the
+    /// next save. The notice names the document and, when the server said, its version,
+    /// so a client can tell a late publish from a current one.
+    Diagnostics(acpilot_proto::file::DiagnosticsNotice),
     /// The stream is quiet but alive.
     Heartbeat,
     /// The client fell behind; refetch the pending list.
@@ -678,12 +685,27 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
                 })
         }
         "heartbeat" => Ok(ProfileStream::Heartbeat),
+        "diagnostics" => diagnostics_of(&frame.data).map(ProfileStream::Diagnostics),
         "resync" => Ok(ProfileStream::Resync),
         other => Ok(ProfileStream::Other {
             event: other.to_owned(),
             data: frame.data.clone(),
         }),
     }
+}
+
+/// The notice in a `diagnostics` frame's body.
+///
+/// The body wraps it in an object rather than sending it bare, the same way a `prefs`
+/// frame names its preferences: a frame with a named field has somewhere to put the
+/// next thing the daemon wants to say about it.
+fn diagnostics_of(data: &str) -> Result<acpilot_proto::file::DiagnosticsNotice, ClientError> {
+    let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+        ClientError::Stream(format!("a diagnostics frame did not parse: {error}"))
+    })?;
+    serde_json::from_value(value["diagnostics"].clone()).map_err(|error| {
+        ClientError::Stream(format!("a diagnostics notice did not parse: {error}"))
+    })
 }
 
 /// The `seq` or `latest_seq` in a control frame, `0` when it is missing.
@@ -742,6 +764,43 @@ mod tests {
         assert_eq!(
             client.url("/v1/files?path=src/main.rs"),
             "http://127.0.0.1:7777/v1/files?path=src/main.rs"
+        );
+    }
+
+    #[test]
+    fn a_pushed_problem_reads_its_notice_out_of_the_frame() {
+        let body = serde_json::json!({
+            "diagnostics": {
+                "path": "src/main.rs",
+                "version": 7,
+                "problems": {
+                    "server": "rust-analyzer",
+                    "encoding": "utf16",
+                    "items": [{
+                        "line": 3,
+                        "column": 5,
+                        "end_line": 3,
+                        "end_column": 9,
+                        "severity": "error",
+                        "message": "cannot find value `nope`",
+                        "code": "E0425"
+                    }]
+                }
+            }
+        })
+        .to_string();
+        let notice = diagnostics_of(&body).expect("a notice");
+        assert_eq!(notice.path, "src/main.rs");
+        assert_eq!(notice.version, Some(7));
+        assert_eq!(notice.problems.server.as_deref(), Some("rust-analyzer"));
+        assert_eq!(notice.problems.items.len(), 1);
+        assert_eq!(notice.problems.items[0].line, 3);
+
+        // A frame from a newer daemon that this build cannot read is an error rather
+        // than a silent nothing: a gutter that quietly ignored it would look clean.
+        assert!(
+            diagnostics_of(r#"{"diagnostics":{"path":7}}"#).is_err(),
+            "a notice this build cannot read is said out loud"
         );
     }
 

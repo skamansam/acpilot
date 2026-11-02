@@ -541,14 +541,24 @@ async fn diagnostics(
         server = answer.program,
         "diagnostics from a language server"
     );
-    Ok(Json(FileDiagnostics {
+    let problems = FileDiagnostics {
         server: Some(answer.program.to_owned()),
         encoding: Some(match answer.encoding {
             acpilot_lsp::PositionEncoding::Utf8 => acpilot_proto::lsp::PositionEncoding::Utf8,
             acpilot_lsp::PositionEncoding::Utf16 => acpilot_proto::lsp::PositionEncoding::Utf16,
         }),
         items: answer.items.iter().map(problem_row).collect(),
-    }))
+    };
+    // Remembered so a client that connects after this answer is still told about the
+    // file: the stream's snapshot is state, and this is the newest fact in it. No
+    // version travels, because the question named text rather than a version and the
+    // server never said which number it judged.
+    state.record_diagnostics(acpilot_proto::file::DiagnosticsNotice {
+        path: request.path.clone(),
+        version: None,
+        problems: problems.clone(),
+    });
+    Ok(Json(problems))
 }
 
 /// The answer when no server was asked, which is not the answer to a clean file.
@@ -561,7 +571,10 @@ fn nothing_asked() -> FileDiagnostics {
 }
 
 /// One problem, in the wire's own counting: lines and columns from 1.
-fn problem_row(problem: &acpilot_lsp::session::Problem) -> Diagnostic {
+///
+/// Shared with the daemon's push path: a published problem and an answered one are the
+/// same problem, and two conversions would be two chances to count differently.
+pub(crate) fn problem_row(problem: &acpilot_lsp::session::Problem) -> Diagnostic {
     Diagnostic {
         line: problem.line.saturating_add(1),
         column: problem.character.saturating_add(1),

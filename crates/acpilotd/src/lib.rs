@@ -7,7 +7,7 @@
 //! Note what is *not* here: no file contents on the keystroke path, no agent
 //! logic, no UI. The daemon is a control plane.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -251,6 +251,52 @@ pub struct AppState {
     /// a daemon that spawned one per references request would pay that index every
     /// keystroke.
     language_servers: Arc<lsp::Servers>,
+    /// Problems a language server published without being asked.
+    ///
+    /// A server with an index speaks on its own, and the pane that is reading the file
+    /// did not ask it to: the frame this announces is how a gutter that was waiting on
+    /// a background check fills in.
+    diagnostics_changes: broadcast::Sender<acpilot_proto::file::DiagnosticsNotice>,
+    /// The newest problems per file, so the stream can start a late-joining client
+    /// with what is already known.
+    ///
+    /// Both halves write here: an answer to `POST /v1/files/diagnostics` and a publish
+    /// the timer drained. That is what makes the frame state as well as an event — a
+    /// client that connects after a server saw a problem is told it on connect rather
+    /// than drawing an empty gutter until the next save.
+    diagnostics: Arc<Mutex<DiagnosticsStore>>,
+}
+
+/// How many files the daemon keeps the last problems for.
+///
+/// A snapshot for a client that connects late, not a database: a workspace with more
+/// files than this has more of them than anybody is looking at, and one that falls out
+/// is asked about again when it is opened. Eviction is in announcement order, so the
+/// file whose problems just moved is the last to go.
+pub const DIAGNOSTICS_SNAPSHOT: usize = 64;
+
+/// The newest problems the daemon knows about, by workspace-relative path.
+#[derive(Debug, Default)]
+struct DiagnosticsStore {
+    notices: HashMap<String, acpilot_proto::file::DiagnosticsNotice>,
+    /// The files in the order they were first announced, oldest first.
+    order: VecDeque<String>,
+}
+
+impl DiagnosticsStore {
+    /// Keep `notice`, dropping the oldest file when the store is full.
+    fn record(&mut self, notice: acpilot_proto::file::DiagnosticsNotice) {
+        if !self.notices.contains_key(&notice.path) {
+            self.order.push_back(notice.path.clone());
+            while self.order.len() > DIAGNOSTICS_SNAPSHOT {
+                let Some(oldest) = self.order.pop_front() else {
+                    break;
+                };
+                self.notices.remove(&oldest);
+            }
+        }
+        self.notices.insert(notice.path.clone(), notice);
+    }
 }
 
 impl Default for AppState {
@@ -271,6 +317,8 @@ impl Default for AppState {
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
             language_servers: Arc::new(lsp::Servers::new()),
+            diagnostics_changes: broadcast::channel(EVENT_BUFFER).0,
+            diagnostics: Arc::default(),
         }
     }
 }
@@ -316,6 +364,119 @@ impl AppState {
     /// started are the daemon's for as long as it runs.
     pub fn language_servers(&self) -> &lsp::Servers {
         &self.language_servers
+    }
+
+    /// Subscribe to the problems the language servers publish on their own.
+    ///
+    /// The same broadcast the profile-wide stream reads, exposed so a test can watch
+    /// the daemon's half without a socket.
+    #[must_use]
+    pub fn subscribe_diagnostics(
+        &self,
+    ) -> broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice> {
+        self.diagnostics_changes.subscribe()
+    }
+
+    /// Keep what a server said about a file, for a client that connects later.
+    ///
+    /// The answer to a question and a publish nobody asked for are the same fact about
+    /// a file, so they land in the same place: the newest one wins, and a client that
+    /// opens after both is told what the daemon knows instead of starting empty.
+    pub fn record_diagnostics(&self, notice: acpilot_proto::file::DiagnosticsNotice) {
+        let mut store = self
+            .diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        store.record(notice);
+    }
+
+    /// The problems the daemon knows about, one per file, sorted by path.
+    ///
+    /// Sorted rather than in announcement order because this is what the stream's
+    /// first frames are built from: two connections opening the same daemon should not
+    /// see the same snapshot in two different orders.
+    #[must_use]
+    pub fn diagnostics_snapshot(&self) -> Vec<acpilot_proto::file::DiagnosticsNotice> {
+        let store = self
+            .diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut notices: Vec<acpilot_proto::file::DiagnosticsNotice> =
+            store.notices.values().cloned().collect();
+        notices.sort_by(|left, right| left.path.cmp(&right.path));
+        notices
+    }
+
+    /// Take what the servers published since this was last called, and announce the
+    /// documents whose problems changed.
+    ///
+    /// A publish outside the workspace is dropped rather than announced: a server may
+    /// mention a file it read from a dependency path, and a client that cannot open it
+    /// has nothing to do with the notice. Returns how many were announced, which is
+    /// the only thing the sweep's log line needs.
+    pub async fn drain_language_server_diagnostics(&self) -> usize {
+        let Some(workspace) = self.workspace() else {
+            return 0;
+        };
+        let pushed = self.language_servers.drain_published().await;
+        let mut announced = 0;
+        for pushed in pushed {
+            let Ok(relative) = pushed.path.strip_prefix(&workspace.root) else {
+                tracing::debug!(
+                    path = %pushed.path.display(),
+                    "a language server published about a file outside the workspace"
+                );
+                continue;
+            };
+            let notice = acpilot_proto::file::DiagnosticsNotice {
+                path: relative.to_string_lossy().replace('\\', "/"),
+                version: pushed.version,
+                problems: acpilot_proto::file::FileDiagnostics {
+                    server: Some(pushed.program.to_owned()),
+                    encoding: Some(match pushed.encoding {
+                        acpilot_lsp::PositionEncoding::Utf8 => {
+                            acpilot_proto::lsp::PositionEncoding::Utf8
+                        }
+                        acpilot_lsp::PositionEncoding::Utf16 => {
+                            acpilot_proto::lsp::PositionEncoding::Utf16
+                        }
+                    }),
+                    items: pushed.items.iter().map(files::problem_row).collect(),
+                },
+            };
+            // Kept before it is announced, so a client that connects mid-sweep finds
+            // the file in the snapshot rather than racing the frame.
+            self.record_diagnostics(notice.clone());
+            // Nobody listening is not a failure: a daemon with no client attached has
+            // nowhere to send an event, and the next client is told on connect from the
+            // snapshot.
+            let _ = self.diagnostics_changes.send(notice);
+            announced += 1;
+        }
+        announced
+    }
+
+    /// Ask the language servers what they published, on a timer.
+    ///
+    /// Spawned by [`startup`] rather than by [`AppState::new`], like the idle sweep: a
+    /// state constructed in a test should not start a clock, and one daemon wants one
+    /// of these.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn watch_language_server_diagnostics(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(lsp::DIAGNOSTICS_POLL);
+            loop {
+                tick.tick().await;
+                let announced = state.drain_language_server_diagnostics().await;
+                if announced > 0 {
+                    tracing::debug!(announced, "language server published problems");
+                }
+            }
+        });
     }
 
     /// Serve this workspace, and open every session in it.
@@ -665,6 +826,10 @@ pub fn startup(
     // the next question, and a person who walks away has no next question. A stopped
     // server starts again on the next ask, so this is a cost, not a behaviour.
     state.reap_idle_language_servers();
+    // And a problem a server finds on its own reaches the pane reading the file. The
+    // transport queues a publish whether or not anybody is asking, so this is how a
+    // gutter that was waiting on a background index fills in without a keystroke.
+    state.watch_language_server_diagnostics();
     // And one an agent opened should be watchable: the same PTY, seen through a
     // pane a client can attach to.
     state.mirror_agent_terminals();
@@ -843,8 +1008,16 @@ async fn events(State(state): State<AppState>) -> Response {
         // below is the next thing to notice.
         let _ = sender.send(prefs_frame(None, &current)).await;
     }
+    // Then what the servers already said, so a client that connects after a publish is
+    // not drawing an empty gutter until it asks: the frames are state as well as
+    // events. They have no id, like the preferences frame — they are the answer to a
+    // question rather than a change.
+    for notice in state.diagnostics_snapshot() {
+        let _ = sender.send(diagnostics_frame(None, &notice)).await;
+    }
     let requests = state.broker.as_ref().map(|broker| broker.subscribe());
-    tokio::spawn(pump(state, requests, preferences, sender));
+    let diagnostics = state.subscribe_diagnostics();
+    tokio::spawn(pump(state, requests, preferences, diagnostics, sender));
     Sse::new(futures::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -870,6 +1043,21 @@ fn prefs_frame(id: Option<u64>, preferences: &Preferences) -> Event {
     frame.data(serde_json::json!({ "preferences": preferences }).to_string())
 }
 
+/// One `diagnostics` frame: problems a server published about a file nobody asked
+/// about.
+///
+/// `id` is the frame's place in the stream for the same reason [`prefs_frame`] carries
+/// one: `Last-Event-ID` and a `resync` name a frame, and a client that reconnects has
+/// something to say about where it was. Nothing is replayed — the frame is an event,
+/// and a client that missed it asks about the file it opens.
+fn diagnostics_frame(id: Option<u64>, notice: &acpilot_proto::file::DiagnosticsNotice) -> Event {
+    let mut frame = Event::default().event("diagnostics");
+    if let Some(id) = id {
+        frame = frame.id(id.to_string());
+    }
+    frame.data(serde_json::json!({ "diagnostics": notice }).to_string())
+}
+
 /// What the pump has to say next.
 enum Step {
     /// Time to prove the connection is still there.
@@ -878,6 +1066,8 @@ enum Step {
     Permission(Result<PermissionRequest, broadcast::error::RecvError>),
     /// The settings settled, or that subscription ended.
     Preferences(Result<Preferences, broadcast::error::RecvError>),
+    /// A language server published problems, or that subscription ended.
+    Diagnostics(Result<acpilot_proto::file::DiagnosticsNotice, broadcast::error::RecvError>),
 }
 
 /// Turn announcements and a clock into SSE frames.
@@ -892,6 +1082,7 @@ async fn pump(
     state: AppState,
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
     mut preferences: broadcast::Receiver<Preferences>,
+    mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
     sender: mpsc::Sender<Event>,
 ) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
@@ -917,6 +1108,7 @@ async fn pump(
             _ = beat.tick() => Step::Beat,
             preferences = preferences.recv() => Step::Preferences(preferences),
             requests = announced => Step::Permission(requests),
+            published = diagnostics.recv() => Step::Diagnostics(published),
         };
 
         let frame = match step {
@@ -936,6 +1128,10 @@ async fn pump(
                 seq += 1;
                 prefs_frame(Some(seq), &preferences)
             }
+            Step::Diagnostics(Ok(notice)) => {
+                seq += 1;
+                diagnostics_frame(Some(seq), &notice)
+            }
             // The client fell behind the announcement channel. It cannot catch up
             // from the stream, so it is told where it now is and refetches what is
             // state: the pending list, and — for preferences, which this daemon can
@@ -954,8 +1150,14 @@ async fn pump(
                         .data(serde_json::json!({ "latest_seq": seq }).to_string()),
                 }
             }
+            // A lagged diagnostics receiver is the same situation the permission half
+            // handles: the frame is gone, and the client asks about the file it opens.
+            Step::Diagnostics(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Permission(Err(broadcast::error::RecvError::Closed))
-            | Step::Preferences(Err(broadcast::error::RecvError::Closed)) => break,
+            | Step::Preferences(Err(broadcast::error::RecvError::Closed))
+            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -1138,10 +1340,10 @@ fn permissions_doc() {}
     get,
     path = "/v1/events",
     tag = "events",
-    summary = "Follow permission requests and settings changes",
+    summary = "Follow permission requests, settings changes and problems a server found",
     responses((
         status = 200,
-        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}

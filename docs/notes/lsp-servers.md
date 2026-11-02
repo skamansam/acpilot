@@ -252,3 +252,27 @@ of typing is one request and every edit restarts the pause. The key that types n
 sends anything, which is the rule the phase starts with. A question nothing answers
 ends the same way: the status line carries what went wrong and the problems already
 in hand stay, because an older answer is still the newest thing anybody knows.
+
+**The server also speaks when nobody asks.** From 2026-11-02 the daemon drains each
+session's publish queue every 250 ms (`DIAGNOSTICS_POLL`) and announces what it finds
+as a `diagnostics` frame on `GET /v1/events`; the TUI applies one to the open buffer
+when the path matches. That is the case the ask-per-pause could not cover: a server
+finishes a background check and publishes afterwards, while the pane is waiting for
+nothing in particular, and a gutter that only moved on the next save would be stale
+for exactly as long as the person reads instead of types. The drain is cheap because
+the transport already reads whether or not anybody is asking — its pump fills a new
+channel per notification whatever the request in flight — so a publish nobody asked
+for is a message in a queue rather than a lost event. A publish about a file outside
+the workspace is dropped: there is no path a client could open.
+
+**An answer is state as well as an event.** Both halves write the same store — the
+publish the timer drained, and the answer `POST /v1/files/diagnostics` served — so the
+newest problems per file survive the client that asked for them. `GET /v1/events`
+sends that store as `diagnostics` frames on connect, which is what makes a reconnect
+(the laptop that woke, the second window opened a minute later) start from what the
+server already said rather than from an empty gutter. The store is capped at
+`DIAGNOSTICS_SNAPSHOT` files (64), drops the file whose problems moved longest ago,
+and is a map rather than a file on disk: problems are recomputed, so persisting them
+would be persisting somebody's obsolete opinion. A file missing from it is not a clean
+file — it is a file nobody has asked about since this daemon started, and opening it
+asks.

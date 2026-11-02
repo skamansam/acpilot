@@ -1109,6 +1109,12 @@ untrusted binary with your repo and your network is exactly the hole worth closi
     so the list does not jump while typing.
   - Caps: 5k per file, 50k per workspace, with a truncation notice. In-memory with a latest
     snapshot for late-joining UIs — diagnostics are recomputed, so persisting them is waste.
+  - Shipped (2026-11-02): the push half and the snapshot. The daemon drains every session's
+    publish queue on a 250 ms timer and announces `diagnostics` frames on `GET /v1/events`; the
+    TUI applies one to the open buffer, so a background index finishing fills the gutter without
+    a save. Answers and publishes both write a capped store (64 files, newest wins), which the
+    stream sends on connect for a client that arrives late. Still open: the pull model
+    (`textDocument/diagnostic`), tags and related information, and the workspace cap.
 
 - [ ] **P7-7 · Requests and features for v0.1** (2d)
   - hover, completion (+`completionItem/resolve`), signature help, definition/declaration/

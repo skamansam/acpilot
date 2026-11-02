@@ -190,12 +190,13 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
 Two streams, one shape.
 
 `GET /v1/sessions/{id}/events` is the session's stream. `GET /v1/events` is the
-profile-wide stream: `profile.*`, `daemon.*`, `prefs`, and `permission.requested`
-— the last two because what they pair with is profile-wide: the pending list, and
-the settings every surface draws with. One connection therefore covers every
-session a UI is watching and the theme it is drawing with. It carries no
-`session` events: a browser watching ten sessions would otherwise pay for all of
-them.
+profile-wide stream: `profile.*`, `daemon.*`, `prefs`, `permission.requested`, and
+`diagnostics` — the rest because what they pair with is profile-wide: the pending
+list, the settings every surface draws with, and the problems of a file any of them
+may have open. One connection therefore covers every session a UI is watching, the
+theme it is drawing with, and a gutter that a server filled in on its own. It
+carries no `session` events: a browser watching ten sessions would otherwise pay
+for all of them.
 
 Every frame that carries data has an `id`, and the ids of a session stream are
 the session's monotonic `seq` (starting at 1). The stream is the source of truth
@@ -262,6 +263,21 @@ than patching it. A file that does not parse announces nothing: the last good
 preferences stay in force, and the next save is read normally. `theme_tui` is in
 the frame as well, because the frame describes the cascade and not one surface's
 slice of it — a client picks the theme for the surface it is.
+
+**Diagnostics are events, not state.** A `diagnostics` frame carries
+`DiagnosticsNotice { path, version?, problems }` — the same body
+`POST /v1/files/diagnostics` answers with, minus the request — and says that a
+language server published problems about a file the client did not ask about. That
+happens on the daemon's own clock: a server with an index publishes again when a
+background check finishes, and a pane that only heard about the problems it asked
+for would keep a stale gutter until the next save. `version` is the document version
+the server named, when it named one, so a client can tell a late publish from a
+current one; most servers leave it out. The daemon also keeps the newest problems per
+file — written by a publish and by an answer to `POST /v1/files/diagnostics` alike —
+and sends them as unnumbered `diagnostics` frames when a client connects, so a
+reconnect starts from what is already known. Individual frames are not replayed: the
+snapshot is the state, and a file it does not mention is one nobody has asked about
+since the daemon started.
 
 `/v1/events` has no `Last-Event-ID` replay for the same reason. Its frames are
 numbered with an `id` that counts what that connection has been told, and a

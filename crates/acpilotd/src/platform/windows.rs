@@ -1,9 +1,7 @@
 //! The Windows listener: loopback TCP, until the named pipe exists.
 
 use std::io;
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use tokio::net::TcpListener;

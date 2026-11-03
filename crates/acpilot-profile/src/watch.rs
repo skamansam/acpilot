@@ -84,12 +84,22 @@ pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>>
 /// that is about to be written inside it. Everything else in the same directory is
 /// somebody else's business.
 fn touches(targets: &[PathBuf], event: &notify::Event) -> bool {
-    is_a_change(event)
-        && event.paths.iter().any(|changed| {
-            targets
-                .iter()
-                .any(|target| target == changed || target.starts_with(changed))
-        })
+    if !is_a_change(event) {
+        return false;
+    }
+    // An ancestor counts only when it has just come into being, because that is
+    // the event that says where the file will be written next. An ancestor that
+    // is merely reported alongside somebody else's write is not the settings:
+    // FSEvents names the containing directory for any write inside it, so
+    // counting those made a log beside `config.toml` announce a preference
+    // change on every line — on macOS only, which is why the filter lives in one
+    // place and the tests name the shape rather than the platform.
+    let created = matches!(event.kind, notify::EventKind::Create(_));
+    event.paths.iter().any(|changed| {
+        targets
+            .iter()
+            .any(|target| target == changed || (created && target.starts_with(changed)))
+    })
 }
 
 /// Whether the event says the file was written, rather than looked at.
@@ -213,6 +223,32 @@ mod tests {
             changes.recv_timeout(DEBOUNCE * 3),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout),
             "reading the settings is not a change to them"
+        );
+    }
+
+    #[test]
+    fn a_directory_a_neighbour_was_written_in_is_not_a_change_to_the_settings() {
+        // The shape macOS reports: one write inside a watched directory arrives
+        // as a modification of the directory. Treating any ancestor as a change
+        // made a log beside the settings announce preferences on every line.
+        let target = PathBuf::from("/w/project/config.toml");
+        let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+            .add_path(PathBuf::from("/w/project"));
+        assert!(
+            !touches(&[target], &event),
+            "a modified directory is somebody else's write"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_appears_is_a_change_to_the_file_it_will_hold() {
+        let target = PathBuf::from("/w/project/.acpilot/config.toml");
+        let event =
+            notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Folder))
+                .add_path(PathBuf::from("/w/project/.acpilot"));
+        assert!(
+            touches(&[target], &event),
+            "the directory appearing is how a project that had no `.acpilot` gets live reload"
         );
     }
 

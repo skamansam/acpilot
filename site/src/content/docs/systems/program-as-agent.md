@@ -81,8 +81,16 @@ itself an agent is the honest way to test a "run anything" claim.
 
 ## Status
 
-Designed, prototyped, not built. The design phase's P0-2 probe drove `freebuff` and Claude Code through a
-real turn each under one driver; the transport turned out to be generic and the
-semantics per-program, which is why the adapter is a profile rather than a
-parser heuristic. The numbers and the failure modes are in
-`docs/notes/pty-agents.md`. The adapter itself arrives in the engine phase (P2).
+Built in the engine phase (P2): `acpilot_agent::pty_agent` is the adapter, and
+`freebuff` ships as a preset in `agents.toml`. The design phase's P0-2 probe drove
+`freebuff` and Claude Code through a real turn each under one driver; the
+transport turned out to be generic and the semantics per-program, which is why
+the adapter is a profile rather than a parser heuristic. The numbers and the
+failure modes are in `docs/notes/pty-agents.md`.
+
+What is not there yet: no daemon path dispatches `transport = "pty"` to it, so a
+PTY agent does not yet appear as a session — `Turn` is shaped to become the same
+event stream an ACP turn produces. Startup gates have no manifest field either;
+a caller answers one with the adapter's `send` and then waits for the screen to
+settle again. `parser = "script:<path>"` is recorded by the loader and refused by
+the adapter, because running a user's script is an extension-policy decision.

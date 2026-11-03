@@ -359,7 +359,53 @@ and deterministic.
     **The `Grants`/`PendingWrite`/`GRANT_TIMEOUT` from the engine phase's P2-4 are gone.** The filesystem now asks the broker, so a read is audited and a rule can refuse it — before that, it could only compare a path with the root. The session classifies a `session/request_permission` by the agent's own `ToolKind` plus its first location, answers with the agent's own option id for the decision (an agent that called its allow option `yolo` receives `yolo`; `AllowOnce`/`AllowAlways`/`Reject*` are matched, not renamed), and cancels the request when the agent offered no option of the kind the decision needs, because approving something nobody offered is not ours to do. Every answer is recorded as a `notice`: `Permission granted` at info, `Permission request denied` at warning, with who decided (`user`, `policy:<id>`, `default`, `session`, `timeout`, `unattended`) in the description. A session with no broker still refuses everything with the agent's reject option, so an unconfigured session cannot imply a grant; `SessionOptions::fs` supplies the filesystem's broker for callers that do not set one. A rule may be scoped to an agent, so the subject carries one: `SessionOptions::agent` is filled from the spec the supervisor started, and a rule naming the manifest's `id` therefore matches the agent that is actually running.
   - **Tests:** nineteen in `permission.rs` (the two glob forms and case folding, first-match-wins with its rule id, a rule needing every constraint it names, the shipped defaults, the documented `[config]` shape, a misspelled decision, an allow and its audit row, a denial that never becomes pending, an inside write needing no person, an ask published with three options and answered once, `allow always` covering the next identical request but not a different path, nobody listening, an expiry that is no longer answerable, and the per-session audit order), fourteen in `fs.rs` (the engine phase's task P2-4 set, with the write tests split by policy: inside allowed and audited, an asking policy refused at once with nobody there, an outside write waiting for approval, a denying policy writing nothing, an expiry), three new in `session.rs` (classification from kind and location, an allow selecting the agent's option with the notice naming the decider, an allow the agent never offered being cancelled), and three in `tests/process.rs` against the engine phase's P2-9 fixture: a write outside the workspace holds the turn while the test checks the file is absent and then writes it after the answer, a denial ends the turn with a refusal the agent can read, and a rule naming the running agent turns that agent's permission request into an allow (the audit says `policy:allow-mock` and the fixture reports the agent's own `allow` option).
   - **Open:** the loader exists — `acpilot-profile::Profile` reads a profile's `config.toml`, and `acpilotd --profile <dir>` puts that policy behind the permissions routes (P3-2) — but a profile *name* resolving to a directory is the profiles phase's P4-2, so a caller still spells the path. The audit lives in memory: the service phase's P3-3 `audit` table is the first thing that keeps it. `GET /v1/permissions` is served (P3-2) but lists pending requests; the audit is not on the wire yet. Rules cannot be reloaded without rebuilding the broker, and a running session holds its `Arc`. Terminal requests reach `Ask` with a registry behind them since the engine phase's task P2-5, so the answer is followed by a real PTY. An `fs/*` callback's audit row has no agent on it: one `Fs` serves every session on its workspace, so the id would be a guess — the session's permission requests do carry theirs.
-- [ ] **P2-7** `acpilot-agent::pty_agent`: the program-as-agent adapter from the design phase's task P0-2, behind `transport = "pty"`; ship two built-in parsers (`plain-transcript`, `ansi-transcript`), a shipped `freebuff` profile as the reference case, and an escape hatch `parser = "script:<path>"` later.
+- [x] **P2-7** `acpilot-agent::pty_agent`: the program-as-agent adapter from the design phase's task P0-2, behind `transport = "pty"`; ship two built-in parsers (`plain-transcript`, `ansi-transcript`), a shipped `freebuff` profile as the reference case, and an escape hatch `parser = "script:<path>"` later. — **done 2026-11-02**
+  - **Result:** `acpilot_agent::pty_agent` is a `PtyAgent` and a `transcript` function. The
+    driver starts a `pty` spec through `Host::spawn_pty`, so an SSH workspace opens its
+    agent on the remote box without this module knowing, and it owns the four things the
+    design phase's task P0-2 found every profile would otherwise repeat: terminal query
+    answers (`CSI ? u`, `CSI > 0 q`, `CSI > c`, `CSI c`, `CSI 6 n`, `CSI 5 n`, `CSI 18 t`),
+    the two-write submit (`text`, the profile's `submit_delay_ms`, then `\r` in its own
+    write, because `text\r` in one write is one paste and the box never submits), bracketed
+    paste framing, and screen capture at the boundary rather than after `exit` — both
+    measured programs run on the alternate screen and leave nothing behind.
+    **The sentinel is the turn boundary, the idle timeout is the backstop.** A sentinel is
+    only accepted once it has gone away since the prompt was submitted, because it is on
+    screen before the prompt is typed, and it must hold still for 150 ms, so a program that
+    redraws its input row mid-turn cannot end a turn on the frame before the answer. The
+    profile's `idle_timeout_ms` still ends a turn when the sentinel never comes back, and a
+    `TURN_DEADLINE` catches a program that animates forever and therefore never goes quiet.
+    **A turn is a transcript, not a screen.** `transcript` cuts everything at and below the
+    sentinel row (input box, status bar, Freebuff's ads), treats the last row repeating the
+    prompt as the user's own line, opens a thought block on `• Thinking` and closes it when
+    a row is indented no further, drops spinner rows and horizontal rules, and pushes
+    consecutive rows with the same author into one `Message`. `Turn` keeps the raw screen
+    beside the messages, so a program that changes its layout is a diff rather than a
+    mystery. Two parsers ship: `plain-transcript` (text) and `ansi-transcript`, which
+    re-renders each cell's fg colour, bold, italic, underline and inverse as SGR runs so the
+    thinking/answer distinction survives into a client.
+    **The escape hatch is refused, not missing.** `parser = "script:<path>"` is still
+    accepted by the loader — it records a path — and `PtyAgent::start` refuses it by name,
+    with the shipped parsers in the message: running a user's script is the extension
+    policy's decision (D18), not a side effect of starting an agent. A spec of any other
+    transport is refused by name too, which is the same rule the supervisor follows in the
+    other direction.
+    **Tests:** seven in the module (the Freebuff and Claude screens from the P0-2 note
+    verbatim, the ANSI parser keeping colour and closing its run, a missing sentinel still
+    yielding the answer, a prompt the program never echoed), and four against a real
+    process on a real PTY (`tests/fixtures/tui_agent.sh`, a shell script whose input row
+    leaves and comes back): a turn ending on the sentinel with the echo, thought and answer
+    in order, the idle backstop ending a turn whose row never returns, an ACP spec refused
+    by name, and a `script:` parser refused rather than run. Windows runs the ConPTY path in
+    `acpilot-host` but has no runner here, recorded rather than hidden — the same gap as the
+    engine phase's task P2-2.
+  - **Open:** nothing in the daemon dispatches `transport = "pty"` here yet. The
+    supervisor still refuses the transport, and a session that carries these turns over
+    `GET /v1/sessions/{id}/events` is the wiring that comes next: `Turn` would become the
+    same `SessionEvent` stream an ACP turn produces, which is why the transcript is
+    messages and not free text. Startup gates (Claude's trust dialog, Freebuff's
+    "subdirectory" modal) have no manifest field yet, so `PtyAgent::send` is how a caller
+    answers one; a profile field is a schema change and therefore a `agents-v2.json`.
 - [x] **P2-8** `acpilot-agent::transcript`: append-only `session.jsonl` (`events`, `grants`, `meta`), reader for replay, compaction into sqlite later. — **done 2026-10-25**
   - **Result:** `acpilot_agent::transcript` is a writer and a reader for one JSON Lines file per conversation. `Transcript::create` opens with `create_new`, so an existing transcript is refused rather than truncated: if two conversations shared a file, one that neither reader could untangle, append-only would be a lie. The first line is `meta` (version, session, workspace, agent, created_at); `event` lines are the same `SessionEvent` the stream carried, sequence and all, so `replay(path, after)` has exactly the contract of `GET /v1/sessions/{id}/events?after=`; `grant` lines are permission decisions flattened to the words a person reads (`policy:allow-workspace`, not an enum with a rule id inside it), with paths made lossy rather than failing the write over bytes a log cannot spell. A record is one `write_all` of `line + '\n'` on an `O_APPEND` file, so a crash can only ever leave a partial *last* line — `read` stops there and keeps everything before it, while a corrupt line in the middle is an error naming its line number. Nothing is `fsync`ed per record: a turn is thousands of events, and a process crash loses nothing anyway. **The daemon writes them:** `acpilotd` gives each session `<data>/acpilot/transcripts/<id>/session.jsonl` (`ACPILOT_HOME` moves it with the rest of Acpilot's state) and appends every recorded event, with the broker's new audit rows flushed at the end of each turn (the cursor is the audit sequence, so a second conversation's grants are never written twice). A transcript that cannot be written is one warning per session, not a failed turn. `next_id` now skips an id that already has a transcript directory, so a restarted daemon's first conversation does not land on top of a stored one — which is what "never reused" claimed and did not do for a deleted session. **Tests:** five in `transcript.rs` (meta first and never rewritten, replay after a sequence, a grant keeping its decider, a torn tail costing only the last record, a corrupt middle line naming its line), and two in `acpilotd` (a session's events and grants read back from its file, and a stored transcript keeping its id from being reused).
   - **Open:** nothing reads a stored transcript back over the API yet — the file survives a restart, but the session list does not, so reverting to the service phase's task P3-7 (SQLite) is what makes a past conversation reachable. Compaction is the same item.

@@ -22,7 +22,11 @@ fn the_built_ins_load_through_the_public_loader() {
         10,
         "ten language-server presets"
     );
-    assert_eq!(registry.agents().len(), 4, "four agent presets");
+    assert_eq!(
+        registry.agents().len(),
+        5,
+        "five agent presets: four ACP agents and the PTY reference case"
+    );
 
     for extension in registry.extensions() {
         assert!(

@@ -319,7 +319,7 @@ fn a_profile_that_is_asked_for_is_given_a_manifest_that_names_the_schema() {
         .join("agents.toml");
 
     let registry = Registry::open_or_create(&path, resolver()).expect("open a new profile");
-    assert_eq!(registry.agents().len(), 4, "the shipped presets");
+    assert_eq!(registry.agents().len(), 5, "the shipped presets");
 
     let text = fs::read_to_string(&path).expect("the manifest was written");
     let first = text.lines().next().expect("at least one line");

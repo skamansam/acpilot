@@ -1296,17 +1296,27 @@ mod tests {
             &crate::secret::MapResolver::new(),
         )
         .expect("a new profile's manifest loads");
-        assert_eq!(agents.len(), 4, "the four shipped presets");
+        assert_eq!(agents.len(), 5, "the five shipped presets");
         assert_eq!(agents[0].id, "claude-code");
     }
 
     #[test]
     fn the_shipped_presets_parse() {
         let agents = load(SHIPPED_PRESETS).expect("shipped presets");
-        assert_eq!(agents.len(), 4);
+        assert_eq!(agents.len(), 5);
+        // Four speak ACP and one is driven through a PTY. The reference case for
+        // the program-as-agent transport is shipped rather than documented only:
+        // a preset nobody parses is a preset nobody has run.
+        let pty: Vec<&str> = agents
+            .iter()
+            .filter(|agent| agent.transport_kind() == AgentTransport::Pty)
+            .map(|agent| agent.id.as_str())
+            .collect();
+        assert_eq!(pty, vec!["freebuff"], "the PTY preset: {pty:?}");
         assert!(
             agents
                 .iter()
+                .filter(|agent| agent.id != "freebuff")
                 .all(|agent| agent.transport_kind() == AgentTransport::AcpStdio)
         );
         assert_eq!(agents[0].id, "claude-code");

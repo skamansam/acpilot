@@ -30,6 +30,17 @@ args = ["-y", "@zed-industries/codex-acp"]
 description = "OpenAI's Codex CLI through the ACP adapter."
 
 [[agents]]
+id = "freebuff"
+name = "Freebuff"
+transport = "pty"
+command = "freebuff"
+parser = "ansi-transcript"
+prompt_row = "▍Enter a coding task"
+sentinel = "▍Enter a coding task"
+exit_command = "/exit"
+description = "A terminal agent with no ACP mode: driven through a PTY, and its screen read as a transcript."
+
+[[agents]]
 id = "local-model"
 name = "Local model (acpilot-agent-lm)"
 transport = "acp_stdio"

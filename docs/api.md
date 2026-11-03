@@ -262,7 +262,11 @@ request appears while connected, so a client never has to poll. A
 `permission.requested` frame is therefore not replayed — a request that arrived
 while the client was away is recovered by the state fetch, and replaying old
 prompts would ask the user to answer something already resolved.
-`permission.resolved` is an event because it must be applied in order.
+`permission.resolved` is an event because it must be applied in order: it is the
+same `event: permission` name with `{"type":"resolved","request_id":…,"option":…}`,
+and it is what closes a dialog another client opened. It is announced by the broker
+after the answer reaches the agent's wait, so a client never stops showing a
+question that is still pending.
 
 **Preferences are state too, and they are the stream's first frame.** A client
 that connects is told what the daemon would apply instead of learning it only when
@@ -289,6 +293,13 @@ and sends them as unnumbered `diagnostics` frames when a client connects, so a
 reconnect starts from what is already known. Individual frames are not replayed: the
 snapshot is the state, and a file it does not mention is one nobody has asked about
 since the daemon started.
+
+**Cross-origin.** The daemon answers CORS only when `[daemon] cors = true` in a
+settings file. Off is the default and the normal case: the SPA is served by this
+daemon, so its requests are same origin, and the Vite dev server proxies `/v1`
+rather than calling it cross-origin. A permissive layer on a token-guarded TCP
+listener would let any page that learned the token read every stream, which is a
+decision a file has to make deliberately.
 
 `/v1/events` has no `Last-Event-ID` replay for the same reason. Its frames are
 numbered with an `id` that counts what that connection has been told, and a

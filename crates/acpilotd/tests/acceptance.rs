@@ -268,6 +268,22 @@ async fn a_scripted_session_runs_from_create_to_a_resolved_permission() {
         .expect("the decision is accepted");
     assert_eq!(decision.option, PermissionOption::AllowOnce);
 
+    // Every other client hears the answer too: the pending list is state, so a
+    // second window that is showing this question closes it rather than asking
+    // again. This is the frame that does it.
+    loop {
+        let frame = tokio::time::timeout(PATIENCE, announcements.next())
+            .await
+            .expect("an announcement within the patience window")
+            .expect("the stream is open")
+            .expect("a parsed frame");
+        if let acpilot_client::ProfileStream::Resolved { request_id, option } = frame {
+            assert_eq!(request_id, request.id);
+            assert_eq!(option, PermissionOption::AllowOnce);
+            break;
+        }
+    }
+
     // The decision wakes the agent's wait and the turn finishes: a `resolve` that
     // returned but did not reach the agent would leave it busy forever, which is
     // the failure this asserts against.

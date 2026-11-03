@@ -51,6 +51,14 @@ pub struct Daemon {
     pub pidfile: Option<PathBuf>,
     /// Log to stderr only, writing no JSON log file.
     pub foreground: Option<bool>,
+    /// Answer cross-origin requests, for a browser served from somewhere else.
+    ///
+    /// Off by default: the SPA is served by this daemon, so its requests are same
+    /// origin, and the one other case — Vite on another port — proxies `/v1`
+    /// (`web/vite.config.ts`), so it does not need CORS either. A daemon that
+    /// answered every origin would let any page that learned the token read every
+    /// stream, which is a decision to make deliberately.
+    pub cors: Option<bool>,
 }
 
 /// What the command line asked for.
@@ -91,6 +99,8 @@ pub struct Config {
     pub pidfile: PathBuf,
     /// Log to stderr only, and write no JSON log file.
     pub foreground: bool,
+    /// Answer cross-origin requests (`[daemon] cors`).
+    pub cors: bool,
 }
 
 /// Resolve the daemon's settings from the files and the flags.
@@ -130,6 +140,7 @@ pub fn resolve(flags: Flags) -> Result<Config, ConfigError> {
         database,
         pidfile,
         foreground: settings.foreground.unwrap_or(false),
+        cors: settings.cors.unwrap_or(false),
     })
 }
 
@@ -147,6 +158,7 @@ pub(crate) fn effective(layers: Daemon, flags: &Flags) -> Daemon {
         database: flags.database.clone().or(layers.database),
         pidfile: flags.pidfile.clone().or(layers.pidfile),
         foreground: flags.foreground.then_some(true).or(layers.foreground),
+        cors: layers.cors,
     }
 }
 

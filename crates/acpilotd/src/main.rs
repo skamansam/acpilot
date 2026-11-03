@@ -112,7 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The state and the background work are one call so that the embedded daemon
     // a client runs in its own process (P6-11) gets exactly what this binary gives.
-    let state = acpilotd::startup(config.profile.as_deref(), &config.workspace)?;
+    let state =
+        acpilotd::startup(config.profile.as_deref(), &config.workspace)?.with_cors(config.cors);
     tracing::info!(
         endpoint = %config.target,
         database = %config.database.display(),

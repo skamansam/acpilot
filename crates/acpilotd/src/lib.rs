@@ -32,6 +32,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{
+    DefaultPredicate, NotForContentType, Predicate, SizeAbove,
+};
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
 mod auth;
@@ -255,6 +261,12 @@ pub struct AppState {
     /// it has to remember to drop. `AppState` always holds a sender, so the channel
     /// is never closed while the daemon runs.
     preference_changes: broadcast::Sender<Preferences>,
+    /// Answer cross-origin requests (`[daemon] cors`).
+    ///
+    /// Off unless the daemon was told the browser is somewhere else: the page is
+    /// served from this origin, and the one other case (Vite on another port)
+    /// proxies `/v1`, so CORS is an explicit decision rather than a default.
+    cors: bool,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -333,6 +345,7 @@ impl Default for AppState {
             terminals: Terminals::default(),
             transcripts: None,
             store: None,
+            cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
@@ -639,6 +652,18 @@ impl AppState {
     /// The database behind the session routes, when the daemon opened one.
     pub fn store(&self) -> Option<&Arc<Store>> {
         self.store.as_ref()
+    }
+
+    /// Answer cross-origin requests.
+    #[must_use]
+    pub fn with_cors(mut self, cors: bool) -> Self {
+        self.cors = cors;
+        self
+    }
+
+    /// Whether this daemon answers a browser on another origin.
+    pub fn cors(&self) -> bool {
+        self.cors
     }
 
     /// Drop events past the retention window, on a timer.
@@ -1130,8 +1155,19 @@ async fn events(State(state): State<AppState>) -> Response {
         let _ = sender.send(diagnostics_frame(None, &notice)).await;
     }
     let requests = state.broker.as_ref().map(|broker| broker.subscribe());
+    let resolved = state
+        .broker
+        .as_ref()
+        .map(|broker| broker.subscribe_resolved());
     let diagnostics = state.subscribe_diagnostics();
-    tokio::spawn(pump(state, requests, preferences, diagnostics, sender));
+    tokio::spawn(pump(
+        state,
+        requests,
+        resolved,
+        preferences,
+        diagnostics,
+        sender,
+    ));
     Sse::new(futures::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -1178,6 +1214,8 @@ enum Step {
     Beat,
     /// The broker announced something, or the subscription ended.
     Permission(Result<PermissionRequest, broadcast::error::RecvError>),
+    /// Somebody answered a request, or that subscription ended.
+    Resolved(Result<(String, PermissionOption), broadcast::error::RecvError>),
     /// The settings settled, or that subscription ended.
     Preferences(Result<Preferences, broadcast::error::RecvError>),
     /// A language server published problems, or that subscription ended.
@@ -1195,6 +1233,7 @@ enum Step {
 async fn pump(
     state: AppState,
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
+    mut resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
     mut preferences: broadcast::Receiver<Preferences>,
     mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
     sender: mpsc::Sender<Event>,
@@ -1218,10 +1257,23 @@ async fn pump(
             }
         };
 
+        let answered = async {
+            match resolved.as_mut() {
+                Some(resolved) => resolved.recv().await,
+                None => {
+                    std::future::pending::<
+                        Result<(String, PermissionOption), broadcast::error::RecvError>,
+                    >()
+                    .await
+                }
+            }
+        };
+
         let step = tokio::select! {
             _ = beat.tick() => Step::Beat,
             preferences = preferences.recv() => Step::Preferences(preferences),
             requests = announced => Step::Permission(requests),
+            answers = answered => Step::Resolved(answers),
             published = diagnostics.recv() => Step::Diagnostics(published),
         };
 
@@ -1242,6 +1294,26 @@ async fn pump(
                 seq += 1;
                 prefs_frame(Some(seq), &preferences)
             }
+            // The request is gone from the pending list by now, so the frame names
+            // it rather than carrying it: a client closes the dialog it is showing
+            // for that id, and one that was not showing it needs nothing.
+            Step::Resolved(Ok((request_id, option))) => {
+                seq += 1;
+                Event::default()
+                    .event("permission")
+                    .id(seq.to_string())
+                    .data(
+                        serde_json::json!({
+                            "type": "resolved",
+                            "request_id": request_id,
+                            "option": option,
+                        })
+                        .to_string(),
+                    )
+            }
+            Step::Resolved(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Diagnostics(Ok(notice)) => {
                 seq += 1;
                 diagnostics_frame(Some(seq), &notice)
@@ -1270,6 +1342,7 @@ async fn pump(
                 .event("resync")
                 .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Permission(Err(broadcast::error::RecvError::Closed))
+            | Step::Resolved(Err(broadcast::error::RecvError::Closed))
             | Step::Preferences(Err(broadcast::error::RecvError::Closed))
             | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
         };
@@ -1737,6 +1810,9 @@ pub fn router() -> Router {
 /// The daemon's `main` calls [`router`] today because profile resolution is not
 /// built; a caller that has loaded a profile passes it here.
 pub fn router_with(state: AppState) -> Router {
+    // Read before `with_state` moves it: the layer decision is made once, when the
+    // router is built, rather than per request.
+    let cors = state.cors();
     let app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/agents", get(agents))
@@ -1757,7 +1833,25 @@ pub fn router_with(state: AppState) -> Router {
     #[cfg(feature = "docs")]
     let app = app.route("/docs", get(docs));
 
-    app
+    // One span per request, from the method to the status: a slow route is visible
+    // in the log without a line in every handler.
+    let app = app.layer(TraceLayer::new_for_http());
+    // Compression for the JSON, never for the event streams. A compressed
+    // `text/event-stream` is held until the compressor has enough bytes, which for a
+    // transcript means a stream that arrives in bursts; `SizeAbove` leaves the small
+    // answers alone, where the framing costs more than the body.
+    let app = app.layer(
+        CompressionLayer::new().compress_when(
+            DefaultPredicate::new()
+                .and(NotForContentType::new("text/event-stream"))
+                .and(SizeAbove::new(1024)),
+        ),
+    );
+    if cors {
+        app.layer(CorsLayer::permissive())
+    } else {
+        app
+    }
 }
 
 #[cfg(test)]

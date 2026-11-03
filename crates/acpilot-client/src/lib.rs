@@ -151,6 +151,17 @@ pub enum ProfileStream {
     /// which is how a client that cannot read the daemon's files learns the
     /// current preferences at all.
     Preferences(Preferences),
+    /// A request somebody else answered.
+    ///
+    /// The pending list is state, so this is not how a client learns what is
+    /// waiting; it is how a client that is *showing* a question hears that another
+    /// window answered it, and closes the dialog instead of asking again.
+    Resolved {
+        /// The request that was answered.
+        request_id: String,
+        /// What it was answered with.
+        option: PermissionOption,
+    },
     /// Problems a language server pushed about a file.
     ///
     /// Not an answer to anything the client asked: a server that finishes an index
@@ -668,6 +679,13 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
             let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
                 ClientError::Stream(format!("a permission frame did not parse: {error}"))
             })?;
+            if value["type"].as_str() == Some("resolved") {
+                let request_id = value["request_id"].as_str().unwrap_or_default().to_owned();
+                let option = serde_json::from_value(value["option"].clone()).map_err(|error| {
+                    ClientError::Stream(format!("a decision did not parse: {error}"))
+                })?;
+                return Ok(ProfileStream::Resolved { request_id, option });
+            }
             serde_json::from_value(value["request"].clone())
                 .map(ProfileStream::Permission)
                 .map_err(|error| {

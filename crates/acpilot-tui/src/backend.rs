@@ -940,6 +940,16 @@ async fn follow_permissions(
                 Ok(ProfileStream::Diagnostics(notice)) => {
                     let _ = updates.send(Update::DiagnosticsPushed(notice));
                 }
+                // Somebody answered a question this terminal may be showing. The
+                // pending list is state, so the answer is to refetch it rather than
+                // to guess which dialog was open: a second window resolving a
+                // request must not leave this one blocking a turn nobody is in.
+                Ok(ProfileStream::Resolved { request_id, .. }) => {
+                    let _ = updates.send(Update::Status(format!(
+                        "{request_id} was answered elsewhere"
+                    )));
+                    refresh_permissions(&client, &updates).await;
+                }
                 Ok(ProfileStream::Resync) | Ok(ProfileStream::Heartbeat) => {
                     let _ = refresh_permissions(&client, &updates).await;
                 }

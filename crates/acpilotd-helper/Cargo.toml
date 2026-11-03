@@ -11,6 +11,14 @@ name = "acpilotd-helper"
 path = "src/main.rs"
 
 [dependencies]
+# The wire is JSON lines, and the helper is uploaded to a host where nothing can be
+# installed: one small crate rather than a hand-rolled parser that has to be right
+# about every escape a path can contain.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

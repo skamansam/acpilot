@@ -53,6 +53,7 @@ pub const API_PREFIX: &str = "/v1";
         error::ErrorBody,
         error::ErrorDetail,
         host::HostKind,
+        host::CreateHostRequest,
         host::HostSummary,
         host::HostCapabilities,
         workspace::WorkspaceSummary,

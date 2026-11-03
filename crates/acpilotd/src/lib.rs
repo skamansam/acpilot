@@ -45,6 +45,7 @@ mod auth;
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
 mod files;
+pub mod hosts;
 mod lsp;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
@@ -227,6 +228,12 @@ pub struct AppState {
     broker: Option<Arc<Broker>>,
     /// The workspace sessions open in, when the daemon was given one.
     workspace: Option<Workspace>,
+    /// The hosts this daemon knows, the one it runs on first.
+    ///
+    /// A registry rather than a table read per request: the local host's
+    /// capabilities are a fact about this build, and a list that changed under a
+    /// client between two reads would be a dialog that flickers.
+    hosts: Arc<hosts::Hosts>,
     /// Every session this daemon owns.
     sessions: Sessions,
     /// Every terminal this daemon owns.
@@ -341,6 +348,7 @@ impl Default for AppState {
             agents: None,
             broker: None,
             workspace: None,
+            hosts: Arc::new(hosts::Hosts::default()),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
@@ -645,8 +653,17 @@ impl AppState {
     /// Keep sessions, events and decisions in this database.
     #[must_use]
     pub fn with_store(mut self, store: Arc<Store>) -> Self {
+        match store.hosts() {
+            Ok(records) => self.hosts.seed(records),
+            Err(error) => tracing::warn!(%error, "the recorded hosts could not be read"),
+        }
         self.store = Some(store);
         self
+    }
+
+    /// The hosts this daemon knows, the one it runs on first.
+    pub fn hosts(&self) -> &hosts::Hosts {
+        &self.hosts
     }
 
     /// The database behind the session routes, when the daemon opened one.
@@ -1824,6 +1841,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/app", get(web_app))
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
+        .merge(hosts::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
         .merge(project::routes())

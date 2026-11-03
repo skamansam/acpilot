@@ -356,6 +356,26 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreateHostRequest": {
+        "description": "The body of `POST /v1/hosts`.\n\nThe kind decides what `address` means: `user@machine` or `machine` for `ssh`,\na distribution name for `wsl`, and nothing for `local`, which is always listed.",
+        "properties": {
+          "address": {
+            "description": "What the transport needs to name it, absent for the local host.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HostKind",
+            "description": "How the daemon would reach the host."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "description": "Request body for `POST /v1/sessions`.",
         "properties": {

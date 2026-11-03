@@ -164,6 +164,31 @@ hash the human approved and is the only way that state is cleared. Without the
 route the state would be terminal, which is the kind of gap this review exists to
 catch.
 
+## Hosts
+
+`GET /v1/hosts` returns `HostSummary[]`, the daemon's own host first:
+`{ id, label, kind, connected, capabilities? }`. `kind` is `local`, `ssh` or `wsl`;
+`capabilities` is `{ filesystem, pty, spawn, lsp }` and is absent until the host has
+answered once. The local host is always `connected` with every capability true — the
+daemon is running on it, so a false field would mean a platform this build cannot
+run on at all. A false field is how a client learns not to offer an agent on a host
+that can edit files but cannot start a process.
+
+`POST /v1/hosts` takes `CreateHostRequest { kind, address? }` and answers `201` with
+the summary, `connected: false` and no capabilities. `address` is `user@machine` for
+`ssh` and a distribution name for `wsl`; its absence is `400`, and `local` is `409`
+because the daemon's own host is already listed. The id is the transport and the
+address joined by a colon (`ssh:me@box`), so adding the same host twice is `409`
+rather than two rows a client cannot tell apart. It is not `ssh://me@box`: the id is
+a path segment on `/v1/hosts/{id}/test`, and `//` would split it into two. An added host is recorded, so it is listed again by
+the next daemon.
+
+`POST /v1/hosts/{id}/test` asks the host whether it answers. The local host answers
+with this build's capabilities. An `ssh` or `wsl` host is `502 host_unavailable`
+with `phase` in `details`: adding one records what a later build connects to, and a
+test that said `connected: false` for a transport that does not exist yet would be
+indistinguishable from a host that is asleep. An unknown id is `404`.
+
 ## Sessions and turns
 
 `POST /v1/sessions` takes `CreateSessionRequest { workspace_id, agent_id, title? }`

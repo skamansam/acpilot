@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use acpilot_proto::event::SessionEvent;
+use acpilot_proto::host::HostKind;
 use acpilot_proto::session::{SessionStatus, SessionSummary};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
@@ -164,6 +165,53 @@ impl Store {
             params![id, root, jiff::Timestamp::now().to_string()],
         )?;
         Ok(())
+    }
+
+    /// Record a host so it is still known after a restart.
+    ///
+    /// The transport's address rather than the last thing that answered: what a
+    /// record is for is what to try next time, and a cached success would make a
+    /// host that went away look present.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn save_host(&self, host: &HostRecord) -> Result<(), StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "INSERT INTO hosts (id, kind, address, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, address = excluded.address",
+            params![
+                host.id,
+                kind_text(host.kind),
+                host.address,
+                jiff::Timestamp::now().to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every host the daemon has been told about, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn hosts(&self) -> Result<Vec<HostRecord>, StoreError> {
+        let connection = self.lock();
+        let mut statement =
+            connection.prepare("SELECT id, kind, address FROM hosts ORDER BY created_at, id")?;
+        let rows = statement.query_map([], |row| {
+            Ok(HostRecord {
+                id: row.get(0)?,
+                kind: kind_from(&row.get::<_, String>(1)?),
+                address: row.get(2)?,
+            })
+        })?;
+        let mut hosts = Vec::new();
+        for row in rows {
+            hosts.push(row?);
+        }
+        Ok(hosts)
     }
 
     /// Write a session's current shape, creating the row or replacing it.
@@ -516,6 +564,17 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// A host the daemon has been told about, as the database keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRecord {
+    /// Identifier the API uses: `local`, `ssh:user@machine`, `wsl:Ubuntu`.
+    pub id: String,
+    /// How the daemon reaches it.
+    pub kind: HostKind,
+    /// What the transport needs to name it; absent for the local host.
+    pub address: Option<String>,
+}
+
 /// One permission decision, as the database keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -552,6 +611,27 @@ fn summary_from(
         status: status_from(&status),
         created_at,
         updated_at,
+    }
+}
+
+/// The transport as the `hosts.kind` column writes it: the wire spelling, so a
+/// row read by a person and a body read by a client say the same word.
+fn kind_text(kind: HostKind) -> &'static str {
+    match kind {
+        HostKind::Local => "local",
+        HostKind::Ssh => "ssh",
+        HostKind::Wsl => "wsl",
+    }
+}
+
+/// The kind a stored row names. The column's `CHECK` already refuses anything
+/// else; a row from a schema this build has not met reads as the local host rather
+/// than reviving a transport with no implementation behind it.
+fn kind_from(text: &str) -> HostKind {
+    match text {
+        "ssh" => HostKind::Ssh,
+        "wsl" => HostKind::Wsl,
+        _ => HostKind::Local,
     }
 }
 
@@ -756,6 +836,29 @@ mod tests {
         assert_eq!(stored.status, SessionStatus::Busy);
         assert_eq!(stored.updated_at, "2026-11-03T11:00:00Z");
         assert_eq!(stored.title, "a conversation");
+    }
+
+    #[test]
+    fn a_host_is_stored_and_read_back() {
+        let store = Store::in_memory().expect("open");
+        store
+            .save_host(&HostRecord {
+                id: "local".into(),
+                kind: HostKind::Local,
+                address: None,
+            })
+            .expect("local");
+        store
+            .save_host(&HostRecord {
+                id: "ssh:me@box".into(),
+                kind: HostKind::Ssh,
+                address: Some("me@box".into()),
+            })
+            .expect("ssh");
+        let hosts = store.hosts().expect("read");
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[1].kind, HostKind::Ssh);
+        assert_eq!(hosts[1].address.as_deref(), Some("me@box"));
     }
 
     #[test]

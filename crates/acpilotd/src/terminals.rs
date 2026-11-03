@@ -55,8 +55,9 @@ use axum::Json;
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Path as ApiPath, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use utoipa::openapi::path::{HttpMethod, Operation};
@@ -322,6 +323,29 @@ impl Terminal {
         Ok(())
     }
 
+    /// End the program, when this daemon started it.
+    ///
+    /// A pane of an *agent's* terminal is refused: that process belongs to the
+    /// session, and `terminal/kill` over ACP is the way its owner ends it. An HTTP
+    /// route that quietly killed an agent's shell would be a second owner.
+    ///
+    /// # Errors
+    ///
+    /// The kill failed, or the terminal is the agent's.
+    pub fn kill(&self) -> Result<(), ApiError> {
+        match &self.driver {
+            Driver::Pty(pty) => pty
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .kill()
+                .map_err(|source| ApiError::new(AcpilotError::Io(source))),
+            Driver::Agent(_) => Err(ApiError::new(AcpilotError::conflict(format!(
+                "{} belongs to an agent; `terminal/kill` is how its session ends it",
+                self.command
+            )))),
+        }
+    }
+
     /// What the API reports about it.
     #[must_use]
     pub fn summary(&self) -> TerminalSummary {
@@ -534,6 +558,33 @@ impl Terminals {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<Terminal>> {
         self.lock().get(id).cloned()
+    }
+
+    /// Forget a terminal, returning whether it was there.
+    pub fn remove(&self, id: &str) -> bool {
+        self.lock().remove(id).is_some()
+    }
+
+    /// End every terminal a session opened, returning how many programs ended.
+    ///
+    /// Deleting a session has to take its panes with it: a shell a person can no
+    /// longer name is a process nobody can find, which is the leak `terminal/release`
+    /// being optional creates.
+    pub fn close_session(&self, session: &str) -> usize {
+        let terminals: Vec<Arc<Terminal>> = self
+            .lock()
+            .values()
+            .filter(|terminal| terminal.session_id == session)
+            .cloned()
+            .collect();
+        let mut ended = 0;
+        for terminal in terminals {
+            if terminal.kill().is_ok() {
+                ended += 1;
+            }
+            self.remove(terminal.id());
+        }
+        ended
     }
 
     /// Every terminal, oldest id first, optionally only one session's.
@@ -826,10 +877,51 @@ fn host_failure(command: &str, message: &str) -> ApiError {
     ))))
 }
 
+/// `POST /v1/terminals/{id}/resize` — tell the program the pane changed shape.
+///
+/// The WS attach frame carries the same control, but a client that is not attached
+/// (a pane being restored, a test) still needs to say the size changed.
+async fn resize(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+    body: Result<Json<TerminalSize>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<TerminalSummary>, ApiError> {
+    let size = body
+        .map_err(|rejection| {
+            ApiError::new(AcpilotError::invalid(format!(
+                "the body is not a terminal size: {rejection}"
+            )))
+        })?
+        .0;
+    let terminal = state
+        .terminals()
+        .get(&id)
+        .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("terminal {id}"))))?;
+    terminal.resize(size)?;
+    Ok(Json(terminal.summary()))
+}
+
+/// `DELETE /v1/terminals/{id}` — end the program and forget the pane.
+///
+async fn close(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let terminal = state
+        .terminals()
+        .get(&id)
+        .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("terminal {id}"))))?;
+    terminal.kill()?;
+    state.terminals().remove(&id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The terminal routes, ready to merge into the daemon's router.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/terminals", get(list).post(create_route))
+        .route("/v1/terminals/{id}", delete(close))
+        .route("/v1/terminals/{id}/resize", post(resize))
         .route("/v1/terminals/{id}/attach", get(attach))
 }
 

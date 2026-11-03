@@ -73,9 +73,11 @@ GET    /v1/events                                                     (SSE)
 GET    /v1/permissions?status=pending     POST   /v1/permissions/{id}/resolve
 
 GET    /v1/files                          PUT    /v1/files
+DELETE /v1/files                          POST   /v1/files/directory
 GET    /v1/files/list
 
 GET    /v1/terminals?session=             POST   /v1/terminals
+DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
 WS     /v1/terminals/{id}/attach
 
 GET    /v1/profiles                       POST   /v1/profiles
@@ -174,7 +176,10 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
 
 - `idempotency_key` is client-generated. The same key inside the same session
   returns the same `PromptAccepted`, not a second turn: a dropped connection must
-  not cost an agent run.
+  not cost an agent run. It is answered before the busy check, because the request
+  that started the running turn is exactly the one a retry repeats — the retry is
+  the one case where "a turn is in flight" and "this turn is mine" are the same
+  thing. A *different* key while a turn runs is still `409`.
 - A second prompt while a turn is in flight is `409 conflict`, with the running
   `turn_id` in the message. Queuing turns would hide the state a UI has to show.
 - `POST /v1/sessions/{id}/cancel` takes an optional `{ turn_id }` and returns
@@ -450,6 +455,20 @@ not there is `404`: this route saves files, it does not build trees.
 None of this is on the keystroke path: the editor owns its buffer and saves
 through this route.
 
+`DELETE /v1/files?workspace=&path=` removes a **file** and answers `204` with no
+body. A directory is `409`, not a recursive delete: removing a tree is a decision
+about what happens to everything inside it, and a route that guesses has already
+discarded the answer. An editor's "delete folder" is a confirmation the client
+shows, and what it calls afterwards is a delete per entry. The same path rules as
+the write apply — `..` refused, a symlink out of the workspace `403`.
+
+`POST /v1/files/directory` takes `{ "path": string }` and answers `201`. Parents
+are created, because a new-folder dialog names the folder and not every level
+between it and the root. The deepest part of the path that already exists is the
+one resolved and checked, since a symlink in the middle is how a recursive create
+lands outside the workspace. Something already at that path is `409`; a
+zero-length name is `400`.
+
 ## Project map
 
 `GET /v1/project/map?workspace=` returns `ProjectMap { path, written, updated?, areas[] }`,
@@ -530,7 +549,21 @@ writes keystrokes to the same descriptor, so a shell an agent started can be
 watched and driven without a second process printing to nobody. Such a pane ends
 when the agent's program ends — a pane opened after the fact still replays what
 the command printed — and killing the pane is not offered, because the process
-belongs to the session that started it.
+belongs to the session that started it. `DELETE /v1/terminals/{id}` on an
+`agent-` id is `409` for that reason; `terminal/kill` over ACP is the owner's way
+to end it.
+
+`POST /v1/terminals/{id}/resize` takes `TerminalSize { cols, rows }` and returns
+the updated `TerminalSummary`. It is the same instruction the attach socket's
+`resize` frame carries, for the panes that have no socket: a layout restored at
+startup knows each pane's size before anything attaches, and a zero dimension is
+`400` because a program told it is zero columns wide draws nothing.
+
+`DELETE /v1/terminals/{id}` ends the program and forgets the pane, and answers
+`204`. That is the other half of `terminal/release` being optional in ACP: a pane
+nobody releases is a process nobody can find, so deleting a session closes its
+terminals too. Attaching to a pane that was deleted is `404` — a pane is a view,
+and the thing it was a view of is gone.
 
 ## Errors
 

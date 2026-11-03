@@ -38,6 +38,7 @@ use acpilot_proto::file::{
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -1131,6 +1132,106 @@ async fn write(
     }))
 }
 
+/// The query string the delete route takes.
+#[derive(Debug, Deserialize)]
+struct DeleteQuery {
+    /// Workspace id, when the client names one.
+    workspace: Option<String>,
+    /// Workspace-relative path of the file to remove.
+    path: Option<String>,
+}
+
+/// `DELETE /v1/files?workspace=&path=`.
+///
+/// Files only. A directory needs a decision about what happens to its contents,
+/// and "deleted the tree because the path was a folder" is how an editor loses a
+/// day's work; `409` says so rather than choosing.
+///
+/// # Errors
+///
+/// No workspace (`409`), a path that escapes (`400`/`403`), no such file (`404`),
+/// or a directory (`409`).
+async fn delete(
+    State(state): State<AppState>,
+    Query(query): Query<DeleteQuery>,
+) -> Result<StatusCode, ApiError> {
+    let root = workspace_root(&state, query.workspace.as_deref())?;
+    let requested = query
+        .path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::invalid("`path` is required"))
+                .with_detail("path", "a delete names the file to remove")
+        })?;
+    let relative = relative_path(requested)?;
+    let resolved = resolve_existing(&root, &relative, requested)?;
+    let metadata = std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
+    if metadata.is_dir() {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{requested} is a directory; this route removes files"
+        ))));
+    }
+    std::fs::remove_file(&resolved).map_err(|source| io_error(&resolved, source))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The body of `POST /v1/files/directory`.
+#[derive(Debug, Deserialize)]
+struct DirectoryRequest {
+    /// Workspace-relative path of the directory to create.
+    path: String,
+}
+
+/// `POST /v1/files/directory` — make a directory, and any parents it needs.
+///
+/// Parents are created because a "new folder" dialog names the folder somebody
+/// wants, not every level between it and the root. The deepest part of the path
+/// that already exists is the part that is resolved and checked: a symlink in the
+/// middle is how `create_dir_all` lands outside the workspace.
+///
+/// # Errors
+///
+/// No workspace (`409`), a path that escapes (`400`/`403`), or something already
+/// at that path (`409`).
+async fn create_directory(
+    State(state): State<AppState>,
+    body: Result<Json<DirectoryRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a directory request: {rejection}"
+        )))
+    })?;
+    let root = workspace_root(&state, None)?;
+    let relative = relative_path(&request.path)?;
+    if relative.as_os_str().is_empty() {
+        return Err(
+            ApiError::new(AcpilotError::invalid("a directory needs a name"))
+                .with_detail("path", "send a path below the workspace root"),
+        );
+    }
+    let absolute = root.join(&relative);
+    if absolute.exists() {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{} already exists",
+            request.path
+        ))));
+    }
+    let mut existing = absolute.as_path();
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| outside(&request.path, &root))?;
+    }
+    let resolved = std::fs::canonicalize(existing).map_err(|source| io_error(existing, source))?;
+    if !resolved.starts_with(&root) {
+        return Err(outside(&request.path, &root));
+    }
+    std::fs::create_dir_all(&absolute).map_err(|source| io_error(&absolute, source))?;
+    Ok(StatusCode::CREATED)
+}
+
 /// The ignore rules that apply to one directory.
 ///
 /// The root's `.gitignore` and every `.gitignore` between it and the directory being
@@ -1359,7 +1460,8 @@ fn io_error(path: &Path, source: io::Error) -> ApiError {
 /// The file routes, ready to merge into the daemon's router.
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/v1/files", get(read).put(write))
+        .route("/v1/files", get(read).put(write).delete(delete))
+        .route("/v1/files/directory", post(create_directory))
         .route("/v1/files/list", get(list))
         .route("/v1/files/search", get(search))
         .route("/v1/files/grep", get(grep))

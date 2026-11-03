@@ -253,6 +253,13 @@ pub struct Record {
     /// conversations with one agent are two contexts; [`Sessions::reading`] picks
     /// the newest for the stats bar.
     usage: Mutex<Usage>,
+    /// Answers already given for a client's `idempotency_key`.
+    ///
+    /// A retried prompt is one turn: the key is the client's, and the same key in
+    /// the same session returns the acceptance it already got rather than starting a
+    /// second agent run. Bounded by the session's life, which is the life of the
+    /// thing the keys were about.
+    prompts: Mutex<HashMap<String, PromptAccepted>>,
     /// The mailbox of the task that owns the [`Session`].
     ///
     /// The ACP handle is `Send` but not `Sync` — the SDK's connection owns an
@@ -342,6 +349,7 @@ impl Record {
                 broker,
                 grants_written: Mutex::new(0),
                 usage: Mutex::new(Usage::default()),
+                prompts: Mutex::new(HashMap::new()),
                 commands,
             }),
             mailbox,
@@ -578,6 +586,23 @@ impl Record {
     /// Ask the session's owner task to end, which drops the agent process.
     fn shutdown(&self) {
         let _ = self.commands.try_send(Command::Shutdown);
+    }
+
+    /// The acceptance a retried prompt already got, when this key was seen.
+    fn remembered(&self, key: &str) -> Option<PromptAccepted> {
+        self.prompts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .cloned()
+    }
+
+    /// Remember what a `idempotency_key` was answered with.
+    fn remember(&self, key: &str, accepted: &PromptAccepted) {
+        self.prompts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.to_owned(), accepted.clone());
     }
 
     /// A title from the first prompt, if the session has none yet.
@@ -985,6 +1010,8 @@ pub async fn remove(
 ) -> Result<Json<SessionSummary>, ApiError> {
     let summary = state.sessions.get(&id).ok_or_else(|| unknown(&id))?;
     state.sessions.remove(&id);
+    // And its panes: a shell nobody can list is a process nobody can find.
+    state.terminals().close_session(&id);
     // Deleting ends the session in the record as well: leaving it `idle` would keep
     // it in every later list, which is the opposite of what the caller asked for.
     if let Some(store) = state.store()
@@ -1035,6 +1062,14 @@ pub async fn prompt(
             .with_detail("text", "a prompt needs at least one non-space character"));
     }
     let record = state.sessions.handle(&id).ok_or_else(|| unknown(&id))?;
+    // Before the busy check, not after: a client that retried the request it sent
+    // a moment ago must get the same answer even though that answer started a turn
+    // which is, by now, in flight.
+    if let Some(key) = request.idempotency_key.as_deref()
+        && let Some(accepted) = record.remembered(key)
+    {
+        return Ok((StatusCode::ACCEPTED, Json(accepted)));
+    }
     if record.status() == SessionStatus::Busy {
         return Err(ApiError::new(AcpilotError::conflict(format!(
             "session {id} already has a turn in flight; cancel it or wait"
@@ -1067,16 +1102,17 @@ pub async fn prompt(
         ))));
     }
 
+    let accepted = PromptAccepted {
+        session_id: id,
+        turn_id,
+        first_seq,
+    };
+    if let Some(key) = request.idempotency_key.as_deref() {
+        record.remember(key, &accepted);
+    }
     // `202`: the turn was accepted and has not run. The transcript arrives on
     // the session's stream, which is where every client reads it.
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(PromptAccepted {
-            session_id: id,
-            turn_id,
-            first_seq,
-        }),
-    ))
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 /// `POST /v1/sessions/{id}/cancel`.
@@ -1551,6 +1587,29 @@ mod tests {
         assert!(
             Arc::ptr_eq(&terminals, state.agent_terminals()),
             "the registry is the daemon's, so a session's terminals are swept and released with it"
+        );
+    }
+
+    #[test]
+    fn a_retried_prompt_remembers_what_it_was_answered() {
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
+        let accepted = PromptAccepted {
+            session_id: "s1".into(),
+            turn_id: "s1:1".into(),
+            first_seq: 1,
+        };
+        record.remember("key-1", &accepted);
+        assert_eq!(record.remembered("key-1"), Some(accepted));
+        assert!(
+            record.remembered("key-2").is_none(),
+            "a different key is a different prompt"
         );
     }
 

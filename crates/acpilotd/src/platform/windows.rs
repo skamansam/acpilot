@@ -34,6 +34,20 @@ pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
     ]
 }
 
+/// Whether something is listening on `target` right now.
+///
+/// Only the TCP half can answer here: the named pipe is P10-5, so a socket target is
+/// a configuration this platform refuses to serve rather than one it can hold.
+pub(crate) fn endpoint_answers(target: &Target) -> bool {
+    match target {
+        Target::Tcp(addr) => addr.parse::<std::net::SocketAddr>().is_ok_and(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250))
+                .is_ok()
+        }),
+        Target::Socket(_) => false,
+    }
+}
+
 /// Resolve when the daemon should stop: Ctrl-C, which is what a console window
 /// closing sends. Windows has no `SIGTERM` for a process without a console
 /// handler, so that half of the unix answer has no equivalent here.

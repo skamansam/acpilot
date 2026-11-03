@@ -185,6 +185,14 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
   `400 invalid_request` with the agent's advertised modes in `details`.
 - `SessionStatus` is `idle`, `busy`, `awaiting_permission`, `closed`, `failed`.
 
+`GET /v1/sessions` lists every conversation this profile has, not only the ones
+this process started. A stored session is reported with `status: "closed"` —
+nothing is running it — and a prompt to it is `409`, because resuming a stopped
+conversation is not in v1. The rows live in one SQLite database per profile (the
+service phase's task P3-7), which is what makes yesterday's conversation reachable
+today; events older than 30 days are compacted out of it, while permission
+decisions are kept because they are the audit rather than the transcript.
+
 ## Event streams
 
 Two streams, one shape.
@@ -235,8 +243,11 @@ in `payload`; a new kind is a wire change and shows up in the OpenAPI snapshot.
 **Reconnect.** The client sends `Last-Event-ID: <seq>` and receives everything
 after it, in order, with no gaps. Replay is served from the live session's ring,
 and every one of those events is appended to the session's transcript as it is
-recorded, so the file outlives the process even though no route reads it back yet:
-enumerating stored sessions is P3-7's, with the SQLite table. If the id is unknown
+recorded, so the conversation outlives the process. A session this daemon did not
+start is answered from that database: `GET /v1/sessions` lists it,
+`GET /v1/sessions/{id}` describes it with status `closed`, and its stream replays
+from the sequence asked for and then ends, because there is no live feed behind it
+to wait on. If the id is unknown
 — older than the ring, or a session this process did not start — the server answers
 `event: resync` with the latest sequence and the client refetches session state
 (`GET /v1/sessions/{id}`) instead of pretending it can catch up. The first frame is

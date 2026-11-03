@@ -444,8 +444,29 @@ and deterministic.
 
 ## Service phase (P3) — Daemon + API (≈10 days)
 
-- [ ] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per the profiles phase's task P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
+- [x] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per the profiles phase's task P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
   - **Started 2026-10-24:** the socket transport is ADR 0004 §3's step 2, and it landed with the client so the product was never half-moved. `acpilotd` binds `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS) by default, creating the directory `0700` and the socket `0600` — the filesystem is the access control, which is the only reason "a local request needs no token" is true. A path another daemon still answers on is refused (`AddrInUse`, naming the flag to move it); one left by a killed daemon is removed and the log says `replaced_stale_socket=true`, which is what makes a crash recoverable without instructions. `--socket <path>` moves it, `--addr <host:port>` is the opt-in TCP listener, both at once is an error rather than a precedence rule, and `SIGTERM` as well as Ctrl-C removes the socket on the way out — a service manager that leaves a socket file behind makes the next start look like a crash. The client needed no new HTTP stack: `reqwest` 0.13 has `ClientBuilder::unix_socket`, so `Client::new` takes either a URL or a path and `--api-url`/`ACPILOT_API_URL` accept both. Defaults live in one place (`acpilot_host::default_endpoint`), so a client's probe and a daemon's bind are the same string by construction. Still open from this item: `figment` configuration, `--foreground`, the pidfile, and the discovery metadata under `daemons/<name>.json`. The bearer token on `--addr` was the last of them and is done — see P3-2 below. The Windows named pipe is P10-5's, so that platform defaults to loopback HTTP for now.
+  - **Result (2026-11-03):** the bootstrap is complete. Settings are a `figment` cascade —
+    the user's `config.toml`, then the profile's, then the flags — read as a `[daemon]`
+    table (`socket`, `addr`, `workspace`, `profile`, `database`, `pidfile`, `foreground`)
+    by `acpilotd::config`. A missing file *is* the defaults, a broken one names the file and
+    line, and a flag that was typed beats a file edited months ago; there is deliberately
+    no environment provider, because `--addr` and `--profile` already have one in `clap`
+    and a second spelling is a variable nobody can find in either place. `--foreground` is
+    not a fork — the daemon never forks — it is "stderr only": the default also appends
+    JSON to `<data>/logs/acpilotd.jsonl`, which is what a bug report reads, and the flag is
+    what a service unit sets when the journal owns the log. **Single instance is the
+    endpoint, not the file.** A socket path or a port cannot be bound twice, so the kernel
+    already refuses the second daemon; the pidfile (`<runtime>/acpilotd.pid`, `0600` in the
+    `0700` runtime directory) turns `EADDRINUSE` into "pid 4123 is already serving …".
+    There is no `flock` on purpose: a lock file left held by a process that crashed in a
+    container or on a network filesystem cannot be recovered, and the pidfile's staleness
+    test — does anything answer on the endpoint — is exactly as durable as the thing it
+    guards. A stale file is replaced, and a clean exit removes it.
+    **Open:** the `daemons/<name>.json` discovery metadata ADR 0004 §2 lists is not written
+    yet, so a client still probes the default endpoint rather than reading a registry of
+    them; the Windows transport is the named pipe (P10-5), and until then that platform
+    starts on loopback HTTP.
 - [ ] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
   - **Started 2026-10-24:** the token half is served, for a TCP listener rather than for a non-loopback one: a port does not inherit the socket's filesystem boundary, so it does not inherit the exemption either (ADR 0004 §3). 32 bytes from the system source, hex, written to `$XDG_RUNTIME_DIR/acpilot/token` `0600` and reused across restarts so a client is not re-taught a secret every launch. The client is given the token rather than looking it up — `Client::with_token`, with `acpilot tui --token` / `ACPILOT_TOKEN` / the file resolved in the binary that has a user — so a library call cannot mean two things in two processes. The file handling moved to `acpilot_host::token` when `acpilot token rotate` arrived: the daemon reads the file per request rather than at startup, so a rotation applies on the next call and nothing restarts, which is the only kind of rotation anyone performs on a token they think leaked. The constant-time comparison moved with it. **Not hashed with `argon2`** as this item first proposed, and the reason is worth recording: hashing protects a secret stored where someone can read it, and this file is already readable only by its owner — a hash would add a second secret that also has to be protected, and no protection. That changes if the token ever moves into `config.toml` (P4-2), where a hash is the difference between a leak and a leak of a verifier. The middleware compares in constant time, accepts `bearer` in any case (the scheme is case-insensitive; the token is not), and answers `401 unauthorized` in the standard envelope. A client that gets a `401` from its probe now reports "refused the token, it is in …" instead of "no daemon" — the difference between editing a file and starting a second daemon. The socket listener deliberately requires nothing. `/docs` is the one route on a TCP listener that answers without a token — a browser cannot attach a header to a typed address, and the page is where the token gets pasted — so the page asks for it in a field and sends it on the contract fetch and on every "Try it out" call, keeping nothing in web storage. Still open here: the `tower-http` layers, `CorsLayer` for the web phase, and the `argon2` path for a token that lives in configuration.
   - **Started 2026-10-22:** `GET /v1/agents` serves an injected `acpilot_agent::Registry` with
@@ -509,13 +530,57 @@ and deterministic.
   - **Started 2026-10-25 (an agent's terminals are panes too):** the agent side keeps its ring for `terminal/output`, but a pane needs the bytes as they arrive, somewhere to put a keystroke, and a wake-up when the program ends, so `acpilot_agent::terminal::TerminalHandle` hands over exactly those: a backlog-and-subscription pair taken under one lock (the pair is what makes a replay gapless), a write, a resize, a kill, and an exit watch. `Terminal::adopt` builds the same `vt100` screen and the same attach machinery over that handle, so `agent-terminal-1` appears in `GET /v1/terminals?session=` and is attached through the same socket. It is the same PTY, not a copy: what a person sees and what the agent polls cannot disagree, the agent's ring is untouched by a keystroke, and the process stays the agent's — the pane ends when it ends. The daemon mirrors at boot (`AppState::mirror_agent_terminals`), adopting each terminal as it opens and filing it under the session id a client holds — the agent's ACP id is mapped back through `Sessions::id_for_acp`, a scan rather than a second index that would have to stay in step with creation, removal and a failed start — and a session it cannot map is filed under the agent's own id rather than dropped.
     **Two races the pump has to get right, both found by the tests.** A program that ended before the pane existed has already recorded its exit, so the loop checks for one at the top of every pass instead of waiting for a change to a value that is already there (that hangs forever); and because the exit and the program's last bytes can be ready at once, the pump drains the queue before closing, or a `select!` that picks the exit draws the screen without the program's final line. The handle is dropped before the pane reports itself over, so `alive: false` means there is nowhere left to type — and `write` says so instead of buffering into a closed PTY. **Tests:** eight, in `acpilotd/tests/agent_terminals.rs` and `acpilot-agent/tests/terminals.rs` — the announcement with what the terminal printed, a keystroke reaching the agent's process, the pane ending when the program does, a pane adopted after the program ended still showing its output and hearing its exit code, the daemon mirroring on its own, and `terminal/kill` through ACP ending the program a watcher sees. They spawn `/bin/sh`, so they live in `tests/` where a platform branch is allowed; the workspace's boundary test is why none of this is in the module's own test block.
   - **Open:** no HTTP resize or kill route on a pane (the WS control frame is the resize; ending an agent's terminal is the agent's `terminal/kill`), and no closing of a session's terminals when the session is deleted. A pane's replay is still only the visible screen (`SCROLLBACK` is zero in the daemon), so a client's history begins when it attaches — the client keeps its own ten thousand lines (P6-10). The client half is served: `acpilot_client::terminal::Terminal` upgrades the attach over a socket or plain TCP and speaks both frame kinds, and the TUI draws it — see task P6-10.
-- [ ] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
+- [x] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
   per profile (P4-4), so migrations run once per open profile — keep them idempotent.
+  - **Result (2026-11-03):** `acpilot-store` is the crate, `migrations/0001_init.sql` the
+    schema (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`),
+    and `acpilotd` opens it at startup, marks every session a previous process left open as
+    `closed`, and writes each session row, event and permission decision as it happens. One
+    database per profile (`Profile::data_dir()/acpilot.db`), so a client's conversation
+    cannot sit beside a weekend project's; a daemon with no profile uses the shared data
+    directory. `WAL`, `foreign_keys = ON` and a `busy_timeout` are set per connection, not
+    hoped for per database. **The migration runner is 25 lines here, not
+    `rusqlite_migration`:** that crate links its own `sqlite3` and the workspace pins
+    `rusqlite`, which Cargo refuses (`links = "sqlite3"` twice). `PRAGMA user_version`, one
+    transaction per step with the bump inside it, and a database newer than this build is
+    refused rather than half-read. Retention is a deletion of events older than 30 days
+    (`RETENTION_DAYS`), swept at boot and every six hours; grants are kept, because a
+    decision is the audit and the transcript beside it is the copy that outlives the
+    window. **The routes read it:** `GET /v1/sessions` merges stored sessions with live
+    ones, `GET /v1/sessions/{id}` falls back to the store, and
+    `GET /v1/sessions/{id}/events` replays a stored conversation from `after` and then
+    ends, because a history has no live feed. `next_id` consults the stored ids as well as
+    the transcript directories, so a restart cannot reuse an id a client still holds.
+    Tests: eight in the crate (a second open is the same database at the same
+    `user_version`; WAL and the foreign key are on; replay is ordered; a re-delivered
+    sequence is an update; retention keeps the recent and the decisions; a status moves
+    without rewriting the conversation; a grant keeps its rule) plus the acceptance test
+    that restarts the daemon and reads the conversation back.
+    **Open:** `terminals` exists and nothing writes it yet — a pane is a live PTY, and what
+    survives is the session; grants are never compacted, which is the next schema's
+    retention question rather than a bug; and a stored session can be read but not resumed
+    (a prompt to one is `409`), because what "resume" means for an agent that keeps no
+    state is the engine's and the models phase's decision, not the storage layer's.
 - [ ] **P3-8** Hosts API: `POST /v1/hosts` (`local|ssh|wsl`), connection test endpoint, capability report (can spawn? can read fs? latency).
   - WSL specifics, from the design phase's P0-5 `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the probe (`probes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so the service phase's task P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
 - [ ] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
-- [ ] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
+- [x] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
   - **DoD:** `acpilotd` runs headless, a scripted `curl` session (create → prompt → stream → permission → resolve) works, and SSE replay after disconnect loses no events.
+  - **Result (2026-11-03):** `crates/acpilotd/tests/acceptance.rs` is that DoD as three
+    tests over a real socket, with the mock agent as a child process. Create → prompt →
+    stream → permission → resolve: the pending request is fetched, resolved with
+    `allow_once`, the turn ends, the session returns to `idle`, and a second turn on the
+    same session streams. Drop and reconnect: two events read, the stream dropped, and
+    `Last-Event-ID` replay delivers the rest with every sequence exactly once. And the
+    storage half: a daemon is stopped, a second opens the same directory, and the
+    conversation is listed as `closed` with its events replayed and the stream ending.
+    **One contract the test had to learn:** the broker refuses a request when nothing is
+    subscribed (`DecidedBy::Unattended`), so a request only becomes pending for a daemon
+    with a client on `GET /v1/events` — the test subscribes before prompting, which is
+    what a UI does, and that refusal is why a headless daemon cannot park a turn forever.
+    **Open:** the `insta` snapshots of every error body are still unwritten (each route's
+    suite asserts its envelope's fields instead), and the `curl` script the DoD names is
+    the test rather than a checked-in shell script, because the client speaks the same wire.
 
 ---
 

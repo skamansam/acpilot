@@ -35,6 +35,10 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The record a restart reads: sessions and their events outlive the process that
+# streamed them, and a conversation a client asks about by id has to be
+# answerable after the daemon that ran it is gone.
+acpilot-store = { workspace = true }
 # The stats bar as a value: `/v1/stats` serves the contract, and `/app/stats`
 # serves the rows a browser can draw, measured by the same crate the TUI uses so
 # the two bars cannot disagree about a denominator.
@@ -58,6 +62,10 @@ acpilot-extensions = { workspace = true }
 acpilot-git = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+# The daemon's settings are a cascade rather than a flag per file: a user-level
+# `config.toml` and a profile's, merged, with the flags on top — the same shape the
+# profiles phase's task P4-2 gives every Acpilot binary.
+figment = { workspace = true, features = ["toml"] }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }

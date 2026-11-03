@@ -552,9 +552,10 @@ acpilot/
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
 │   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
+│   ├── acpilot-store/         # one SQLite database per profile: sessions, events, grants
 │   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
 │   ├── acpilot-client/        # typed client for the daemon API: REST + SSE
-│   ├── acpilotd/              # daemon: axum API, sqlite, event bus
+│   ├── acpilotd/              # daemon: axum API, sessions, event bus
 │   ├── acpilotd-helper/       # tiny in-host shim for SSH/WSL (stdio JSON-RPC)
 │   ├── acpilot-cli/           # `acpilot` binary: CLI + subcommand dispatch
 │   ├── acpilot-tui/           # ratatui UI, started by `acpilot tui`
@@ -567,7 +568,6 @@ acpilot/
 ├── site/                      # docs site: Astro + Starlight, deployed to Pages
 ├── patches/                   # narrow, upstreamed patches if a pinned dep needs one
 ├── probes/                    # time-boxed P0 measurements, one question each (CONTRIBUTING §Probes)
-├── migrations/                # sqlite migrations
 ├── docs/                      # ADRs, ACP + LSP notes, protocol map
 ├── xtask/                     # build/dev/packaging tasks
 ├── README.md

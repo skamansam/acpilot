@@ -15,6 +15,9 @@ acpilot-agent = { workspace = true }
 # agree about what `tab_width` is, so the settings cascade reads the same struct
 # the API serves rather than a second shape with its own defaults.
 acpilot-proto = { workspace = true }
+# The profile's database is opened by the crate that knows its schema, so the file
+# name is asked for here instead of spelled a second time in the daemon.
+acpilot-store = { workspace = true }
 # The platform's config root. This is the one crate allowed to ask `directories`
 # where `~/.config` is; every other caller asks this crate.
 directories = { workspace = true }

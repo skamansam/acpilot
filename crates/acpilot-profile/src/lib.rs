@@ -132,6 +132,20 @@ impl Profile {
         self.root.join(CONFIG_FILE)
     }
 
+    /// Where this profile keeps its state: transcripts, the database, caches.
+    ///
+    /// One directory per profile, under the platform's data root, so two profiles
+    /// cannot share a conversation list or a session id that means two things. A
+    /// path with no last segment (a filesystem root) names no profile and gets the
+    /// shared root, which is the same answer [`Self::name`] gives.
+    #[must_use]
+    pub fn data_dir(&self) -> PathBuf {
+        match self.name() {
+            Some(name) => data_dir().join("profiles").join(name),
+            None => data_dir(),
+        }
+    }
+
     /// Where this profile declares its agents.
     ///
     /// The file name belongs to `acpilot-agent`: the reader that parses it is the
@@ -153,6 +167,15 @@ impl Profile {
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.root.file_name().and_then(std::ffi::OsStr::to_str)
+    }
+
+    /// The database that holds this profile's conversations (the service phase's task P3-7).
+    ///
+    /// The file name belongs to `acpilot-store`, because the crate that migrates the
+    /// schema is the thing that decides what it is called.
+    #[must_use]
+    pub fn database_path(&self) -> PathBuf {
+        self.data_dir().join(acpilot_store::FILE_NAME)
     }
 
     /// The `[policy]` table, or the shipped policy when the file has none.

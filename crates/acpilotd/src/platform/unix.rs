@@ -24,6 +24,23 @@ pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
     vec![PathBuf::from(program)]
 }
 
+/// Whether something is listening on `target` right now.
+///
+/// The pidfile's stale check, and nothing else: a daemon that is already bound is a
+/// daemon whose socket accepts a connection, which is a stronger answer than "the
+/// pid in the file is still in a process table" — a recycled pid looks alive forever.
+/// The TCP half uses a short timeout because a host that does not answer is not the
+/// one we are about to start beside.
+pub(crate) fn endpoint_answers(target: &Target) -> bool {
+    match target {
+        Target::Socket(path) => std::os::unix::net::UnixStream::connect(path).is_ok(),
+        Target::Tcp(addr) => addr.parse::<std::net::SocketAddr>().is_ok_and(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250))
+                .is_ok()
+        }),
+    }
+}
+
 /// Bind `target` and serve until `shutdown` resolves.
 ///
 /// # Errors

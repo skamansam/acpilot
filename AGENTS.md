@@ -8,9 +8,9 @@ they win.
 <!-- gstack:begin harness-routing -->
 ## gstack skills
 
-gstack's engineering workflows are installed at /home/sam/workspace-other/gstack.
+gstack's engineering workflows are installed at ../gstack.
 For a coding, review, test, plan or release task, read
-/home/sam/workspace-other/gstack/SKILL.md, pick the one skill whose line matches,
+../gstack/SKILL.md, pick the one skill whose line matches,
 then read that skill's SKILL.md and follow it step by step, starting with its
 Preamble command. Load nothing else up front.
 <!-- gstack:end harness-routing -->

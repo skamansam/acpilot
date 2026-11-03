@@ -21,6 +21,7 @@ use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
 use acpilot_proto::profile::Preferences;
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
+use acpilot_store::Store;
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
@@ -34,11 +35,15 @@ use tokio::sync::{broadcast, mpsc};
 use utoipa::OpenApi as _;
 
 mod auth;
+// The daemon's settings: two files, then the flags (P3-1). Public because the
+// binary resolves them before it has an `AppState` to attach them to.
+pub mod config;
 mod files;
 mod lsp;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
+pub mod pidfile;
 mod platform;
 mod project;
 mod sessions;
@@ -75,6 +80,13 @@ const EVENT_BUFFER: usize = 32;
 /// timestamp comparison per terminal. `terminal/release` is optional in ACP, so
 /// without this a command that outlived one tool call would outlive the daemon.
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How often the store drops events past its retention window.
+///
+/// Six hours against a thirty-day window: the sweep is a single indexed delete, and
+/// a daemon that runs for a week without one is the case this is sized for. The
+/// first tick is immediate, so every start is also a sweep.
+pub const COMPACT_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Health payload. Deliberately minimal: a health check should not be able to fail
 /// because a subsystem is slow.
@@ -219,6 +231,13 @@ pub struct AppState {
     /// transcript directory is a decision about a filesystem, and the default for
     /// a library value is not to write into somebody's home directory.
     transcripts: Option<std::path::PathBuf>,
+    /// The SQLite record: sessions, their events and their decisions, kept after
+    /// the process that streamed them is gone (the service phase's task P3-7).
+    ///
+    /// `None` in a test or an embedded daemon that was given no path, for the same
+    /// reason transcripts are: a library value does not write into somebody's home
+    /// directory uninvited.
+    store: Option<Arc<Store>>,
     /// The terminals *agents* ask their client to open.
     ///
     /// A different store from [`Self::terminals`], which is the panes a client
@@ -313,6 +332,7 @@ impl Default for AppState {
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
+            store: None,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
@@ -609,6 +629,49 @@ impl AppState {
         self.transcripts.as_deref()
     }
 
+    /// Keep sessions, events and decisions in this database.
+    #[must_use]
+    pub fn with_store(mut self, store: Arc<Store>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// The database behind the session routes, when the daemon opened one.
+    pub fn store(&self) -> Option<&Arc<Store>> {
+        self.store.as_ref()
+    }
+
+    /// Drop events past the retention window, on a timer.
+    ///
+    /// Run once at boot as well, because the interval's first tick is immediate and
+    /// a daemon that is restarted daily would otherwise never reach a sweep.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn compact_store_on_a_timer(&self) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(COMPACT_INTERVAL);
+            loop {
+                tick.tick().await;
+                let before = jiff::Timestamp::now()
+                    - jiff::SignedDuration::from_hours(acpilot_store::RETENTION_DAYS * 24);
+                match store.compact(before) {
+                    Ok(0) => {}
+                    Ok(removed) => {
+                        tracing::info!(removed, "compacted events past the retention window");
+                    }
+                    // A sweep that fails is retried in six hours: the events it
+                    // would have dropped are not being read by anything.
+                    Err(error) => tracing::warn!(%error, "the retention sweep failed"),
+                }
+            }
+        });
+    }
+
     /// The terminals an agent's `terminal/*` requests are served from.
     ///
     /// One for the whole daemon, because the registry is keyed by session id and
@@ -819,6 +882,13 @@ pub fn startup(
         // of a transcript: a client that reconnects after a restart can read what
         // happened. Where that lives is the data directory, not the socket's.
         .map(|state| state.with_transcripts(transcript_dir()))?;
+    // And the queryable half of the same record: a transcript a client cannot ask
+    // about by id is a file, not a history. A store that cannot be opened costs the
+    // history and one warning, not the daemon — a full disk is bad enough without
+    // taking today's sessions with it.
+    let state = open_store(state, profile);
+    // Once at boot and then every six hours, because the first tick is immediate.
+    state.compact_store_on_a_timer();
     // A terminal is a process; one an agent opened and never released has to end
     // on its own, because `terminal/release` is optional in ACP.
     state.reap_terminals_on_a_timer();
@@ -838,6 +908,50 @@ pub fn startup(
     // announces the new preferences on `GET /v1/events`.
     state.watch_preferences();
     Ok(state)
+}
+
+/// Open the profile's database and attach it to `state`.
+///
+/// The path decision is [`acpilot_profile::Profile::database_path`]'s for a named
+/// profile and the shared data directory's otherwise, so two ways of starting the
+/// daemon cannot disagree about where a conversation lives.
+///
+/// A session from a previous process is marked `closed` here: nothing is running it,
+/// and a list that says `busy` is a client waiting for a turn that will never come.
+fn open_store(state: AppState, profile: Option<&std::path::Path>) -> AppState {
+    let path = profile
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+        .map_or_else(
+            || acpilot_profile::data_dir().join(acpilot_store::FILE_NAME),
+            |profile| profile.database_path(),
+        );
+    let store = match Store::open(&path) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "sessions will not outlive this process"
+            );
+            return state;
+        }
+    };
+    if let Some(workspace) = state.workspace()
+        && let Err(error) =
+            store.remember_workspace(&workspace.id, &workspace.root.to_string_lossy())
+    {
+        tracing::warn!(%error, "the workspace was not recorded");
+    }
+    match store.close_open_sessions() {
+        Ok(0) => {}
+        Ok(closed) => tracing::info!(
+            closed,
+            "sessions from a previous run are closed; nothing is running them"
+        ),
+        Err(error) => tracing::warn!(%error, "the stored sessions were not closed"),
+    }
+    tracing::info!(path = %path.display(), "sessions are kept in a database");
+    state.with_store(Arc::new(store))
 }
 
 /// Where the daemon keeps the transcripts of its sessions.

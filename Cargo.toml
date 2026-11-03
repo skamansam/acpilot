@@ -44,6 +44,10 @@ acpilot-lsp = { version = "0.1.0", path = "crates/acpilot-lsp" }
 # the same surface, so a route cannot be reachable from one frontend and not
 # another.
 acpilot-client = { version = "0.1.0", path = "crates/acpilot-client" }
+# The daemon's durable record: sessions, events and permission decisions in one
+# SQLite database per profile. A separate crate because a future `acpilot`` verb
+# that only reads history should not link the router.
+acpilot-store = { version = "0.1.0", path = "crates/acpilot-store" }
 # The engine, as a library: the socket and TCP listeners a release runs, and the
 # in-process one `acpilot tui` runs when no daemon answers (P6-11). It is what the
 # client talks to, not a thing the client reimplements.

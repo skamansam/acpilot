@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use acpilot_agent::session::{Session, SessionOptions};
 use acpilot_agent::supervisor::AgentProcess;
 use acpilot_agent::transcript::{FILE_NAME, Meta as TranscriptMeta, Transcript};
-use acpilot_agent::{AgentSpec, Broker, Fs};
+use acpilot_agent::{AgentSpec, Broker, Fs, PermissionOption};
 use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
 use acpilot_proto::ErrorBody;
@@ -53,6 +53,7 @@ use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, SessionId, SessionStatus, SessionSummary,
 };
 use acpilot_proto::stats::ContextStats;
+use acpilot_store::{Grant, Store};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path as ApiPath, Query, State};
@@ -233,6 +234,14 @@ pub struct Record {
     /// Whether a failed transcript write has already been reported for this
     /// session, so a broken disk is one warning rather than one per event.
     transcript_warned: AtomicBool,
+    /// The database this session's events and decisions are written to.
+    ///
+    /// `None` when the daemon opened no store. The file beside it is the record
+    /// that outlives the schema; this is the one a route can query by id, which is
+    /// what makes a conversation from yesterday reachable after a restart.
+    store: Option<Arc<Store>>,
+    /// A failed store write is one warning, like a failed transcript write.
+    store_warned: AtomicBool,
     /// The broker whose decisions belong in this session's transcript.
     broker: Option<Arc<Broker>>,
     /// The last audit sequence written, so a turn appends what is new and not the
@@ -286,6 +295,7 @@ impl Record {
         agent_id: String,
         broker: Option<Arc<Broker>>,
         transcripts: Option<&Path>,
+        store: Option<Arc<Store>>,
     ) -> (Arc<Self>, mpsc::Receiver<Command>) {
         let now = jiff::Timestamp::now().to_string();
         let (commands, mailbox) = mpsc::channel(COMMAND_BUFFER);
@@ -327,6 +337,8 @@ impl Record {
                 acp_id: Mutex::new(None),
                 transcript,
                 transcript_warned: AtomicBool::new(false),
+                store,
+                store_warned: AtomicBool::new(false),
                 broker,
                 grants_written: Mutex::new(0),
                 usage: Mutex::new(Usage::default()),
@@ -387,10 +399,23 @@ impl Record {
     }
 
     fn set_status(&self, status: SessionStatus) {
-        self.lifecycle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .status = status;
+        {
+            let mut state = self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            state.status = status;
+        }
+        // The database learns the new status as it happens: a restart that closed
+        // every session would otherwise be the only way a stored row moves, and a
+        // client reading history mid-run would see `busy` for a finished turn.
+        if let Some(store) = &self.store
+            && let Err(error) =
+                store.set_status(&self.id, &status, &jiff::Timestamp::now().to_string())
+            && !self.store_warned.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(%error, session = %self.id, "the database did not record a status");
+        }
     }
 
     /// The sequence number of the last recorded event, `0` when there is none.
@@ -436,6 +461,12 @@ impl Record {
         {
             tracing::warn!(%error, session = %self.id, "the transcript is no longer being written");
         }
+        if let Some(store) = &self.store
+            && let Err(error) = store.append_event(&event)
+            && !self.store_warned.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(%error, session = %self.id, "the database is no longer being written");
+        }
     }
 
     /// Append the permission decisions this session made since the last call.
@@ -446,9 +477,12 @@ impl Record {
     /// ends rather than per event, because a decision is already on the broker's
     /// log by the time the call that needed it returns.
     fn flush_grants(&self) {
-        let (Some(transcript), Some(broker)) = (&self.transcript, &self.broker) else {
+        let Some(broker) = &self.broker else {
             return;
         };
+        if self.transcript.is_none() && self.store.is_none() {
+            return;
+        }
         let mut written = self
             .grants_written
             .lock()
@@ -460,7 +494,26 @@ impl Record {
             .filter(|entry| entry.seq > cutoff)
         {
             *written = entry.seq;
-            if let Err(error) = transcript.grant(entry)
+            // Both records are written from the same audit entry, so the file and
+            // the database cannot tally a decision differently. The database copy
+            // is the one retention keeps: a decision is an audit row, not volume.
+            if let Some(store) = &self.store {
+                let grant = Grant {
+                    session_id: self.id.clone(),
+                    seq: entry.seq,
+                    at: entry.at.clone(),
+                    tool: entry.tool.clone().unwrap_or_else(|| entry.title.clone()),
+                    decision: option_text(&entry.option),
+                    decided_by: entry.decided_by.to_string(),
+                };
+                if let Err(error) = store.record_grant(&grant)
+                    && !self.store_warned.swap(true, Ordering::Relaxed)
+                {
+                    tracing::warn!(%error, session = %self.id, "a decision was not recorded");
+                }
+            }
+            if let Some(transcript) = &self.transcript
+                && let Err(error) = transcript.grant(entry)
                 && !self.transcript_warned.swap(true, Ordering::Relaxed)
             {
                 tracing::warn!(%error, session = %self.id, "a grant was not written to the transcript");
@@ -617,6 +670,7 @@ pub async fn create(
         spec.id.clone(),
         Some(Arc::clone(broker)),
         state.transcripts(),
+        state.store().cloned(),
     );
     if let Some(title) = &request.title {
         record.title_from(title);
@@ -629,6 +683,13 @@ pub async fn create(
     // no client ever sees a session id that has nobody listening on it.
     spawn_owner(session, Arc::clone(&record), mailbox);
     state.sessions.insert(Arc::clone(&record));
+    // Stored before the route answers, so a client that creates a session and asks
+    // about it after a crash finds it rather than a gap between two records.
+    if let Some(store) = state.store()
+        && let Err(error) = store.save_session(&record.summary())
+    {
+        tracing::warn!(%error, session = %id, "the session was not recorded");
+    }
     Ok(record.summary())
 }
 
@@ -833,14 +894,20 @@ fn agent_failed(error: impl std::fmt::Display) -> ApiError {
 /// sessions is only a starting point, not the answer.
 fn next_id(state: &AppState) -> SessionId {
     let mut number = state.sessions.list().len() + 1;
+    let recorded: Vec<String> = state
+        .store()
+        .and_then(|store| store.session_ids().ok())
+        .unwrap_or_default();
     loop {
         let id = format!("s{number}");
         let live = state.sessions.get(&id).is_some();
         // `<transcript>/<id>/session.jsonl` is how a stored conversation is named;
-        // its directory is the one thing a restart still has to compare with.
+        // its directory is the one thing a restart still has to compare with, and
+        // the database is the second because a transcript can be turned off.
         let stored = state
             .transcripts()
-            .is_some_and(|directory| directory.join(&id).exists());
+            .is_some_and(|directory| directory.join(&id).exists())
+            || recorded.iter().any(|recorded| recorded == &id);
         if !live && !stored {
             return id;
         }
@@ -850,7 +917,28 @@ fn next_id(state: &AppState) -> SessionId {
 
 /// `GET /v1/sessions`.
 pub async fn list(State(state): State<AppState>) -> Json<Vec<SessionSummary>> {
-    Json(pending_aware(state.sessions.list(), &state))
+    let mut summaries = state.sessions.list();
+    // Sessions this process did not start are still this profile's sessions. They
+    // are listed from the store rather than hidden, because a conversation that is
+    // not in the list is one a client cannot open at all.
+    if let Some(store) = state.store() {
+        match store.sessions() {
+            Ok(stored) => {
+                for summary in stored {
+                    if !summaries.iter().any(|live| live.id == summary.id) {
+                        summaries.push(summary);
+                    }
+                }
+                summaries.sort_by(|left, right| {
+                    left.created_at
+                        .cmp(&right.created_at)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+            }
+            Err(error) => tracing::warn!(%error, "the stored sessions could not be listed"),
+        }
+    }
+    Json(pending_aware(summaries, &state))
 }
 
 /// Mark sessions blocked on a permission request.
@@ -880,7 +968,13 @@ pub async fn one(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SessionSummary>, ApiError> {
-    let summary = state.sessions.get(&id).ok_or_else(|| unknown(&id))?;
+    let summary = match state.sessions.get(&id) {
+        Some(summary) => summary,
+        None => state
+            .store()
+            .and_then(|store| store.session(&id).ok().flatten())
+            .ok_or_else(|| unknown(&id))?,
+    };
     Ok(Json(pending_aware(vec![summary], &state).remove(0)))
 }
 
@@ -891,6 +985,17 @@ pub async fn remove(
 ) -> Result<Json<SessionSummary>, ApiError> {
     let summary = state.sessions.get(&id).ok_or_else(|| unknown(&id))?;
     state.sessions.remove(&id);
+    // Deleting ends the session in the record as well: leaving it `idle` would keep
+    // it in every later list, which is the opposite of what the caller asked for.
+    if let Some(store) = state.store()
+        && let Err(error) = store.set_status(
+            &id,
+            &SessionStatus::Closed,
+            &jiff::Timestamp::now().to_string(),
+        )
+    {
+        tracing::warn!(%error, session = %id, "the deletion was not recorded");
+    }
     Ok(Json(summary))
 }
 
@@ -1045,7 +1150,6 @@ pub async fn events(
     Query(query): Query<AfterQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let record = state.sessions.handle(&id).ok_or_else(|| unknown(&id))?;
     let after = query
         .after
         .or_else(|| {
@@ -1055,6 +1159,13 @@ pub async fn events(
                 .and_then(|value| value.trim().parse::<u64>().ok())
         })
         .unwrap_or(0);
+
+    // A conversation this process did not start has no live feed: its events are a
+    // file, and the stream is the replay of it. That is the difference between a
+    // history and a session, and it is why this branch ends instead of waiting.
+    let Some(record) = state.sessions.handle(&id) else {
+        return stored_events(&state, &id, after);
+    };
 
     let (sender, receiver) = mpsc::channel(STREAM_BUFFER);
     tokio::spawn(pump(record, after, sender));
@@ -1068,6 +1179,40 @@ pub async fn events(
         },
     ))
     .into_response())
+}
+
+/// Replay a stored conversation from the database, then end the stream.
+///
+/// Nothing is replayed twice and nothing is invented: `after` is the same sequence
+/// the live stream takes, so a client reconnecting with a `Last-Event-ID` from a
+/// session that has since restarted sees the same gap-free answer.
+fn stored_events(state: &AppState, id: &str, after: u64) -> Result<Response, ApiError> {
+    let Some(store) = state.store() else {
+        return Err(unknown(id));
+    };
+    if store.session(id).map_err(store_failed)?.is_none() {
+        return Err(unknown(id));
+    }
+    let events = store.events_after(id, after).map_err(store_failed)?;
+    let frames = events
+        .into_iter()
+        .map(|event| Ok::<_, std::convert::Infallible>(frame(&event)));
+    Ok(Sse::new(futures::stream::iter(frames)).into_response())
+}
+
+/// A store failure as the API's own error: the daemon understood the request and
+/// could not answer it, which is a `500` rather than a `404`.
+fn store_failed(error: acpilot_store::StoreError) -> ApiError {
+    ApiError::new(AcpilotError::from(std::io::Error::other(error.to_string())))
+}
+
+/// The wire spelling of a decision, so the database says `allow_once` where the
+/// transcript says the same thing.
+fn option_text(option: &PermissionOption) -> String {
+    serde_json::to_value(option)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{option:?}"))
 }
 
 /// Which sequence the stream starts at.
@@ -1329,6 +1474,7 @@ mod tests {
             "mock".to_owned(),
             Some(Arc::clone(&broker)),
             Some(transcripts.path()),
+            None,
         );
 
         record.notice("Test", "one");
@@ -1423,8 +1569,14 @@ mod tests {
 
     #[test]
     fn the_replay_ring_keeps_the_newest_events() {
-        let (record, _mailbox) =
-            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
         for seq in 1..=REPLAY_CAPACITY + 10 {
             record.record(event(&record, seq as u64));
         }
@@ -1436,8 +1588,14 @@ mod tests {
 
     #[test]
     fn replay_after_returns_only_later_events() {
-        let (record, _mailbox) =
-            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
         for seq in 1..=3 {
             record.record(event(&record, seq));
         }
@@ -1451,8 +1609,14 @@ mod tests {
 
     #[test]
     fn the_default_title_names_the_agent() {
-        let (record, _mailbox) =
-            Record::new("s1".into(), "default".into(), "claude".into(), None, None);
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "claude".into(),
+            None,
+            None,
+            None,
+        );
         assert_eq!(record.summary().title, "claude session");
         record.title_from("update the readme");
         assert_eq!(record.summary().title, "update the readme");
@@ -1463,8 +1627,14 @@ mod tests {
 
     #[test]
     fn a_conversation_is_counted_as_it_is_recorded() {
-        let (record, _mailbox) =
-            Record::new("s1".into(), "default".into(), "mock".into(), None, None);
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
         assert!(
             record.context().is_none(),
             "a session nobody has spoken to reports nothing rather than zero"
@@ -1492,12 +1662,27 @@ mod tests {
     #[test]
     fn an_agents_reading_is_its_newest_conversation() {
         let sessions = Sessions::new();
-        let (older, _a) = Record::new("s1".into(), "default".into(), "mock".into(), None, None);
-        let (newer, _b) = Record::new("s2".into(), "default".into(), "mock".into(), None, None);
+        let (older, _a) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
+        let (newer, _b) = Record::new(
+            "s2".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
         let (elsewhere, _c) = Record::new(
             "s3".into(),
             "default".into(),
             "elsewhere".into(),
+            None,
             None,
             None,
         );

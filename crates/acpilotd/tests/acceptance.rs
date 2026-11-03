@@ -360,6 +360,13 @@ async fn a_conversation_is_still_there_after_the_daemon_that_ran_it() {
     }
     drop(events);
 
+    // Let the turn finish before pulling the plug. Aborting the server task does
+    // not stop the session task it spawned, so a daemon killed mid-turn can still
+    // write `busy` after the next daemon has closed the row — which is a race in
+    // the teardown, not in what this test asks: what the database says after a
+    // *stopped* daemon is `closed`.
+    wait_for_status(&harness.client, &session, SessionStatus::Idle).await;
+
     // Stop the first daemon but keep its directory: the database is the only thing
     // that carries the conversation across, which is the whole point of the task.
     let Harness {

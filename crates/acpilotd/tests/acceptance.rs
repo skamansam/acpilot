@@ -1,4 +1,10 @@
+#![cfg(unix)]
+
 //! The service phase's acceptance test: a scripted client against a real daemon.
+//!
+//! unix only, like `tests/socket.rs`: the daemon's default transport is a unix
+//! socket, and the Windows named pipe is P10-5. The store and the settings cascade
+//! have their own tests that run everywhere; what needs a socket is what waits.
 //!
 //! `TODO.md` states the phase's definition of done as two sentences — "a scripted
 //! `curl` session (create → prompt → stream → permission → resolve) works, and SSE
@@ -43,12 +49,7 @@ fn mock_agent() -> &'static Path {
         .get_or_init(|| {
             let exe = std::env::current_exe().expect("the test's own path");
             let debug = exe.parent().and_then(Path::parent).expect("target/debug");
-            let name = if cfg!(windows) {
-                "acpilot-mock-agent.exe"
-            } else {
-                "acpilot-mock-agent"
-            };
-            let path = debug.join(name);
+            let path = debug.join("acpilot-mock-agent");
             if !path.exists() {
                 let status = std::process::Command::new(env!("CARGO"))
                     .args([
@@ -126,13 +127,15 @@ async fn daemon_in(
     // The mock agent as a manifest entry, so the session route can find it: the
     // daemon lists what a profile declares and refuses to invent a command.
     let agents = directory.join("agents.toml");
+    // The command is escaped rather than pasted: a Windows path in a TOML string is
+    // `C:\\…` twice over, and the parse error names the column rather than the cause.
+    let command = mock_agent().display().to_string().replace('\\', "\\\\");
     std::fs::write(
         &agents,
         format!(
             "schema_version = 1\n\n[[agents]]\nid = \"mock\"\nname = \"Mock\"\n\
              description = \"The fixture agent.\"\ntransport = \"acp-stdio\"\n\
-             command = \"{}\"\n",
-            mock_agent().display()
+             command = \"{command}\"\n"
         ),
     )
     .expect("agents.toml");

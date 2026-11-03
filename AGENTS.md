@@ -5,6 +5,50 @@ repository. `CONTRIBUTING.md` is the authority on the gate and the conventions,
 and `README.md` explains what the product is. When this file and those disagree,
 they win.
 
+<!-- gstack:begin harness-routing -->
+## gstack skills
+
+gstack's engineering workflows are installed at /home/sam/workspace-other/gstack.
+For a coding, review, test, plan or release task, read
+/home/sam/workspace-other/gstack/SKILL.md, pick the one skill whose line matches,
+then read that skill's SKILL.md and follow it step by step, starting with its
+Preamble command. Load nothing else up front.
+<!-- gstack:end harness-routing -->
+
+This file's own sections still apply: the routing block is about which workflow
+to run, not about which documents describe this codebase.
+
+### When to use which skill
+
+- Bug, failing test, panic, or wrong output: `investigate` (root cause before any fix).
+- Done with a change, before calling it finished: `verify`, then `review` on the diff.
+- New feature or vague idea: `spec`; for a non-trivial design, `plan-eng-review` before writing code.
+- Ready to open a PR: `ship`.
+- Code touching auth, input parsing, `unsafe`, FFI, or network boundaries: `cso`.
+- Web UI work: `qa` to exercise it in a real browser, `design-review` for visual polish,
+  `benchmark` for page performance. Use the `browse` skill for all web browsing.
+- Don't use skills for one-line edits or questions about the code.
+
+### Rust checks (what `verify` and `ship` must run)
+
+- Gate: `cargo xtask check` — the commands CI runs, in one call (fmt, clippy, the
+  workspace nextest, the P0-5 probe and the web UI). `--no-web` when Node is not
+  the point.
+- Format: `cargo fmt --all -- --check`
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
+- Test: `cargo nextest run --workspace` (fall back to `cargo test --workspace`)
+- Gate at workspace level; `-p <crate>` alone can pass where the workspace fails.
+  `cargo nextest` does not run doctests, which is why CI has a separate
+  `docs`-feature job.
+
+### Web checks
+
+- `cargo xtask web-check` is the whole list: `npm ci` when `web/node_modules` is
+  missing, `npm run check` (svelte-check: types and accessibility), `npm test`,
+  the live test against a built `acpilotd`, `npm run build`, and a comparison of
+  the rebuilt page with the committed one.
+- Never `npm install` unless the task is changing dependencies.
+
 ## Read these first
 
 | File | Why |

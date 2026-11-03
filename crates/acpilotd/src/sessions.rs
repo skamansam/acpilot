@@ -56,6 +56,7 @@ use acpilot_proto::stats::ContextStats;
 use acpilot_store::{Grant, Store};
 use axum::Json;
 use axum::Router;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as ApiPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, Sse};
@@ -1217,6 +1218,110 @@ pub async fn events(
     .into_response())
 }
 
+/// `WS /v1/sessions/{id}/stream?after=N` — the same feed over a socket.
+///
+/// The SSE route is what a browser takes; this is the one a client that already
+/// speaks WebSocket uses, and it starts at the same place: `after`, or the
+/// sequence the ring and the database agree on when it is absent. The frames are
+/// the event JSON the SSE `data:` lines carry, one per frame, with no `id`
+/// alongside — a client that needs the sequence reads it from the event.
+///
+/// A stored conversation is replayed and the socket closed, exactly as its SSE
+/// stream ends: a history has no live feed to wait on.
+pub async fn stream(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+    Query(query): Query<AfterQuery>,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    // Both refusals happen before the upgrade, so they are the API's usual envelope
+    // rather than a close frame a client has to interpret.
+    if state.sessions.handle(&id).is_none() {
+        let Some(store) = state.store() else {
+            return Err(unknown(&id));
+        };
+        if store.session(&id).map_err(store_failed)?.is_none() {
+            return Err(unknown(&id));
+        }
+    }
+    let after = query.after.unwrap_or(0);
+    Ok(upgrade.on_upgrade(move |socket| serve_stream(state, id, after, socket)))
+}
+
+/// Send the replay, then follow the feed until the socket goes away.
+async fn serve_stream(state: AppState, id: String, after: u64, mut socket: WebSocket) {
+    let Some(record) = state.sessions.handle(&id) else {
+        // A stored conversation: everything is already written down, so there is
+        // nothing to follow afterwards.
+        if let Some(store) = state.store()
+            && let Ok(events) = store.events_after(&id, after)
+        {
+            for event in events {
+                if send_event(&mut socket, &event).await.is_err() {
+                    return;
+                }
+            }
+        }
+        return;
+    };
+
+    let mut last = after;
+    for event in record.replay_after(after) {
+        last = event.seq;
+        if send_event(&mut socket, &event).await.is_err() {
+            return;
+        }
+    }
+
+    let mut live = record.subscribe();
+    let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = beat.tick() => {
+                // A ping rather than a text frame: a client's `onmessage` should
+                // see events, and the transport answers a ping for us.
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
+            event = live.recv() => match event {
+                Ok(event) if event.seq > last => {
+                    last = event.seq;
+                    if send_event(&mut socket, &event).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let resync = serde_json::json!({ "type": "resync", "latest_seq": last });
+                    if socket.send(Message::text(resync.to_string())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            frame = socket.recv() => match frame {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                // Anything else from a client is a frame this route does not
+                // speak: pings are answered by the transport, and a client that
+                // sends commands here is using the wrong route.
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+}
+
+/// One event as a socket frame.
+async fn send_event(socket: &mut WebSocket, event: &SessionEvent) -> Result<(), axum::Error> {
+    socket
+        .send(Message::text(
+            serde_json::to_string(event).expect("a session event is always serialisable"),
+        ))
+        .await
+}
+
 /// Replay a stored conversation from the database, then end the stream.
 ///
 /// Nothing is replayed twice and nothing is invented: `after` is the same sequence
@@ -1327,6 +1432,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/sessions/{id}/prompt", post(prompt))
         .route("/v1/sessions/{id}/cancel", post(cancel))
         .route("/v1/sessions/{id}/events", get(events))
+        .route("/v1/sessions/{id}/stream", get(stream))
 }
 
 #[allow(dead_code)]

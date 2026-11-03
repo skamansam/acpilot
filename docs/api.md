@@ -215,6 +215,15 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
   `400 invalid_request` with the agent's advertised modes in `details`.
 - `SessionStatus` is `idle`, `busy`, `awaiting_permission`, `closed`, `failed`.
 
+`WS /v1/sessions/{id}/stream?after=N` is the same feed over a socket: one text
+frame per `SessionEvent`, no `id` alongside because the event carries its `seq`. A
+stored conversation is replayed and the socket closed, like its SSE stream ending;
+an unknown id is `404` with the usual envelope *before* the upgrade, so a client is
+not left reading a close code. A dropped frame sequence is announced as
+`{"type":"resync","latest_seq":N}` rather than silently continuing: the client's
+answer to that is to reconnect with `after=N`. The connection is kept alive with
+WebSocket pings, which a browser answers without the page seeing anything.
+
 `GET /v1/sessions` lists every conversation this profile has, not only the ones
 this process started. A stored session is reported with `status: "closed"` —
 nothing is running it — and a prompt to it is `409`, because resuming a stopped

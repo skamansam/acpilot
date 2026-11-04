@@ -18,7 +18,13 @@ pub fn mock_agent() -> &'static Path {
         .get_or_init(|| {
             let exe = std::env::current_exe().expect("the test's own path");
             let debug = exe.parent().and_then(Path::parent).expect("target/debug");
-            let path = debug.join("acpilot-mock-agent");
+            // The executable suffix is the platform's: a Windows build is
+            // `acpilot-mock-agent.exe`, and a path without it would look like a
+            // fixture that was never built.
+            let path = debug.join(format!(
+                "acpilot-mock-agent{}",
+                std::env::consts::EXE_SUFFIX
+            ));
             if !path.exists() {
                 let status = std::process::Command::new(env!("CARGO"))
                     .args([

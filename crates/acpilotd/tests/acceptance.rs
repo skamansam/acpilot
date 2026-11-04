@@ -161,14 +161,24 @@ async fn next_event(
         Result<acpilot_client::SessionStream, acpilot_client::ClientError>,
     >,
 ) -> u64 {
-    let frame = tokio::time::timeout(PATIENCE, stream.next())
-        .await
-        .expect("an event inside the patience window")
-        .expect("the stream is still open")
-        .expect("a frame");
-    match frame {
-        acpilot_client::SessionStream::Event(event) => event.seq,
-        other => panic!("expected an event, got {other:?}"),
+    // A heartbeat names the last sequence rather than adding one, so it is the
+    // stream saying it is alive while the event is still on its way. The server sends
+    // one every 15 s and a loaded runner can meet it before the event it is waiting
+    // for; failing there would blame the keep-alive for the wait. The event is still
+    // required inside the window, so this skips the frame, not the assertion.
+    loop {
+        let frame = tokio::time::timeout(PATIENCE, stream.next())
+            .await
+            .expect("an event inside the patience window")
+            .expect("the stream is still open")
+            .expect("a frame");
+        match frame {
+            acpilot_client::SessionStream::Event(event) => return event.seq,
+            acpilot_client::SessionStream::Heartbeat { seq } => {
+                assert!(seq > 0, "a heartbeat names the last sequence it has seen");
+            }
+            other => panic!("expected an event, got {other:?}"),
+        }
     }
 }
 

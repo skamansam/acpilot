@@ -95,7 +95,11 @@ GET    /v1/stats
 ```
 
 `GET /v1/health` is the one route a client calls before it trusts anything else:
-`{ok, service, version, api, workspace?}`. `workspace` is the id the daemon was
+`{ok, service, version, api, workspace?, install?}`. `install` is how the running
+binary was installed, when that installation left a marker (ADR 0010): `{method,
+version?}`, where `method` decides who may reconcile a version difference — a package
+manager that owns the files, or the program itself for a tarball or a `cargo install`.
+It is absent when no marker was found, which is treated as nobody's to replace. `workspace` is the id the daemon was
 started with and is omitted when it has none; a client uses it to check that the
 daemon already listening is serving the directory it was asked about, rather than
 restarting a daemon that may be mid-turn (ADR 0004 §2).

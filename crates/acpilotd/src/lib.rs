@@ -120,6 +120,14 @@ pub struct Health {
     /// something a client should have named.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// How this daemon was installed, when a marker says (ADR 0010).
+    ///
+    /// A client whose version does not match reports the difference and needs to know
+    /// who is allowed to reconcile it: a package manager that owns these files, or the
+    /// program itself when the copy is the user's. Absent means no marker was found,
+    /// which is treated as nobody's to replace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<acpilot_host::install::Install>,
 }
 
 /// An [`AcpilotError`] rendered as an HTTP response.
@@ -203,6 +211,11 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
         version: env!("CARGO_PKG_VERSION"),
         api: acpilot_proto::API_PREFIX,
         workspace: state.workspace().map(|workspace| workspace.id.clone()),
+        // Asked of the binary that is running, not of `PATH`: a second copy on this
+        // machine is a different installation and says so for itself.
+        install: std::env::current_exe()
+            .ok()
+            .and_then(|exe| acpilot_host::install::install_of(&exe)),
     })
 }
 

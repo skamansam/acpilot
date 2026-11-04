@@ -1413,6 +1413,18 @@ untrusted binary with your repo and your network is exactly the hole worth closi
   - Left: the tap repository (`skamansam/homebrew-tap`) and its `HOMEBREW_TAP_TOKEN` do not exist yet, so the formula is generated and not pushed.
   - Left, and a decision rather than a chore: cargo-dist archives one *package* per platform, so a release is `acpilot`, `acpilotd` and `acpilot-gui` as three archives that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` still packages one tarball holding all three. Picking one shape belongs with P12-2's workflow work; until then `xtask dist` produces the cargo-dist shape and the workflow produces the other.
   - Note: `cargo-dist` declares the `.cdx.xml` per program and generates it only in the CI job it writes, so `xtask dist` runs `cargo cyclonedx` itself and keeps the three declared SBOMs (`Cargo.toml`'s `[profile.dist]` is what `dist build` asks for).
+- **Progress 2026-11-04:** a version difference can now say how to fix it. ADR 0010 decides
+  install provenance: every installation except a bare binary drop ships `install.json`
+  (`{method, version?}`) beside the program or under a shared prefix, because only the
+  package knows which package manager owns the files. `acpilot_host::install` reads it in
+  the ADR's order (beside the binary, `/usr/local/share`, `/usr/share`, per-user state) and
+  answers who may replace the binary: `package-manager` (prints `sudo apt install
+  --only-upgrade acpilot`, `brew upgrade acpilot`, …), `self` (tarball, script, AppImage,
+  `cargo`), or `nobody` for a method it does not know. `GET /v1/health` reports it as
+  `install`, so the refusal a client gives can end in the one command that reconciles the
+  two versions. **Open:** the update itself (fetch, checksum, temp file, atomic rename,
+  restart), a `acpilot update` surface, and a marker actually shipped by a package — no
+  distribution exists yet, so the table is exercised by tests rather than by installs.
 - [ ] **P12-2** Versioning (`0.1.0`), `CHANGELOG.md` via `git-cliff`, release workflow with signed tags, reproducible builds documented.
 - [ ] **P12-3** Docs site (`docs/`): quickstart per interface, agent manifest reference, profile + config reference (`docs/config.md`, cascade and origin), host setup (ssh/wsl), policy reference, LSP server setup (`docs/lsp.md`), API reference from OpenAPI, troubleshooting (`acpilot doctor` output explained).
 - [ ] **P12-4** First-run experience, with no setup command to run first. The first use of a profile materialises it: `Registry::open_or_create` creates `agents.toml` with the `$schema` line and the shipped presets, once, and never over a file that exists. `acpilot doctor` then detects agents on PATH (`claude`, `codex`, `gemini`, `freebuff`) and language servers, tests one handshake, and the first launch prints next steps. A program that needs no configuration launches with sane defaults and says nothing; a file appears only when there is a profile to save. Decided 2026-10-22: a required `setup` step is a toll booth in front of a product whose whole claim is that the manifest is a file you can edit.

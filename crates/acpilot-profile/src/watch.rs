@@ -60,7 +60,7 @@ pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>>
     let (changes, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         while let Ok(Ok(event)) = watch_events.recv() {
-            if !touches(&targets, &event) {
+            if !touches(&targets, &watched, &event) {
                 continue;
             }
             std::thread::sleep(DEBOUNCE);
@@ -83,7 +83,7 @@ pub fn changes(paths: impl IntoIterator<Item = PathBuf>) -> Option<Receiver<()>>
 /// the second is how the creation of `.acpilot` is a change to the `config.toml`
 /// that is about to be written inside it. Everything else in the same directory is
 /// somebody else's business.
-fn touches(targets: &[PathBuf], event: &notify::Event) -> bool {
+fn touches(targets: &[PathBuf], watched: &[PathBuf], event: &notify::Event) -> bool {
     if !is_a_change(event) {
         return false;
     }
@@ -96,9 +96,19 @@ fn touches(targets: &[PathBuf], event: &notify::Event) -> bool {
     // place and the tests name the shape rather than the platform.
     let created = matches!(event.kind, notify::EventKind::Create(_));
     event.paths.iter().any(|changed| {
-        targets
-            .iter()
-            .any(|target| target == changed || (created && target.starts_with(changed)))
+        targets.iter().any(|target| {
+            target == changed
+                || (created
+                    && target.starts_with(changed)
+                    // Only when it is a directory nobody was watching. FSEvents
+                    // reports a write inside a watched directory as a creation
+                    // *of that directory*, so "any ancestor named in a create
+                    // event" counted a log beside the settings as a settings
+                    // change — on macOS only, which is why the rule is about the
+                    // watch rather than the platform. A directory already armed is
+                    // the one the watch started from, not one that appeared.
+                    && !watched.iter().any(|armed| armed == changed))
+        })
     })
 }
 
@@ -235,7 +245,7 @@ mod tests {
         let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
             .add_path(PathBuf::from("/w/project"));
         assert!(
-            !touches(&[target], &event),
+            !touches(&[target], &[], &event),
             "a modified directory is somebody else's write"
         );
     }
@@ -247,8 +257,23 @@ mod tests {
             notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Folder))
                 .add_path(PathBuf::from("/w/project/.acpilot"));
         assert!(
-            touches(&[target], &event),
+            touches(&[target], &[PathBuf::from("/w/project")], &event),
             "the directory appearing is how a project that had no `.acpilot` gets live reload"
+        );
+    }
+
+    #[test]
+    fn a_create_reported_on_a_directory_already_watched_is_not_a_change() {
+        // What macOS reports for `write(daemon.log)`: a creation of the watched
+        // directory itself. It is already watched, so nothing about the settings
+        // changed — this is the shape that made the test below flaky rather than
+        // failing, because it depends on how FSEvents coalesces.
+        let target = PathBuf::from("/w/project/config.toml");
+        let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Any))
+            .add_path(PathBuf::from("/w/project"));
+        assert!(
+            !touches(&[target], &[PathBuf::from("/w/project")], &event),
+            "a directory we are already watching did not appear"
         );
     }
 

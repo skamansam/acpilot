@@ -2,8 +2,8 @@
 //!
 //! The helper is one process per host, spoken to over stdin/stdout as
 //! line-delimited JSON-RPC 2.0 (see `crates/acpilotd-helper`). This module owns the
-//! daemon's half of that: start the transport, shake hands, and report what the far
-//! side can do. [`Connections`] keeps the process that answered, so asking a host the
+//! daemon's half of that: start the transport, shake hands, say what the far side can
+//! do, and then ask it things. [`Connections`] keeps the process that answered, so asking a host the
 //! same question twice is one connection rather than two — a helper is a session with
 //! a protocol, and a daemon that booted a distro per request would be paying the
 //! transport's cost for every question.
@@ -17,8 +17,10 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use acpilot_proto::host::HostCapabilities;
 use serde_json::{Value, json};
@@ -30,6 +32,14 @@ use serde_json::{Value, json};
 /// without the other is refused at the handshake instead of failing a call.
 pub const PROTOCOL: u64 = 1;
 
+/// How long one answer is waited for before the helper is called dead.
+///
+/// A helper is a process on another machine: one that stopped reading would otherwise
+/// be a daemon hung on a pipe with nothing to show for it. The budget is the same as
+/// the handshake's in `crates/acpilotd/src/hosts.rs`, because a call and a handshake
+/// are the same round trip over the same transport.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// One running helper, and the pipes it answers on.
 ///
 /// Dropped when the daemon forgets the host or a call fails: a helper that stopped
@@ -39,7 +49,8 @@ pub const PROTOCOL: u64 = 1;
 pub struct Connection {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    replies: mpsc::Receiver<String>,
+    timeout: Duration,
     capabilities: HostCapabilities,
     next_id: u64,
 }
@@ -53,6 +64,15 @@ impl Connection {
     /// handshake, or speaks another protocol. The message names what happened; the
     /// caller turns it into a `502` for the host.
     pub fn dial(program: &str, args: &[String]) -> Result<Self, String> {
+        Self::dial_within(program, args, CALL_TIMEOUT)
+    }
+
+    /// As [`Connection::dial`], waiting `timeout` for each answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Connection::dial`], plus a helper that did not answer inside `timeout`.
+    pub fn dial_within(program: &str, args: &[String], timeout: Duration) -> Result<Self, String> {
         let mut child = Command::new(program)
             .args(args)
             .stdin(Stdio::piped())
@@ -68,10 +88,25 @@ impl Connection {
             .stdout
             .take()
             .ok_or_else(|| "the helper has no stdout".to_owned())?;
+        // Reading happens on a thread because a pipe has no read timeout: waiting on
+        // it directly would make a helper that stopped reading a daemon that hung,
+        // which is the failure a remote path can least afford. The thread ends when the
+        // helper does — EOF, or the kill in `Drop` closing the pipe — and the sender
+        // being gone is how a caller learns the far side went with it.
+        let (sender, replies) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
         let mut connection = Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            replies,
+            timeout,
             // Filled in by the handshake: the helper names its methods and this is
             // what it says, not what this build expects of it. Nothing is true until
             // it has answered, so a half-finished connection offers nothing.
@@ -95,46 +130,86 @@ impl Connection {
         self.capabilities
     }
 
-    /// Ask the helper what it is, on the connection it already answered on.
+    /// Ask the helper `method` with `params` and hand back its `result`.
     ///
-    /// The reply's `id` is not matched: the conversation is one request and one
-    /// answer at a time, and the mutex that owns this connection is the thing that
-    /// keeps it that way.
-    fn hello(&mut self) -> Result<(), String> {
-        self.next_id += 1;
+    /// # Errors
+    ///
+    /// The helper answered nothing, answered a line that is not JSON-RPC, answered a
+    /// different request, refused with an error, or stayed silent past the timeout.
+    pub fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id + 1;
+        self.next_id = id;
         let request = json!({
             "jsonrpc": "2.0",
-            "id": self.next_id,
-            "method": "hello",
-            "params": { "protocol": PROTOCOL },
+            "id": id,
+            "method": method,
+            "params": params,
         });
         // A program that exited before reading is not a helper, and it answers
         // nothing — which the read below reports as itself. Treating the write's
         // `EPIPE` as the failure instead would name the symptom (a broken pipe) rather
-        // than the fact (no handshake), and would report it twice for one cause.
+        // than the fact, and would report it twice for one cause.
         let _ = writeln!(self.stdin, "{request}").and_then(|()| self.stdin.flush());
-        let mut line = String::new();
-        self.stdout
-            .read_line(&mut line)
-            .map_err(|error| format!("the helper would not answer: {error}"))?;
-        if line.trim().is_empty() {
-            return Err("the helper answered nothing".to_owned());
-        }
+        let line = self.read()?;
         let response: Value = serde_json::from_str(&line).map_err(|error| {
             format!("the helper answered something that is not JSON-RPC: {error}")
         })?;
-        let protocol = response
+        // The id is checked rather than assumed: a reply to another request taken as
+        // this one's would hand the caller somebody else's file, and the interleaving
+        // that produced it is the thing to report, not to paper over.
+        match response.get("id") {
+            Some(replied) if *replied == json!(id) => {}
+            Some(other) => return Err(format!("the helper answered request {other}, not {id}")),
+            None => {
+                return Err(format!(
+                    "the helper answered without saying which request: {}",
+                    line.trim()
+                ));
+            }
+        }
+        if let Some(error) = response.get("error") {
+            let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("no message");
+            return Err(format!("{method}: {message} (code {code})"));
+        }
+        response
             .get("result")
-            .and_then(|result| result.get("protocol"))
+            .cloned()
+            .ok_or_else(|| format!("the helper answered {method} with neither result nor error"))
+    }
+
+    /// Ask the helper what it is, on the connection it already answered on.
+    fn hello(&mut self) -> Result<(), String> {
+        let result = self.request("hello", json!({ "protocol": PROTOCOL }))?;
+        let protocol = result
+            .get("protocol")
             .and_then(Value::as_u64)
-            .ok_or_else(|| format!("the helper did not shake hands: {}", line.trim()))?;
+            .ok_or_else(|| format!("the helper did not shake hands: {result}"))?;
         if protocol != PROTOCOL {
             return Err(format!(
                 "this daemon speaks protocol {PROTOCOL}, the helper {protocol}"
             ));
         }
-        self.capabilities = capabilities(response.get("result").unwrap_or(&Value::Null));
+        self.capabilities = capabilities(&result);
         Ok(())
+    }
+
+    /// One line from the helper, or what happened instead of one.
+    fn read(&mut self) -> Result<String, String> {
+        match self.replies.recv_timeout(self.timeout) {
+            Ok(line) if line.trim().is_empty() => Err("the helper answered nothing".to_owned()),
+            Ok(line) => Ok(line),
+            Err(RecvTimeoutError::Timeout) => Err(format!(
+                "the helper did not answer within {:?}",
+                self.timeout
+            )),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("the helper answered nothing and closed its side".to_owned())
+            }
+        }
     }
 }
 

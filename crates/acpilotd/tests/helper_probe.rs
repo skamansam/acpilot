@@ -5,10 +5,16 @@
 //! `acpilotd-helper` itself is tested where it lives; what this covers is the other
 //! end — that a helper which shakes hands is believed, one that speaks another
 //! protocol is refused by number, and one that says nothing is a failure rather than
-//! an empty success. A shell standing in for the helper is what makes the failures
+//! an empty success — and then what a kept connection can ask it: a request is
+//! answered, another request's answer is refused rather than taken, a refusal keeps
+//! its code, and a helper that stops reading is a failure inside the timeout rather
+//! than a daemon hung on a pipe. A shell standing in for the helper is what makes the failures
 //! reproducible without a second host.
 
-use acpilotd::helper::{Connections, probe};
+use std::time::Duration;
+
+use acpilotd::helper::{Connection, Connections, probe};
+use serde_json::json;
 
 fn speak(line: &str) -> (String, Vec<String>) {
     (
@@ -89,11 +95,13 @@ fn a_second_test_of_the_same_host_asks_the_helper_that_answered_the_first() {
     // nothing" rather than pass for the wrong reason.
     let directory = tempfile::tempdir().expect("temp dir");
     let marker = directory.path().join("dialled");
+    // The stand-in answers each handshake with the id it was asked: the daemon checks
+    // the id now, so a fixed one would be a refused answer rather than a reuse.
+    let answer = r#"{"jsonrpc":"2.0","id":%s,"result":{"protocol":1}}"#;
     let script = format!(
         "if [ -e '{marker}' ]; then exit 0; fi\n: > '{marker}'\n\
-         while read -r _; do printf '%s\\n' '{handshake}'; done",
+         n=0\nwhile read -r _; do n=$((n+1)); printf '{answer}\\n' \"$n\"; done",
         marker = marker.display(),
-        handshake = r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1}}"#,
     );
     let program = "sh".to_owned();
     let args = vec!["-c".to_owned(), script];
@@ -113,4 +121,81 @@ fn a_second_test_of_the_same_host_asks_the_helper_that_answered_the_first() {
 fn a_helper_that_is_not_there_names_the_program() {
     let error = probe("/nonexistent/acpilotd-helper", &[]).expect_err("no such program");
     assert!(error.contains("/nonexistent/acpilotd-helper"), "{error}");
+}
+
+#[test]
+fn a_request_gets_the_answer_to_that_request() {
+    let (program, args) = answering(
+        r#"n=0
+while read -r _; do
+  n=$((n+1))
+  if [ "$n" = 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"methods":["fs.list"]}}';
+  else printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"entries":["a.txt"]}}'; fi
+done"#,
+    );
+    let mut connection = Connection::dial(&program, &args).expect("the handshake");
+    let result = connection
+        .request("fs.list", json!({}))
+        .expect("the second request is answered");
+    assert_eq!(result["entries"][0], "a.txt", "{result}");
+}
+
+#[test]
+fn another_requests_answer_is_refused_rather_than_taken() {
+    let (program, args) = answering(
+        r#"n=0
+while read -r _; do
+  n=$((n+1))
+  if [ "$n" = 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocol":1}}';
+  else printf '%s\n' '{"jsonrpc":"2.0","id":7,"result":{"entries":[]}}'; fi
+done"#,
+    );
+    let mut connection = Connection::dial(&program, &args).expect("the handshake");
+    let error = connection
+        .request("fs.list", json!({}))
+        .expect_err("an answer to somebody else's request");
+    assert!(error.contains("request 7"), "{error}");
+    assert!(error.contains("not 2"), "{error}");
+}
+
+#[test]
+fn a_refusal_keeps_the_code_the_helper_gave_it() {
+    let (program, args) = answering(
+        r#"n=0
+while read -r _; do
+  n=$((n+1))
+  if [ "$n" = 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocol":1}}';
+  else printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"no such file: /nope"}}'; fi
+done"#,
+    );
+    let mut connection = Connection::dial(&program, &args).expect("the handshake");
+    let error = connection
+        .request("fs.read", json!({ "path": "/nope" }))
+        .expect_err("a missing file is a refusal");
+    assert!(error.contains("fs.read"), "{error}");
+    assert!(error.contains("no such file: /nope"), "{error}");
+    assert!(error.contains("-32000"), "{error}");
+}
+
+#[test]
+fn a_helper_that_stops_answering_fails_inside_the_timeout() {
+    let (program, args) = answering(
+        r#"n=0
+while read -r _; do
+  n=$((n+1))
+  if [ "$n" = 1 ]; then printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocol":1}}';
+  else exec sleep 30; fi
+done"#,
+    );
+    let mut connection = Connection::dial_within(&program, &args, Duration::from_millis(300))
+        .expect("the handshake");
+    let error = connection
+        .request("exec", json!({}))
+        .expect_err("a helper that stopped reading");
+    assert!(error.contains("did not answer within"), "{error}");
+}
+
+/// A shell that stands in for a helper, with the loop the tests above describe.
+fn answering(script: &str) -> (String, Vec<String>) {
+    ("sh".to_owned(), vec!["-c".to_owned(), script.to_owned()])
 }

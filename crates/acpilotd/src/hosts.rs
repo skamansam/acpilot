@@ -19,8 +19,9 @@
 //!
 //! Latency is not reported: a handshake is one line each way, and a number from it
 //! would say more about where the helper runs than about the host. A remote host's
-//! capabilities are protocol 1's — files and programs, no PTY and no language
-//! server yet — so a client is not offered a pane on a host that would refuse one.
+//! capabilities are the ones its helper named in the handshake, so a client is only
+//! offered what the far side said it could do — a build with a PTY is offered a pane,
+//! one without `exec` is never offered as a place to start an agent.
 
 use std::sync::{Arc, Mutex, PoisonError};
 

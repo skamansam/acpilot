@@ -1566,8 +1566,7 @@ async fn ask(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| host.id.clone());
-    let (program, args) =
-        crate::hosts::remote_command(host.kind, &address, &state.hosts().ssh_program());
+    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
     let unavailable = |detail: String| {
         ApiError::new(AcpilotError::HostUnavailable {
             host: host.id.clone(),
@@ -1577,9 +1576,8 @@ async fn ask(
     let connections = std::sync::Arc::clone(state.hosts().connections());
     let key = host.id.clone();
     let method = method.to_owned();
-    let asked = tokio::task::spawn_blocking(move || {
-        connections.request(&key, &program, &args, &method, params)
-    });
+    let asked =
+        tokio::task::spawn_blocking(move || connections.request(&key, &transport, &method, params));
     let answered = tokio::time::timeout(crate::hosts::HANDSHAKE_TIMEOUT, asked)
         .await
         .map_err(|_| {
@@ -1599,8 +1597,7 @@ async fn ask(
 ///
 /// No ETag the host computed, because the helper reads a file rather than opening one:
 /// the token is this daemon's own hash of the text it was handed, which is enough to tell
-/// a client that what it is looking at is what it read. A write is not served for a remote
-/// workspace yet, so there is nothing to send it back to.
+/// a client that what it is looking at is what it read.
 async fn read_remote(
     state: &AppState,
     host: &acpilot_proto::host::HostSummary,
@@ -1654,10 +1651,16 @@ async fn read_remote(
 
 /// [`list`], from a root on the far side of a transport.
 ///
-/// The far host lists one directory, so the rows are what it named: no ignore matching and
-/// no git letters, because both are this machine reading the other machine's files with
-/// rules it does not have. A tree of a remote workspace still draws — it just draws rows
-/// without letters rather than claiming every path is clean.
+/// The far host lists one directory, and the two questions a tree row asks about it are
+/// asked *there*: `git check-ignore` for the hidden rows and `git status` for the letters.
+/// Both are the same programs, reading the same repository, that the local listing uses —
+/// a matcher of this daemon's own would be a second answer to which files a person's
+/// commits hide, and the two would disagree the first time a pattern was subtle.
+///
+/// Every one of those answers is optional. A host with no `git`, a workspace that is not a
+/// repository, and a helper from before `fs.ignored` all leave a row without a letter and
+/// a listing that shows everything: a tree that cannot know is a tree without marks, not a
+/// tree that claims every path is clean and visible.
 async fn list_remote(
     state: &AppState,
     host: &acpilot_proto::host::HostSummary,
@@ -1699,6 +1702,10 @@ async fn list_remote(
     } else {
         format!("{separated}/")
     };
+    let honour = state
+        .preferences()
+        .is_none_or(|preferences| preferences.tree_respect_gitignore);
+    let include_ignored = query.include_ignored.unwrap_or(false);
     let mut listing: Vec<FileEntry> = entries
         .iter()
         .filter_map(|entry| {
@@ -1718,9 +1725,173 @@ async fn list_remote(
                 status: None,
             })
         })
+        // `.git` is the repository's bookkeeping rather than the project's files, and no
+        // ignore rule has to say so — the same rule the local listing follows.
+        .filter(|row| {
+            !(honour
+                && row
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name == ".git"))
+        })
         .collect();
+    // Asked once for the whole directory rather than once per row: a row that asked its
+    // own question would be one `git` process start on the far host per file.
+    let changed = changes_remote(state, host, root).await;
+    let ignored = if honour {
+        ignored_remote(state, host, root, &listing).await
+    } else {
+        std::collections::HashSet::new()
+    };
+    listing.retain(|row| include_ignored || !ignored.contains(&row.path));
+    for row in &mut listing {
+        row.ignored = ignored.contains(&row.path);
+        row.status = changed.get(&row.path).copied();
+    }
     listing.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(Json(listing))
+}
+
+/// Every changed path under a root on the far side, as the letter a tree row draws.
+///
+/// The same two `git` questions the local [`changes`] answers, asked through the helper's
+/// `exec` because `git` has to read the repository the files are in. An empty map is the
+/// answer for every way that can fail — no `git` on the host, not a repository — for the
+/// same reason the local one is: a tree without letters is not an error a listing carries.
+async fn changes_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+) -> BTreeMap<String, FileChange> {
+    let Some(top) = git_remote(state, host, &["-C", root, "rev-parse", "--show-toplevel"]).await
+    else {
+        return BTreeMap::new();
+    };
+    let top = top.trim();
+    if top.is_empty() {
+        return BTreeMap::new();
+    }
+    // Run at the workspace root rather than the repository's: paths are reported relative
+    // to the repository either way, and the root is the path this daemon knows.
+    let Some(status) = git_remote(
+        state,
+        host,
+        &[
+            "-C",
+            root,
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )
+    .await
+    else {
+        return BTreeMap::new();
+    };
+    let Ok(status) = acpilot_git::parse_status(status.as_bytes()) else {
+        return BTreeMap::new();
+    };
+    let prefix = remote_prefix(root, top);
+    let mut changes: BTreeMap<String, FileChange> = BTreeMap::new();
+    for entry in &status.files {
+        let Some(relative) = workspace_relative(&entry.path, prefix.as_deref()) else {
+            continue;
+        };
+        let change = change_of(entry);
+        let mut path = Some(relative.as_str());
+        while let Some(current) = path {
+            let slot = changes.entry(current.to_owned()).or_insert(change);
+            if urgency(change) > urgency(*slot) {
+                *slot = change;
+            }
+            path = current.rfind('/').map(|at| &current[..at]);
+        }
+    }
+    changes
+}
+
+/// The workspace root's path inside its repository, when the repository is bigger.
+///
+/// The same arithmetic [`changes`] does with `canonicalize`, done on the far host's own
+/// spellings: both paths came from that host's `git`, so they already agree on separators
+/// and on whether a `..` was collapsed.
+fn remote_prefix(root: &str, top: &str) -> Option<String> {
+    let normalise = |path: &str| path.trim_end_matches(['/', '\\']).replace('\\', "/");
+    let (root, top) = (normalise(root), normalise(top));
+    if root == top {
+        return None;
+    }
+    root.strip_prefix(&format!("{top}/")).map(str::to_owned)
+}
+
+/// Which of `rows` an ignore rule on the far host hides.
+///
+/// One question for the whole directory, and an empty answer for every way it can go
+/// unanswered: a helper that does not offer `fs.ignored` refuses by name, and a refusal
+/// here reads as "nothing is hidden", which is the listing that shows every file rather
+/// than the one that silently loses rows.
+async fn ignored_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    rows: &[FileEntry],
+) -> std::collections::HashSet<String> {
+    let paths: Vec<&str> = rows.iter().map(|row| row.path.as_str()).collect();
+    if paths.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let Ok(Ok(answer)) = ask(
+        state,
+        host,
+        "fs.ignored",
+        serde_json::json!({ "root": root, "paths": paths }),
+    )
+    .await
+    else {
+        return std::collections::HashSet::new();
+    };
+    answer
+        .get("ignored")
+        .and_then(serde_json::Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One `git` on the far host, and what it printed.
+///
+/// `None` is every way that question can go unanswered — no `git` on the host, a directory
+/// that is not a repository, a program that exited non-zero — because each of them is a
+/// tree without letters rather than an error a listing should carry.
+async fn git_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    args: &[&str],
+) -> Option<String> {
+    let answered = ask(
+        state,
+        host,
+        "exec",
+        serde_json::json!({ "program": "git", "args": args }),
+    )
+    .await
+    .ok()?;
+    let answer = answered.ok()?;
+    if answer.get("code").and_then(serde_json::Value::as_i64) != Some(0) {
+        return None;
+    }
+    answer
+        .get("stdout")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 /// A refusal from the far side of a read, in this API's terms.

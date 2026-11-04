@@ -108,11 +108,11 @@ fn a_second_test_of_the_same_host_asks_the_helper_that_answered_the_first() {
     let connections = Connections::new();
 
     let first = connections
-        .probe("ssh:box", &program, &args)
+        .probe_with("ssh:box", &program, &args)
         .expect("the first test dials");
     assert!(first.filesystem);
     let second = connections
-        .probe("ssh:box", &program, &args)
+        .probe_with("ssh:box", &program, &args)
         .expect("the second test reuses the helper");
     assert!(second.spawn);
 }

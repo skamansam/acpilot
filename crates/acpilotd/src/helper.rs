@@ -2,11 +2,21 @@
 //!
 //! The helper is one process per host, spoken to over stdin/stdout as
 //! line-delimited JSON-RPC 2.0 (see `crates/acpilotd-helper`). This module owns the
-//! daemon's half of that: start the transport, shake hands, say what the far side can
-//! do, and then ask it things. [`Connections`] keeps the process that answered, so asking a host the
-//! same question twice is one connection rather than two — a helper is a session with
-//! a protocol, and a daemon that booted a distro per request would be paying the
-//! transport's cost for every question.
+//! daemon's half of that: put the helper on the host, start the transport, shake hands,
+//! say what the far side can do, and then ask it things. [`Connections`] keeps the process
+//! that answered, so asking a host the same question twice is one connection rather than
+//! two — a helper is a session with a protocol, and a daemon that booted a distro per
+//! request would be paying the transport's cost for every question.
+//!
+//! # Why the helper travels inside the daemon
+//!
+//! A host that has never seen acpilot has no `acpilotd-helper` on it to start. A release
+//! build carries the static binary (see `build.rs`), so the first connection writes it to
+//! `~/.local/bin` over the transport that is already there and starts *that* — no `scp`,
+//! no package manager, and the version on the host is the version this daemon speaks
+//! instead of whatever was installed months ago. A developer build carries nothing and
+//! asks the host's `PATH`, which is what every stand-in in this crate's tests is: the
+//! difference is packaging, not behaviour.
 //!
 //! # Why the version is checked
 //!
@@ -16,13 +26,13 @@
 //! something unexpected is reported rather than parsed optimistically.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use acpilot_proto::host::HostCapabilities;
+use acpilot_proto::host::{HostCapabilities, HostKind};
 use serde_json::{Value, json};
 
 /// The protocol this daemon speaks.
@@ -31,6 +41,16 @@ use serde_json::{Value, json};
 /// values are the same contract from two sides, and a build that changes one
 /// without the other is refused at the handshake instead of failing a call.
 pub const PROTOCOL: u64 = 1;
+
+/// The directory an installed helper lives in, relative to the host user's home.
+///
+/// `~/.local/bin` is the path the design phase's P0-5 measured and the one the WSL and
+/// SSH pages tell a person to expect. A relative directory is joined to `$HOME` on the
+/// host, so the same constant works on a Linux box, a distro and a Mac.
+pub const INSTALL_DIR: &str = ".local/bin";
+
+/// The name the helper is installed under.
+pub const INSTALL_NAME: &str = "acpilotd-helper";
 
 /// The helper this build carries, or nothing when it was built without one.
 ///
@@ -58,6 +78,33 @@ pub fn bundled() -> Option<&'static [u8]> {
 /// the handshake's in `crates/acpilotd/src/hosts.rs`, because a call and a handshake
 /// are the same round trip over the same transport.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A host and the transport command that reaches it.
+///
+/// The three facts the commands are built from, in one value: a host id is a key, and a
+/// key is not a recipe. [`Transport::new`] is what the routes construct from the host
+/// they looked up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transport {
+    /// Which of the three transports this host speaks.
+    pub kind: HostKind,
+    /// The far end's address: `user@machine` for ssh, a distribution for wsl.
+    pub address: String,
+    /// The `ssh` program, which `ACPILOT_SSH` or a test can move.
+    pub ssh: String,
+}
+
+impl Transport {
+    /// One host, as the commands need it.
+    #[must_use]
+    pub fn new(kind: HostKind, address: impl Into<String>, ssh: impl Into<String>) -> Self {
+        Self {
+            kind,
+            address: address.into(),
+            ssh: ssh.into(),
+        }
+    }
+}
 
 /// One running helper, and the pipes it answers on.
 ///
@@ -282,6 +329,123 @@ pub fn probe(program: &str, args: &[String]) -> Result<HostCapabilities, String>
     Ok(Connection::dial(program, args)?.capabilities())
 }
 
+/// The shell script that puts `bytes` at `dir/acpilotd-helper` on a host.
+///
+/// One `sh -s` (or a `sh -s` behind `ssh`/`wsl.exe`) is the whole transport question:
+/// the script arrives on stdin, so nothing has to be quoted for a shell that this
+/// daemon cannot see, and the bytes arrive as base64 inside a quoted heredoc, so a
+/// binary with a newline in it is not a syntax error.
+///
+/// The write is to a temporary name and then a rename, so a helper that is running on
+/// the host is replaced rather than truncated underneath itself: a half-written
+/// executable is a host whose next call fails with `Exec format error`.
+fn install_script(dir: &str, bytes: &[u8]) -> String {
+    // Only the daemon's own words go in here, but a directory with a quote in it would
+    // still end the string early and run the rest as shell.
+    let dir = dir.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        concat!(
+            "set -e\n",
+            "d=\"{dir}\"\n",
+            "mkdir -p \"$d\"\n",
+            "base64 -d > \"$d/.{name}.new\" <<'ACPILOT-HELPER'\n",
+            "{encoded}\n",
+            "ACPILOT-HELPER\n",
+            "chmod 755 \"$d/.{name}.new\"\n",
+            "mv \"$d/.{name}.new\" \"$d/{name}\"\n",
+        ),
+        dir = dir,
+        name = INSTALL_NAME,
+        encoded = base64(bytes),
+    )
+}
+
+/// The standard base64 alphabet, padded, in 76-character lines.
+///
+/// Hand-rolled because the daemon has no base64 dependency and this is the only place
+/// it needs one. Text on stdin is what keeps a binary from having to be quoted: a
+/// heredoc is a byte channel, but a shell's syntax is not, and a helper that contains
+/// the delimiter's line would end the heredoc early.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4 + bytes.len() / 57 + 1);
+    for (index, chunk) in bytes.chunks(3).enumerate() {
+        if index > 0 && index % 19 == 0 {
+            out.push('\n');
+        }
+        let packed = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(char::from(ALPHABET[(packed >> 18) as usize & 63]));
+        out.push(char::from(ALPHABET[(packed >> 12) as usize & 63]));
+        out.push(if chunk.len() > 1 {
+            char::from(ALPHABET[(packed >> 6) as usize & 63])
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            char::from(ALPHABET[packed as usize & 63])
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Run `program args` — a shell that reads its script from stdin — and wait for it.
+///
+/// The wait is bounded because the transport is a process on another machine: an `ssh`
+/// whose host stopped answering would otherwise be a daemon parked forever in a
+/// blocking thread. A failure carries the far side's own stderr, which is the only
+/// thing that says *why* (`mkdir: Permission denied` versus `sh: not found`).
+fn install_within(
+    program: &str,
+    args: &[String],
+    dir: &str,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{program}: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // A write that fails is reported by the exit status below, which names the
+        // shell's own reason; the pipe's `EPIPE` is the symptom of the same thing.
+        let _ = stdin
+            .write_all(install_script(dir, bytes).as_bytes())
+            .and_then(|()| stdin.flush());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                let mut said = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut said);
+                }
+                return Err(format!(
+                    "putting {INSTALL_NAME} in {dir} on the host failed ({status}): {}",
+                    said.trim()
+                ));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "putting {INSTALL_NAME} on the host did not finish within {timeout:?}"
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => return Err(format!("{program}: {error}")),
+        }
+    }
+}
+
 /// The helpers this daemon has running, one per host.
 ///
 /// A failed call drops the connection, so the next test dials again rather than
@@ -291,6 +455,10 @@ pub fn probe(program: &str, args: &[String]) -> Result<HostCapabilities, String>
 #[derive(Debug, Default)]
 pub struct Connections {
     live: Mutex<HashMap<String, Connection>>,
+    /// Where an installed helper goes, when a test or a build moves it off `$HOME`.
+    dir: Mutex<Option<String>>,
+    /// The bytes to install, when a test supplies them instead of the build.
+    bundle: Mutex<Option<Vec<u8>>>,
 }
 
 impl Connections {
@@ -300,18 +468,52 @@ impl Connections {
         Self::default()
     }
 
-    /// Test host `id` through `program`, reusing the helper it already answered on.
+    /// Say where a host should put the helper, without touching this process's
+    /// environment.
+    ///
+    /// `ACPILOT_HELPER_DIR` is the daemon's own answer and this is a test's: a suite that
+    /// set the variable would be choosing the install directory for every test beside
+    /// it, and one that installed into the developer's real `~/.local/bin` would pass
+    /// by overwriting the thing it claims to have created.
+    pub fn prefer_install_dir(&self, dir: Option<String>) {
+        *self.dir.lock().unwrap_or_else(PoisonError::into_inner) = dir;
+    }
+
+    /// Say which helper to put on a host, overriding the one this build carries.
+    ///
+    /// The bundled bytes are compiled in, so a test cannot produce them; this is the
+    /// seam that lets the install path be exercised by a build that carries nothing.
+    /// `None` means "whatever the build carries", which is also the default.
+    pub fn prefer_bundle(&self, bytes: Option<Vec<u8>>) {
+        *self.bundle.lock().unwrap_or_else(PoisonError::into_inner) = bytes;
+    }
+
+    /// The directory an installed helper goes in, as a shell spells it.
+    fn install_dir(&self) -> String {
+        self.dir
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .or_else(|| std::env::var("ACPILOT_HELPER_DIR").ok())
+            .unwrap_or_else(|| INSTALL_DIR.to_owned())
+    }
+
+    /// The helper bytes to install: a test's, else this build's.
+    fn bundle(&self) -> Option<Vec<u8>> {
+        self.bundle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .or_else(|| bundled().map(<[u8]>::to_vec))
+    }
+
+    /// Test host `id` through `transport`, reusing the helper it already answered on.
     ///
     /// # Errors
     ///
-    /// [`Connection::dial`] failed, or the kept helper stopped answering and the
-    /// fresh one failed too.
-    pub fn probe(
-        &self,
-        id: &str,
-        program: &str,
-        args: &[String],
-    ) -> Result<HostCapabilities, String> {
+    /// The install, the transport or the handshake failed on every path this daemon
+    /// knows, and the message names each in turn.
+    pub fn probe(&self, id: &str, transport: &Transport) -> Result<HostCapabilities, String> {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(connection) = live.get_mut(id) {
             match connection.hello() {
@@ -324,7 +526,7 @@ impl Connections {
                 }
             }
         }
-        let connection = Connection::dial(program, args)?;
+        let connection = self.dial(transport)?;
         let capabilities = connection.capabilities();
         live.insert(id.to_owned(), connection);
         Ok(capabilities)
@@ -338,6 +540,66 @@ impl Connections {
     /// a missing file and a dead helper are both failures here, and the message is
     /// the helper's own words so the route can say which side refused.
     pub fn request(
+        &self,
+        id: &str,
+        transport: &Transport,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if !live.contains_key(id) {
+            let connection = self.dial(transport)?;
+            live.insert(id.to_owned(), connection);
+        }
+        let Some(connection) = live.get_mut(id) else {
+            return Err("the connection went while it was dialling".to_owned());
+        };
+        let answer = connection.request(method, params);
+        if answer.is_err() {
+            // A call that failed may have left the pipe mid-conversation — a refused
+            // path returns a well-formed error, but a timeout or a broken line does
+            // not — and the next request would read the rest of this one instead of
+            // its own answer. Dropping it makes the next call dial again.
+            live.remove(id);
+        }
+        answer
+    }
+
+    /// Test host `id` through a program that is already on the host, installing nothing.
+    ///
+    /// The seam the transport tests use: they stand `sh` in for a helper, which is not a
+    /// program this daemon can upload.
+    ///
+    /// # Errors
+    ///
+    /// As [`Connection::dial`].
+    pub fn probe_with(
+        &self,
+        id: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<HostCapabilities, String> {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(connection) = live.get_mut(id) {
+            match connection.hello() {
+                Ok(()) => return Ok(connection.capabilities()),
+                Err(_) => {
+                    live.remove(id);
+                }
+            }
+        }
+        let connection = Connection::dial(program, args)?;
+        let capabilities = connection.capabilities();
+        live.insert(id.to_owned(), connection);
+        Ok(capabilities)
+    }
+
+    /// Ask host `id` `method` on a program that is already there.
+    ///
+    /// # Errors
+    ///
+    /// As [`Connection::dial`] and [`Connection::request`].
+    pub fn request_with(
         &self,
         id: &str,
         program: &str,
@@ -355,12 +617,109 @@ impl Connections {
         };
         let answer = connection.request(method, params);
         if answer.is_err() {
-            // A call that failed may have left the pipe mid-conversation — a refused
-            // path returns a well-formed error, but a timeout or a broken line does
-            // not — and the next request would read the rest of this one instead of
-            // its own answer. Dropping it makes the next call dial again.
             live.remove(id);
         }
         answer
+    }
+
+    /// Start the helper on a host: install it when this build carries one, else use
+    /// the one on the host's `PATH`.
+    ///
+    /// The install is attempted once per connection, not once per call: `request` and
+    /// `probe` only dial when nothing is live, so a helper that answered is not
+    /// uploaded over itself. A host that refuses the write — a read-only home, a
+    /// sandbox with no `sh` — still gets the `PATH` attempt, because a machine that
+    /// was prepared by hand is a machine that works.
+    fn dial(&self, transport: &Transport) -> Result<Connection, String> {
+        let dir = self.install_dir();
+        let mut problems = Vec::new();
+        if let Some(bytes) = self.bundle() {
+            let (program, args) = crate::hosts::remote_command(
+                transport.kind,
+                &transport.address,
+                &transport.ssh,
+                crate::hosts::Step::Install,
+                &dir,
+            );
+            match install_within(&program, &args, &dir, &bytes, CALL_TIMEOUT) {
+                Ok(()) => {
+                    let (program, args) = crate::hosts::remote_command(
+                        transport.kind,
+                        &transport.address,
+                        &transport.ssh,
+                        crate::hosts::Step::Installed,
+                        &dir,
+                    );
+                    match Connection::dial(&program, &args) {
+                        Ok(connection) => return Ok(connection),
+                        Err(error) => problems.push(format!("the installed helper: {error}")),
+                    }
+                }
+                Err(error) => problems.push(error),
+            }
+        }
+        let (program, args) = crate::hosts::remote_command(
+            transport.kind,
+            &transport.address,
+            &transport.ssh,
+            crate::hosts::Step::Path,
+            &dir,
+        );
+        Connection::dial(&program, &args).map_err(|error| {
+            if problems.is_empty() {
+                return error;
+            }
+            problems.push(format!("{INSTALL_NAME} on the host's PATH: {error}"));
+            problems.join("; ")
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_install_script_writes_exactly_the_bytes_it_was_given() {
+        // The install script is POSIX `sh` on purpose — a host this reaches is a unix
+        // host — and a build without one carries no helper to install at all. There is
+        // nothing to assert where there is no shell to assert it with, and this is a
+        // runtime check rather than a `cfg` because the workspace's boundary test says a
+        // `cfg` naming an operating system belongs in `src/platform/`.
+        if std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .status()
+            .is_err()
+        {
+            return;
+        }
+        // Every byte value, so a newline, a NUL and the heredoc's own delimiter are all
+        // somewhere in it: the install is a text channel for a binary, and that is the
+        // thing that breaks quietly.
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(4_000).collect();
+        let directory = tempfile::tempdir().expect("temp dir");
+        let dir = directory.path().join("bin");
+        install_within(
+            "sh",
+            &["-s".to_owned()],
+            &dir.display().to_string(),
+            &bytes,
+            Duration::from_secs(10),
+        )
+        .expect("the script runs");
+        let written = std::fs::read(dir.join(INSTALL_NAME)).expect("the installed helper");
+        // Compared rather than printed: a failing assert_eq on four thousand bytes is a
+        // wall of decimals that says nothing about where the two differ.
+        let same = written.len() == bytes.len()
+            && written
+                .iter()
+                .zip(&bytes)
+                .all(|(written, wanted)| written == wanted);
+        assert!(
+            same,
+            "the install is not byte for byte: wrote {} bytes, expected {}",
+            written.len(),
+            bytes.len()
+        );
     }
 }

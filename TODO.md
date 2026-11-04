@@ -575,7 +575,49 @@ and deterministic.
   - **Result (2026-11-03):** the routes the contract listed and the daemon did not have. `GET /v1/hosts` lists the daemon's own host first, `connected` with every capability true — that is a fact about this build, not a probe, since the daemon is running there. `POST /v1/hosts` takes `{ kind, address? }`, refuses `local` (it is already listed) and a remote host without an address, and derives the id from the transport and the address so the same host twice is a `409`. A remote host is added as `connected: false` with **no** capabilities: an optimistic `true` would be a client offering to spawn an agent on a machine nobody has reached. Added hosts are written to the `hosts` table the schema already had and seeded back at startup, so a restart does not forget them. `POST /v1/hosts/{id}/test` answers for the local host and for `ssh`/`wsl` starts `acpilotd-helper` over the host's own transport and shakes hands, answering the protocol-1 capabilities as `connected: true` or `502 host_unavailable` with `transport` in `details`; returning `connected: false` there would be indistinguishable from a host that is merely asleep.
   - **Open:** latency is not reported. A handshake is one line each way, and a number from it would say more about where the helper runs than about the host. Remote hosts are reachable (2026-11-03): the test runs `acpilotd::helper::probe`, which starts the helper through `ssh -o BatchMode=yes <address> acpilotd-helper` or `wsl.exe -d <distro> -e acpilotd-helper` (the programs are `ACPILOT_SSH`/`ACPILOT_WSL` when they are not on `PATH`), so `connected` only becomes true when a helper answered in this process. What remains is reuse: each test is one helper, and a session that keeps one alive is the remote-workspace work P3-9 still lists.
   - WSL specifics, from the design phase's P0-5 `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the probe (`probes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so the service phase's task P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
-- [ ] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
+- [x] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
+  - **Result (2026-11-04):** the helper travels, and a far host is asked its own questions.
+    A build given `ACPILOT_HELPER_BIN` embeds the binary (`build.rs` writes an empty file
+    when it was not, so `include_bytes!` always has a path and `bundled()` turns the empty
+    case into `None`); the first connection to a host writes it to
+    `~/.local/bin/acpilotd-helper` with one `sh -s` — the bytes as base64 in a quoted
+    heredoc, `chmod 755`, then a rename, so a helper that is running is replaced rather
+    than truncated underneath itself — starts that copy with
+    `sh -c 'exec "$HOME/.local/bin/acpilotd-helper"'`, and falls back to a helper already
+    on the host's `PATH` when the write is refused: a read-only home is a machine
+    somebody prepared by hand, not an unreachable host, and a failure names both attempts
+    instead of the last one. It uploads once per host per process, because `Connections`
+    only dials when nothing is live; `ACPILOT_HELPER_DIR` moves the directory, which is
+    also the test seam that keeps a suite out of a developer's real `~/.local/bin`.
+    `helper::Transport` replaced the `(program, args)` pair at every call site, so the
+    commands for the three ways to reach a helper — on `PATH`, installed, installing — are
+    built in one place (`hosts::remote_command` and its `Step`). The release workflow
+    builds the musl helper before the daemon and sets the variable, so the packaged
+    daemon carries one. Tests: the transport, the install and its reuse against stand-in
+    hosts (`tests/helper_install.rs`, three), a unit test that the install script writes
+    four thousand bytes — NULs, newlines and the heredoc's own delimiter among them —
+    through a shell and back byte for byte, and the existing handshake suite on the
+    low-level `probe_with`/`request_with` seam.
+    **A remote tree knows what the far host knows.** `GET /v1/files/list` on a remote
+    workspace asks `git status --porcelain=v2 -z` through the helper's `exec` and draws
+    the same letters as the local listing — `acpilot_git::parse_status` became public for
+    exactly that reason, because one parser is one answer — and a new `fs.ignored` method
+    runs `git check-ignore -z --stdin` on the host for the hidden rows. `.git` is never a
+    row, `include_ignored` shows a hidden one marked `ignored: true`, and a host that
+    cannot answer — no `git`, not a repository, a helper from before `fs.ignored` — shows
+    every file rather than losing rows or claiming it checked. One thing worth writing
+    down: `-z` makes the separator NUL on the *input* as well as the output, so newlines
+    there read as paths git never saw and return an empty list that looks exactly like a
+    repository with no rules. Tests: three route tests over a stand-in host
+    (`tests/remote_git.rs`) and two in the helper's suite against a real `git` repository.
+  - **Open:** PTY and LSP over the helper are the remote-hosts phase's P8-3 and the
+    language-intelligence phase's P7, not this layer's — the helper says so in `hello`
+    (it lists `fs.*` and `exec`), and a client is only offered what the far side claimed.
+    A remote `FileContent.marks` (gutter letters for one file) is still empty: it is a
+    second `git diff` question nobody has asked. The Windows build carries no helper, so
+    a Windows daemon reaches WSL only through one already installed in the distro (P9-3
+    uploads it); `git` must be on the host for letters and hidden rows; and there is no
+    watch on a remote workspace — polling is P8's.
   - **Progress 2026-11-04:** a workspace can live on a remote host. `GET/POST /v1/workspaces`
     records a host and an absolute root, and checks the root before it does: a local root is a
     `stat`, a root on an ssh or wsl host is an `fs.list` through the helper — which makes the

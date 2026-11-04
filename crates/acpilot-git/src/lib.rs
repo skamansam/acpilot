@@ -616,7 +616,12 @@ fn split_nul(bytes: &[u8]) -> impl Iterator<Item = &str> {
         .filter_map(|field| std::str::from_utf8(field).ok())
 }
 
-fn parse_status(bytes: &[u8]) -> Result<Status, GitError> {
+/// Parse `git status --porcelain=v2 --branch -z` output.
+///
+/// Public because a daemon that asked `git` on another host holds the same bytes and has
+/// to draw the same letters: a second parser would be a second answer to what a path's
+/// state is, and the first time the two disagreed nobody could tell which tree was right.
+pub fn parse_status(bytes: &[u8]) -> Result<Status, GitError> {
     let mut status = Status::default();
     let fields: Vec<&str> = split_nul(bytes).collect();
     let mut index = 0;

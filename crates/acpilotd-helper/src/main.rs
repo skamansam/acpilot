@@ -15,8 +15,9 @@
 //!
 //! # What it exposes
 //!
-//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir` and `exec` — the operations `acpilot-host`'s
-//! `Host` trait asks for. Text is UTF-8 on the wire; a binary read is refused rather
+//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored` and `exec` — the
+//! operations `acpilot-host`'s `Host` trait asks for, plus the one question a tree asks
+//! about a directory. Text is UTF-8 on the wire; a binary read is refused rather
 //! than mangled, because the caller can tell a refusal from an empty file and cannot
 //! tell either from lossy bytes. There is no PTY yet: `exec` runs a program with
 //! piped stdio, and a caller that wants a terminal gets `unsupported` naming that.
@@ -26,6 +27,7 @@
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -133,13 +135,14 @@ fn error_line(id: Value, failure: &Failure) -> String {
 /// [`call`] does not answer is a promise that fails on first use. A test calls each
 /// name to keep the list true, and the list is in the handshake so a daemon does not
 /// have to assume what the helper it reached can do.
-const METHODS: [&str; 7] = [
+const METHODS: [&str; 8] = [
     "hello",
     "fs.read",
     "fs.write",
     "fs.list",
     "fs.remove",
     "fs.mkdir",
+    "fs.ignored",
     "exec",
 ];
 
@@ -151,6 +154,7 @@ fn call(method: &str, params: &Value) -> Result<Value, Failure> {
         "fs.list" => list(params),
         "fs.remove" => remove(params),
         "fs.mkdir" => mkdir(params),
+        "fs.ignored" => ignored(params),
         "exec" => exec(params),
         other => Err(Failure::method(other)),
     }
@@ -261,6 +265,74 @@ fn mkdir(params: &Value) -> Result<Value, Failure> {
     }
     std::fs::create_dir_all(&path).map_err(|error| refused(&path, &error))?;
     Ok(json!({ "path": display(&path), "created": true }))
+}
+
+/// Which of `paths` under `root` an ignore rule hides.
+///
+/// `git check-ignore` rather than a matcher of our own: the rules live in the repository
+/// — `.gitignore` files, `.git/info/exclude`, the user's global excludes — and a second
+/// implementation would disagree with the one the person's commits already follow. A
+/// workspace that is not a repository, a host with no `git`, and a `git` that cannot read
+/// the tree all answer "nothing is hidden", because a listing without marks shows every
+/// file rather than claiming none is ignored.
+fn ignored(params: &Value) -> Result<Value, Failure> {
+    // `root` rather than `path`: this is a question *about* a directory — which of these
+    // names under the repository it is — and one named `path` would read as the thing being
+    // listed rather than the tree the rules come from.
+    let root = params
+        .get("root")
+        .and_then(Value::as_str)
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| Failure::params("`root` is required"))?;
+    let paths: Vec<String> = params
+        .get("paths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return Ok(json!({ "ignored": [] }));
+    }
+    let mut child = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["check-ignore", "-z", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Ok(json!({ "ignored": [] })),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        for path in &paths {
+            // `-z` makes the separator NUL on *both* sides, not just the output: a
+            // newline here is a path git never sees, and the answer is an empty list
+            // that looks exactly like a repository with no rules. A path cannot hold a
+            // NUL, so this is unambiguous.
+            let _ = stdin
+                .write_all(path.as_bytes())
+                .and_then(|()| stdin.write_all(b"\0"));
+        }
+    }
+    let Ok(output) = child.wait_with_output() else {
+        return Ok(json!({ "ignored": [] }));
+    };
+    let listed: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter_map(|field| std::str::from_utf8(field).ok())
+        .filter(|field| !field.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(json!({ "ignored": listed }))
 }
 
 /// Run a program with piped stdio and answer with what it printed.

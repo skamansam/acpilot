@@ -182,6 +182,54 @@ fn exec_of_a_missing_program_is_a_refusal() {
     assert_eq!(error["code"], -32000);
 }
 
+#[cfg(unix)]
+#[test]
+fn ignored_paths_are_what_git_on_the_host_says() {
+    // `git check-ignore` and not a matcher of our own: the rules a commit follows are the
+    // repository's, and a second implementation would disagree with them the first time a
+    // pattern was subtle. A host without `git` answers "nothing is ignored" instead, which
+    // is the same answer this test would get and not the thing it is checking for.
+    let directory = tempfile::tempdir().expect("directory");
+    let Ok(status) = Command::new("git")
+        .arg("-C")
+        .arg(directory.path())
+        .args(["init", "-q"])
+        .status()
+    else {
+        return;
+    };
+    if !status.success() {
+        return;
+    }
+    std::fs::write(directory.path().join(".gitignore"), "target\n").expect("write");
+    let root = directory.path().to_string_lossy().replace('\\', "/");
+
+    let mut helper = Helper::start();
+    let listed = helper.call(
+        "fs.ignored",
+        json!({ "root": root, "paths": ["target", "src"] }),
+    );
+    assert_eq!(
+        listed["ignored"],
+        json!(["target"]),
+        "the path the rule hides, and not the one it does not: {listed}"
+    );
+}
+
+#[test]
+fn with_no_repository_nothing_is_reported_as_ignored() {
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().to_string_lossy().replace('\\', "/");
+
+    let mut helper = Helper::start();
+    let listed = helper.call("fs.ignored", json!({ "root": root, "paths": ["a.txt"] }));
+    assert_eq!(
+        listed["ignored"],
+        json!([]),
+        "a tree that is not a repository has no rules to hide anything with: {listed}"
+    );
+}
+
 #[test]
 fn a_file_is_removed_and_a_directory_is_answered_rather_than_removed() {
     let directory = tempfile::tempdir().expect("directory");

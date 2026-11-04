@@ -221,8 +221,7 @@ async fn remote(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| host.id.clone());
-    let (program, args) =
-        crate::hosts::remote_command(host.kind, &address, &state.hosts().ssh_program());
+    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
     let unavailable = |detail: String| {
         ApiError::new(AcpilotError::HostUnavailable {
             host: host.id.clone(),
@@ -235,7 +234,7 @@ async fn remote(
     // host's path and nothing borrows it across the hop.
     let path = root.to_owned();
     let asked = tokio::task::spawn_blocking(move || {
-        connections.request(&key, &program, &args, "fs.list", json!({ "path": path }))
+        connections.request(&key, &transport, "fs.list", json!({ "path": path }))
     });
     let answered = tokio::time::timeout(crate::hosts::HANDSHAKE_TIMEOUT, asked)
         .await

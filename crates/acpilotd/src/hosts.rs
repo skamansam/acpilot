@@ -96,6 +96,24 @@ impl Hosts {
         *self.ssh.lock().unwrap_or_else(PoisonError::into_inner) = program;
     }
 
+    /// Say where a host should put the helper it is given, without touching this
+    /// process's environment.
+    ///
+    /// The same seam as [`Self::prefer_ssh`], for the same reason: an install directory
+    /// is a fact about this daemon (or this test), and `ACPILOT_HELPER_DIR` is only the
+    /// default nobody typed.
+    pub fn prefer_install_dir(&self, dir: Option<String>) {
+        self.connections.prefer_install_dir(dir);
+    }
+
+    /// Say which helper to put on a host, overriding the one this build carries.
+    ///
+    /// A test seam: the bundled bytes are compiled in, so a suite cannot produce them,
+    /// and a build that carries nothing still has to prove the install path works.
+    pub fn prefer_bundle(&self, bytes: Option<Vec<u8>>) {
+        self.connections.prefer_bundle(bytes);
+    }
+
     /// The `ssh` this daemon should run: the one it was told about, else the one the
     /// environment names, else `PATH`'s.
     pub(crate) fn ssh_program(&self) -> String {
@@ -297,12 +315,12 @@ async fn remote(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| id.clone());
-    let (program, args) = remote_command(host.kind, &address, &state.hosts().ssh_program());
+    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
     // The connection the daemon already has for this host, or a new one it keeps:
     // testing the same host twice asks the helper that answered the first time.
     let connections = Arc::clone(state.hosts().connections());
     let key = id.clone();
-    let probe = tokio::task::spawn_blocking(move || connections.probe(&key, &program, &args));
+    let probe = tokio::task::spawn_blocking(move || connections.probe(&key, &transport));
     let failed = |detail: String| {
         ApiError::new(AcpilotError::HostUnavailable { host: id.clone() })
             .with_detail("transport", detail)
@@ -327,37 +345,103 @@ async fn remote(
     }
 }
 
+/// Which of the three ways to reach a helper a command is for.
+///
+/// One enum rather than three functions, because the three differ by the *last* argument
+/// of the same command: a transport that grows a fourth way to start a program only has
+/// to say which of these it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// The helper the host already has, named on its `PATH`.
+    Path,
+    /// The helper this daemon installed in `dir`.
+    Installed,
+    /// A shell reading the install script from stdin.
+    Install,
+}
+
 /// The program and arguments that run the helper on a host.
 ///
 /// `ACPILOT_SSH` and `ACPILOT_WSL` move the transport itself: a box where `ssh` is
 /// not on `PATH`, or a Windows build whose `wsl.exe` lives somewhere unusual, would
 /// otherwise have no way to say where it is. The helper's name is the far side's —
 /// `acpilotd-helper` on the host's `PATH` — not this daemon's.
-pub(crate) fn remote_command(kind: HostKind, address: &str, ssh: &str) -> (String, Vec<String>) {
+///
+/// `dir` is where an installed helper lives, as a shell spells it: `$HOME/.local/bin` by
+/// default, or an absolute directory when a test would rather not write into a
+/// developer's home.
+pub(crate) fn remote_command(
+    kind: HostKind,
+    address: &str,
+    ssh: &str,
+    step: Step,
+    dir: &str,
+) -> (String, Vec<String>) {
     match kind {
         // `-e`, never `--`: P0-5 measured `wsl.exe --` routing the command through
         // the user's shell, which ate backslashes and reported a missing program as
         // 127. `-e` calls `execvpe` directly and reports the failure as itself.
-        HostKind::Ssh => (
-            ssh.to_owned(),
-            vec![
+        HostKind::Ssh => {
+            let mut args = vec![
                 "-o".to_owned(),
                 "BatchMode=yes".to_owned(),
                 address.to_owned(),
-                "acpilotd-helper".to_owned(),
-            ],
-        ),
-        HostKind::Wsl => (
-            std::env::var("ACPILOT_WSL").unwrap_or_else(|_| "wsl.exe".to_owned()),
-            vec![
-                "-d".to_owned(),
-                address.to_owned(),
-                "-e".to_owned(),
-                "acpilotd-helper".to_owned(),
-            ],
-        ),
-        HostKind::Local => ("acpilotd-helper".to_owned(), Vec::new()),
+            ];
+            match step {
+                Step::Path => args.push(crate::helper::INSTALL_NAME.to_owned()),
+                // `ssh` hands the rest of the line to the remote user's shell, so the
+                // launch is quoted once here and expanded (`$HOME`) there.
+                Step::Installed => args.push(format!(
+                    "sh -c '{}'",
+                    launch_script(dir).replace('\'', "'\\''")
+                )),
+                Step::Install => args.push("sh -s".to_owned()),
+            }
+            (ssh.to_owned(), args)
+        }
+        HostKind::Wsl => {
+            let program = std::env::var("ACPILOT_WSL").unwrap_or_else(|_| "wsl.exe".to_owned());
+            let mut args = vec!["-d".to_owned(), address.to_owned(), "-e".to_owned()];
+            match step {
+                Step::Path => args.push(crate::helper::INSTALL_NAME.to_owned()),
+                // `-e` does not expand `~` or `$HOME` (P0-5), so the one program it
+                // starts is a shell that does.
+                Step::Installed => {
+                    args.push("sh".to_owned());
+                    args.push("-c".to_owned());
+                    args.push(launch_script(dir));
+                }
+                Step::Install => {
+                    args.push("sh".to_owned());
+                    args.push("-s".to_owned());
+                }
+            }
+            (program, args)
+        }
+        HostKind::Local => match step {
+            Step::Path => (crate::helper::INSTALL_NAME.to_owned(), Vec::new()),
+            Step::Installed => ("sh".to_owned(), vec!["-c".to_owned(), launch_script(dir)]),
+            Step::Install => ("sh".to_owned(), vec!["-s".to_owned()]),
+        },
     }
+}
+
+/// The program a shell should `exec` to start the installed helper on a host.
+fn launch_script(dir: &str) -> String {
+    format!("exec \"{}\"", helper_path(dir))
+}
+
+/// Where an installed helper lives, as the host's shell spells it.
+///
+/// A relative directory is joined to `$HOME` so the default is per-user; an absolute one
+/// is used as it stands, which is what a test's temporary directory needs.
+fn helper_path(dir: &str) -> String {
+    let root = if dir.starts_with('/') || dir.starts_with('~') {
+        dir.to_owned()
+    } else {
+        format!("$HOME/{dir}")
+    };
+    format!("{root}/{}", crate::helper::INSTALL_NAME)
 }
 
 fn transport_name(kind: HostKind) -> &'static str {

@@ -194,10 +194,15 @@ a path segment on `/v1/hosts/{id}/test`, and `//` would split it into two. An ad
 the next daemon.
 
 `POST /v1/hosts/{id}/test` asks the host whether it answers. The local host answers
-with this build's capabilities. A remote host is reached by starting
-`acpilotd-helper` over its transport — `ssh -o BatchMode=yes <address>
-acpilotd-helper`, or `wsl.exe -d <distro> -e acpilotd-helper` — and asking it to
-shake hands: the answer names protocol 1 and the methods the helper serves, and the
+with this build's capabilities. A remote host is reached by putting `acpilotd-helper`
+on it and starting it over that host's transport, then asking it to shake hands. A
+build that carries the helper writes it to `~/.local/bin/acpilotd-helper` first — one
+`sh -s` with the static binary base64-encoded on stdin, so a host that has never seen
+acpilot so needs neither `scp` nor a package manager, and the copy that answers is the
+version this daemon speaks rather than whatever was installed months ago
+(`ACPILOT_HELPER_DIR` moves the directory, which is what a test uses instead of a real
+home). A host that refuses the write — a read-only home, no `sh` — still gets a helper
+that is already on its `PATH`, and a failure reports both attempts. The handshake's answer names protocol 1 and the methods the helper serves, and the
 capabilities reported are those methods — `fs.*` is files, `exec` is programs, and
 `pty.*` or `lsp.*` once a helper has them, so a host is offered a pane only when the
 helper on it says it can open one. A helper old enough to answer without a list is

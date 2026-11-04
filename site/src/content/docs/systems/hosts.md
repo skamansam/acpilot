@@ -30,6 +30,15 @@ For SSH and WSL, the daemon uploads a small static binary (`acpilotd-helper`) an
 talks JSON-RPC to it over stdio. Filesystem calls, PTYs, and spawns happen on the
 far side of the connection, where the latency is zero instead of per-syscall.
 
+The helper travels **inside** `acpilotd`: a release build compiles it for musl and
+embeds the bytes, and the first connection to a host writes them to
+`~/.local/bin/acpilotd-helper` over the transport that is already there — one
+`sh -s` reading a base64 payload on stdin. No `scp`, no package manager, and no
+question about which version is on the host: the handshake refuses a helper whose
+protocol number is not the daemon's, and the daemon put the file there so it knows.
+A host that already has a helper on its `PATH` still works — every test and
+developer build is that case — and a host that refuses the write falls back to it.
+
 ```mermaid
 flowchart LR
     daemon["acpilotd<br/>your machine"] -->|ssh exec| helper["acpilotd-helper<br/>on the host"]

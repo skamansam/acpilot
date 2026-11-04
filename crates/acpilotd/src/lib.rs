@@ -45,6 +45,7 @@ mod auth;
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
 mod files;
+pub mod helper;
 pub mod hosts;
 mod lsp;
 // The in-process listener: the same router, served by a client instead of a

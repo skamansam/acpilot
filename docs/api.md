@@ -184,10 +184,15 @@ a path segment on `/v1/hosts/{id}/test`, and `//` would split it into two. An ad
 the next daemon.
 
 `POST /v1/hosts/{id}/test` asks the host whether it answers. The local host answers
-with this build's capabilities. An `ssh` or `wsl` host is `502 host_unavailable`
-with `phase` in `details`: adding one records what a later build connects to, and a
-test that said `connected: false` for a transport that does not exist yet would be
-indistinguishable from a host that is asleep. An unknown id is `404`.
+with this build's capabilities. A remote host is reached by starting
+`acpilotd-helper` over its transport — `ssh -o BatchMode=yes <address>
+acpilotd-helper`, or `wsl.exe -d <distro> -e acpilotd-helper` — and asking it to
+shake hands: the answer names protocol 1, so the capabilities reported are what that
+protocol defines (files and programs; no PTY and no language server yet). A host
+that cannot be reached is `502 host_unavailable` with `transport` in `details`, and
+the failure is reported rather than stored: `connected` only becomes true when a
+helper answered in this process. An unknown id is `404`. `ACPILOT_SSH` and
+`ACPILOT_WSL` move the transport program for a host where it is not on `PATH`.
 
 ## Sessions and turns
 
@@ -211,8 +216,15 @@ turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean
   `202` with `{ "turn_id": ..., "cancelled": true | false }`. Cancelling an idle
   session is `202` with `cancelled: false` rather than an error: the caller's
   intent ("stop") is already true.
-- `POST /v1/sessions/{id}/mode` takes `{ "mode": string }`; unknown modes are
-  `400 invalid_request` with the agent's advertised modes in `details`.
+- `POST /v1/sessions/{id}/mode` takes `SetModeRequest { mode }` and answers
+  `ModeState { mode, available[] }`, where each mode is `{ id, name, description? }`.
+  An id the agent did not advertise is `400 invalid_request` with the alternatives in
+  `details`, so a picker can be repaired without a second request. An agent that
+  offers no modes, a session that has ended, and a turn in flight are all `409`:
+  there is either nothing to switch or nowhere to switch it yet, and a `200` for a
+  mode nobody entered would be worse than saying so. The agent's `mode_changed`
+  event on the session stream confirms the switch, which is why this is a request
+  rather than a notification — ACP makes the agent the authority on its modes.
 - `SessionStatus` is `idle`, `busy`, `awaiting_permission`, `closed`, `failed`.
 
 `WS /v1/sessions/{id}/stream?after=N` is the same feed over a socket: one text

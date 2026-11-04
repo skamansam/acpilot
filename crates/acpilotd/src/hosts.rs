@@ -17,12 +17,10 @@
 //!
 //! # What is not here
 //!
-//! An `ssh` or `wsl` host can be added and is remembered, and testing one is
-//! `502 host_unavailable` naming the phase that builds the transport: adding a
-//! host records what a later build will connect to, and refusing to add it would
-//! make the dialog a lie about the shape of the API. Latency is not reported for
-//! either kind: the only number this daemon could measure is the distance from a
-//! process to itself.
+//! Latency is not reported: a handshake is one line each way, and a number from it
+//! would say more about where the helper runs than about the host. A remote host's
+//! capabilities are protocol 1's — files and programs, no PTY and no language
+//! server yet — so a client is not offered a pane on a host that would refuse one.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -229,13 +227,96 @@ async fn test(
             state.hosts().replace(probed.clone());
             Ok(Json(probed))
         }
-        HostKind::Ssh | HostKind::Wsl => {
-            Err(
-                ApiError::new(AcpilotError::HostUnavailable { host: id }).with_detail(
-                    "phase",
-                    "reaching a remote host needs the helper that phase 9 (P9) ships",
-                ),
-            )
+        HostKind::Ssh | HostKind::Wsl => remote(&state, &host, id).await,
+    }
+}
+
+/// How long a transport gets before the test is reported as failed.
+///
+/// A handshake is one line each way once the transport is up; the budget is for
+/// the transport starting (a distro a Windows build has to boot, an ssh connection
+/// that has to negotiate). A test that never answers is a failure the caller can
+/// act on, not a request to hold open forever.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Test a host whose transport is a process: `ssh` or `wsl.exe`.
+///
+/// The helper is started over the transport and asked to shake hands. What comes
+/// back is protocol 1's capability set, not a promise about this machine: a host
+/// whose helper answers is a host this daemon can reach, and the capabilities say
+/// what it can then do.
+async fn remote(
+    state: &AppState,
+    host: &HostSummary,
+    id: String,
+) -> Result<Json<HostSummary>, ApiError> {
+    let address = id
+        .split_once(':')
+        .map(|(_, address)| address.to_owned())
+        .unwrap_or_else(|| id.clone());
+    let (program, args) = remote_command(host.kind, &address);
+    let probe = tokio::task::spawn_blocking(move || crate::helper::probe(&program, &args));
+    let failed = |detail: String| {
+        ApiError::new(AcpilotError::HostUnavailable { host: id.clone() })
+            .with_detail("transport", detail)
+    };
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, probe).await {
+        Err(_) => Err(failed(format!(
+            "{} did not answer within {} seconds",
+            transport_name(host.kind),
+            HANDSHAKE_TIMEOUT.as_secs()
+        ))),
+        Ok(Err(error)) => Err(failed(error.to_string())),
+        Ok(Ok(Err(detail))) => Err(failed(detail)),
+        Ok(Ok(Ok(capabilities))) => {
+            let connected = HostSummary {
+                connected: true,
+                capabilities: Some(capabilities),
+                ..host.clone()
+            };
+            state.hosts().replace(connected.clone());
+            Ok(Json(connected))
         }
+    }
+}
+
+/// The program and arguments that run the helper on a host.
+///
+/// `ACPILOT_SSH` and `ACPILOT_WSL` move the transport itself: a box where `ssh` is
+/// not on `PATH`, or a Windows build whose `wsl.exe` lives somewhere unusual, would
+/// otherwise have no way to say where it is. The helper's name is the far side's —
+/// `acpilotd-helper` on the host's `PATH` — not this daemon's.
+fn remote_command(kind: HostKind, address: &str) -> (String, Vec<String>) {
+    match kind {
+        // `-e`, never `--`: P0-5 measured `wsl.exe --` routing the command through
+        // the user's shell, which ate backslashes and reported a missing program as
+        // 127. `-e` calls `execvpe` directly and reports the failure as itself.
+        HostKind::Ssh => (
+            std::env::var("ACPILOT_SSH").unwrap_or_else(|_| "ssh".to_owned()),
+            vec![
+                "-o".to_owned(),
+                "BatchMode=yes".to_owned(),
+                address.to_owned(),
+                "acpilotd-helper".to_owned(),
+            ],
+        ),
+        HostKind::Wsl => (
+            std::env::var("ACPILOT_WSL").unwrap_or_else(|_| "wsl.exe".to_owned()),
+            vec![
+                "-d".to_owned(),
+                address.to_owned(),
+                "-e".to_owned(),
+                "acpilotd-helper".to_owned(),
+            ],
+        ),
+        HostKind::Local => ("acpilotd-helper".to_owned(), Vec::new()),
+    }
+}
+
+fn transport_name(kind: HostKind) -> &'static str {
+    match kind {
+        HostKind::Ssh => "ssh",
+        HostKind::Wsl => "wsl.exe",
+        HostKind::Local => "the local host",
     }
 }

@@ -137,21 +137,23 @@ async fn testing_the_local_host_reports_what_it_can_do() {
 }
 
 #[tokio::test]
-async fn testing_a_remote_host_names_the_phase_that_builds_it() {
+async fn testing_an_unreachable_host_reports_the_transport_that_failed() {
+    // `.invalid` is reserved by RFC 2606, so no resolver anywhere answers it: the
+    // test is about the refusal, not about whether this machine has an ssh agent.
     let app = app();
     let (status, _) = send(
         &app,
         "POST",
         "/v1/hosts",
-        Some(serde_json::json!({ "kind": "wsl", "address": "Ubuntu" })),
+        Some(serde_json::json!({ "kind": "ssh", "address": "me@box.invalid" })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
 
-    let (status, refused) = send(&app, "POST", "/v1/hosts/wsl:Ubuntu/test", None).await;
+    let (status, refused) = send(&app, "POST", "/v1/hosts/ssh:me@box.invalid/test", None).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(refused["code"], "host_unavailable");
-    assert_eq!(refused["details"][0]["field"], "phase");
+    assert_eq!(refused["details"][0]["field"], "transport");
 }
 
 #[tokio::test]

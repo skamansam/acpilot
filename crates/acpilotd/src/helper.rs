@@ -32,6 +32,25 @@ use serde_json::{Value, json};
 /// without the other is refused at the handshake instead of failing a call.
 pub const PROTOCOL: u64 = 1;
 
+/// The helper this build carries, or nothing when it was built without one.
+///
+/// `build.rs` writes the artifact into `OUT_DIR` and writes an empty file when
+/// `ACPILOT_HELPER_BIN` was not set, because `include_bytes!` needs the path to exist at
+/// every build. An empty file is not a helper, so it is turned into `None` here rather
+/// than offered as a zero-byte program to copy onto a host.
+const BUNDLED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/acpilotd-helper"));
+
+/// The static helper this daemon can put on a host, when a build packaged one.
+///
+/// A release build carries the musl binary, so a host that has never seen acpilot
+/// receives it on first connect. A developer build carries nothing and asks the host for
+/// `acpilotd-helper` on its `PATH`, which is what every stand-in in this crate's tests
+/// is: the difference is packaging, not behaviour.
+#[must_use]
+pub fn bundled() -> Option<&'static [u8]> {
+    (!BUNDLED.is_empty()).then_some(BUNDLED)
+}
+
 /// How long one answer is waited for before the helper is called dead.
 ///
 /// A helper is a process on another machine: one that stopped reading would otherwise

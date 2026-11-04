@@ -22,7 +22,7 @@
 //! capabilities are protocol 1's — files and programs, no PTY and no language
 //! server yet — so a client is not offered a pane on a host that would refuse one.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use acpilot_core::AcpilotError;
 use acpilot_proto::host::{CreateHostRequest, HostCapabilities, HostKind, HostSummary};
@@ -47,12 +47,21 @@ pub const LOCAL_HOST: &str = "local";
 #[derive(Debug)]
 pub struct Hosts {
     known: Mutex<Vec<HostSummary>>,
+    /// The helper connections this daemon keeps, one per remote host.
+    ///
+    /// A connection rather than a probe per request: a helper is a session, and
+    /// testing the same host twice should ask the process that already answered
+    /// rather than boot the transport again (see `crate::helper`). Here rather
+    /// than on the daemon because it is a fact about a host, and the host list is
+    /// what a connection test starts from.
+    connections: Arc<crate::helper::Connections>,
 }
 
 impl Default for Hosts {
     fn default() -> Self {
         Self {
             known: Mutex::new(vec![local_summary()]),
+            connections: Arc::new(crate::helper::Connections::new()),
         }
     }
 }
@@ -62,6 +71,12 @@ impl Hosts {
     #[must_use]
     pub fn list(&self) -> Vec<HostSummary> {
         self.lock().clone()
+    }
+
+    /// The helper connections this daemon keeps, one per remote host.
+    #[must_use]
+    pub fn connections(&self) -> &Arc<crate::helper::Connections> {
+        &self.connections
     }
 
     /// The host with this id, when it is one this daemon knows.
@@ -255,7 +270,11 @@ async fn remote(
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| id.clone());
     let (program, args) = remote_command(host.kind, &address);
-    let probe = tokio::task::spawn_blocking(move || crate::helper::probe(&program, &args));
+    // The connection the daemon already has for this host, or a new one it keeps:
+    // testing the same host twice asks the helper that answered the first time.
+    let connections = Arc::clone(state.hosts().connections());
+    let key = id.clone();
+    let probe = tokio::task::spawn_blocking(move || connections.probe(&key, &program, &args));
     let failed = |detail: String| {
         ApiError::new(AcpilotError::HostUnavailable { host: id.clone() })
             .with_detail("transport", detail)

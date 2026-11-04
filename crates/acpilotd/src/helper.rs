@@ -3,9 +3,10 @@
 //! The helper is one process per host, spoken to over stdin/stdout as
 //! line-delimited JSON-RPC 2.0 (see `crates/acpilotd-helper`). This module owns the
 //! daemon's half of that: start the transport, shake hands, and report what the far
-//! side can do. It deliberately does not keep the process: a connection test is one
-//! connection, and a session that keeps a helper alive is the remote-workspace work
-//! that comes after this.
+//! side can do. [`Connections`] keeps the process that answered, so asking a host the
+//! same question twice is one connection rather than two — a helper is a session with
+//! a protocol, and a daemon that booted a distro per request would be paying the
+//! transport's cost for every question.
 //!
 //! # Why the version is checked
 //!
@@ -14,8 +15,10 @@
 //! build speaks and the helper refuses another by number; a handshake that answered
 //! something unexpected is reported rather than parsed optimistically.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Mutex, PoisonError};
 
 use acpilot_proto::host::HostCapabilities;
 use serde_json::{Value, json};
@@ -27,80 +30,177 @@ use serde_json::{Value, json};
 /// without the other is refused at the handshake instead of failing a call.
 pub const PROTOCOL: u64 = 1;
 
-/// Start `program` with `args`, ask it what it is, and end it.
+/// One running helper, and the pipes it answers on.
 ///
-/// Returns the capabilities protocol 1 defines rather than what was probed method
-/// by method: the handshake is the answer to "does this helper work", and a probe
-/// that called every method would be a second copy of the protocol here.
+/// Dropped when the daemon forgets the host or a call fails: a helper that stopped
+/// reading is not a connection worth keeping, and a process left behind would be a
+/// leak per failed test.
+#[derive(Debug)]
+pub struct Connection {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    capabilities: HostCapabilities,
+    next_id: u64,
+}
+
+impl Connection {
+    /// Start `program` with `args` and shake hands with it.
+    ///
+    /// # Errors
+    ///
+    /// The program could not start, wrote nothing, answered something that is not a
+    /// handshake, or speaks another protocol. The message names what happened; the
+    /// caller turns it into a `502` for the host.
+    pub fn dial(program: &str, args: &[String]) -> Result<Self, String> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("{program}: {error}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "the helper has no stdin".to_owned())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "the helper has no stdout".to_owned())?;
+        let mut connection = Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            // What protocol 1 defines: whole-file reads and writes, a listing, and a
+            // program with piped stdio. No PTY and no language server yet, so a client
+            // is not offered a pane on a host that would refuse to open one.
+            capabilities: HostCapabilities {
+                filesystem: true,
+                pty: false,
+                spawn: true,
+                lsp: false,
+            },
+            next_id: 0,
+        };
+        // A failed handshake drops `connection`, which kills the child: a transport
+        // that started and then said nothing is not left running for nobody.
+        connection.hello()?;
+        Ok(connection)
+    }
+
+    /// What this helper can do, as the handshake defined it.
+    #[must_use]
+    pub fn capabilities(&self) -> HostCapabilities {
+        self.capabilities
+    }
+
+    /// Ask the helper what it is, on the connection it already answered on.
+    ///
+    /// The reply's `id` is not matched: the conversation is one request and one
+    /// answer at a time, and the mutex that owns this connection is the thing that
+    /// keeps it that way.
+    fn hello(&mut self) -> Result<(), String> {
+        self.next_id += 1;
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": self.next_id,
+            "method": "hello",
+            "params": { "protocol": PROTOCOL },
+        });
+        // A program that exited before reading is not a helper, and it answers
+        // nothing — which the read below reports as itself. Treating the write's
+        // `EPIPE` as the failure instead would name the symptom (a broken pipe) rather
+        // than the fact (no handshake), and would report it twice for one cause.
+        let _ = writeln!(self.stdin, "{request}").and_then(|()| self.stdin.flush());
+        let mut line = String::new();
+        self.stdout
+            .read_line(&mut line)
+            .map_err(|error| format!("the helper would not answer: {error}"))?;
+        if line.trim().is_empty() {
+            return Err("the helper answered nothing".to_owned());
+        }
+        let response: Value = serde_json::from_str(&line).map_err(|error| {
+            format!("the helper answered something that is not JSON-RPC: {error}")
+        })?;
+        let protocol = response
+            .get("result")
+            .and_then(|result| result.get("protocol"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("the helper did not shake hands: {}", line.trim()))?;
+        if protocol != PROTOCOL {
+            return Err(format!(
+                "this daemon speaks protocol {PROTOCOL}, the helper {protocol}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Killing and reaping on drop is what makes "forget this host" and "this
+        // transport failed" the same operation: neither a stale process nor a
+        // zombie is left for the next test to trip over.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Ask a helper that is started for this call only, and end it afterwards.
 ///
 /// # Errors
 ///
-/// The program could not start, wrote nothing, answered something that is not a
-/// handshake, or speaks another protocol. The message names what happened; the
-/// caller turns it into a `502` for the host.
+/// As [`Connection::dial`].
 pub fn probe(program: &str, args: &[String]) -> Result<HostCapabilities, String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("{program}: {error}"))?;
-    let result = handshake(&mut child);
-    // The helper is a session, not a call, but this is a test rather than a
-    // session: nothing will ever ask it again, and leaving it running would be a
-    // process per connection test.
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+    Ok(Connection::dial(program, args)?.capabilities())
 }
 
-fn handshake(child: &mut Child) -> Result<HostCapabilities, String> {
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "the helper has no stdin".to_owned())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "the helper has no stdout".to_owned())?;
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "hello",
-        "params": { "protocol": PROTOCOL },
-    });
-    // A program that exited before reading is not a helper, and it answers
-    // nothing — which the read below reports as itself. Treating the write's
-    // `EPIPE` as the failure instead would name the symptom (a broken pipe) rather
-    // than the fact (no handshake), and would report it twice for one cause.
-    let _ = writeln!(stdin, "{request}").and_then(|()| stdin.flush());
-    let mut line = String::new();
-    BufReader::new(stdout)
-        .read_line(&mut line)
-        .map_err(|error| format!("the helper would not answer: {error}"))?;
-    if line.trim().is_empty() {
-        return Err("the helper answered nothing".to_owned());
+/// The helpers this daemon has running, one per host.
+///
+/// A failed call drops the connection, so the next test dials again rather than
+/// reporting the same dead pipe for the rest of the process. The lock is held across
+/// the handshake because it *is* the connection: two requests on one helper would
+/// interleave two conversations on one pair of pipes.
+#[derive(Debug, Default)]
+pub struct Connections {
+    live: Mutex<HashMap<String, Connection>>,
+}
+
+impl Connections {
+    /// No connection has been opened yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
-    let response: Value = serde_json::from_str(&line)
-        .map_err(|error| format!("the helper answered something that is not JSON-RPC: {error}"))?;
-    let protocol = response
-        .get("result")
-        .and_then(|result| result.get("protocol"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("the helper did not shake hands: {}", line.trim()))?;
-    if protocol != PROTOCOL {
-        return Err(format!(
-            "this daemon speaks protocol {PROTOCOL}, the helper {protocol}"
-        ));
+
+    /// Test host `id` through `program`, reusing the helper it already answered on.
+    ///
+    /// # Errors
+    ///
+    /// [`Connection::dial`] failed, or the kept helper stopped answering and the
+    /// fresh one failed too.
+    pub fn probe(
+        &self,
+        id: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<HostCapabilities, String> {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(connection) = live.get_mut(id) {
+            match connection.hello() {
+                Ok(()) => return Ok(connection.capabilities()),
+                // The helper died, or the transport dropped it: the next dial is the
+                // answer. Keeping a broken pipe would fail every later test of a host
+                // that has come back.
+                Err(_) => {
+                    live.remove(id);
+                }
+            }
+        }
+        let connection = Connection::dial(program, args)?;
+        let capabilities = connection.capabilities();
+        live.insert(id.to_owned(), connection);
+        Ok(capabilities)
     }
-    // What protocol 1 defines: whole-file reads and writes, a listing, and a
-    // program with piped stdio. No PTY and no language server yet, so a client is
-    // not offered a pane on a host that would refuse to open one.
-    Ok(HostCapabilities {
-        filesystem: true,
-        pty: false,
-        spawn: true,
-        lsp: false,
-    })
 }

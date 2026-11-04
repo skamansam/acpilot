@@ -160,9 +160,15 @@ harder to rename than prose:
 
 `AgentStatus` has an `untrusted` state — "ran once, but the binary changed
 since" — so `POST /v1/agents/{id}/trust` exists in v1 to leave it: it records the
-hash the human approved and is the only way that state is cleared. Without the
-route the state would be terminal, which is the kind of gap this review exists to
-catch.
+SHA-256 of the program the agent's command runs, and is the only way that state is
+cleared. `GET /v1/agents` compares that pin with the file on disk, so a replaced
+binary reads as `untrusted` until somebody says the new one is the one they meant;
+`missing` wins over `untrusted`, because there is nothing to approve. The pin is the
+stored record (`agent_pins`), so a restart does not reopen the dialog; a daemon with
+no store answers `409` rather than `200` for a promise it cannot keep, an agent whose
+program this host cannot resolve is `400`, and an id the profile does not declare is
+`404`. Without the route the state would be terminal, which is the kind of gap this
+review exists to catch.
 
 ## Hosts
 

@@ -8,7 +8,7 @@
 //! an empty success. A shell standing in for the helper is what makes the failures
 //! reproducible without a second host.
 
-use acpilotd::helper::probe;
+use acpilotd::helper::{Connections, probe};
 
 fn speak(line: &str) -> (String, Vec<String>) {
     (
@@ -44,6 +44,34 @@ fn a_helper_that_says_nothing_is_a_failure() {
     let (program, args) = ("sh".to_owned(), vec!["-c".to_owned(), "exit 0".to_owned()]);
     let error = probe(&program, &args).expect_err("silence is not a handshake");
     assert!(error.contains("answered nothing"), "{error}");
+}
+
+#[test]
+fn a_second_test_of_the_same_host_asks_the_helper_that_answered_the_first() {
+    // The stand-in answers every hello it reads, but exits silently if it is
+    // started a second time. Reuse is therefore the only way the second call can
+    // succeed, and a daemon that dialled again would fail with "answered
+    // nothing" rather than pass for the wrong reason.
+    let directory = tempfile::tempdir().expect("temp dir");
+    let marker = directory.path().join("dialled");
+    let script = format!(
+        "if [ -e '{marker}' ]; then exit 0; fi\n: > '{marker}'\n\
+         while read -r _; do printf '%s\\n' '{handshake}'; done",
+        marker = marker.display(),
+        handshake = r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1}}"#,
+    );
+    let program = "sh".to_owned();
+    let args = vec!["-c".to_owned(), script];
+    let connections = Connections::new();
+
+    let first = connections
+        .probe("ssh:box", &program, &args)
+        .expect("the first test dials");
+    assert!(first.filesystem);
+    let second = connections
+        .probe("ssh:box", &program, &args)
+        .expect("the second test reuses the helper");
+    assert!(second.spawn);
 }
 
 #[test]

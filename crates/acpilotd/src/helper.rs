@@ -72,13 +72,13 @@ impl Connection {
             child,
             stdin,
             stdout: BufReader::new(stdout),
-            // What protocol 1 defines: whole-file reads and writes, a listing, and a
-            // program with piped stdio. No PTY and no language server yet, so a client
-            // is not offered a pane on a host that would refuse to open one.
+            // Filled in by the handshake: the helper names its methods and this is
+            // what it says, not what this build expects of it. Nothing is true until
+            // it has answered, so a half-finished connection offers nothing.
             capabilities: HostCapabilities {
-                filesystem: true,
+                filesystem: false,
                 pty: false,
-                spawn: true,
+                spawn: false,
                 lsp: false,
             },
             next_id: 0,
@@ -133,6 +133,7 @@ impl Connection {
                 "this daemon speaks protocol {PROTOCOL}, the helper {protocol}"
             ));
         }
+        self.capabilities = capabilities(response.get("result").unwrap_or(&Value::Null));
         Ok(())
     }
 }
@@ -144,6 +145,37 @@ impl Drop for Connection {
         // zombie is left for the next test to trip over.
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// What the far side said it can do, read out of the handshake's `result`.
+///
+/// A helper that lists its methods is believed, because the list is its own: a build
+/// that grows a PTY offers `pty.*` and the daemon stops guessing, and one without
+/// `exec` is not offered as a host to spawn an agent on. The navigator's set is the
+/// fallback for a helper from before the list existed — protocol 1 always meant files
+/// and programs — and an explicit empty list is not that fallback: a helper that says
+/// it can do nothing is not one to hand a workspace to.
+fn capabilities(handshake: &Value) -> HostCapabilities {
+    let Some(methods) = handshake.get("methods").and_then(Value::as_array) else {
+        return HostCapabilities {
+            filesystem: true,
+            pty: false,
+            spawn: true,
+            lsp: false,
+        };
+    };
+    let offers = |prefix: &str| {
+        methods
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|method| method.starts_with(prefix))
+    };
+    HostCapabilities {
+        filesystem: offers("fs."),
+        pty: offers("pty."),
+        spawn: offers("exec"),
+        lsp: offers("lsp."),
     }
 }
 

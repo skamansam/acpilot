@@ -77,6 +77,32 @@ fn the_handshake_names_the_protocol_and_the_host() {
 }
 
 #[test]
+fn every_method_the_handshake_advertises_is_one_the_helper_answers() {
+    // The daemon reads capabilities out of this list, so a name here that `call`
+    // does not serve would be a capability advertised and then refused on first use.
+    let mut helper = Helper::start();
+    let hello = helper.call("hello", json!({ "protocol": 1 }));
+    let methods: Vec<&str> = hello["methods"]
+        .as_array()
+        .expect("the handshake lists methods")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(methods.contains(&"exec"), "{methods:?}");
+    for method in methods {
+        if method == "hello" {
+            continue;
+        }
+        let response = helper.ask(method, json!({}));
+        assert_ne!(
+            response.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32601),
+            "{method} is advertised but not answered: {response}"
+        );
+    }
+}
+
+#[test]
 fn a_protocol_it_does_not_speak_is_refused_by_number() {
     let mut helper = Helper::start();
     let error = helper.error("hello", json!({ "protocol": 99 }));

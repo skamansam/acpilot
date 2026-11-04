@@ -193,8 +193,12 @@ the next daemon.
 with this build's capabilities. A remote host is reached by starting
 `acpilotd-helper` over its transport — `ssh -o BatchMode=yes <address>
 acpilotd-helper`, or `wsl.exe -d <distro> -e acpilotd-helper` — and asking it to
-shake hands: the answer names protocol 1, so the capabilities reported are what that
-protocol defines (files and programs; no PTY and no language server yet). A host
+shake hands: the answer names protocol 1 and the methods the helper serves, and the
+capabilities reported are those methods — `fs.*` is files, `exec` is programs, and
+`pty.*` or `lsp.*` once a helper has them, so a host is offered a pane only when the
+helper on it says it can open one. A helper old enough to answer without a list is
+protocol 1's files and programs; one that lists nothing is reported as a host that
+can do nothing, because that is what it said. A host
 that cannot be reached is `502 host_unavailable` with `transport` in `details`, and
 the failure is reported rather than stored: `connected` only becomes true when a
 helper answered in this process. An unknown id is `404`. `ACPILOT_SSH` and

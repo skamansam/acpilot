@@ -126,6 +126,15 @@ fn error_line(id: Value, failure: &Failure) -> String {
     .to_string()
 }
 
+/// Every method this helper answers, as `hello` advertises them.
+///
+/// The daemon turns this list into capabilities, so a method added to [`call`]
+/// without a line here is one the far side never offers, and a name here that
+/// [`call`] does not answer is a promise that fails on first use. A test calls each
+/// name to keep the list true, and the list is in the handshake so a daemon does not
+/// have to assume what the helper it reached can do.
+const METHODS: [&str; 5] = ["hello", "fs.read", "fs.write", "fs.list", "exec"];
+
 fn call(method: &str, params: &Value) -> Result<Value, Failure> {
     match method {
         "hello" => hello(params),
@@ -137,7 +146,8 @@ fn call(method: &str, params: &Value) -> Result<Value, Failure> {
     }
 }
 
-/// The handshake: which protocol this helper speaks, and where it is running.
+/// The handshake: which protocol this helper speaks, what it can do, and where it
+/// is running.
 fn hello(params: &Value) -> Result<Value, Failure> {
     let protocol = params
         .get("protocol")
@@ -151,6 +161,7 @@ fn hello(params: &Value) -> Result<Value, Failure> {
     }
     Ok(json!({
         "protocol": PROTOCOL,
+        "methods": METHODS,
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "pid": std::process::id(),

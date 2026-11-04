@@ -18,7 +18,7 @@ fn speak(line: &str) -> (String, Vec<String>) {
 }
 
 #[test]
-fn a_helper_that_shakes_hands_is_believed() {
+fn a_helper_from_before_the_method_list_gets_protocol_1s_capabilities() {
     let (program, args) =
         speak(r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"os":"linux","arch":"x86_64"}}"#);
     let capabilities = probe(&program, &args).expect("a helper that answered");
@@ -29,6 +29,41 @@ fn a_helper_that_shakes_hands_is_believed() {
         "protocol 1 has no PTY, so a client is not offered one"
     );
     assert!(!capabilities.lsp);
+}
+
+#[test]
+fn a_helper_that_lists_its_methods_is_believed() {
+    let (program, args) = speak(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"methods":["hello","fs.read","fs.write","fs.list"]}}"#,
+    );
+    let capabilities = probe(&program, &args).expect("a helper that answered");
+    assert!(capabilities.filesystem, "it offered fs.*");
+    assert!(
+        !capabilities.spawn,
+        "it did not offer exec, so a client is not invited to start an agent on it"
+    );
+    assert!(!capabilities.pty);
+    assert!(!capabilities.lsp);
+}
+
+#[test]
+fn a_helper_that_lists_no_methods_offers_nothing() {
+    let (program, args) = speak(r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"methods":[]}}"#);
+    let capabilities = probe(&program, &args).expect("a helper that answered");
+    assert!(
+        !capabilities.filesystem && !capabilities.pty && !capabilities.spawn && !capabilities.lsp,
+        "an empty list is what the helper said, not a reason to fall back"
+    );
+}
+
+#[test]
+fn a_helper_that_offers_a_pty_is_offered_as_one() {
+    let (program, args) =
+        speak(r#"{"jsonrpc":"2.0","id":1,"result":{"protocol":1,"methods":["pty.open","exec"]}}"#);
+    let capabilities = probe(&program, &args).expect("a helper that answered");
+    assert!(capabilities.pty, "a helper that grew a PTY says so");
+    assert!(capabilities.spawn);
+    assert!(!capabilities.filesystem, "no fs.* in its list");
 }
 
 #[test]

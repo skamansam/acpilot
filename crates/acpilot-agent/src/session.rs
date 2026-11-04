@@ -96,9 +96,10 @@ use agent_client_protocol::schema::v1::{
     NoticeSeverity, PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest,
     ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionId as AcpSessionId, SessionInfoUpdate, SessionNotification, SessionUpdate,
-    TerminalOutputRequest, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind,
-    UsageUpdate, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
+    SessionId as AcpSessionId, SessionInfoUpdate, SessionModeState, SessionNotification,
+    SessionUpdate, SetSessionModeRequest, TerminalOutputRequest, TextContent, ToolCall,
+    ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
 use serde::Serialize;
@@ -265,6 +266,13 @@ pub struct Session {
     /// daemon's idle sweep would keep a command alive for up to half an hour after
     /// the conversation it belonged to is gone.
     terminals: Option<Arc<Terminals>>,
+    /// The modes the agent advertised, and the one it is in.
+    ///
+    /// Seeded from `session/new` or `session/load` and updated by a successful
+    /// [`Session::set_mode`]. ACP also announces changes as `session/update`
+    /// notifications, which the daemon records; this copy is what a caller can ask
+    /// about without re-reading the conversation's events.
+    modes: Mutex<Option<SessionModeState>>,
 }
 
 impl std::fmt::Debug for Session {
@@ -578,6 +586,7 @@ impl Session {
             stop: Some(stop_tx),
             task: Some(task),
             terminals: options.terminals,
+            modes: Mutex::new(None),
         })
     }
 
@@ -643,6 +652,7 @@ impl Session {
                 source,
             })?;
         self.acp_id = Some(response.session_id.0.to_string());
+        *self.modes.lock().unwrap_or_else(PoisonError::into_inner) = response.modes.clone();
         Ok(response)
     }
 
@@ -663,6 +673,7 @@ impl Session {
                 source,
             })?;
         self.acp_id = Some(session_id);
+        *self.modes.lock().unwrap_or_else(PoisonError::into_inner) = response.modes.clone();
         Ok(response)
     }
 
@@ -704,6 +715,65 @@ impl Session {
                 operation: "session/cancel",
                 source,
             })
+    }
+
+    /// The modes the agent advertised, when it advertised any.
+    ///
+    /// `None` is "this agent has one fixed mode", which is the same thing to a
+    /// client as an agent that offers none: there is nothing to switch.
+    #[must_use]
+    pub fn modes(&self) -> Option<acpilot_proto::session::ModeState> {
+        let modes = self
+            .modes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()?;
+        Some(acpilot_proto::session::ModeState {
+            mode: modes.current_mode_id.0.to_string(),
+            available: modes
+                .available_modes
+                .iter()
+                .map(|mode| acpilot_proto::session::SessionMode {
+                    id: mode.id.0.to_string(),
+                    name: mode.name.clone(),
+                    description: mode.description.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    /// Ask the agent to switch modes.
+    ///
+    /// ACP's `session/set_mode` is a request rather than a notification because the
+    /// agent is the authority on which modes exist: the answer, not this side, is
+    /// what says the switch happened. The local copy follows a successful answer,
+    /// and the agent's own `CurrentModeUpdate` notification refines it when the
+    /// switch changes more than the id.
+    ///
+    /// # Errors
+    ///
+    /// No `session/new` has run ([`SessionError::NoSession`]), or the agent refused
+    /// or answered something else ([`SessionError::Protocol`]).
+    pub async fn set_mode(&self, mode_id: impl Into<String>) -> Result<(), SessionError> {
+        let acp_id = self.acp_id.clone().ok_or(SessionError::NoSession)?;
+        let mode_id = mode_id.into();
+        self.connection
+            .send_request(SetSessionModeRequest::new(acp_id, mode_id.clone()))
+            .block_task()
+            .await
+            .map_err(|source| SessionError::Protocol {
+                operation: "session/set_mode",
+                source,
+            })?;
+        if let Some(modes) = self
+            .modes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+        {
+            modes.current_mode_id = mode_id.into();
+        }
+        Ok(())
     }
 }
 

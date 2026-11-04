@@ -82,6 +82,34 @@ pub struct CancelAccepted {
     pub cancelled: bool,
 }
 
+/// `POST /v1/sessions/{id}/mode` body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SetModeRequest {
+    /// The id of the mode to switch to, as the agent advertised it.
+    pub mode: String,
+}
+
+/// One mode an agent offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SessionMode {
+    /// Identifier the agent uses for this mode.
+    pub id: String,
+    /// Human-readable name shown in a picker.
+    pub name: String,
+    /// What the mode changes, when the agent says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// The modes an agent offers, and the one it is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ModeState {
+    /// The mode in effect once this answer was written.
+    pub mode: String,
+    /// Every mode the agent advertised, in its own order.
+    pub available: Vec<SessionMode>,
+}
+
 /// Response to an accepted prompt.
 ///
 /// The turn itself streams over SSE; this only acknowledges that it started.

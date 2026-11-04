@@ -52,6 +52,7 @@ use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, SessionId, SessionStatus, SessionSummary,
 };
+use acpilot_proto::session::{ModeState, SetModeRequest};
 use acpilot_proto::stats::ContextStats;
 use acpilot_store::{Grant, Store};
 use axum::Json;
@@ -261,6 +262,12 @@ pub struct Record {
     /// second agent run. Bounded by the session's life, which is the life of the
     /// thing the keys were about.
     prompts: Mutex<HashMap<String, PromptAccepted>>,
+    /// The modes the agent offered, and the one it is in.
+    ///
+    /// Seeded when the session opens and refined by the agent's own `mode_changed`
+    /// events, so the route can refuse an id the agent never advertised without
+    /// asking the agent and waiting for a turn's worth of stream.
+    modes: Mutex<Option<acpilot_proto::session::ModeState>>,
     /// The mailbox of the task that owns the [`Session`].
     ///
     /// The ACP handle is `Send` but not `Sync` — the SDK's connection owns an
@@ -276,6 +283,8 @@ enum Command {
     Prompt(String),
     /// Ask the agent to stop the turn in flight.
     Cancel,
+    /// Switch the agent's mode.
+    Mode(String),
     /// End the session: the agent process is killed when the task returns.
     Shutdown,
 }
@@ -351,6 +360,7 @@ impl Record {
                 grants_written: Mutex::new(0),
                 usage: Mutex::new(Usage::default()),
                 prompts: Mutex::new(HashMap::new()),
+                modes: Mutex::new(None),
                 commands,
             }),
             mailbox,
@@ -440,6 +450,17 @@ impl Record {
 
     /// Record one event: ring for replay, feed for whoever is attached.
     pub fn record(&self, event: SessionEvent) {
+        // A mode change the agent announced is the newest truth about its modes:
+        // taking it from the event rather than polling keeps a second client's
+        // picker right after the first switched.
+        if matches!(event.kind, SessionEventKind::ModeChanged)
+            && let Some(mode_id) = event.payload.get("mode_id").and_then(|id| id.as_str())
+        {
+            let mut modes = self.modes.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(state) = modes.as_mut() {
+                state.mode = mode_id.to_owned();
+            }
+        }
         // Counted before the event is visible, so a client that sees a chunk and
         // asks the stats route in the same breath is not told it has not arrived.
         self.usage
@@ -606,6 +627,28 @@ impl Record {
             .insert(key.to_owned(), accepted.clone());
     }
 
+    /// What the agent offers, and the mode it is in.
+    fn set_modes(&self, modes: Option<acpilot_proto::session::ModeState>) {
+        *self.modes.lock().unwrap_or_else(PoisonError::into_inner) = modes;
+    }
+
+    /// The modes this agent advertised, when it advertised any.
+    #[must_use]
+    pub fn modes(&self) -> Option<acpilot_proto::session::ModeState> {
+        self.modes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Follow a mode switch the agent accepted.
+    fn set_mode(&self, mode: &str) {
+        let mut modes = self.modes.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(state) = modes.as_mut() {
+            state.mode = mode.to_owned();
+        }
+    }
+
     /// A title from the first prompt, if the session has none yet.
     fn title_from(&self, prompt: &str) {
         let mut state = self
@@ -704,6 +747,9 @@ pub async fn create(
     // The agent may have chosen its own name for the conversation; a terminal it
     // opens is keyed by that, so the pane store needs the way back.
     record.set_acp_id(session.acp_session_id());
+    // What the agent says it can do, before the first client asks. Copied while
+    // the session is still here: the owner task takes it below.
+    record.set_modes(session.modes());
 
     // The session is moved onto its own thread before the route can return, so
     // no client ever sees a session id that has nobody listening on it.
@@ -800,6 +846,12 @@ async fn drive(session: Session, record: Arc<Record>, mut mailbox: mpsc::Receive
                 // A cancel between turns is not an error: the key arrived after
                 // the turn ended, which is what a person asked for either way.
                 Some(Command::Cancel) => {}
+                // A mode switch between turns is the ordinary case: nothing is
+                // in flight, so the agent can answer at once.
+                Some(Command::Mode(mode)) => match session.set_mode(mode.clone()).await {
+                    Ok(()) => record.set_mode(&mode),
+                    Err(error) => record.notice("Mode not changed", &error.to_string()),
+                },
                 Some(Command::Shutdown) | None => {
                     record.set_status(SessionStatus::Closed);
                     return;
@@ -864,6 +916,14 @@ async fn drive_turn(
                 Some(Command::Prompt(_)) => record.notice(
                     "Prompt refused",
                     "a turn is already in flight; that prompt was not sent",
+                ),
+                // Switching modes mid-turn is not refused by ACP, but an agent
+                // that changed its rules halfway through a turn would make the
+                // transcript a lie about which rules produced which part. The
+                // client can ask again when the turn ends.
+                Some(Command::Mode(_)) => record.notice(
+                    "Mode refused",
+                    "a turn is in flight; the mode was not changed",
                 ),
                 Some(Command::Shutdown) | None => {
                     record.set_status(SessionStatus::Closed);
@@ -1156,6 +1216,74 @@ pub async fn cancel(
     ))
 }
 
+/// `POST /v1/sessions/{id}/mode` — switch the agent's mode.
+///
+/// The agent is the authority: the list answered here is what it advertised at
+/// `session/new`, and an id it did not advertise is `400` with the alternatives in
+/// `details` rather than a request that fails later inside the agent. An agent that
+/// offers no modes at all is `409`: there is nothing to switch, and a `200` for a
+/// mode nobody can enter would be worse than saying so.
+///
+/// The answer is the state the switch was sent to; the agent's own `mode_changed`
+/// event on the session's stream is what confirms it, and the session's copy follows
+/// that event.
+pub async fn set_mode(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+    body: Result<Json<SetModeRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<ModeState>, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a mode request: {rejection}"
+        )))
+    })?;
+    let record = state.sessions.handle(&id).ok_or_else(|| unknown(&id))?;
+    if record.status() == SessionStatus::Closed {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "session {id} has ended; there is no agent to switch"
+        ))));
+    }
+    if record.status() == SessionStatus::Busy {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "session {id} has a turn in flight; the mode can change when it ends"
+        ))));
+    }
+    let mode = request.mode.trim();
+    if mode.is_empty() {
+        return Err(ApiError::new(AcpilotError::invalid("`mode` is empty"))
+            .with_detail("mode", "send the id of one of the agent's modes"));
+    }
+    let Some(modes) = record.modes() else {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "the agent for session {id} offers no modes to switch"
+        ))));
+    };
+    if !modes.available.iter().any(|offered| offered.id == mode) {
+        let ids: Vec<&str> = modes
+            .available
+            .iter()
+            .map(|offered| offered.id.as_str())
+            .collect();
+        return Err(ApiError::new(AcpilotError::invalid(format!(
+            "{mode} is not a mode the agent offers"
+        )))
+        .with_detail("mode", format!("the agent offers {}", ids.join(", "))));
+    }
+    if record
+        .commands
+        .try_send(Command::Mode(mode.to_owned()))
+        .is_err()
+    {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "session {id} is not ready for a mode change"
+        ))));
+    }
+    Ok(Json(ModeState {
+        mode: mode.to_owned(),
+        available: modes.available,
+    }))
+}
+
 impl Record {
     /// Record a notice on the session's own stream.
     fn notice(&self, title: &str, message: &str) {
@@ -1431,6 +1559,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/sessions/{id}", get(one).delete(remove))
         .route("/v1/sessions/{id}/prompt", post(prompt))
         .route("/v1/sessions/{id}/cancel", post(cancel))
+        .route("/v1/sessions/{id}/mode", post(set_mode))
         .route("/v1/sessions/{id}/events", get(events))
         .route("/v1/sessions/{id}/stream", get(stream))
 }

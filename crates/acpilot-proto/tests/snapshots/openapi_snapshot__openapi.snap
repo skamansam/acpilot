@@ -1330,6 +1330,27 @@ expression: canonical(document)
         ],
         "type": "string"
       },
+      "ModeState": {
+        "description": "The modes an agent offers, and the one it is in.",
+        "properties": {
+          "available": {
+            "description": "Every mode the agent advertised, in its own order.",
+            "items": {
+              "$ref": "#/components/schemas/SessionMode"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "description": "The mode in effect once this answer was written.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "available"
+        ],
+        "type": "object"
+      },
       "ModelCapabilities": {
         "description": "What a model appears able to do, as far as the server admits.",
         "properties": {
@@ -2181,6 +2202,31 @@ expression: canonical(document)
         ],
         "type": "string"
       },
+      "SessionMode": {
+        "description": "One mode an agent offers.",
+        "properties": {
+          "description": {
+            "description": "What the mode changes, when the agent says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Identifier the agent uses for this mode.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name shown in a picker.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "SessionStatus": {
         "description": "Where a session is in its lifecycle.",
         "enum": [
@@ -2232,6 +2278,19 @@ expression: canonical(document)
           "status",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "SetModeRequest": {
+        "description": "`POST /v1/sessions/{id}/mode` body.",
+        "properties": {
+          "mode": {
+            "description": "The id of the mode to switch to, as the agent advertised it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
         ],
         "type": "object"
       },

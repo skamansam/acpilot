@@ -430,6 +430,18 @@ second field. One path a listing cannot mark is a deleted one: a listing is the
 filesystem, so a file that is gone has no row, and the source-control routes
 (P6.5-2) are where a deleted file is listed as deleted.
 
+A workspace opened with `POST /v1/workspaces` on a host other than `local` is read
+through that host's helper, not through this machine's disk: `workspace` is the row's
+`id`, `path` is still relative to the root, and the daemon asks `fs.list` or `fs.read`
+over the transport. The reply is translated once, here. Rows of a remote listing carry
+`is_dir` and `size` and no `modified`, `ignored` or `status` — ignore rules and git
+letters are this machine's reading of files it cannot see — and a remote read carries
+an `etag` the daemon hashes from the text, because there is no write for a client to
+send it back to yet. Every route that *walks* the workspace (`search`, `grep`,
+`references`, `diagnostics`, the `/v1/git/*` family) answers `409 conflict` naming the
+host when asked about a remote workspace: each one reads directories here, and a
+plausible answer about a different machine is worse than a refusal.
+
 `GET /v1/files/search?workspace=&q=` returns `FileEntry[]` of the files whose
 paths answer `q`, ignoring case, best match first, at most 200 of them. A query is
 a substring (`tui` finds `crates/acpilot-tui/src/app.rs`) or initials matched in

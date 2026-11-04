@@ -96,7 +96,14 @@ async fn read(
     State(state): State<AppState>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileContent>, ApiError> {
-    let root = workspace_root(&state, query.workspace.as_deref())?;
+    match source(&state, query.workspace.as_deref())? {
+        Source::Local(root) => read_local(&root, &query),
+        Source::Remote { host, root } => read_remote(&state, &host, &root, &query).await,
+    }
+}
+
+/// [`read`], from a directory this daemon can open itself.
+fn read_local(root: &Path, query: &FileQuery) -> Result<Json<FileContent>, ApiError> {
     let requested = query
         .path
         .as_deref()
@@ -106,7 +113,7 @@ async fn read(
                 .with_detail("path", "a read names the file to read")
         })?;
     let relative = relative_path(requested)?;
-    let resolved = resolve_existing(&root, &relative, requested)?;
+    let resolved = resolve_existing(root, &relative, requested)?;
 
     let metadata = std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
     if metadata.is_dir() {
@@ -125,8 +132,8 @@ async fn read(
     }
     let etag = etag(&metadata, &bytes);
     let text = text_of(bytes, requested)?;
-    let path = display_path(&root, &resolved);
-    let marks = line_marks(&root, &path);
+    let path = display_path(root, &resolved);
+    let marks = line_marks(root, &path);
     Ok(Json(FileContent {
         path,
         text,
@@ -185,10 +192,21 @@ async fn list(
     State(state): State<AppState>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<Vec<FileEntry>>, ApiError> {
-    let root = workspace_root(&state, query.workspace.as_deref())?;
+    match source(&state, query.workspace.as_deref())? {
+        Source::Local(root) => list_local(&state, &root, &query),
+        Source::Remote { host, root } => list_remote(&state, &host, &root, &query).await,
+    }
+}
+
+/// [`list`], from a directory this daemon can open itself.
+fn list_local(
+    state: &AppState,
+    root: &Path,
+    query: &FileQuery,
+) -> Result<Json<Vec<FileEntry>>, ApiError> {
     let requested = query.path.as_deref().unwrap_or_default();
     let relative = relative_path(requested)?;
-    let resolved = resolve_existing(&root, &relative, requested)?;
+    let resolved = resolve_existing(root, &relative, requested)?;
     if !resolved.is_dir() {
         return Err(ApiError::new(AcpilotError::conflict(format!(
             "{requested} is not a directory; GET /v1/files reads a file"
@@ -204,12 +222,12 @@ async fn list(
     // Built even when the caller asked for the hidden rows: a row an ignore rule
     // hides comes back *marked*, and that answer belongs to the matcher rather than
     // to a client that never saw the pattern.
-    let rules = honour.then(|| ignore_rules(&root, &resolved));
+    let rules = honour.then(|| ignore_rules(root, &resolved));
     let include_ignored = query.include_ignored.unwrap_or(false);
     // Asked once for the whole directory rather than once per row: git answers
     // about paths, and a row that asked its own question would be one `git status`
     // per file.
-    let changed = changes(&root);
+    let changed = changes(root);
 
     let entries = std::fs::read_dir(&resolved).map_err(|source| io_error(&resolved, source))?;
     let mut listing = Vec::new();
@@ -222,7 +240,7 @@ async fn list(
             continue;
         };
         let path = entry.path();
-        if !inside(&root, &path) {
+        if !inside(root, &path) {
             continue;
         }
         let is_dir = metadata.is_dir();
@@ -240,7 +258,7 @@ async fn list(
         if honour && path.file_name().is_some_and(|name| name == ".git") {
             continue;
         }
-        let relative = display_path(&root, &path);
+        let relative = display_path(root, &path);
         let change = changed.get(&relative).copied();
         listing.push(FileEntry {
             path: relative,
@@ -1289,16 +1307,319 @@ struct SearchQuery {
     offset: Option<usize>,
 }
 
+/// Where the files a request names are.
+pub(crate) enum Source {
+    /// A directory this daemon can open itself.
+    Local(PathBuf),
+    /// A root on a host this daemon reaches through its helper.
+    Remote {
+        /// The host whose helper is asked.
+        host: acpilot_proto::host::HostSummary,
+        /// The root, spelled the way that host spells it.
+        root: String,
+    },
+}
+
+/// The workspace `workspace` names, in the form a route can read from.
+///
+/// A workspace this daemon opened is found by id, wherever it lives: the row records the
+/// host, and a row for another host is read through that host's helper rather than
+/// through this machine's filesystem. Nothing named is the workspace the daemon was
+/// started on, which is the only answer an older client can ask for.
+///
+/// # Errors
+///
+/// A workspace id that was never opened (`404`, naming the one this daemon serves), or
+/// no workspace at all (`409`).
+pub(crate) fn source(state: &AppState, workspace: Option<&str>) -> Result<Source, ApiError> {
+    let named = workspace.filter(|id| !id.is_empty());
+    let opened = named.and_then(|id| {
+        state
+            .workspaces()
+            .list()
+            .into_iter()
+            .find(|row| row.id == id)
+    });
+    let Some(row) = opened else {
+        return workspace_root(state, named).map(Source::Local);
+    };
+    if row.host_id == crate::hosts::LOCAL_HOST {
+        return Ok(Source::Local(PathBuf::from(&row.root)));
+    }
+    let host = state
+        .hosts()
+        .get(&row.host_id)
+        .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("host {}", row.host_id))))?;
+    Ok(Source::Remote {
+        host,
+        root: row.root,
+    })
+}
+
+/// Ask `host`'s helper `method`, and tell its refusal from a transport that will not answer.
+///
+/// The outer error is how this daemon failed to reach the host: a helper that would not
+/// start, a handshake that ran out of time, a host nobody has tested yet. The inner error
+/// is the host answering — its own words for why it would not do as it was asked, which is
+/// the only thing that can say a path is missing from a machine this daemon cannot see.
+async fn ask(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<Result<serde_json::Value, String>, ApiError> {
+    let capabilities = host.capabilities.ok_or_else(|| {
+        ApiError::new(AcpilotError::conflict(format!(
+            "host {} has not been tested yet; POST /v1/hosts/{}/test first",
+            host.id, host.id
+        )))
+    })?;
+    if !capabilities.filesystem {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "the helper on {} does not read files",
+            host.id
+        ))));
+    }
+    let address = host
+        .id
+        .split_once(':')
+        .map(|(_, address)| address.to_owned())
+        .unwrap_or_else(|| host.id.clone());
+    let (program, args) =
+        crate::hosts::remote_command(host.kind, &address, &state.hosts().ssh_program());
+    let unavailable = |detail: String| {
+        ApiError::new(AcpilotError::HostUnavailable {
+            host: host.id.clone(),
+        })
+        .with_detail("transport", detail)
+    };
+    let connections = std::sync::Arc::clone(state.hosts().connections());
+    let key = host.id.clone();
+    let method = method.to_owned();
+    let asked = tokio::task::spawn_blocking(move || {
+        connections.request(&key, &program, &args, &method, params)
+    });
+    let answered = tokio::time::timeout(crate::hosts::HANDSHAKE_TIMEOUT, asked)
+        .await
+        .map_err(|_| {
+            unavailable(format!(
+                "{} did not answer within {} seconds",
+                host.id,
+                crate::hosts::HANDSHAKE_TIMEOUT.as_secs()
+            ))
+        })?;
+    match answered {
+        Err(join) => Err(unavailable(join.to_string())),
+        Ok(answered) => Ok(answered),
+    }
+}
+
+/// [`read`], from a root on the far side of a transport.
+///
+/// No ETag the host computed, because the helper reads a file rather than opening one:
+/// the token is this daemon's own hash of the text it was handed, which is enough to tell
+/// a client that what it is looking at is what it read. A write is not served for a remote
+/// workspace yet, so there is nothing to send it back to.
+async fn read_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    query: &FileQuery,
+) -> Result<Json<FileContent>, ApiError> {
+    let requested = query
+        .path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::invalid("`path` is required"))
+                .with_detail("path", "a read names the file to read")
+        })?;
+    let relative = relative_path(requested)?;
+    let path = relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.read",
+        serde_json::json!({ "path": remote_path(root, &path) }),
+    )
+    .await?;
+    let read = answer.map_err(|message| read_refusal(host, requested, &message))?;
+    let text = read
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::HostUnavailable {
+                host: host.id.clone(),
+            })
+            .with_detail(
+                "transport",
+                format!("the helper answered fs.read with {read}, which is not a file"),
+            )
+        })?;
+    // Checked after the transport rather than before it: the helper has no cheap way to
+    // say how big a file is, and a cap that refused nothing would be a comment.
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_large(requested, text.len() as u64));
+    }
+    Ok(Json(FileContent {
+        path,
+        text: text.to_owned(),
+        etag: etag_of(text.as_bytes()),
+        // No gutter marks: `git` runs on the host the files are on, and this daemon has
+        // not asked the far one yet.
+        marks: Vec::new(),
+    }))
+}
+
+/// [`list`], from a root on the far side of a transport.
+///
+/// The far host lists one directory, so the rows are what it named: no ignore matching and
+/// no git letters, because both are this machine reading the other machine's files with
+/// rules it does not have. A tree of a remote workspace still draws — it just draws rows
+/// without letters rather than claiming every path is clean.
+async fn list_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    query: &FileQuery,
+) -> Result<Json<Vec<FileEntry>>, ApiError> {
+    let requested = query.path.as_deref().unwrap_or_default();
+    let relative = relative_path(requested)?;
+    let separated = relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.list",
+        serde_json::json!({ "path": remote_path(root, &separated) }),
+    )
+    .await?;
+    let listed = answer.map_err(|message| {
+        ApiError::new(AcpilotError::not_found(format!(
+            "path {} on {}",
+            empty_as_root(requested),
+            host.id
+        )))
+        .with_detail("transport", message)
+    })?;
+    let entries = listed
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::HostUnavailable {
+                host: host.id.clone(),
+            })
+            .with_detail(
+                "transport",
+                format!("the helper answered fs.list with {listed}, which is not a listing"),
+            )
+        })?;
+    let prefix = if separated.is_empty() {
+        String::new()
+    } else {
+        format!("{separated}/")
+    };
+    let mut listing: Vec<FileEntry> = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.get("name").and_then(serde_json::Value::as_str)?;
+            Some(FileEntry {
+                path: format!("{prefix}{name}"),
+                is_dir: entry
+                    .get("is_dir")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                size: entry
+                    .get("size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                modified: None,
+                ignored: false,
+                status: None,
+            })
+        })
+        .collect();
+    listing.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(Json(listing))
+}
+
+/// A refusal from the far side of a read, in this API's terms.
+///
+/// The helper's words travel as the detail rather than being dropped: "permission denied"
+/// and "no such file" are both a path that could not be read here, and only the host can
+/// say which.
+fn read_refusal(
+    host: &acpilot_proto::host::HostSummary,
+    requested: &str,
+    message: &str,
+) -> ApiError {
+    if message.contains("not UTF-8 text") {
+        return binary(requested);
+    }
+    ApiError::new(AcpilotError::not_found(format!(
+        "path {requested} on {}",
+        host.id
+    )))
+    .with_detail("transport", message.to_owned())
+}
+
+/// The far host's spelling of a workspace-relative path.
+///
+/// The separator follows the root, because the root is the host's spelling: a Windows host
+/// names `C:\\src` and joins with a backslash, and a path sent with the wrong one is a file
+/// that is not there.
+fn remote_path(root: &str, relative: &str) -> String {
+    let root = root.trim_end_matches(['/', '\\']);
+    if relative.is_empty() {
+        return root.to_owned();
+    }
+    let separator = if root.contains('\\') { '\\' } else { '/' };
+    let relative = if separator == '\\' {
+        relative.replace('/', "\\")
+    } else {
+        relative.to_owned()
+    };
+    format!("{root}{separator}{relative}")
+}
+
+/// The token a client holds for text read across a transport.
+///
+/// Shorter than [`etag`] because there is no stat to fold in: the text is the version, and
+/// a hash of it is the whole answer.
+fn etag_of(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let hash: String = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{:x}-{hash}", bytes.len())
+}
+
 /// The root, checked against the id the client named.
 ///
 /// An empty id means "the one you serve", which is the only value a v1 client
 /// can usefully send before workspaces are plural. A different id is a `404`
 /// naming both, because a client that thinks it is editing directory A while
-/// the daemon serves B has no way to notice otherwise.
+/// the daemon serves B has no way to notice otherwise. A workspace that was opened on
+/// another host is a `409` here: it is known, and the routes that walk this machine's
+/// filesystem are not the ones that read it.
 pub(crate) fn workspace_root(
     state: &AppState,
     workspace: Option<&str>,
 ) -> Result<PathBuf, ApiError> {
+    if let Some(id) = workspace.filter(|id| !id.is_empty())
+        && let Some(row) = state
+            .workspaces()
+            .list()
+            .into_iter()
+            .find(|row| row.id == id)
+        && row.host_id != crate::hosts::LOCAL_HOST
+    {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{id} is on {}, and only reading and listing a file are answered for a workspace on another host",
+            row.host_id
+        ))));
+    }
     let served = state.workspace().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon was started without a workspace, so it has no files to serve",

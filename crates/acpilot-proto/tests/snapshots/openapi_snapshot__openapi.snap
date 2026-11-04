@@ -1001,6 +1001,13 @@ expression: canonical(document)
           "text": {
             "description": "New UTF-8 contents.",
             "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one.\n\nAbsent is the workspace the daemon was started on, which is the only answer\nan older client could ask for.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

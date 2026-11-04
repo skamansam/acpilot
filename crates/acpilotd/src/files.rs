@@ -1056,7 +1056,14 @@ async fn write(
             "the body is not a file write: {rejection}"
         )))
     })?;
-    let root = workspace_root(&state, None)?;
+    match source(&state, request.workspace.as_deref())? {
+        Source::Local(root) => write_local(root, request),
+        Source::Remote { host, root } => write_remote(&state, &host, &root, request).await,
+    }
+}
+
+/// [`write`], through this daemon's own filesystem.
+fn write_local(root: PathBuf, request: FileWriteRequest) -> Result<Json<FileContent>, ApiError> {
     let relative = relative_path(&request.path)?;
     let bytes = request.text.into_bytes();
     if bytes.len() as u64 > MAX_FILE_BYTES {
@@ -1173,7 +1180,6 @@ async fn delete(
     State(state): State<AppState>,
     Query(query): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let root = workspace_root(&state, query.workspace.as_deref())?;
     let requested = query
         .path
         .as_deref()
@@ -1181,9 +1187,18 @@ async fn delete(
         .ok_or_else(|| {
             ApiError::new(AcpilotError::invalid("`path` is required"))
                 .with_detail("path", "a delete names the file to remove")
-        })?;
+        })?
+        .to_owned();
+    match source(&state, query.workspace.as_deref())? {
+        Source::Local(root) => delete_local(&root, &requested),
+        Source::Remote { host, root } => delete_remote(&state, &host, &root, &requested).await,
+    }
+}
+
+/// [`delete`], through this daemon's own filesystem.
+fn delete_local(root: &Path, requested: &str) -> Result<StatusCode, ApiError> {
     let relative = relative_path(requested)?;
-    let resolved = resolve_existing(&root, &relative, requested)?;
+    let resolved = resolve_existing(root, &relative, requested)?;
     let metadata = std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
     if metadata.is_dir() {
         return Err(ApiError::new(AcpilotError::conflict(format!(
@@ -1197,6 +1212,9 @@ async fn delete(
 /// The body of `POST /v1/files/directory`.
 #[derive(Debug, Deserialize)]
 struct DirectoryRequest {
+    /// Workspace id, when the client names one.
+    #[serde(default)]
+    workspace: Option<String>,
     /// Workspace-relative path of the directory to create.
     path: String,
 }
@@ -1221,8 +1239,17 @@ async fn create_directory(
             "the body is not a directory request: {rejection}"
         )))
     })?;
-    let root = workspace_root(&state, None)?;
-    let relative = relative_path(&request.path)?;
+    match source(&state, request.workspace.as_deref())? {
+        Source::Local(root) => directory_local(&root, &request.path),
+        Source::Remote { host, root } => {
+            directory_remote(&state, &host, &root, &request.path).await
+        }
+    }
+}
+
+/// [`create_directory`], through this daemon's own filesystem.
+fn directory_local(root: &Path, requested: &str) -> Result<StatusCode, ApiError> {
+    let relative = relative_path(requested)?;
     if relative.as_os_str().is_empty() {
         return Err(
             ApiError::new(AcpilotError::invalid("a directory needs a name"))
@@ -1232,19 +1259,16 @@ async fn create_directory(
     let absolute = root.join(&relative);
     if absolute.exists() {
         return Err(ApiError::new(AcpilotError::conflict(format!(
-            "{} already exists",
-            request.path
+            "{requested} already exists"
         ))));
     }
     let mut existing = absolute.as_path();
     while !existing.exists() {
-        existing = existing
-            .parent()
-            .ok_or_else(|| outside(&request.path, &root))?;
+        existing = existing.parent().ok_or_else(|| outside(requested, root))?;
     }
     let resolved = std::fs::canonicalize(existing).map_err(|source| io_error(existing, source))?;
-    if !resolved.starts_with(&root) {
-        return Err(outside(&request.path, &root));
+    if !resolved.starts_with(root) {
+        return Err(outside(requested, root));
     }
     std::fs::create_dir_all(&absolute).map_err(|source| io_error(&absolute, source))?;
     Ok(StatusCode::CREATED)
@@ -1354,6 +1378,163 @@ pub(crate) fn source(state: &AppState, workspace: Option<&str>) -> Result<Source
         host,
         root: row.root,
     })
+}
+
+/// [`write`], through a host this daemon reaches with its helper.
+///
+/// The token a client sends back is the one [`read_remote`] produced — this daemon's hash
+/// of the text — so `if_match` is checked by reading the file again over the same transport
+/// that is about to write it. A failed read is also how a create is told from an overwrite:
+/// the helper has no `stat`, and "is it there" is the same question as "read it".
+async fn write_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    request: FileWriteRequest,
+) -> Result<Json<FileContent>, ApiError> {
+    // Hashed before the text is moved into the request: the token a client stores is this
+    // daemon's own, and it is the hash of the bytes this call is about to send.
+    let etag = etag_of(request.text.as_bytes());
+    let bytes = request.text.into_bytes();
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_large(&request.path, bytes.len() as u64));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| ApiError::new(AcpilotError::invalid("the text is not UTF-8")))?;
+    let relative = relative_path(&request.path)?;
+    let path = relative.to_string_lossy().replace('\\', "/");
+    let target = remote_path(root, &path);
+    let current = ask(
+        state,
+        host,
+        "fs.read",
+        serde_json::json!({ "path": target }),
+    )
+    .await?;
+
+    match (&request.if_match, current) {
+        // Nothing there is a create; something there is the silent replace this route
+        // refuses without a token, exactly as the local write does.
+        (None, Ok(_)) => {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "{} already exists; read it and send its `etag` as `if_match`",
+                request.path
+            ))));
+        }
+        (None, Err(_)) => {}
+        (Some(expected), Ok(read)) => {
+            let read = read
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if &etag_of(read.as_bytes()) != expected {
+                return Err(ApiError::new(AcpilotError::conflict(format!(
+                    "{} changed since that `etag`; read it again",
+                    request.path
+                ))));
+            }
+        }
+        (Some(_), Err(detail)) => {
+            return Err(ApiError::new(AcpilotError::not_found(format!(
+                "file {} on {}",
+                request.path, host.id
+            )))
+            .with_detail("transport", detail));
+        }
+    }
+
+    let written = ask(
+        state,
+        host,
+        "fs.write",
+        serde_json::json!({ "path": target, "text": text.as_str() }),
+    )
+    .await?;
+    written.map_err(|detail| {
+        ApiError::new(AcpilotError::not_found(format!(
+            "path {} on {}",
+            request.path, host.id
+        )))
+        .with_detail("transport", detail)
+    })?;
+    Ok(Json(FileContent {
+        path,
+        text,
+        etag,
+        marks: Vec::new(),
+    }))
+}
+
+/// [`delete`], through a host this daemon reaches with its helper.
+///
+async fn delete_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    requested: &str,
+) -> Result<StatusCode, ApiError> {
+    let relative = relative_path(requested)?;
+    let path = relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.remove",
+        serde_json::json!({ "path": remote_path(root, &path) }),
+    )
+    .await?;
+    let removed = answer.map_err(|detail| {
+        ApiError::new(AcpilotError::not_found(format!(
+            "path {requested} on {}",
+            host.id
+        )))
+        .with_detail("transport", detail)
+    })?;
+    // The host answered that it reached the path and did not remove it, which is a
+    // directory: refusing silently here would delete a tree the caller did not name.
+    if removed.get("removed").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{requested} is a directory; this route removes files"
+        ))));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// [`create_directory`], through a host this daemon reaches with its helper.
+///
+async fn directory_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    requested: &str,
+) -> Result<StatusCode, ApiError> {
+    let relative = relative_path(requested)?;
+    if relative.as_os_str().is_empty() {
+        return Err(
+            ApiError::new(AcpilotError::invalid("a directory needs a name"))
+                .with_detail("path", "send a path below the workspace root"),
+        );
+    }
+    let path = relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.mkdir",
+        serde_json::json!({ "path": remote_path(root, &path) }),
+    )
+    .await?;
+    let made = answer.map_err(|detail| {
+        ApiError::new(AcpilotError::not_found(format!(
+            "path {requested} on {}",
+            host.id
+        )))
+        .with_detail("transport", detail)
+    })?;
+    if made.get("created").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{requested} already exists"
+        ))));
+    }
+    Ok(StatusCode::CREATED)
 }
 
 /// Ask `host`'s helper `method`, and tell its refusal from a transport that will not answer.
@@ -1616,7 +1797,7 @@ pub(crate) fn workspace_root(
         && row.host_id != crate::hosts::LOCAL_HOST
     {
         return Err(ApiError::new(AcpilotError::conflict(format!(
-            "{id} is on {}, and only reading and listing a file are answered for a workspace on another host",
+            "{id} is on {}, and this route walks this daemon's own filesystem rather than asking that host",
             row.host_id
         ))));
     }

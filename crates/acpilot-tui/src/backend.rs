@@ -495,6 +495,7 @@ async fn run(
                 }
                 Some(Request::SaveFile { path, text, etag }) => {
                     let body = acpilot_proto::file::FileWriteRequest {
+                        workspace: None,
                         path: path.clone(),
                         text,
                         if_match: Some(etag),

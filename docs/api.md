@@ -436,8 +436,17 @@ through that host's helper, not through this machine's disk: `workspace` is the 
 over the transport. The reply is translated once, here. Rows of a remote listing carry
 `is_dir` and `size` and no `modified`, `ignored` or `status` — ignore rules and git
 letters are this machine's reading of files it cannot see — and a remote read carries
-an `etag` the daemon hashes from the text, because there is no write for a client to
-send it back to yet. Every route that *walks* the workspace (`search`, `grep`,
+an `etag` the daemon hashes from the text it was handed. That token is the one a write
+sends back: `PUT` and `DELETE /v1/files` and `POST /v1/files/directory` take the same
+`workspace` (`PUT` and the directory body in the request body, a delete in the query),
+and the daemon asks the host to `fs.write`, `fs.remove` or `fs.mkdir`. A remote
+`if_match` is checked by reading the file again over the same transport, so a create is
+a read that failed; a stale token, and a write with no token over a file that exists,
+are the same `409`s they are locally. The far side answers what it did rather than
+refusing: `removed: false` for a directory (a tree is a decision, not a delete) and
+`created: false` for a folder that was already there, because "not a file" and "not
+there" are different answers to a person and only the host can tell them apart. Every
+route that *walks* the workspace (`search`, `grep`,
 `references`, `diagnostics`, the `/v1/git/*` family) answers `409 conflict` naming the
 host when asked about a remote workspace: each one reads directories here, and a
 plausible answer about a different machine is worse than a refusal.

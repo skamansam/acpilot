@@ -291,6 +291,12 @@ pub struct DiagnosticsNotice {
 /// Request body for `PUT /v1/files`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FileWriteRequest {
+    /// Workspace id, when the client names one.
+    ///
+    /// Absent is the workspace the daemon was started on, which is the only answer
+    /// an older client could ask for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     /// Workspace-relative path.
     pub path: String,
     /// New UTF-8 contents.

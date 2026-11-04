@@ -15,7 +15,7 @@
 //!
 //! # What it exposes
 //!
-//! `fs.read`, `fs.write`, `fs.list` and `exec` — the operations `acpilot-host`'s
+//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir` and `exec` — the operations `acpilot-host`'s
 //! `Host` trait asks for. Text is UTF-8 on the wire; a binary read is refused rather
 //! than mangled, because the caller can tell a refusal from an empty file and cannot
 //! tell either from lossy bytes. There is no PTY yet: `exec` runs a program with
@@ -133,7 +133,15 @@ fn error_line(id: Value, failure: &Failure) -> String {
 /// [`call`] does not answer is a promise that fails on first use. A test calls each
 /// name to keep the list true, and the list is in the handshake so a daemon does not
 /// have to assume what the helper it reached can do.
-const METHODS: [&str; 5] = ["hello", "fs.read", "fs.write", "fs.list", "exec"];
+const METHODS: [&str; 7] = [
+    "hello",
+    "fs.read",
+    "fs.write",
+    "fs.list",
+    "fs.remove",
+    "fs.mkdir",
+    "exec",
+];
 
 fn call(method: &str, params: &Value) -> Result<Value, Failure> {
     match method {
@@ -141,6 +149,8 @@ fn call(method: &str, params: &Value) -> Result<Value, Failure> {
         "fs.read" => read(params),
         "fs.write" => write(params),
         "fs.list" => list(params),
+        "fs.remove" => remove(params),
+        "fs.mkdir" => mkdir(params),
         "exec" => exec(params),
         other => Err(Failure::method(other)),
     }
@@ -221,6 +231,36 @@ fn list(params: &Value) -> Result<Value, Failure> {
             .cmp(right["name"].as_str().unwrap_or_default())
     });
     Ok(json!({ "entries": entries }))
+}
+
+/// Remove one file.
+///
+/// A directory is answered rather than removed — `removed: false` — because what happens
+/// to the tree inside it is a decision for the caller, and `false` says "the call reached
+/// the file and this is not one" without pretending the path was missing. A missing path
+/// is still an error, since nothing was reached.
+fn remove(params: &Value) -> Result<Value, Failure> {
+    let path = path_param(params)?;
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| refused(&path, &error))?;
+    if metadata.is_dir() {
+        return Ok(json!({ "path": display(&path), "removed": false }));
+    }
+    std::fs::remove_file(&path).map_err(|error| refused(&path, &error))?;
+    Ok(json!({ "path": display(&path), "removed": true }))
+}
+
+/// Make a directory and any parents it needs.
+///
+/// An existing path is `created: false` rather than a quiet success: a caller that asked
+/// for a new folder and got "fine" cannot tell whether it was already there, and the two
+/// answers are different in every dialog that asked for one.
+fn mkdir(params: &Value) -> Result<Value, Failure> {
+    let path = path_param(params)?;
+    if path.exists() {
+        return Ok(json!({ "path": display(&path), "created": false }));
+    }
+    std::fs::create_dir_all(&path).map_err(|error| refused(&path, &error))?;
+    Ok(json!({ "path": display(&path), "created": true }))
 }
 
 /// Run a program with piped stdio and answer with what it printed.

@@ -181,3 +181,50 @@ fn exec_of_a_missing_program_is_a_refusal() {
     let error = helper.error("exec", json!({ "program": "/nonexistent/program" }));
     assert_eq!(error["code"], -32000);
 }
+
+#[test]
+fn a_file_is_removed_and_a_directory_is_answered_rather_than_removed() {
+    let directory = tempfile::tempdir().expect("directory");
+    let file = directory.path().join("note.txt");
+    std::fs::write(&file, "bye").expect("write");
+    let file = file.to_string_lossy().replace('\\', "/");
+    let root = directory.path().to_string_lossy().replace('\\', "/");
+
+    let mut helper = Helper::start();
+    let removed = helper.call("fs.remove", json!({ "path": file }));
+    assert_eq!(removed["removed"], true);
+    assert!(
+        !directory.path().join("note.txt").exists(),
+        "the file is gone"
+    );
+
+    let refused = helper.call("fs.remove", json!({ "path": root }));
+    assert_eq!(
+        refused["removed"], false,
+        "a folder is a decision, not a delete: {refused}"
+    );
+    assert!(directory.path().exists(), "and it is still there");
+}
+
+#[test]
+fn a_missing_path_is_an_error_and_an_existing_directory_is_not_created() {
+    let directory = tempfile::tempdir().expect("directory");
+    let missing = directory.path().join("nothing-here");
+    let missing = missing.to_string_lossy().replace('\\', "/");
+    let root = directory.path().to_string_lossy().replace('\\', "/");
+
+    let mut helper = Helper::start();
+    let error = helper.error("fs.remove", json!({ "path": missing }));
+    assert_eq!(error["code"], -32000);
+
+    let deep = format!("{root}/a/b");
+    let made = helper.call("fs.mkdir", json!({ "path": deep }));
+    assert_eq!(made["created"], true);
+    assert!(
+        directory.path().join("a/b").is_dir(),
+        "parents are made too"
+    );
+
+    let again = helper.call("fs.mkdir", json!({ "path": format!("{root}/a") }));
+    assert_eq!(again["created"], false);
+}

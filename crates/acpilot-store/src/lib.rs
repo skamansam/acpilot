@@ -51,7 +51,7 @@ pub const RETENTION_DAYS: i64 = 30;
 /// Bumped with every entry in [`MIGRATIONS`]. A database written by a newer daemon
 /// is refused rather than read: the columns a newer build added are the ones this
 /// one would try to write past.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The schema, in order, as `(version, sql)`.
 ///
@@ -61,7 +61,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// workaround. A new migration is one more entry here and one more file in
 /// `migrations/`; an edited migration that has shipped is a database that
 /// disagrees with itself.
-const MIGRATIONS: &[(u32, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_agent_pins.sql")),
+];
 
 /// A profile's conversations, sessions and decisions.
 ///
@@ -212,6 +215,48 @@ impl Store {
             hosts.push(row?);
         }
         Ok(hosts)
+    }
+
+    /// Record that a person approved this agent's binary.
+    ///
+    /// A pin is replaced rather than accumulated: the row is the binary currently
+    /// trusted for an agent, and two rows would be two answers to one question.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn save_agent_pin(&self, agent_id: &str, fingerprint: &str) -> Result<(), StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "INSERT INTO agent_pins (agent_id, fingerprint, trusted_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (agent_id) DO UPDATE SET fingerprint = excluded.fingerprint,
+             trusted_at = excluded.trusted_at",
+            params![agent_id, fingerprint, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Every pin a person has recorded, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn agent_pins(&self) -> Result<Vec<AgentPin>, StoreError> {
+        let connection = self.lock();
+        let mut statement = connection.prepare(
+            "SELECT agent_id, fingerprint FROM agent_pins ORDER BY trusted_at, agent_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AgentPin {
+                agent_id: row.get(0)?,
+                fingerprint: row.get(1)?,
+            })
+        })?;
+        let mut pins = Vec::new();
+        for row in rows {
+            pins.push(row?);
+        }
+        Ok(pins)
     }
 
     /// Write a session's current shape, creating the row or replacing it.
@@ -575,6 +620,15 @@ pub struct HostRecord {
     pub address: Option<String>,
 }
 
+/// An agent binary a person approved, as the database keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPin {
+    /// The agent the approval belongs to.
+    pub agent_id: String,
+    /// SHA-256 of the program's bytes when it was approved.
+    pub fingerprint: String,
+}
+
 /// One permission decision, as the database keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -720,10 +774,10 @@ mod tests {
                 .remember_workspace("demo", "/tmp/demo")
                 .expect("workspace");
             store.save_session(&summary("s1")).expect("session");
-            assert_eq!(store.version().expect("version"), 1);
+            assert_eq!(store.version().expect("version"), SCHEMA_VERSION);
         }
         let again = Store::open(&path).expect("the second open runs no migration");
-        assert_eq!(again.version().expect("version"), 1);
+        assert_eq!(again.version().expect("version"), SCHEMA_VERSION);
         assert_eq!(
             again.session("s1").expect("read").expect("there").title,
             "a conversation"
@@ -859,6 +913,17 @@ mod tests {
         assert_eq!(hosts.len(), 2);
         assert_eq!(hosts[1].kind, HostKind::Ssh);
         assert_eq!(hosts[1].address.as_deref(), Some("me@box"));
+    }
+
+    #[test]
+    fn a_pin_is_replaced_rather_than_accumulated() {
+        let store = Store::in_memory().expect("open");
+        store.save_agent_pin("mock", "aaa").expect("first");
+        store.save_agent_pin("mock", "bbb").expect("second");
+        let pins = store.agent_pins().expect("read");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].agent_id, "mock");
+        assert_eq!(pins[0].fingerprint, "bbb");
     }
 
     #[test]

@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use acpilot_agent::Terminals as AgentTerminals;
-use acpilot_agent::supervisor::availability;
 use acpilot_agent::{AgentSpec, Broker, IDLE_TIMEOUT, KeyringResolver, PermissionOption, Registry};
 use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
@@ -57,6 +56,9 @@ mod project;
 mod sessions;
 mod stats;
 mod terminals;
+// What a person approved: the fingerprint a `POST /v1/agents/{id}/trust` records and
+// the `untrusted` state it is the only way out of.
+mod trust;
 // What a conversation costs, counted from the events its agent streamed. Not a
 // route and not a renderer: the sessions engine counts, `/v1/stats` reports.
 mod usage;
@@ -1053,22 +1055,12 @@ fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry
 
 /// One agent as the API reports it.
 ///
-/// Availability is a `PATH` lookup on the host the daemon runs on (see
-/// [`availability`]). Nothing is spawned, so listing agents cannot start one; a
+/// Availability is a `PATH` lookup on the host the daemon runs on, and the pin a
+/// person recorded decides whether a binary that changed is `untrusted` (see
+/// [`trust`]). Nothing is spawned, so listing agents cannot start one; a
 /// handshake-dependent status is reported by the session routes, not here.
-fn summarize(spec: &AgentSpec) -> AgentSummary {
-    AgentSummary {
-        id: spec.id.clone(),
-        name: spec.name.clone(),
-        transport: spec.transport_kind(),
-        status: availability(spec),
-        // An HTTP agent has no command; the empty string is the honest answer
-        // rather than a URL in a field that means "what will be spawned".
-        command: spec
-            .command()
-            .map_or_else(String::new, acpilot_agent::CommandSpec::command_line),
-        protocol_version: None,
-    }
+fn summarize(spec: &AgentSpec, pins: &HashMap<String, String>) -> AgentSummary {
+    trust::summary(spec, pins.get(&spec.id).map(String::as_str))
 }
 
 /// `GET /v1/agents`.
@@ -1076,11 +1068,12 @@ fn summarize(spec: &AgentSpec) -> AgentSummary {
 /// An empty list means the daemon has no registry loaded; there is no profile to
 /// answer 404 for yet.
 async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
+    let pins = trust::pins(&state);
     let summaries = state.agents.as_ref().map_or_else(Vec::new, |registry| {
         registry
             .agents()
             .iter()
-            .map(|spec| summarize(spec))
+            .map(|spec| summarize(spec, &pins))
             .collect()
     });
     Json(summaries)
@@ -1462,6 +1455,9 @@ fn option_str(option: PermissionOption) -> &'static str {
 
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     let mut document = ApiDoc::openapi();
+    // Trust is a route of its own module: what a pin is and where it lives is
+    // documented there, and the document only needs the operation.
+    trust::register(&mut document);
     let paths = &mut document.paths.paths;
     paths.insert(
         "/v1/agents".to_owned(),
@@ -1834,6 +1830,7 @@ pub fn router_with(state: AppState) -> Router {
     let app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/agents", get(agents))
+        .merge(trust::routes())
         .route("/v1/permissions", get(permissions))
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))

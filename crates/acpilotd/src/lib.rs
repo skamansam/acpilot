@@ -62,6 +62,7 @@ mod trust;
 // What a conversation costs, counted from the events its agent streamed. Not a
 // route and not a renderer: the sessions engine counts, `/v1/stats` reports.
 mod usage;
+mod workspaces;
 
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
@@ -237,6 +238,12 @@ pub struct AppState {
     /// capabilities are a fact about this build, and a list that changed under a
     /// client between two reads would be a dialog that flickers.
     hosts: Arc<hosts::Hosts>,
+    /// The workspaces clients have opened, and the check that each root was there.
+    ///
+    /// In memory like the host list: a workspace is a host and a path, and both are
+    /// already durable facts. The daemon still serves one workspace's files; this is
+    /// the registry that makes naming another one possible at all.
+    workspaces: Arc<workspaces::Workspaces>,
     /// Every session this daemon owns.
     sessions: Sessions,
     /// Every terminal this daemon owns.
@@ -352,6 +359,7 @@ impl Default for AppState {
             broker: None,
             workspace: None,
             hosts: Arc::new(hosts::Hosts::default()),
+            workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
@@ -667,6 +675,11 @@ impl AppState {
     /// The hosts this daemon knows, the one it runs on first.
     pub fn hosts(&self) -> &hosts::Hosts {
         &self.hosts
+    }
+
+    /// The workspaces clients have opened on those hosts.
+    pub fn workspaces(&self) -> &workspaces::Workspaces {
+        &self.workspaces
     }
 
     /// The database behind the session routes, when the daemon opened one.
@@ -1844,6 +1857,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(stats::routes())
         .merge(project::routes())
         .merge(terminals::routes())
+        .merge(workspaces::routes())
         .with_state(state);
 
     #[cfg(feature = "docs")]

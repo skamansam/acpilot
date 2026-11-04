@@ -56,6 +56,12 @@ pub struct Hosts {
     /// than on the daemon because it is a fact about a host, and the host list is
     /// what a connection test starts from.
     connections: Arc<crate::helper::Connections>,
+    /// Where `ssh` is, when it is not on `PATH`.
+    ///
+    /// `ACPILOT_SSH` is how a daemon says so and [`Self::prefer_ssh`] is how a test
+    /// does: the environment belongs to the process, and a suite that wrote to it
+    /// would be deciding the transport for every test beside it.
+    ssh: Mutex<Option<String>>,
 }
 
 impl Default for Hosts {
@@ -63,6 +69,7 @@ impl Default for Hosts {
         Self {
             known: Mutex::new(vec![local_summary()]),
             connections: Arc::new(crate::helper::Connections::new()),
+            ssh: Mutex::new(None),
         }
     }
 }
@@ -78,6 +85,26 @@ impl Hosts {
     #[must_use]
     pub fn connections(&self) -> &Arc<crate::helper::Connections> {
         &self.connections
+    }
+
+    /// Say where `ssh` is without moving the process's environment.
+    ///
+    /// A test's transport is a stand-in program, and `ACPILOT_SSH` is read from the
+    /// environment only as the daemon's own answer: a suite that set the variable
+    /// would be choosing the transport for every test in its process.
+    pub fn prefer_ssh(&self, program: Option<String>) {
+        *self.ssh.lock().unwrap_or_else(PoisonError::into_inner) = program;
+    }
+
+    /// The `ssh` this daemon should run: the one it was told about, else the one the
+    /// environment names, else `PATH`'s.
+    pub(crate) fn ssh_program(&self) -> String {
+        self.ssh
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .or_else(|| std::env::var("ACPILOT_SSH").ok())
+            .unwrap_or_else(|| "ssh".to_owned())
     }
 
     /// The host with this id, when it is one this daemon knows.
@@ -253,7 +280,7 @@ async fn test(
 /// the transport starting (a distro a Windows build has to boot, an ssh connection
 /// that has to negotiate). A test that never answers is a failure the caller can
 /// act on, not a request to hold open forever.
-const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+pub(crate) const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Test a host whose transport is a process: `ssh` or `wsl.exe`.
 ///
@@ -270,7 +297,7 @@ async fn remote(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| id.clone());
-    let (program, args) = remote_command(host.kind, &address);
+    let (program, args) = remote_command(host.kind, &address, &state.hosts().ssh_program());
     // The connection the daemon already has for this host, or a new one it keeps:
     // testing the same host twice asks the helper that answered the first time.
     let connections = Arc::clone(state.hosts().connections());
@@ -306,13 +333,13 @@ async fn remote(
 /// not on `PATH`, or a Windows build whose `wsl.exe` lives somewhere unusual, would
 /// otherwise have no way to say where it is. The helper's name is the far side's —
 /// `acpilotd-helper` on the host's `PATH` — not this daemon's.
-fn remote_command(kind: HostKind, address: &str) -> (String, Vec<String>) {
+pub(crate) fn remote_command(kind: HostKind, address: &str, ssh: &str) -> (String, Vec<String>) {
     match kind {
         // `-e`, never `--`: P0-5 measured `wsl.exe --` routing the command through
         // the user's shell, which ate backslashes and reported a missing program as
         // 127. `-e` calls `execvpe` directly and reports the failure as itself.
         HostKind::Ssh => (
-            std::env::var("ACPILOT_SSH").unwrap_or_else(|_| "ssh".to_owned()),
+            ssh.to_owned(),
             vec![
                 "-o".to_owned(),
                 "BatchMode=yes".to_owned(),

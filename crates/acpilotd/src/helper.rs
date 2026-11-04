@@ -310,4 +310,38 @@ impl Connections {
         live.insert(id.to_owned(), connection);
         Ok(capabilities)
     }
+
+    /// Ask host `id` `method`, dialling first when there is no connection yet.
+    ///
+    /// # Errors
+    ///
+    /// The transport would not start, the handshake failed, or the call itself did:
+    /// a missing file and a dead helper are both failures here, and the message is
+    /// the helper's own words so the route can say which side refused.
+    pub fn request(
+        &self,
+        id: &str,
+        program: &str,
+        args: &[String],
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if !live.contains_key(id) {
+            let connection = Connection::dial(program, args)?;
+            live.insert(id.to_owned(), connection);
+        }
+        let Some(connection) = live.get_mut(id) else {
+            return Err("the connection went while it was dialling".to_owned());
+        };
+        let answer = connection.request(method, params);
+        if answer.is_err() {
+            // A call that failed may have left the pipe mid-conversation — a refused
+            // path returns a well-formed error, but a timeout or a broken line does
+            // not — and the next request would read the rest of this one instead of
+            // its own answer. Dropping it makes the next call dial again.
+            live.remove(id);
+        }
+        answer
+    }
 }

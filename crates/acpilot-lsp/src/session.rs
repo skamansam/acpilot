@@ -176,7 +176,27 @@ impl Session {
     /// A binary that cannot be started, or a server that does not answer
     /// `initialize` with a result.
     pub async fn start(program: &str, args: &[String], root: &Path) -> Result<Self, SessionError> {
-        let mut server = Server::spawn(program, args, root)?;
+        let server = Server::spawn(program, args, root)?;
+        Self::handshake(server, program, root).await
+    }
+
+    /// A session over a server somebody else started and connected.
+    ///
+    /// The daemon uses this for a server on an SSH or WSL host: the bytes are the same
+    /// bytes, the handshake is the same handshake, and only the pipe's far end moved.
+    ///
+    /// # Errors
+    ///
+    /// The server does not answer `initialize` with a result.
+    pub async fn attach(server: Server, program: &str, root: &Path) -> Result<Self, SessionError> {
+        Self::handshake(server, program, root).await
+    }
+
+    async fn handshake(
+        mut server: Server,
+        program: &str,
+        root: &Path,
+    ) -> Result<Self, SessionError> {
         let root_uri = Url::from_directory_path(root)
             .map_err(|()| SessionError::Uri(root.display().to_string()))?;
         let answer = server

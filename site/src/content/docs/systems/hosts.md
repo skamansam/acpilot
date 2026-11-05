@@ -55,6 +55,23 @@ is not a clever workaround, it is the only version that feels like a local
 editor.
 </Aside>
 
+## A language server over the helper
+
+A workspace on a host gets its language server **there**, not here: `lsp.start` runs
+the detected program (`rust-analyzer`, `pyright-langserver`,
+`typescript-language-server`) with pipes rather than a PTY — LSP is already framed,
+and a terminal would add echo and CRLF translation the protocol never asked for. The
+daemon sends its own `initialize` through `lsp.write` and reads the answers as
+`lsp.data`, so the protocol above the pipe is the same code that talks to a server on
+this machine. The server indexes the root as the host spells it, which is why a
+reference in a second file is a line on that machine, and why a workspace this daemon
+cannot see still gets scoped references.
+
+One helper process per server, for the same reason a terminal gets one: a server
+speaks when it has finished indexing, and that must not queue in front of a file read
+on the shared connection. A server that cannot be started is remembered as absent
+until the daemon restarts, exactly as a local one is.
+
 ## A terminal over the helper
 
 The same helper opens real PTYs: `pty.open` answers with an id and streams the

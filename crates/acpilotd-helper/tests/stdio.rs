@@ -222,6 +222,57 @@ fn data(event: &Value) -> String {
 
 #[cfg(unix)]
 #[test]
+fn a_language_server_takes_bytes_and_is_forwarded_back() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("directory");
+    let program = directory.path().join("fake-lsp");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nprintf 'hello-from-host'\nread line\nprintf 'got:%s' \"$line\"\n",
+    )
+    .expect("write");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("mode");
+
+    let mut helper = Helper::start();
+    helper.call("hello", json!({ "protocol": 1 }));
+    let opened = helper.call(
+        "lsp.start",
+        json!({
+            "program": program.to_string_lossy().replace('\\', "/"),
+            "cwd": directory.path().to_string_lossy().replace('\\', "/"),
+        }),
+    );
+    let id = opened["id"].as_u64().expect("the helper names the server");
+
+    // The program prints before anything is written, so its `lsp.data` may already be
+    // waiting: `ask` holds notifications and `line` hands them back in order.
+    let mut heard = String::new();
+    while !heard.contains("hello-from-host") {
+        let event = helper.line();
+        assert_eq!(event["method"], "lsp.data", "{event}");
+        heard.push_str(&data(&event));
+    }
+
+    // `cGluZwo=` is "ping\n": a frame reaches the server as the bytes the client wrote,
+    // not as a JSON string with the frame's own quoting in it.
+    let written = helper.call("lsp.write", json!({ "id": id, "data": "cGluZwo=" }));
+    assert_eq!(written["bytes"], 5);
+    while !heard.contains("got:ping") {
+        let event = helper.line();
+        assert_eq!(event["method"], "lsp.data", "{event}");
+        heard.push_str(&data(&event));
+    }
+
+    let closed = helper.call("lsp.close", json!({ "id": id }));
+    assert_eq!(closed["closed"], true);
+    let event = helper.line();
+    assert_eq!(event["method"], "lsp.exit", "{event}");
+    assert_eq!(event["params"]["id"], id);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_terminal_paints_and_then_says_how_it_ended() {
     let mut helper = Helper::start();
     helper.call("hello", json!({ "protocol": 1 }));

@@ -51,6 +51,7 @@ mod lsp;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
+mod lsp_remote;
 pub mod pidfile;
 mod platform;
 mod project;

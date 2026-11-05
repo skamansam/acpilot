@@ -31,11 +31,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acpilot_lsp::position::PositionEncoding;
 use acpilot_lsp::session::{Location, Session};
 use tokio::sync::Mutex;
+
+use crate::helper::{Connections, Transport};
 
 /// The servers this build knows how to start, by language.
 ///
@@ -144,9 +147,52 @@ pub struct Pushed {
 ///
 /// `Debug` is written out rather than derived: a [`Session`] owns pipes and a child
 /// process, and the only fact worth printing is which languages have one running.
+/// Where a session runs: this daemon's machine, or a workspace's host.
+#[derive(Debug, Clone)]
+pub enum Where {
+    /// The daemon's own filesystem.
+    Local,
+    /// A host reached through its helper.
+    Remote {
+        /// The transport that reaches it.
+        transport: Transport,
+        /// The host id, for a key and a message.
+        host: String,
+    },
+}
+
+/// A workspace root and the machine it is on.
+///
+/// Two spellings of one directory, kept together because they must not be confused: the
+/// path a server is started in is the host's, and a `Path` resolved on this daemon is
+/// the wrong string to hand a server on another machine.
+#[derive(Debug, Clone)]
+pub struct Place {
+    /// The root, in the spelling of the machine the server runs on.
+    pub root: PathBuf,
+    /// Which machine that is.
+    pub at: Where,
+}
+
+impl Place {
+    /// The id a session for `language` is kept under.
+    ///
+    /// A local key is the language alone, so a daemon with no remote workspaces keeps
+    /// the one-session-per-language behaviour it had; a remote key names the host and the
+    /// root, because two workspaces on one host are two indexes.
+    fn key(&self, language: &'static str) -> String {
+        match &self.at {
+            Where::Local => language.to_owned(),
+            Where::Remote { host, .. } => {
+                format!("{host}\u{0}{}\u{0}{language}", self.root.display())
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Servers {
-    sessions: Mutex<HashMap<&'static str, Option<Running>>>,
+    sessions: Mutex<HashMap<String, Option<Running>>>,
 }
 
 /// A started server and what the daemon knows about its use.
@@ -156,6 +202,13 @@ pub struct Servers {
 /// a session nobody has asked is a process to stop.
 struct Running {
     session: Session,
+    /// The command that runs, for a status line or a log.
+    program: &'static str,
+    /// The helper process, when this session runs on a host.
+    ///
+    /// Dropped with the session, which is what closes the far side and ends the
+    /// server there; a `Session` on its own has no process to close.
+    _remote: Option<crate::lsp_remote::RemoteHandle>,
     last_used: Instant,
     /// The length of the last `textDocument/references` call that answered, without
     /// the retries a cold index needs. What a status line reports is the round trip,
@@ -171,7 +224,7 @@ impl std::fmt::Debug for Servers {
             sessions
                 .iter()
                 .filter(|(_, session)| session.is_some())
-                .map(|(language, _)| *language)
+                .map(|(language, _)| language.clone())
                 .collect::<Vec<_>>()
         });
         formatter
@@ -197,7 +250,8 @@ impl Servers {
     pub async fn references(
         &self,
         language: &str,
-        root: &Path,
+        place: &Place,
+        connections: &Arc<Connections>,
         path: &Path,
         text: &str,
         offset: usize,
@@ -206,8 +260,9 @@ impl Servers {
             .iter()
             .find(|(id, _, _)| *id == language)
             .map(|(id, program, _)| (*id, *program))?;
+        let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, root).await?;
+        let running = running(&mut sessions, language, place, connections).await?;
         // Marked used before the question rather than after the answer: the first
         // question is the index, and a sweep that stopped a server in the middle of
         // one would make the next keystroke pay for it a second time.
@@ -226,7 +281,7 @@ impl Servers {
             tracing::debug!(server = program, %error, "language server lost the document");
             // A session whose transport broke is not reusable: drop it so the next
             // request starts a fresh one rather than failing forever.
-            sessions.insert(language, None);
+            sessions.insert(key.clone(), None);
             return None;
         }
 
@@ -263,7 +318,7 @@ impl Servers {
                 }
                 Err(error) => {
                     tracing::debug!(server = program, %error, "references failed");
-                    sessions.insert(language, None);
+                    sessions.insert(key.clone(), None);
                     return None;
                 }
             }
@@ -282,7 +337,8 @@ impl Servers {
     pub async fn diagnostics(
         &self,
         language: &str,
-        root: &Path,
+        place: &Place,
+        connections: &Arc<Connections>,
         path: &Path,
         text: &str,
     ) -> Option<Problems> {
@@ -290,15 +346,16 @@ impl Servers {
             .iter()
             .find(|(id, _, _)| *id == language)
             .map(|(id, program, _)| (*id, *program))?;
+        let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, root).await?;
+        let running = running(&mut sessions, language, place, connections).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
 
         if let Err(error) = running.session.open(path, language, text).await {
             tracing::debug!(server = program, %error, "language server lost the document");
-            sessions.insert(language, None);
+            sessions.insert(key.clone(), None);
             return None;
         }
         match running.session.diagnostics(path, DIAGNOSTICS_WAIT).await {
@@ -312,7 +369,7 @@ impl Servers {
             }
             Err(error) => {
                 tracing::debug!(server = program, %error, "diagnostics failed");
-                sessions.insert(language, None);
+                sessions.insert(key.clone(), None);
                 None
             }
         }
@@ -332,13 +389,11 @@ impl Servers {
     pub async fn drain_published(&self) -> Vec<Pushed> {
         let mut sessions = self.sessions.lock().await;
         let mut pushed = Vec::new();
-        for (language, slot) in sessions.iter_mut() {
+        for slot in sessions.values_mut() {
             let Some(running) = slot.as_mut() else {
                 continue;
             };
-            let Some((_, program, _)) = SERVERS.iter().find(|(id, _, _)| id == language) else {
-                continue;
-            };
+            let program = running.program;
             let encoding = running.session.encoding();
             for published in running.session.drain_published() {
                 pushed.push(Pushed {
@@ -370,27 +425,22 @@ impl Servers {
     ///
     /// [`AppState`]: crate::AppState
     pub async fn shutdown(&self) {
-        let started: Vec<(&'static str, Session)> = {
+        let started: Vec<Running> = {
             let mut sessions = self.sessions.lock().await;
             sessions
                 .drain()
-                .filter_map(|(language, running)| {
-                    running.map(|running| (language, running.session))
-                })
+                .filter_map(|(_, running)| running)
                 .collect()
         };
         if started.is_empty() {
             return;
         }
-        futures::future::join_all(
-            started
-                .into_iter()
-                .map(|(language, mut session)| async move {
-                    let server = session.program().to_owned();
-                    session.shutdown().await;
-                    tracing::debug!(server = %server, language, "language server stopped");
-                }),
-        )
+        futures::future::join_all(started.into_iter().map(|mut running| async move {
+            let server = running.program;
+            running.session.shutdown().await;
+            tracing::debug!(server, "language server stopped");
+            drop(running);
+        }))
         .await;
     }
 
@@ -406,39 +456,31 @@ impl Servers {
     /// log line and for a test.
     pub async fn stop_idle(&self, idle: Duration) -> Vec<&'static str> {
         let now = Instant::now();
-        let stopped: Vec<(&'static str, Running)> = {
+        let stopped: Vec<Running> = {
             let mut sessions = self.sessions.lock().await;
-            let idle_now: Vec<&'static str> = sessions
+            let idle_now: Vec<String> = sessions
                 .iter()
                 .filter(|(_, slot)| {
                     slot.as_ref()
                         .is_some_and(|running| now.duration_since(running.last_used) >= idle)
                 })
-                .map(|(language, _)| *language)
+                .map(|(key, _)| key.clone())
                 .collect();
             idle_now
                 .into_iter()
-                .filter_map(|language| {
-                    sessions
-                        .remove(language)
-                        .flatten()
-                        .map(|running| (language, running))
-                })
+                .filter_map(|key| sessions.remove(&key).flatten())
                 .collect()
         };
         if stopped.is_empty() {
             return Vec::new();
         }
-        let languages: Vec<&'static str> = stopped.iter().map(|(language, _)| *language).collect();
-        futures::future::join_all(
-            stopped
-                .into_iter()
-                .map(|(language, mut running)| async move {
-                    let server = running.session.program().to_owned();
-                    running.session.shutdown().await;
-                    tracing::debug!(server = %server, language, "idle language server stopped");
-                }),
-        )
+        let languages: Vec<&'static str> = stopped.iter().map(|running| running.program).collect();
+        futures::future::join_all(stopped.into_iter().map(|mut running| async move {
+            let server = running.program;
+            running.session.shutdown().await;
+            tracing::debug!(server, "idle language server stopped");
+            drop(running);
+        }))
         .await;
         languages
     }
@@ -457,7 +499,7 @@ impl Servers {
             .map(|(language, program, _)| {
                 let running =
                     sessions
-                        .get(language)
+                        .get(*language)
                         .and_then(|slot| slot.as_ref())
                         .map(|running| RunningState {
                             encoding: running.session.encoding(),
@@ -483,38 +525,66 @@ impl Servers {
 /// language, whether it is installed, and whether a failed one is retried (it is not —
 /// see the module note).
 async fn running<'a>(
-    sessions: &'a mut HashMap<&'static str, Option<Running>>,
+    sessions: &'a mut HashMap<String, Option<Running>>,
     language: &'static str,
-    root: &Path,
+    place: &Place,
+    connections: &Arc<Connections>,
 ) -> Option<&'a mut Running> {
     let (_, program, args) = SERVERS.iter().find(|(id, _, _)| *id == language)?;
-    if !installed(program) {
-        return None;
-    }
-    if !sessions.contains_key(language) {
+    let key = place.key(language);
+    if !sessions.contains_key(&key) {
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-        let started = Session::start(program, &args, root).await;
+        // A local server is only offered when it is installed; a remote one is the
+        // host's to have, and the refusal there names the program the host could not run.
+        let started = match &place.at {
+            Where::Local => {
+                if installed(program) {
+                    Session::start(program, &args, &place.root)
+                        .await
+                        .ok()
+                        .map(|session| (session, None))
+                } else {
+                    None
+                }
+            }
+            Where::Remote { transport, .. } => {
+                let root = place.root.to_string_lossy().into_owned();
+                match crate::lsp_remote::start(
+                    Arc::clone(connections),
+                    transport.clone(),
+                    program,
+                    args.clone(),
+                    root,
+                )
+                .await
+                {
+                    Ok((session, handle)) => Some((session, Some(handle))),
+                    Err(error) => {
+                        tracing::debug!(server = program, %error, "language server did not start on the host");
+                        None
+                    }
+                }
+            }
+        };
         match &started {
-            Ok(session) => {
+            Some((session, _)) => {
                 tracing::debug!(server = program, encoding = %session.encoding(), "language server ready");
             }
-            Err(error) => {
-                tracing::debug!(server = program, %error, "language server did not start");
-            }
+            None => tracing::debug!(server = program, "language server did not start"),
         }
         sessions.insert(
-            language,
-            started
-                .map(|session| Running {
-                    session,
-                    last_used: Instant::now(),
-                    round_trip: None,
-                    requests: 0,
-                })
-                .ok(),
+            key.clone(),
+            started.map(|(session, remote)| Running {
+                session,
+                program,
+                _remote: remote,
+                last_used: Instant::now(),
+                round_trip: None,
+                requests: 0,
+            }),
         );
     }
-    sessions.get_mut(language)?.as_mut()
+    sessions.get_mut(&key)?.as_mut()
 }
 
 /// One language this build can start, as `GET /v1/lsp/servers` reports it.

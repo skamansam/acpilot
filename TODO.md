@@ -1339,7 +1339,36 @@ untrusted binary with your repo and your network is exactly the hole worth closi
   - `acpilot format <paths>` and `--check` for CI. Document the interaction with agent writes:
     last writer wins, but both are diffed and both are audited.
 
-- [ ] **P7-11 · Remote language servers** (1d, lands with the remote hosts phase (P8) and the Windows phase (P9))
+- [x] **P7-11 · Remote language servers** (1d, lands with the remote hosts phase (P8) and the Windows phase (P9))
+  - **Result (2026-11-04):** a workspace on a host gets diagnostics and references from a
+    server **on that host**. The helper grew `lsp.start`, `lsp.write` and `lsp.close`:
+    a program on piped stdio, its stdout as `lsp.data` notifications, its stderr as
+    `lsp.stderr` (read so a full pipe cannot block it) and its end as `lsp.exit`, with
+    the id this process assigns for the same reason `pty.*` assigns one. Pipes rather
+    than a PTY, because a PTY adds echo and CRLF translation to a protocol that is
+    already framed (`docs/notes/ssh-agent.md` makes the same point from the client side).
+    `acpilot-lsp`'s client learned a second transport: `Server::attach` takes a pipe
+    instead of a child, so `Session`'s handshake, document sync and questions are the
+    same code for a server on this machine and one three hops away — the only thing that
+    moved is the pipe's far end. The daemon's bridge (`crates/acpilotd/src/lsp_remote.rs`)
+    carries bytes both ways over one helper process per server, with a writer thread for
+    stdin's ordering and a reader thread that sorts `lsp.data` from `lsp.stdout`'s
+    siblings; the registry is keyed by language **and** place, so two workspaces on one
+    host are two indexes and a local session keeps the key it had. The file routes
+    resolve a workspace through the existing `Source`, so a remote root is read through
+    the helper and a remote references request with no server answer is a `409` rather
+    than an empty list — the parse-tree fallback reads this daemon's disk, and an empty
+    answer would be a claim nobody checked. **Tests:** the helper's `lsp.*` round trip
+    against a shell script that prints and echoes a written frame (the bytes arrive, the
+    id is the helper's, close reaps it), the codec's own tests, and the refusal-by-name
+    for a helper from before `lsp.start`.
+  - **Open:** a publish from a host is drained but dropped: the daemon strips the
+    workspace root before announcing it, and the notice's path is the host's, so only
+    answered diagnostics reach the event stream until the store learns to carry a
+    workspace id. `GET /v1/lsp/servers` still lists this machine's servers only. Nothing
+    measures a remote index's latency, and the bridge has no cancellation or progress
+    forwarding. Windows is covered by the same code (`installed` is the platform's) but
+    no Windows host was tested, because a helper on a Windows host is P9's.
   - Over SSH and WSL the server runs **on the host**, spawned through `acpilotd-helper` alongside
     fs/PTY/spawn. Pointing a local server at remote files is unsupported, not merely slow: wrong
     toolchain, wrong paths, wrong import roots.

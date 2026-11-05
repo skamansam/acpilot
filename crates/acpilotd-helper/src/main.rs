@@ -15,9 +15,10 @@
 //!
 //! # What it exposes
 //!
-//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored`, `exec` and
-//! the `pty.*` family — the operations `acpilot-host`'s `Host` trait asks for, plus the
-//! one question a tree asks about a directory and the one thing a pane cannot do without.
+//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored`, `exec`, the
+//! `pty.*` family and the `lsp.*` family — the operations `acpilot-host`'s `Host` trait
+//! asks for, plus the one question a tree asks about a directory, the one thing a pane
+//! cannot do without, and the one thing a language server cannot: a pipe that stays open.
 //! Text is UTF-8 on the wire; a binary read is refused rather than mangled, because the
 //! caller can tell a refusal from an empty file and cannot tell either from lossy bytes.
 //! `exec` runs a program with piped stdio and answers when it is over.
@@ -30,12 +31,19 @@
 //! stream never queues behind a request and a request never waits behind output. See
 //! `pty.rs` for why the id is this process's rather than a pid.
 //!
+//! `lsp.start` does the same for a language server over pipes rather than a PTY: the
+//! daemon sends its `initialize` through `lsp.write` and reads the answers as
+//! `lsp.data`, so a server on the host indexes the host's files. `docs/notes/ssh-agent.md`
+//! says why it is pipes: a PTY would add echo and CRLF translation the protocol never
+//! asked for.
+//!
 //! `serde_json` and `portable-pty`, and nothing else: the helper is uploaded and run
 //! where nothing can be installed, so its size and its build are part of its contract.
 //! The PTY crate is the daemon's own — the platform branch is inside it, and opening a
 //! terminal by hand would be `unsafe`, which this workspace forbids.
 
 mod base64;
+mod lsp;
 mod pty;
 
 use std::io::{self, BufRead, Write};
@@ -95,26 +103,30 @@ impl Failure {
 }
 
 fn main() {
-    // The terminals outlive any one request, and the reader thread of each needs the
-    // map it was registered in, so the sessions are shared rather than borrowed.
+    // Terminals and servers outlive any one request, and the reader thread of each
+    // needs the map it was registered in, so the sessions are shared rather than
+    // borrowed.
     let sessions = Arc::new(pty::Sessions::new());
+    let servers = Arc::new(lsp::Sessions::new());
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        let response = answer(&line, &sessions);
+        let response = answer(&line, &sessions, &servers);
         sessions.send(&response);
     }
-    // The daemon closed the pipe: the shells it started have nobody left to talk to,
-    // and a process whose helper died is one nobody can name or attach to.
+    // The daemon closed the pipe: the shells and servers it started have nobody left to
+    // talk to, and a process whose helper died is one nobody can name, attach to, or
+    // send a request to.
     sessions.close_all();
+    servers.close_all();
 }
 
 /// One line in, one line out. A line that is not a request is answered rather than
 /// skipped: a caller waiting on a reply it will never get is worse than an error.
-fn answer(line: &str, sessions: &Arc<pty::Sessions>) -> Value {
+fn answer(line: &str, sessions: &Arc<pty::Sessions>, servers: &Arc<lsp::Sessions>) -> Value {
     let request: Request = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(error) => {
@@ -127,7 +139,7 @@ fn answer(line: &str, sessions: &Arc<pty::Sessions>) -> Value {
             );
         }
     };
-    match call(&request.method, &request.params, sessions) {
+    match call(&request.method, &request.params, sessions, servers) {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": request.id, "result": result }),
         Err(failure) => error_line(request.id, &failure),
     }
@@ -148,7 +160,7 @@ fn error_line(id: Value, failure: &Failure) -> Value {
 /// [`call`] does not answer is a promise that fails on first use. A test calls each
 /// name to keep the list true, and the list is in the handshake so a daemon does not
 /// have to assume what the helper it reached can do.
-const METHODS: [&str; 13] = [
+const METHODS: [&str; 16] = [
     "hello",
     "fs.read",
     "fs.write",
@@ -162,9 +174,17 @@ const METHODS: [&str; 13] = [
     "pty.resize",
     "pty.kill",
     "pty.close",
+    "lsp.start",
+    "lsp.write",
+    "lsp.close",
 ];
 
-fn call(method: &str, params: &Value, sessions: &Arc<pty::Sessions>) -> Result<Value, Failure> {
+fn call(
+    method: &str,
+    params: &Value,
+    sessions: &Arc<pty::Sessions>,
+    servers: &Arc<lsp::Sessions>,
+) -> Result<Value, Failure> {
     match method {
         "hello" => hello(params),
         "fs.read" => read(params),
@@ -179,6 +199,9 @@ fn call(method: &str, params: &Value, sessions: &Arc<pty::Sessions>) -> Result<V
         "pty.resize" => sessions.resize(params),
         "pty.kill" => sessions.kill(params),
         "pty.close" => sessions.close(params),
+        "lsp.start" => servers.start(params),
+        "lsp.write" => servers.write(params),
+        "lsp.close" => servers.close(params),
         other => Err(Failure::method(other)),
     }
 }

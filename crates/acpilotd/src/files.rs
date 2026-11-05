@@ -521,7 +521,8 @@ async fn diagnostics(
         )))
     })?;
     let relative = relative_path(&request.path)?;
-    let root = workspace_root(&state, request.workspace.as_deref())?;
+    let source = source(&state, request.workspace.as_deref())?;
+    let (root, place) = place_of(&state, &source);
     let Some(language) = crate::lsp::language_of(&request.path) else {
         return Ok(Json(nothing_asked()));
     };
@@ -531,27 +532,42 @@ async fn diagnostics(
         // answer, and a file being written for the first time is precisely the one
         // whose problems are worth hearing about.
         Some(text) => (
-            resolve_existing(&root, &relative, &request.path)
-                .unwrap_or_else(|_| root.join(&relative)),
+            match &source {
+                Source::Local(_) => resolve_existing(&root, &relative, &request.path)
+                    .unwrap_or_else(|_| root.join(&relative)),
+                Source::Remote { .. } => root.join(&relative),
+            },
             text,
         ),
-        None => {
-            let resolved = resolve_existing(&root, &relative, &request.path)?;
-            let metadata =
-                std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
-            if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
-                return Ok(Json(nothing_asked()));
+        None => match &source {
+            Source::Local(_) => {
+                let resolved = resolve_existing(&root, &relative, &request.path)?;
+                let metadata =
+                    std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
+                if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
+                    return Ok(Json(nothing_asked()));
+                }
+                let bytes =
+                    std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
+                let Ok(text) = String::from_utf8(bytes) else {
+                    return Ok(Json(nothing_asked()));
+                };
+                (resolved, text)
             }
-            let bytes = std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
-            let Ok(text) = String::from_utf8(bytes) else {
-                return Ok(Json(nothing_asked()));
-            };
-            (resolved, text)
-        }
+            // The file is on the host, and so is the server: this daemon only needs the
+            // text to know which buffer the question is about, and it is the host's copy.
+            Source::Remote { host, root: at } => {
+                let Some(text) = remote_text(&state, host, at, &relative).await? else {
+                    return Ok(Json(nothing_asked()));
+                };
+                (root.join(&relative), text)
+            }
+        },
     };
+    let connections = std::sync::Arc::clone(state.hosts().connections());
     let Some(answer) = state
         .language_servers()
-        .diagnostics(language, &root, &resolved, &text)
+        .diagnostics(language, &place, &connections, &resolved, &text)
         .await
     else {
         return Ok(Json(nothing_asked()));
@@ -623,7 +639,8 @@ async fn find_references(
     at: Option<(&str, usize)>,
     buffer: Option<(&str, &str)>,
 ) -> Result<Vec<Reference>, ApiError> {
-    let root = workspace_root(state, workspace)?;
+    let source = source(state, workspace)?;
+    let (root, _) = place_of(state, &source);
     // An identifier is one word. Anything else cannot be a use of a name, and a walk
     // that read every file to prove it would be a search for nothing.
     if !is_identifier(needle) {
@@ -634,9 +651,17 @@ async fn find_references(
     // `id` in the repository. `None` means nothing answered, and the parse tree below
     // is the answer for a workspace whose language has no server installed.
     if let Some((path, offset)) = at
-        && let Some(rows) = ask_server(state, &root, path, offset, buffer).await?
+        && let Some(rows) = ask_server(state, &source, path, offset, buffer).await?
     {
         return Ok(rows);
+    }
+    // The parse-tree fallback reads this daemon's own disk. A remote workspace's files
+    // are not here, and an empty list would say "no uses" about a workspace nobody
+    // searched.
+    if matches!(source, Source::Remote { .. }) {
+        return Err(ApiError::new(AcpilotError::conflict(
+            "no language server on this workspace's host answered; the parse-tree search reads this daemon's own disk",
+        )));
     }
     let honour = state
         .preferences()
@@ -758,7 +783,7 @@ fn parsed_uses(_language: &str, _text: &str, _needle: &str) -> Vec<(usize, usize
 /// dropped: a row the tree cannot open is not a row.
 async fn ask_server(
     state: &AppState,
-    root: &Path,
+    source: &Source,
     path: &str,
     offset: usize,
     buffer: Option<(&str, &str)>,
@@ -767,6 +792,7 @@ async fn ask_server(
         return Ok(None);
     };
     let relative = relative_path(path)?;
+    let (root, place) = place_of(state, source);
     // The buffer is the document the server opens: asking it about the saved text
     // while the pane shows an edited one would resolve the caret against a version
     // nobody is looking at, and the caret's offset is the edited one's.
@@ -775,35 +801,183 @@ async fn ask_server(
             // A file that is not on disk yet — a buffer opened before its first save —
             // is still a document the server can resolve a symbol in. The path has
             // already been refused if it escapes, so joining it is the whole answer.
-            resolve_existing(root, &relative, path).unwrap_or_else(|_| root.join(&relative)),
+            match source {
+                Source::Local(_) => resolve_existing(&root, &relative, path)
+                    .unwrap_or_else(|_| root.join(&relative)),
+                Source::Remote { .. } => root.join(&relative),
+            },
             text.to_owned(),
         ),
-        None => {
-            let resolved = resolve_existing(root, &relative, path)?;
-            let metadata =
-                std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
-            if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
-                return Ok(None);
+        None => match source {
+            Source::Local(_) => {
+                let resolved = resolve_existing(&root, &relative, path)?;
+                let metadata =
+                    std::fs::metadata(&resolved).map_err(|source| io_error(&resolved, source))?;
+                if metadata.is_dir() || metadata.len() > MAX_FILE_BYTES {
+                    return Ok(None);
+                }
+                let bytes =
+                    std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
+                if bytes.contains(&0) {
+                    return Ok(None);
+                }
+                let Ok(text) = String::from_utf8(bytes) else {
+                    return Ok(None);
+                };
+                (resolved, text)
             }
-            let bytes = std::fs::read(&resolved).map_err(|source| io_error(&resolved, source))?;
-            if bytes.contains(&0) {
-                return Ok(None);
+            Source::Remote { host, root: at } => {
+                let Some(text) = remote_text(state, host, at, &relative).await? else {
+                    return Ok(None);
+                };
+                (root.join(&relative), text)
             }
-            let Ok(text) = String::from_utf8(bytes) else {
-                return Ok(None);
-            };
-            (resolved, text)
-        }
+        },
     };
+    let connections = std::sync::Arc::clone(state.hosts().connections());
     let Some(answer) = state
         .language_servers()
-        .references(language, root, &resolved, &text, offset)
+        .references(language, &place, &connections, &resolved, &text, offset)
         .await
     else {
         return Ok(None);
     };
     tracing::debug!(server = answer.program, "references from a language server");
-    Ok(Some(rows_from(root, &answer)))
+    match source {
+        Source::Local(root) => Ok(Some(rows_from(root, &answer))),
+        Source::Remote { host, root, .. } => {
+            Ok(Some(rows_from_remote(state, host, root, &answer).await?))
+        }
+    }
+}
+
+/// The root path and the machine a session for `source` runs on.
+fn place_of(state: &AppState, source: &Source) -> (PathBuf, crate::lsp::Place) {
+    match source {
+        Source::Local(root) => (
+            root.clone(),
+            crate::lsp::Place {
+                root: root.clone(),
+                at: crate::lsp::Where::Local,
+            },
+        ),
+        Source::Remote { host, root } => (
+            PathBuf::from(root),
+            crate::lsp::Place {
+                root: PathBuf::from(root),
+                at: crate::lsp::Where::Remote {
+                    transport: transport_for(state, host),
+                    host: host.id.clone(),
+                },
+            },
+        ),
+    }
+}
+
+/// The transport a host's helper is reached with.
+fn transport_for(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+) -> crate::helper::Transport {
+    let address = host
+        .id
+        .split_once(':')
+        .map(|(_, address)| address.to_owned())
+        .unwrap_or_else(|| host.id.clone());
+    crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program())
+}
+
+/// One file's text, read through the host's helper.
+///
+/// `None` is the host refusing — a missing file, a directory, bytes that are not text —
+/// which is the same "nothing to ask about" a local read answers with.
+async fn remote_text(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    relative: &Path,
+) -> Result<Option<String>, ApiError> {
+    let path = relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.read",
+        serde_json::json!({ "path": remote_path(root, &path) }),
+    )
+    .await?;
+    let Ok(read) = answer else {
+        return Ok(None);
+    };
+    Ok(read
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned))
+}
+
+/// [`rows_from`], for locations on a host: the text of each row is read there.
+///
+/// Sequential on purpose: a references answer is at most [`MAX_REFERENCES`] rows, and a
+/// burst of transport calls to draw one list would cost more than it saves.
+async fn rows_from_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    answer: &crate::lsp::Answer,
+) -> Result<Vec<Reference>, ApiError> {
+    let at = Path::new(root);
+    let mut texts: HashMap<std::path::PathBuf, String> = HashMap::new();
+    let mut found: Vec<Reference> = Vec::new();
+    for location in &answer.locations {
+        let Ok(relative) = location.path.strip_prefix(at) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() {
+            continue;
+        }
+        if !texts.contains_key(&location.path) {
+            let relative = Path::new(&relative);
+            let Some(text) = remote_text(state, host, root, relative).await? else {
+                continue;
+            };
+            texts.insert(location.path.clone(), text);
+        }
+        let text = &texts[&location.path];
+        let index = LineIndex::new(text);
+        let Some(bytes) = index.offset(
+            text,
+            Position::new(location.line, location.character),
+            answer.encoding,
+        ) else {
+            continue;
+        };
+        let line_start = text[..bytes].rfind('\n').map_or(0, |at| at + 1);
+        let column = u32::try_from(text[line_start..bytes].chars().count() + 1).unwrap_or(u32::MAX);
+        let line = text
+            .split('\n')
+            .nth(location.line as usize)
+            .unwrap_or_default()
+            .trim_end();
+        found.push(Reference {
+            path: relative,
+            line: location.line + 1,
+            column,
+            text: line.to_owned(),
+        });
+        if found.len() == MAX_REFERENCES {
+            break;
+        }
+    }
+    found.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.line.cmp(&right.line))
+            .then(left.column.cmp(&right.column))
+    });
+    found.dedup_by(|left, right| {
+        left.path == right.path && left.line == right.line && left.column == right.column
+    });
+    Ok(found)
 }
 
 /// The server's locations as rows a pane can draw.

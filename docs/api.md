@@ -511,6 +511,19 @@ does not answer falls back to the parse-tree search above. That fallback is the
 `--no-default-features` links no grammar at all and answers references only from a
 server.
 
+A workspace on a host has no files here, so the fallback is not available there: the
+server runs **on that workspace's host**, through its helper, and the documents it
+opens are the host's paths. The host must have been tested and its helper must offer
+`lsp.start` (`409` otherwise, naming the host); the server is the same detected program
+as on this machine, started in the workspace root as the host spells it, and its
+`file://` URIs index that machine's files. A references request on a remote workspace
+with no server answer is `409` rather than an empty list, because an empty list would
+say "no uses" about a workspace nobody searched. `POST /v1/files/diagnostics` takes the
+same route: the server is started on the workspace's host, `text` absent means the file
+is read through the helper, and the rows' lines come back from the machine that has the
+file. A server on a host is one per workspace root and language, so two workspaces on
+one host are two indexes; it is stopped by the same idle sweep as a local one.
+
 `POST /v1/files/references` is the same question with the **open buffer** attached:
 `ReferencesRequest { q, path, offset, text?, workspace? }`. `text` is the file as the
 editor holds it, for the file `path` names, and it is what the search runs over — for

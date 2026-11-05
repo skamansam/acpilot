@@ -121,7 +121,7 @@ async fn a_remote_terminal_paints_writes_resizes_and_ends() {
     let (connections, transport) = host(directory.path(), STAND_IN);
     let terminal = Terminal::spawn_remote(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         transport,
         Arc::clone(&connections),
         Some(ExecCommand::new("/bin/sh")),
@@ -194,7 +194,7 @@ fn a_helper_without_a_pty_is_refused_by_name() {
     let (connections, transport) = host(directory.path(), PTYLESS);
     let error = Terminal::spawn_remote(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         transport,
         connections,
         None,

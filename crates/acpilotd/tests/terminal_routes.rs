@@ -30,7 +30,7 @@ fn app(root: &std::path::Path) -> (axum::Router, Arc<Terminal>) {
     let state = AppState::new().with_workspace(workspace);
     let terminal = Terminal::spawn(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         ExecCommand::new("/bin/sh"),
         TerminalSize { cols: 80, rows: 24 },
     )
@@ -97,6 +97,44 @@ async fn a_terminal_resizes_and_then_ends() {
     let (status, listed) = send(&app, "GET", "/v1/terminals", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed, serde_json::json!([]), "the pane is forgotten");
+}
+
+#[tokio::test]
+async fn a_sessionless_terminal_is_only_for_another_host() {
+    let root = tempfile::tempdir().expect("workspace");
+    let (app, _terminal) = app(root.path());
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/terminals",
+        Some(serde_json::json!({ "size": { "cols": 80, "rows": 24 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("needs a session"),
+        "the refusal says what is missing: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_session_is_a_404() {
+    let root = tempfile::tempdir().expect("workspace");
+    let (app, _terminal) = app(root.path());
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/terminals",
+        Some(serde_json::json!({
+            "session_id": "nope",
+            "size": { "cols": 80, "rows": 24 }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 #[tokio::test]

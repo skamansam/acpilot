@@ -152,7 +152,11 @@ impl Driver {
 /// One running terminal.
 pub struct Terminal {
     id: TerminalId,
-    session_id: SessionId,
+    /// The session that takes this pane with it when it ends, when one does.
+    ///
+    /// A sessionless terminal is a client's own — a browser tab on a remote
+    /// workspace's shell — and ends when its program does or when the daemon does.
+    session_id: Option<SessionId>,
     /// The command line, for display. Never re-parsed.
     command: String,
     driver: Driver,
@@ -182,7 +186,7 @@ impl Terminal {
     /// the request being wrong, and both name the command in the message.
     pub fn spawn(
         id: TerminalId,
-        session_id: SessionId,
+        session_id: Option<SessionId>,
         command: ExecCommand,
         size: TerminalSize,
     ) -> Result<Arc<Self>, ApiError> {
@@ -237,7 +241,7 @@ impl Terminal {
     /// own words, because "the terminal did not open" helps nobody.
     pub fn spawn_remote(
         id: TerminalId,
-        session_id: SessionId,
+        session_id: Option<SessionId>,
         transport: crate::helper::Transport,
         connections: Arc<crate::helper::Connections>,
         command: Option<ExecCommand>,
@@ -303,7 +307,7 @@ impl Terminal {
         let cols = NonZeroU16::new(size.cols).unwrap_or(NonZeroU16::MIN);
         let terminal = Arc::new(Self {
             id: format!("agent-{}", handle.id()),
-            session_id,
+            session_id: Some(session_id),
             command: handle.command().to_owned(),
             driver: Driver::Agent(Mutex::new(Some(handle.clone()))),
             screen: Mutex::new(Screen {
@@ -324,8 +328,8 @@ impl Terminal {
 
     /// The session that owns it.
     #[must_use]
-    pub fn session_id(&self) -> &str {
-        &self.session_id
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 
     /// The screen as it is now, and everything from this moment on.
@@ -662,7 +666,7 @@ impl Terminals {
         let terminals: Vec<Arc<Terminal>> = self
             .lock()
             .values()
-            .filter(|terminal| terminal.session_id == session)
+            .filter(|terminal| terminal.session_id.as_deref() == Some(session))
             .cloned()
             .collect();
         let mut ended = 0;
@@ -685,7 +689,7 @@ impl Terminals {
         let terminals: Vec<Arc<Terminal>> = self.lock().values().cloned().collect();
         let mut summaries: Vec<TerminalSummary> = terminals
             .iter()
-            .filter(|terminal| session.is_none_or(|id| terminal.session_id == id))
+            .filter(|terminal| session.is_none_or(|id| terminal.session_id.as_deref() == Some(id)))
             .map(|terminal| terminal.summary())
             .collect();
         summaries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -705,10 +709,10 @@ impl Terminals {
 ///
 /// # Errors
 ///
-/// No workspace to start in (`409`), no such session (`404`), arguments without a
-/// command or a zero dimension (`400`), a directory that is not inside the
-/// workspace (`403`) or does not exist (`404`), or a PTY the host could not make
-/// (`500`). A named workspace that does not exist is `404`; one on a host nobody has
+/// No workspace to start in (`409`), no such session (`404`), a sessionless terminal
+/// for the daemon's own workspace (`409`), arguments without a command or a zero
+/// dimension (`400`), a directory that is not inside the workspace (`403`) or does not
+/// exist (`404`), or a PTY the host could not make (`500`). A named workspace that does not exist is `404`; one on a host nobody has
 /// tested, or whose helper has no PTY, is `409`; a remote command the host refused is
 /// `500`, naming the host's own words.
 pub async fn create(
@@ -747,13 +751,22 @@ pub async fn create(
         Some(id) => remote_workspace(state, id)?,
     };
     // The session is what takes the pane with it when it ends, whichever host the shell
-    // is on. Sessions themselves are still this daemon's own (P8-5 starts them on a
-    // host), so a remote workspace's terminal is owned by the session that opened it.
-    if state.sessions.get(&request.session_id).is_none() {
-        return Err(ApiError::new(AcpilotError::not_found(format!(
-            "session {}",
-            request.session_id
-        ))));
+    // is on — but a client with no session at all can still ask for one there. Sessions
+    // do not run on a host yet (P8-5), so the only honest sessionless terminal is on a
+    // host: a shell on this daemon's own machine with no session would be a second,
+    // sessionless way to run commands on it, which is the door the session rule closes.
+    match &request.session_id {
+        Some(id) if state.sessions.get(id).is_none() => {
+            return Err(ApiError::new(AcpilotError::not_found(format!(
+                "session {id}"
+            ))));
+        }
+        None if remote.is_none() => {
+            return Err(ApiError::new(AcpilotError::conflict(
+                "a terminal on this daemon's own host needs a session; a sessionless one is for a workspace on another host",
+            )));
+        }
+        _ => {}
     }
 
     let named = request

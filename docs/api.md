@@ -608,11 +608,17 @@ winning a tie.
 
 ## Terminals
 
-`POST /v1/terminals` takes `CreateTerminalRequest { session_id, workspace?,
+`POST /v1/terminals` takes `CreateTerminalRequest { session_id?, workspace?,
 command?, args?, cwd?, size }` and returns a `TerminalSummary` with the process
 already running. A terminal belongs to a session because that is what owns the
-work it does; a shell with no session would be a second, sessionless way to run
-commands on the daemon's host. `command` defaults to the host's own shell, and
+work it does; a shell with no session on the daemon's own host would be a second,
+sessionless way to run commands there. So `session_id` is required for the
+workspace this daemon serves, and may be **absent** for a workspace on another
+host: sessions do not run on a host yet (P8-5), and a client with no session — a
+browser tab on a remote workspace's shell — still needs a pane there. A
+sessionless terminal is that client's: `TerminalSummary.session_id` is absent,
+`GET /v1/terminals?session=` does not list it for any session, and it ends when
+its program ends or when the daemon does. `command` defaults to the host's own shell, and
 `cwd` is relative to the workspace root (an absolute path is accepted and
 checked) — a directory outside it is `403`, not a silent start somewhere else.
 

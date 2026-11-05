@@ -1454,8 +1454,10 @@ untrusted binary with your repo and your network is exactly the hole worth closi
     `ECD` history is P2-8. `TERM` is the helper's default, not a negotiation or a
     request field (there is no `env` in `CreateTerminalRequest`). The pane is owned by a
     session that still lives on this daemon, because sessions do not run remotely until
-    P8-5; a client that has no session at all — a browser tab on a remote workspace's
-    shell — is P11's. Input and output each cost one round trip, which is right for a
+    P8-5; a client with no session at all can now ask for a pane on a remote workspace — `POST
+    /v1/terminals` with no `session_id` is allowed there and refused on this daemon's own
+    host — which is the HTTP half P11's browser tab needs; the browser pane itself is
+    still P11's. Input and output each cost one round trip, which is right for a
     terminal and wrong for a `cat` of a large file (that is `fs.read`).
 - [ ] **P8-7** Fallbacks: `ssh` binary mode via `openssh` crate for configs russh cannot express (FIDO, `Match`, ControlMaster); auto-fallback with a single log line.
 - [ ] **P8-8** Tests: docker-compose `sshd` fixture; tests for agent auth, bad host key, dropped connection mid-turn, and a 200 MB file read.

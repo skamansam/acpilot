@@ -20,7 +20,7 @@ const PATIENCE: Duration = Duration::from_secs(5);
 fn summary() -> TerminalSummary {
     TerminalSummary {
         id: "t1".to_owned(),
-        session_id: "s1".to_owned(),
+        session_id: Some("s1".to_owned()),
         size: TerminalSize { cols: 80, rows: 24 },
         alive: true,
         command: "/bin/sh".to_owned(),

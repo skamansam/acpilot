@@ -59,7 +59,7 @@ async fn an_agent_terminal_becomes_a_pane_a_client_can_attach_to() {
     let summary = state.terminals().adopt("s1".to_owned(), handle);
 
     assert_eq!(summary.id, "agent-terminal-1");
-    assert_eq!(summary.session_id, "s1");
+    assert_eq!(summary.session_id.as_deref(), Some("s1"));
     assert!(
         summary.command.contains("printf hello"),
         "the pane has a title: {}",
@@ -149,7 +149,7 @@ async fn the_daemon_mirrors_a_terminal_an_agent_opens() {
     };
     // No session in this daemon answers to the agent's id, so the pane is filed
     // under that id rather than dropped — see `mirror_agent_terminals`.
-    assert_eq!(pane.session_id(), "acp-1");
+    assert_eq!(pane.session_id(), Some("acp-1"));
     screen_shows(&pane, "mirrored").await;
 }
 

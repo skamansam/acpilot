@@ -2552,7 +2552,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2579,7 +2579,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2624,7 +2624,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2712,7 +2712,7 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2730,7 +2730,7 @@ mod tests {
     fn summary(id: &str, command: &str, alive: bool) -> acpilot_proto::terminal::TerminalSummary {
         acpilot_proto::terminal::TerminalSummary {
             id: id.to_owned(),
-            session_id: "s1".to_owned(),
+            session_id: Some("s1".to_owned()),
             size: TerminalSize { cols: 60, rows: 20 },
             alive,
             command: command.to_owned(),

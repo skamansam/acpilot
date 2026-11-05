@@ -26,7 +26,7 @@ const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
 fn spawn(program: &str, args: &[&str]) -> std::sync::Arc<Terminal> {
     Terminal::spawn(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         ExecCommand::new(program).args(args),
         SIZE,
     )
@@ -97,7 +97,7 @@ fn typed_bytes_reach_the_program() {
 fn a_resize_reaches_the_program() {
     let terminal = Terminal::spawn(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         ExecCommand::new("sh").args(["-c", "sleep 0.4; stty size"]),
         TerminalSize { cols: 40, rows: 10 },
     )
@@ -142,7 +142,7 @@ fn closing_a_pane_does_not_end_the_process() {
 fn a_zero_dimension_never_starts_a_process() {
     let error = Terminal::spawn(
         "t1".to_owned(),
-        "s1".to_owned(),
+        Some("s1".to_owned()),
         ExecCommand::new("sh"),
         TerminalSize { cols: 0, rows: 0 },
     )

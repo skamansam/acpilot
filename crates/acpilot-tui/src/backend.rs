@@ -482,7 +482,7 @@ async fn run(
                         continue;
                     };
                     let request = acpilot_proto::terminal::CreateTerminalRequest {
-                        session_id: session.clone(),
+                        session_id: Some(session.clone()),
                         workspace,
                         command: None,
                         args: Vec::new(),
@@ -495,7 +495,7 @@ async fn run(
                                 "started {} · attaching",
                                 summary.command
                             )));
-                            refresh_terminals(&client, &summary.session_id, &updates).await;
+                            refresh_terminals(&client, session, &updates).await;
                             if let Some(link) = terminal.take() {
                                 link.task.abort();
                             }

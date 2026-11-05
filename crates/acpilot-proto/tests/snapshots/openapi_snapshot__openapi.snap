@@ -402,7 +402,7 @@ expression: canonical(document)
         "type": "object"
       },
       "CreateTerminalRequest": {
-        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing;\na shell with no session would be a second, sessionless way to run commands on\nthe daemon's host.",
+        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing; a\nshell with no session on the daemon's own host would be a second, sessionless way to\nrun commands there. On a **remote** workspace the work is on that host and sessions\ndo not run there yet (P8-5), so a client with no session — a browser tab — may ask\nfor a terminal there without one.",
         "properties": {
           "args": {
             "description": "Arguments for `command`, verbatim.",
@@ -426,8 +426,15 @@ expression: canonical(document)
             ]
           },
           "session_id": {
-            "$ref": "#/components/schemas/String",
-            "description": "Session that owns the terminal."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Session that owns the terminal, when the client has one.\n\nRequired for the daemon's own workspace; optional for a workspace on another\nhost, where a sessionless terminal is the only kind a client without a session\ncan have."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
@@ -442,7 +449,6 @@ expression: canonical(document)
           }
         },
         "required": [
-          "session_id",
           "size"
         ],
         "type": "object"
@@ -2359,8 +2365,15 @@ expression: canonical(document)
             "description": "Terminal identifier."
           },
           "session_id": {
-            "$ref": "#/components/schemas/String",
-            "description": "Session that owns it."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Session that owns it, when one does.\n\nAbsent for a terminal a client asked for in a remote workspace without a\nsession: a browser tab on that workspace's shell has none, and sessions do not\nrun on a host yet (P8-5). A local terminal is always a session's."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
@@ -2369,7 +2382,6 @@ expression: canonical(document)
         },
         "required": [
           "id",
-          "session_id",
           "size",
           "alive",
           "command"

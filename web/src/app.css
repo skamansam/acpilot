@@ -359,6 +359,125 @@ td.muted,
   color: var(--success);
 }
 
+/*
+ * The terminal: a list of the daemon's panes, and the xterm.js screen one of them
+ * is drawn on. The height is the screen's own, not the page's: a terminal grows to
+ * show more of the program, which is the whole point of putting it here.
+ */
+.terminals {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-panel);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.pane-count {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.pane-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  font-size: 0.95rem;
+}
+
+.pane-name code {
+  color: var(--text);
+}
+
+.pane-where {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* A pane nobody owns is the row a person needs to read carefully: it may be on
+ * another machine, and it looks like any other shell otherwise. */
+.pane-row[data-session='none'] .pane-where {
+  color: var(--warning);
+}
+
+.pane-row[data-alive='false'] .pane-name code {
+  color: var(--text-muted);
+}
+
+.pane-row button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.pane-note {
+  margin: 0.9rem 0 0;
+  font-size: 0.9rem;
+}
+
+.terminal {
+  margin-top: 0.75rem;
+}
+
+.terminal-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.terminal-title {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.terminal-where {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.terminal-status {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.terminal-status[data-status='open'] {
+  color: var(--success);
+}
+
+.terminal-status[data-status='reconnecting'] {
+  color: var(--warning);
+}
+
+.terminal-status[data-status='ended'] {
+  color: var(--danger);
+}
+
+.terminal-screen {
+  height: 60vh;
+  min-height: 18rem;
+  padding: 0.35rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.terminal-screen .xterm {
+  height: 100%;
+}
+
 dialog {
   max-width: 32rem;
   width: calc(100% - 2rem);

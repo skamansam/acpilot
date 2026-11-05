@@ -987,6 +987,12 @@ async fn attach(
         .get(&id)
         .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("terminal {id}"))))?;
     Ok(upgrade
+        // A browser's socket constructor sets no headers, so the page cannot send
+        // `Authorization`; it offers the token in the protocol list instead and
+        // `auth` accepts it from there. The daemon has to name a protocol it agreed
+        // to or the browser fails the handshake, and the name is this one — never the
+        // token, which the client already knows and the server has no reason to echo.
+        .protocols(["acpilot.v1"])
         .on_upgrade(move |socket| pump(socket, terminal))
         .into_response())
 }

@@ -50,7 +50,8 @@ daemon does not pretend to be a web server fleet.
 
 ## Status
 
-The Svelte app exists and is what ships, with the editor still to come.
+The Svelte app exists and is what ships, with the editor and the transcript still
+to come.
 `web/` is Svelte 5 + Vite + TypeScript; `npm run build` emits **one HTML file**
 into `crates/acpilot-web/assets/`, with its script and stylesheet inlined, and
 `acpilotd` serves that at `/app`. The built file is committed, so building the
@@ -63,6 +64,24 @@ integration, with **Show sources** naming where each figure came from, which is 
 same question the terminal's `F4` asks — and the session list with each row's
 agent, status and last event. **About** names the running build and the
 licence; **Quit** tries to close the tab and says so when the browser refuses.
+
+**Terminals** is the one interactive pane so far. The section lists every pane
+`GET /v1/terminals` returns — the open session's, and the ones no session owns, a
+shell in another workspace on another host among them, each saying where it runs —
+and **Attach** draws the chosen one with xterm.js over
+`WS /v1/terminals/{id}/attach`, with the fit addon sizing the cells and the WebGL
+renderer falling back to xterm's own when a context is refused. A pane is a view,
+not an owner: detaching or closing the tab leaves the program running, a dropped
+socket reattaches with backoff and replays the screen, and an exit notice is the
+only close that ends the view. Copy and paste are `Ctrl-Shift-C` and
+`Ctrl-Shift-V`, so `Ctrl-C` stays the interrupt a shell expects.
+
+The socket is the one request in the product a browser cannot give an
+`Authorization` header to, so the token travels as the `acpilot.v1` subprotocol
+(`new WebSocket(url, ["acpilot.v1", token])`) and the daemon answers with the
+protocol name, never the token. That is still a header rather than a query
+string: the secret stays out of the daemon's log, the browser's history and any
+`Referer`.
 The shell is served without a token like `/docs`, because a browser cannot attach
 a header to a typed address and the page holds no data; every API call behind it
 is still guarded.
@@ -87,12 +106,18 @@ frame carries exactly the variables the page was served with: no session, no fil
 nothing a token would have protected. If that ever stops being true, the route
 needs a token, not a wider exception.
 
-Two tests hold that page to account. `npm test` mounts the shell in a headless DOM
-against a fake stream, which is the page's own logic; `npm run test:live` builds a
-real daemon, opens the page against it, saves `theme_web` in a temporary settings
+Tests hold that page to account. `npm test` mounts the shell in a headless DOM
+against a fake stream, which is the page's own logic, and pins the terminal's
+rules in `web/src/terminals.test.ts`: which panes are listed, what a sessionless
+row says, that the token is a protocol and never a URL, and that a dropped socket
+reattaches while a close or an exit does not. `npm run test:live` builds a real
+daemon, opens the page against it, saves `theme_web` in a temporary settings
 file, and asserts the already-open page repainted — a socket, a watcher and a
-stream, with the browser as the only stand-in. CI runs both in the `web` job, so
-the repaint is a gate rather than a demonstration.
+stream, with the browser as the only stand-in. On the daemon side,
+`crates/acpilotd/tests/terminal_attach.rs` performs the browser's exact
+handshake against a real listener and the real auth layer. CI runs all of it in
+the `web` and `check` jobs, so the repaint and the attach are gates rather than
+demonstrations.
 
 ```bash
 cargo run -p acpilotd -- --addr 127.0.0.1:7777
@@ -105,6 +130,7 @@ the same one the CLI and the TUI talk to, so `/app` shows the build that is runn
 right now rather than a version baked into a bundle weeks ago.
 
 Still open from the web phase: the routes above, the generated API client, the
-CodeMirror editor, the SSE transcript, the xterm terminal, and the daemon-side
-CSP. What exists now is the shape they hang on — embedded, self-serving, one file,
-no asset directory to lose.
+CodeMirror editor, the SSE transcript, creating a pane from the page (it attaches
+to panes; `POST /v1/terminals` wants a session, and there is no session view yet),
+and the daemon-side CSP. What exists now is the shape they hang on — embedded,
+self-serving, one file, no asset directory to lose.

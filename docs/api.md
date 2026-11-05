@@ -41,6 +41,14 @@ right and this file is a bug.
   is refused from then on, with nothing restarting. A missing or wrong token is
   `401 unauthorized`, in the usual envelope, and the scheme is case-insensitive
   while the token is not.
+
+  A **WebSocket a page opens** is the one request a browser cannot give that
+  header to: `new WebSocket(url, protocols)` sets no headers at all. Attach
+  routes therefore also accept the token as a `Sec-WebSocket-Protocol` name —
+  `new WebSocket(url, ["acpilot.v1", token])` — and the daemon answers with
+  `acpilot.v1`, never with the token echoed back. That is still a header, not a
+  query string: the token stays out of log lines, browser history and any
+  `Referer`, which is where the URL alternative would put it.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 
@@ -647,8 +655,12 @@ in.
 opened for a session the daemon could not map has no id to be filtered by, so the
 unfiltered listing is the only one that names it.
 
-`WS /v1/terminals/{id}/attach` is the pane. The stream is deliberately split by
-frame type, because terminal output can contain anything a shell can print:
+`WS /v1/terminals/{id}/attach` is the pane. A browser opens it with
+`new WebSocket(url, ["acpilot.v1", token])` — the token as a subprotocol, because a
+socket constructor sets no headers (see **Auth**) — and the handshake answers
+`acpilot.v1`; a client that can set `Authorization` sends the bearer header and
+needs no protocol. The stream is deliberately split by frame type, because
+terminal output can contain anything a shell can print:
 
 | Direction | Frame | Meaning |
 | --- | --- | --- |

@@ -10,7 +10,7 @@
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import type { Health, SessionSummary, StatRow } from './api';
+import type { Health, SessionSummary, StatRow, TerminalSummary } from './api';
 
 const TOKEN_KEY = 'acpilot.token';
 
@@ -30,6 +30,25 @@ const SESSION: SessionSummary = {
   status: 'idle',
   created_at: '2026-10-24T12:00:00Z',
   updated_at: '2026-10-24T12:05:00Z',
+};
+
+// Two panes: one the session opened, and one nobody owns — a shell in a named
+// workspace on another host. The second is the row the picker exists for.
+const PANE: TerminalSummary = {
+  id: 't1',
+  session_id: 'session-1',
+  size: { cols: 80, rows: 24 },
+  alive: true,
+  command: '/bin/sh -c make',
+};
+
+const ORPHAN: TerminalSummary = {
+  id: 't2',
+  workspace: 'build',
+  host: 'ssh:box',
+  size: { cols: 80, rows: 24 },
+  alive: true,
+  command: 'tail -f',
 };
 
 // One row of each shape the bar has to draw: a measured context window, and an
@@ -175,6 +194,9 @@ beforeEach(() => {
     if (route === '/app/stats') {
       return json(STATS);
     }
+    if (route === '/v1/terminals') {
+      return json([PANE, ORPHAN]);
+    }
     return new Response('not found', { status: 404 });
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -211,6 +233,7 @@ describe('a remembered token', () => {
     expect(target.textContent).toContain('a session that exists');
     expect(target.textContent).toContain('v1');
     expect(sentTokens()).toEqual([
+      'Bearer stored',
       'Bearer stored',
       'Bearer stored',
       'Bearer stored',
@@ -306,6 +329,51 @@ describe('the stats bar', () => {
   });
 });
 
+describe('the terminals', () => {
+  it('lists a pane nobody owns and says where it runs', async () => {
+    // Filtering the list by the open session would hide this row, and the process
+    // behind it would be one nobody could find from the page.
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const rows = await vi.waitFor(() => {
+      const found = [...target.querySelectorAll('.pane-row')];
+      expect(found.length).toBe(2);
+      return found;
+    });
+    expect(rows[0]?.textContent).toContain('/bin/sh -c make');
+    expect(rows[0]?.textContent).toContain('session session-1');
+    expect(rows[1]?.textContent).toContain('no session');
+    expect(rows[1]?.textContent).toContain('build on ssh:box');
+    expect(rows[1]?.querySelector('button')?.textContent).toBe('Attach');
+  });
+
+  it('a daemon that cannot list terminals still shows the page', async () => {
+    // An older daemon has no `/v1/terminals`. The sessions are still what a person
+    // came for, so the section says what it could not read instead of failing.
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('a session that exists'));
+    expect(target.textContent).toContain('/v1/terminals');
+  });
+});
+
 describe('no token', () => {
   it('is a form, and no request at all', async () => {
     render();
@@ -327,7 +395,12 @@ describe('no token', () => {
 
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
-    expect(sentTokens()).toEqual(['Bearer typed', 'Bearer typed', 'Bearer typed']);
+    expect(sentTokens()).toEqual([
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+    ]);
   });
 
   it('an empty submission connects to nothing', async () => {

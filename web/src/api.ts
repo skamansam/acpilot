@@ -35,6 +35,21 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+/** One row of `GET /v1/terminals`: a pane a client may attach to. */
+export interface TerminalSummary {
+  id: string;
+  /** Absent for a pane no session owns: another workspace's shell, or an agent's
+   * shell whose session the daemon could not map. */
+  session_id?: string;
+  /** The workspace the pane runs in, when it is not this daemon's own. */
+  workspace?: string;
+  /** The host it runs on, when it is not this daemon's machine (`ssh:me@box`). */
+  host?: string;
+  size: { cols: number; rows: number };
+  alive: boolean;
+  command: string;
+}
+
 /** Where one figure came from, as the daemon spells it. */
 export type StatSource = 'server' | 'configured' | 'estimated' | 'unknown';
 
@@ -136,4 +151,15 @@ export function sessions(token: string, signal?: AbortSignal): Promise<SessionSu
  */
 export function stats(token: string, signal?: AbortSignal): Promise<StatRow[]> {
   return get<StatRow[]>('/app/stats', token, signal);
+}
+
+/**
+ * `GET /v1/terminals` — every pane the daemon owns.
+ *
+ * Unfiltered on purpose. A pane may have no session at all (a shell in a remote
+ * workspace, or an agent's shell whose session could not be mapped), and asking
+ * for one session's panes hides a process that is still running.
+ */
+export function terminals(token: string, signal?: AbortSignal): Promise<TerminalSummary[]> {
+  return get<TerminalSummary[]>('/v1/terminals', token, signal);
 }

@@ -10,9 +10,13 @@
 //! has no `web/` directory to serve from. `npm run build` in `web/` is what
 //! regenerates the file; it is committed so building the daemon needs no Node.
 //!
-//! What the page does today: asks for the daemon's token, shows the health answer
-//! and the session list once it has one, and offers About and Quit. The editor,
-//! transcript and terminal are the rest of the web phase (P11-3 – P11-5).
+//! What the page does today: asks for the daemon's token, shows the health answer,
+//! the stats bar, the session list and the daemon's terminals once it has one, and
+//! attaches to a pane over `WS /v1/terminals/{id}/attach` with xterm.js — offering
+//! About, Quit and Detach. The token travels on that socket as the
+//! `acpilot.v1` subprotocol because a browser sets no headers on a WebSocket; see
+//! `acpilotd::auth`. The editor and the transcript are the rest of the web phase
+//! (P11-3, P11-4).
 
 use std::collections::BTreeMap;
 use std::ops::Range;

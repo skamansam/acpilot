@@ -6,12 +6,16 @@
     readToken,
     sessions as listSessions,
     stats as readStats,
+    terminals as listTerminals,
     writeToken,
     type Health,
     type SessionSummary,
     type StatRow,
+    type TerminalSummary,
     type Track,
   } from './api';
+  import Terminal from './Terminal.svelte';
+  import { paneWhere, panesFor } from './terminals';
 
   // The build the daemon injected into the page before anyone had a token. Its
   // health answer is preferred once there is one, because that is the process
@@ -30,6 +34,19 @@
   // could not be read is not a roster of none, and an older daemon that never
   // heard of `/app/stats` must not take the whole page down with it.
   let statsNote = $state<string | null>(null);
+  // The panes this daemon owns, listed unfiltered. A pane with no session is still
+  // a process: a shell in another workspace on another host, or an agent's shell
+  // whose session the daemon could not map. Hiding it is how it becomes a process
+  // nobody can find.
+  let panes = $state<TerminalSummary[]>([]);
+  let panesNote = $state<string | null>(null);
+  // The pane being drawn, when one is. The process belongs to the daemon: closing
+  // this view detaches, and the program keeps running.
+  let openPane = $state<TerminalSummary | null>(null);
+  // There is no session view yet (P11-4), so no session is open. When one arrives
+  // its id goes here, and `panesFor` keeps that session's panes *plus* the ones
+  // nobody owns — the filter must never drop a pane with no `session_id`.
+  const openSession: string | null = null;
   // Provenance is one click away, the same key (F4) the terminal uses: a bar has no
   // room for where a number came from, and a bar that never says is a claim.
   let sources = $state(false);
@@ -81,20 +98,32 @@
     loading = true;
     error = null;
     try {
-      const [status, sessions, bar] = await Promise.all([
+      const [status, sessions, bar, terminals] = await Promise.all([
         health(token, current.signal),
         listSessions(token, current.signal),
         // The bar is the one part of the page a daemon older than this build may
         // not serve, so its absence is reported beside the bar rather than as a
         // failure of the page.
         readStats(token, current.signal).catch(() => null),
+        // Unfiltered, for the same reason: the picker keeps the open session's panes
+        // and every pane nobody owns, so a shell in another workspace is not hidden
+        // by a list that asked only for one session's.
+        listTerminals(token, current.signal).catch(() => null),
       ]);
       healthInfo = status;
       rows = sessions;
       integrations = bar ?? [];
+      panes = terminals ? panesFor(terminals, openSession) : [];
       statsNote = bar
         ? null
         : 'This daemon did not report its integrations; the bar needs a build that serves /app/stats.';
+      panesNote = terminals
+        ? null
+        : 'This daemon did not list its terminals; the terminal needs a build that serves /v1/terminals.';
+      // A pane that ended while this view was open is a row nothing can attach to.
+      if (openPane && !panes.some((pane) => pane.id === openPane?.id)) {
+        openPane = null;
+      }
     } catch (cause) {
       if (current.signal.aborted) {
         return;
@@ -103,6 +132,9 @@
       rows = [];
       integrations = [];
       statsNote = null;
+      panes = [];
+      panesNote = null;
+      openPane = null;
       if (cause instanceof ApiError) {
         error = cause.message;
         // A rejected token is not going to start working; forget it so the form
@@ -143,6 +175,9 @@
     rows = [];
     integrations = [];
     statsNote = null;
+    panes = [];
+    panesNote = null;
+    openPane = null;
     error = null;
     loading = false;
     writeToken('');
@@ -337,6 +372,45 @@
         </table>
       </div>
 
+      <section class="terminals" aria-labelledby="terminals-title">
+        <div class="stats-head">
+          <h3 id="terminals-title">Terminals</h3>
+          {#if panes.length}
+            <span class="pane-count">
+              {panes.length}
+              {panes.length === 1 ? 'pane' : 'panes'}
+            </span>
+          {/if}
+        </div>
+        {#if openPane}
+          <Terminal pane={openPane} {token} onclose={() => (openPane = null)} />
+        {:else if panes.length}
+          <ul class="pane-rows">
+            {#each panes as pane (pane.id)}
+              <li class="pane-row" data-session={pane.session_id ?? 'none'} data-alive={pane.alive}>
+                <span class="pane-name"><code>{pane.command}</code></span>
+                <span class="pane-where">{paneWhere(pane)}</span>
+                <span class="status" data-status={pane.alive ? 'idle' : 'closed'}>
+                  {pane.alive ? 'running' : 'exited'}
+                </span>
+                <button type="button" onclick={() => (openPane = pane)}>Attach</button>
+              </li>
+            {/each}
+          </ul>
+          <p class="note pane-note">
+            A pane with <strong>no session</strong> is not any session's — it may be a
+            shell in another workspace on another host. Attaching draws the same process
+            the terminal or the desktop app is using; leaving this page detaches it and
+            leaves the program running.
+          </p>
+        {:else}
+          <p class="note">
+            {panesNote ??
+              'No terminals on this daemon. Start one from the TUI or the desktop app, then refresh — this page attaches to panes, it does not own them.'}
+          </p>
+        {/if}
+      </section>
+
       <div class="actions">
         <button type="button" class="primary" onclick={() => void load()} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh'}
@@ -382,8 +456,8 @@
       </form>
 
       <p class="note">
-        The editor, the transcript and the terminal arrive with the web phase
-        (P11) — until then the TUI and the desktop app are the cockpits.
+        The editor and the transcript arrive with the rest of the web phase (P11-3,
+        P11-4) — until then the TUI and the desktop app are the cockpits for both.
       </p>
     {/if}
 

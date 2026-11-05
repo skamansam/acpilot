@@ -5,14 +5,29 @@
 //! answers — and none of that exists until the binary is started.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
+
+/// How long one line may take before the helper is called silent.
+///
+/// Long enough for a loaded runner to start a program and forward its first bytes, short
+/// enough that a helper which never speaks fails the test while it is still the test's
+/// story. Without this the wait was `read_line`, which blocks until the helper writes or
+/// dies: a quiet helper parked the test until nextest's five-minute terminate, and the
+/// report named the test without naming the wait.
+const READ_DEADLINE: Duration = Duration::from_secs(30);
 
 struct Helper {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Lines the helper wrote, read on a thread of their own so the wait above can
+    /// end.
+    lines: mpsc::Receiver<String>,
+    /// How long [`Helper::line`] waits before declaring the helper silent.
+    deadline: Duration,
     /// Notifications that arrived while a call was waiting for its answer.
     ///
     /// A terminal's output may be written before the response to the call that opened
@@ -30,11 +45,32 @@ impl Helper {
             .spawn()
             .expect("the helper starts");
         let stdin = child.stdin.take().expect("stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+        let stdout = child.stdout.take().expect("stdout");
+        let (sender, lines) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("helper-stdout".to_owned())
+            .spawn(move || {
+                let mut stdout = BufReader::new(stdout);
+                loop {
+                    let mut line = String::new();
+                    match stdout.read_line(&mut line) {
+                        // The helper is gone, or closed its output: the channel closing
+                        // is how `line` hears it.
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            if sender.send(line).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("the helper's output is read on a thread");
         Self {
             child,
             stdin,
-            stdout,
+            lines,
+            deadline: READ_DEADLINE,
             pending: Vec::new(),
         }
     }
@@ -57,12 +93,24 @@ impl Helper {
     }
 
     /// One line, held notifications first so a test sees the stream in order.
+    ///
+    /// Panics, rather than waiting forever, when the helper has nothing to say: a helper
+    /// that is stuck and one that is merely slow look identical to a blocked read, and
+    /// only one of them is worth waiting a gate for.
     fn line(&mut self) -> Value {
         if !self.pending.is_empty() {
             return self.pending.remove(0);
         }
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).expect("read");
+        let line = match self.lines.recv_timeout(self.deadline) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+                "the helper wrote nothing for {:?}: either it is stuck or the program it started never spoke",
+                self.deadline
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the helper closed its output without answering")
+            }
+        };
         serde_json::from_str(&line).unwrap_or_else(|error| panic!("not JSON: {error}: {line:?}"))
     }
 
@@ -81,6 +129,16 @@ impl Helper {
             .cloned()
             .unwrap_or_else(|| panic!("expected an error, got {response}"))
     }
+}
+
+#[test]
+#[should_panic(expected = "wrote nothing for")]
+fn a_helper_that_says_nothing_is_reported_rather_than_waited_on() {
+    // No request is written, so the helper has nothing to answer with. The wait must end
+    // in this test's own words rather than in nextest's terminate.
+    let mut helper = Helper::start();
+    helper.deadline = Duration::from_millis(50);
+    helper.line();
 }
 
 impl Drop for Helper {

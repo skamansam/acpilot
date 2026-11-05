@@ -595,13 +595,26 @@ winning a tie.
 
 ## Terminals
 
-`POST /v1/terminals` takes `CreateTerminalRequest { session_id, command?, args?,
-cwd?, size }` and returns a `TerminalSummary` with the process already running.
-A terminal belongs to a session because that is what owns the work it does; a
-shell with no session would be a second, sessionless way to run commands on the
-daemon's host. `command` defaults to the host's own shell, and `cwd` is relative
-to the workspace root (an absolute path is accepted and checked) — a directory
-outside it is `403`, not a silent start somewhere else.
+`POST /v1/terminals` takes `CreateTerminalRequest { session_id, workspace?,
+command?, args?, cwd?, size }` and returns a `TerminalSummary` with the process
+already running. A terminal belongs to a session because that is what owns the
+work it does; a shell with no session would be a second, sessionless way to run
+commands on the daemon's host. `command` defaults to the host's own shell, and
+`cwd` is relative to the workspace root (an absolute path is accepted and
+checked) — a directory outside it is `403`, not a silent start somewhere else.
+
+`workspace` names a workspace from `GET /v1/workspaces`; absent is the one this
+daemon serves. A workspace on an ssh or WSL host starts the shell **there**,
+through its helper: the pane is bytes in both directions plus a size, so it is
+the same attach socket and the same screen, and the daemon never pretends the
+process is local. The host must have been tested and its helper must offer a PTY
+(`409` otherwise, naming the host); `cwd` is checked by string — no `..` out of
+the root and no absolute path outside it, since there is no `canonicalize` across
+the transport — and the helper starts `$SHELL` or `/bin/sh` with
+`TERM=xterm-256color`, because a daemon under a service manager has no terminal
+to copy a `TERM` from. The pane is still the session's: sessions run on this
+daemon (P8-5 starts them on a host), so a remote workspace's terminal is owned by
+the session that opened it.
 
 `GET /v1/terminals?session=` lists them, same shape, filterable.
 

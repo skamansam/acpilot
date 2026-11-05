@@ -55,6 +55,16 @@ is not a clever workaround, it is the only version that feels like a local
 editor.
 </Aside>
 
+## A terminal over the helper
+
+The same helper opens real PTYs: `pty.open` answers with an id and streams the
+program's output back as notifications, and `pty.write`, `pty.resize` and
+`pty.kill` drive it. Each pane gets its own helper process, because a terminal's
+output arrives between requests and must not queue in front of a file read — the
+daemon's reader sorts replies from output by shape. The screen, the replay on
+attach and the exit notice are the daemon's, unchanged: a remote pane is not a
+second kind of pane.
+
 ## What is preserved
 
 - **Path spelling.** A path is stored as the host spells it; translation happens

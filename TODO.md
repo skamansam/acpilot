@@ -610,9 +610,10 @@ and deterministic.
     there read as paths git never saw and return an empty list that looks exactly like a
     repository with no rules. Tests: three route tests over a stand-in host
     (`tests/remote_git.rs`) and two in the helper's suite against a real `git` repository.
-  - **Open:** PTY and LSP over the helper are the remote-hosts phase's P8-3 and the
-    language-intelligence phase's P7, not this layer's — the helper says so in `hello`
-    (it lists `fs.*` and `exec`), and a client is only offered what the far side claimed.
+  - **Open:** LSP over the helper is the language-intelligence phase's P7, not this
+    layer's — the helper says so in `hello` (it lists `fs.*` and `exec`), and a client is
+    only offered what the far side claimed. A PTY was on this list too and shipped as
+    P8-6, which is where its result and its remaining gaps are written down.
     A remote `FileContent.marks` (gutter letters for one file) is still empty: it is a
     second `git diff` question nobody has asked. The Windows build carries no helper, so
     a Windows daemon reaches WSL only through one already installed in the distro (P9-3
@@ -1387,7 +1388,45 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 - [ ] **P8-3** Capabilities over SSH: upload `acpilotd-helper` (musl, `scp`-less — write via `exec` + base64 or SFTP), version handshake, then fs/PTY/spawn/LSP through the helper.
 - [ ] **P8-4** Remote workspace: root path on remote, file read/write with ETag, `notify`-equivalent via helper polling interval (500 ms) until inotify-over-SSH exists.
 - [ ] **P8-5** Remote agent spawn: ACP over an SSH `exec` channel (stdio bridged), stderr captured separately, resize forwarded, clean kill on cancel.
-- [ ] **P8-6** Remote terminal: PTY request (`xterm-256color`, current size), resize messages, reconnect that replays the last screen.
+- [x] **P8-6** Remote terminal: PTY request (`xterm-256color`, current size), resize messages, reconnect that replays the last screen.
+  - **Result (2026-11-04):** a pane can run on the host its files are on.
+    `crates/acpilotd-helper` grew `pty.open`, `pty.write`, `pty.resize`, `pty.kill` and
+    `pty.close` (`portable-pty`, the daemon's own crate, so the platform branch is
+    inside it rather than a second implementation), with the PTY's output leaving as
+    `pty.data` notifications and its exit as `pty.exit { id, code }`. A terminal is not a
+    call — output arrives between requests — so the daemon opens **one helper process per
+    pane** (`crates/acpilotd/src/pty_remote.rs`) and its reader thread sorts the lines by
+    shape: an `id` is an answer, `pty.data` is screen, `pty.exit` is the end. Multiplexing
+    onto the shared files connection would have put a chatty shell in front of every
+    `fs.read` on that host. Bytes are base64 in both directions, the one encoding that
+    carries a `\x1b`, a quote and half a UTF-8 character through a JSON string; the
+    daemon already had an encoder for the install script, and `base64.rs` is now that
+    codec with a decoder beside it and tests on both. The helper is started by the same
+    install-and-fall-back ladder as everything else (`Connections::session`), it is told
+    `TERM=xterm-256color` because a daemon under a service manager has no `TERM` to
+    inherit, and it starts `$SHELL` or `/bin/sh` when the request names no program — a
+    shell is a fact about the host, not about the machine holding the socket.
+    `POST /v1/terminals` takes an optional `workspace`: one on an ssh or WSL host starts
+    the shell there, with `cwd` checked by string (no `..` out of the root, no absolute
+    path outside it) because there is no `canonicalize` across the transport, and with
+    the same capability check the workspace route makes. `Driver` grew a third arm
+    (`Remote`) rather than a second `Terminal`: the screen, the attach replay, the
+    resize and the exit notice are the daemon's and unchanged, so a remote pane is not a
+    second kind of pane. **Tests:** two in the helper's suite (a program paints and its
+    exit code arrives; a terminal takes input and a new size, through `read` so the test
+    cannot pass on a program that exited before it was typed at), two route-level ones
+    in `tests/remote_terminals.rs` against a shell that stands in for `ssh` and the
+    helper (the frame the daemon typed comes back as output, the size changes, the exit
+    code is reported, and a helper from before `pty.open` is refused by name), and the
+    codec's own tests in `crates/acpilotd/src/base64.rs`.
+  - **Open:** the screen lives in the daemon, so a pane reattaches after a network drop
+    but not after a daemon restart — a surviving terminal is P12's (persistence), and
+    `ECD` history is P2-8. `TERM` is the helper's default, not a negotiation or a
+    request field (there is no `env` in `CreateTerminalRequest`). The pane is owned by a
+    session that still lives on this daemon, because sessions do not run remotely until
+    P8-5; a client that has no session at all — a browser tab on a remote workspace's
+    shell — is P11's. Input and output each cost one round trip, which is right for a
+    terminal and wrong for a `cat` of a large file (that is `fs.read`).
 - [ ] **P8-7** Fallbacks: `ssh` binary mode via `openssh` crate for configs russh cannot express (FIDO, `Match`, ControlMaster); auto-fallback with a single log line.
 - [ ] **P8-8** Tests: docker-compose `sshd` fixture; tests for agent auth, bad host key, dropped connection mid-turn, and a 200 MB file read.
   - **DoD:** edit a file and run an agent on a remote box from the TUI, with the daemon local; kill the network mid-turn and recover.

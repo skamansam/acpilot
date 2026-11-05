@@ -115,14 +115,35 @@ struct Screen {
 enum Driver {
     /// A PTY this daemon started (`POST /v1/terminals`).
     Pty(Mutex<Pty>),
+    /// A PTY on another host, driven through that host's helper.
+    Remote(Mutex<crate::pty_remote::RemotePty>),
     /// A terminal an agent asked its client for, seen through a pane.
     Agent(Mutex<Option<AgentTerminal>>),
 }
 
 impl Driver {
-    fn pty(&self) -> Option<std::sync::MutexGuard<'_, Pty>> {
+    /// How the program ended, from whoever knows.
+    ///
+    /// The local PTY reaps its own child. A remote one was told by the host, because the
+    /// process table is there and not here. An agent's terminal reports through its own
+    /// watch (see `pump_agent`), so it has no answer on this path.
+    fn exit_code(&self) -> Option<i32> {
         match self {
-            Self::Pty(pty) => Some(pty.lock().unwrap_or_else(PoisonError::into_inner)),
+            Self::Pty(pty) => match pty
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .try_wait()
+            {
+                Ok(Some(exit)) => exit.code,
+                // No exit status readable: either the child outlived the terminal (it
+                // cannot) or the backend cannot report one. Not a reason to withhold the
+                // news that it ended.
+                Ok(None) | Err(_) => None,
+            },
+            Self::Remote(remote) => remote
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .exit_code(),
             Self::Agent(_) => None,
         }
     }
@@ -192,6 +213,69 @@ impl Terminal {
             .name(format!("acpilot-terminal-{}", terminal.id))
             // One read loop and a parser; the default 2 MiB is more than this
             // needs, and a daemon with a dozen panes is a dozen of them.
+            .stack_size(256 * 1024)
+            .spawn(move || pump_output(pump, reader))
+            .map_err(|source| ApiError::new(AcpilotError::Io(source)))?;
+
+        Ok(terminal)
+    }
+
+    /// Start `command` on a PTY on the other end of `transport`.
+    ///
+    /// The same screen, attach and replay as [`Terminal::spawn`]: what changes is where
+    /// the bytes come from, and that is the point — a pane on a remote workspace is not
+    /// a second kind of pane.
+    ///
+    /// `command` absent means the host's own shell, which is a fact only the host knows:
+    /// this daemon's `SHELL` is about the machine it runs on. `cwd` is the host's
+    /// directory, already checked against the workspace root by the caller.
+    ///
+    /// # Errors
+    ///
+    /// A zero dimension, a transport that would not start, a helper without a PTY, or a
+    /// program the host refused to start. The message names the command and the host's
+    /// own words, because "the terminal did not open" helps nobody.
+    pub fn spawn_remote(
+        id: TerminalId,
+        session_id: SessionId,
+        transport: crate::helper::Transport,
+        connections: Arc<crate::helper::Connections>,
+        command: Option<ExecCommand>,
+        cwd: Option<PathBuf>,
+        size: TerminalSize,
+    ) -> Result<Arc<Self>, ApiError> {
+        let (rows, cols) = dimensions(size)?;
+        let command_line = command
+            .as_ref()
+            .map_or_else(|| "the host's shell".to_owned(), ExecCommand::command_line);
+        let mut remote = crate::pty_remote::RemotePty::open(
+            &connections,
+            &transport,
+            command.as_ref(),
+            cwd.as_deref(),
+            Size::new(size.cols, size.rows),
+        )
+        .map_err(|error| host_failure(&command_line, &error))?;
+        let reader = remote
+            .take_reader()
+            .ok_or_else(|| host_failure(&command_line, "the terminal has no output side"))?;
+
+        let (output, _) = broadcast::channel(OUTPUT_BUFFER);
+        let terminal = Arc::new(Self {
+            id,
+            session_id,
+            command: command_line,
+            driver: Driver::Remote(Mutex::new(remote)),
+            screen: Mutex::new(Screen {
+                parser: vt100::Parser::new(rows, cols, SCROLLBACK),
+                output,
+            }),
+            alive: AtomicBool::new(true),
+        });
+
+        let pump = Arc::clone(&terminal);
+        std::thread::Builder::new()
+            .name(format!("acpilot-terminal-{}", terminal.id))
             .stack_size(256 * 1024)
             .spawn(move || pump_output(pump, reader))
             .map_err(|source| ApiError::new(AcpilotError::Io(source)))?;
@@ -271,6 +355,11 @@ impl Terminal {
                 .unwrap_or_else(PoisonError::into_inner)
                 .write_all(bytes)
                 .map_err(|source| ApiError::new(AcpilotError::Io(source))),
+            Driver::Remote(remote) => remote
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .write_all(bytes)
+                .map_err(|source| ApiError::new(AcpilotError::Io(source))),
             // A pane of an agent's terminal: the same bytes, one process further
             // away. `None` is a program that has already ended, which is the same
             // answer `write` on a closed PTY gives.
@@ -304,6 +393,11 @@ impl Terminal {
                 .unwrap_or_else(PoisonError::into_inner)
                 .resize(Size::new(size.cols, size.rows))
                 .map_err(|error| host_failure(&self.command, &error.to_string()))?,
+            Driver::Remote(remote) => remote
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .resize(Size::new(size.cols, size.rows))
+                .map_err(|error| host_failure(&self.command, &error))?,
             Driver::Agent(handle) => {
                 // The actor that owns the process sets the size; the pane only
                 // relays the shape, because the program is not this socket's.
@@ -339,6 +433,11 @@ impl Terminal {
                 .unwrap_or_else(PoisonError::into_inner)
                 .kill()
                 .map_err(|source| ApiError::new(AcpilotError::Io(source))),
+            Driver::Remote(remote) => remote
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .kill()
+                .map_err(|source| ApiError::new(AcpilotError::Io(source))),
             Driver::Agent(_) => Err(ApiError::new(AcpilotError::conflict(format!(
                 "{} belongs to an agent; `terminal/kill` is how its session ends it",
                 self.command
@@ -351,6 +450,7 @@ impl Terminal {
     pub fn summary(&self) -> TerminalSummary {
         let size = match &self.driver {
             Driver::Pty(pty) => pty.lock().unwrap_or_else(PoisonError::into_inner).size(),
+            Driver::Remote(remote) => remote.lock().unwrap_or_else(PoisonError::into_inner).size(),
             // The handle knows the PTY's size; once it is gone, the screen is the
             // last thing that knew it, which is still the truth a pane needs.
             Driver::Agent(handle) => match handle
@@ -404,21 +504,9 @@ fn pump_output(terminal: Arc<Terminal>, mut reader: Box<dyn Read + Send>) {
     }
 
     terminal.alive.store(false, Ordering::Release);
-    let code = match terminal.driver.pty() {
-        Some(mut pty) => match pty.try_wait() {
-            Ok(Some(exit)) => {
-                // `try_wait` has reaped the child, so a second call cannot see it;
-                // the panes are told from this one.
-                exit.code
-            }
-            // No exit status readable: either the child outlived the terminal
-            // (it cannot) or the backend cannot report one. Not a reason to
-            // withhold the news that it ended.
-            Ok(None) | Err(_) => None,
-        },
-        // `pump_output` only ever runs for a PTY this daemon started.
-        None => None,
-    };
+    // The local PTY has reaped its child by the time `exit_code` runs, so a second
+    // call cannot see it; the panes are told from this one.
+    let code = terminal.driver.exit_code();
     let screen = terminal
         .screen
         .lock()
@@ -620,7 +708,9 @@ impl Terminals {
 /// No workspace to start in (`409`), no such session (`404`), arguments without a
 /// command or a zero dimension (`400`), a directory that is not inside the
 /// workspace (`403`) or does not exist (`404`), or a PTY the host could not make
-/// (`500`).
+/// (`500`). A named workspace that does not exist is `404`; one on a host nobody has
+/// tested, or whose helper has no PTY, is `409`; a remote command the host refused is
+/// `500`, naming the host's own words.
 pub async fn create(
     state: &AppState,
     request: CreateTerminalRequest,
@@ -630,24 +720,35 @@ pub async fn create(
     // already running, and a body that makes no sense is a `400` whatever this
     // daemon happens to have loaded.
     dimensions(request.size)?;
-    let command = match request.command {
-        Some(program) => ExecCommand::new(program).args(request.args),
-        None => {
-            if !request.args.is_empty() {
-                return Err(
-                    ApiError::new(AcpilotError::invalid("`args` without `command`"))
-                        .with_detail("args", "arguments belong to the command they are passed to"),
-                );
-            }
-            acpilot_host::default_shell()
-        }
-    };
+    if request.command.is_none() && !request.args.is_empty() {
+        return Err(
+            ApiError::new(AcpilotError::invalid("`args` without `command`"))
+                .with_detail("args", "arguments belong to the command they are passed to"),
+        );
+    }
 
-    let workspace = state.workspace().ok_or_else(|| {
-        ApiError::new(AcpilotError::conflict(
-            "this daemon was started without a workspace, so a terminal has no directory to start in",
-        ))
-    })?;
+    // Where the shell runs. A request that names no workspace is the one this daemon
+    // serves; a remote one is a workspace row whose host is reached through its helper,
+    // which is the same machine the files are on.
+    let (root, remote) = match request
+        .workspace
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        None => match state.workspace() {
+            Some(workspace) => (workspace.root.clone(), None),
+            None => {
+                return Err(ApiError::new(AcpilotError::conflict(
+                    "this daemon was started without a workspace, so a terminal has no directory to start in",
+                )));
+            }
+        },
+        Some(id) => remote_workspace(state, id)?,
+    };
+    // The session is what takes the pane with it when it ends, whichever host the shell
+    // is on. Sessions themselves are still this daemon's own (P8-5 starts them on a
+    // host), so a remote workspace's terminal is owned by the session that opened it.
     if state.sessions.get(&request.session_id).is_none() {
         return Err(ApiError::new(AcpilotError::not_found(format!(
             "session {}",
@@ -655,13 +756,124 @@ pub async fn create(
         ))));
     }
 
-    let cwd = resolve_cwd(&workspace.root, request.cwd.as_deref())?;
-    let command = command.cwd(cwd);
-
-    let terminal = Terminal::spawn(next_id(state), request.session_id, command, request.size)?;
+    let named = request
+        .command
+        .map(|program| ExecCommand::new(program).args(request.args));
+    let terminal = match remote {
+        None => {
+            let command = named.unwrap_or_else(acpilot_host::default_shell);
+            let cwd = resolve_cwd(&root, request.cwd.as_deref())?;
+            Terminal::spawn(
+                next_id(state),
+                request.session_id,
+                command.cwd(cwd),
+                request.size,
+            )?
+        }
+        Some(transport) => {
+            let cwd = remote_cwd(&root, request.cwd.as_deref())?;
+            let command = named.map(|command| command.cwd(PathBuf::from(&cwd)));
+            Terminal::spawn_remote(
+                next_id(state),
+                request.session_id,
+                transport,
+                Arc::clone(state.hosts().connections()),
+                command,
+                Some(PathBuf::from(cwd)),
+                request.size,
+            )?
+        }
+    };
     let summary = terminal.summary();
     state.terminals().insert(terminal);
     Ok(summary)
+}
+
+/// The root and transport of a workspace the request named.
+///
+/// The row is a workspace somebody opened (`POST /v1/workspaces`), so its root was
+/// checked on its host then; what this decides is where the shell runs. A local row is
+/// a directory on this machine, and a row on an ssh or WSL host is a transport — with
+/// the same capability check the workspace route makes, because a helper that cannot
+/// start terminals is a host to read files on and not one to open a pane on.
+fn remote_workspace(
+    state: &AppState,
+    id: &str,
+) -> Result<(PathBuf, Option<crate::helper::Transport>), ApiError> {
+    let row = state
+        .workspaces()
+        .list()
+        .into_iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("workspace {id}"))))?;
+    let root = PathBuf::from(&row.root);
+    if row.host_id == crate::hosts::LOCAL_HOST {
+        return Ok((root, None));
+    }
+    let host = state
+        .hosts()
+        .get(&row.host_id)
+        .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("host {}", row.host_id))))?;
+    let capabilities = host.capabilities.ok_or_else(|| {
+        ApiError::new(AcpilotError::conflict(format!(
+            "host {} has not been tested yet; POST /v1/hosts/{}/test first",
+            host.id, host.id
+        )))
+    })?;
+    if !capabilities.pty {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "the helper on {} does not start terminals",
+            host.id
+        ))));
+    }
+    let address = host
+        .id
+        .split_once(':')
+        .map(|(_, address)| address.to_owned())
+        .unwrap_or_else(|| host.id.clone());
+    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
+    Ok((root, Some(transport)))
+}
+
+/// The directory a remote shell starts in, checked by string.
+///
+/// There is no `canonicalize` across the transport, so this is the guard that can be
+/// made here: `..` may not climb out of the root and an absolute path must be inside it.
+/// A symlink on the host can still point anywhere, which is why the workspace root is
+/// the thing a person chose rather than a sandbox.
+fn remote_cwd(root: &Path, requested: Option<&str>) -> Result<String, ApiError> {
+    let root = root.to_string_lossy();
+    let Some(requested) = requested.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(root.into_owned());
+    };
+    let joined = if requested.starts_with('/') {
+        requested.to_owned()
+    } else {
+        format!("{}/{requested}", root.trim_end_matches('/'))
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(ApiError::new(AcpilotError::denied(format!(
+                        "cwd {requested} is outside the workspace at {root}"
+                    ))));
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let resolved = format!("/{}", parts.join("/"));
+    let inside = resolved == root.as_ref()
+        || resolved.starts_with(&format!("{}/", root.trim_end_matches('/')));
+    if !inside {
+        return Err(ApiError::new(AcpilotError::denied(format!(
+            "cwd {requested} is outside the workspace at {root}"
+        ))));
+    }
+    Ok(resolved)
 }
 
 /// `GET /v1/terminals?session=`.

@@ -15,19 +15,33 @@
 //!
 //! # What it exposes
 //!
-//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored` and `exec` — the
-//! operations `acpilot-host`'s `Host` trait asks for, plus the one question a tree asks
-//! about a directory. Text is UTF-8 on the wire; a binary read is refused rather
-//! than mangled, because the caller can tell a refusal from an empty file and cannot
-//! tell either from lossy bytes. There is no PTY yet: `exec` runs a program with
-//! piped stdio, and a caller that wants a terminal gets `unsupported` naming that.
+//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored`, `exec` and
+//! the `pty.*` family — the operations `acpilot-host`'s `Host` trait asks for, plus the
+//! one question a tree asks about a directory and the one thing a pane cannot do without.
+//! Text is UTF-8 on the wire; a binary read is refused rather than mangled, because the
+//! caller can tell a refusal from an empty file and cannot tell either from lossy bytes.
+//! `exec` runs a program with piped stdio and answers when it is over.
 //!
-//! No dependencies beyond `serde_json`: the helper is uploaded and run where nothing
-//! can be installed, so its size and its build are part of its contract.
+//! # Terminals are not calls
+//!
+//! `pty.open` starts a program on a real PTY and answers with an id; the output comes
+//! back afterwards as the only other shape of line this protocol has, a notification
+//! (`pty.data`, then `pty.exit`). The daemon opens **one helper per terminal**, so a
+//! stream never queues behind a request and a request never waits behind output. See
+//! `pty.rs` for why the id is this process's rather than a pid.
+//!
+//! `serde_json` and `portable-pty`, and nothing else: the helper is uploaded and run
+//! where nothing can be installed, so its size and its build are part of its contract.
+//! The PTY crate is the daemon's own — the platform branch is inside it, and opening a
+//! terminal by hand would be `unsafe`, which this workspace forbids.
+
+mod base64;
+mod pty;
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -50,13 +64,13 @@ struct Request {
 
 /// A refusal, in the JSON-RPC error shape.
 #[derive(Debug)]
-struct Failure {
+pub(crate) struct Failure {
     code: i64,
     message: String,
 }
 
 impl Failure {
-    fn new(code: i64, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: i64, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -64,43 +78,43 @@ impl Failure {
     }
 
     /// The method is not one this helper has.
-    fn method(name: &str) -> Self {
+    pub(crate) fn method(name: &str) -> Self {
         Self::new(-32601, format!("{name} is not a method this helper has"))
     }
 
     /// The parameters are missing or wrong.
-    fn params(message: impl Into<String>) -> Self {
+    pub(crate) fn params(message: impl Into<String>) -> Self {
         Self::new(-32602, message)
     }
 
     /// The host refused the operation: a missing file, a directory that is a file,
     /// a program that would not start.
-    fn host(message: impl Into<String>) -> Self {
+    pub(crate) fn host(message: impl Into<String>) -> Self {
         Self::new(-32000, message)
     }
 }
 
 fn main() {
+    // The terminals outlive any one request, and the reader thread of each needs the
+    // map it was registered in, so the sessions are shared rather than borrowed.
+    let sessions = Arc::new(pty::Sessions::new());
     let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        let response = answer(&line);
-        if writeln!(stdout, "{response}")
-            .and_then(|()| stdout.flush())
-            .is_err()
-        {
-            break;
-        }
+        let response = answer(&line, &sessions);
+        sessions.send(&response);
     }
+    // The daemon closed the pipe: the shells it started have nobody left to talk to,
+    // and a process whose helper died is one nobody can name or attach to.
+    sessions.close_all();
 }
 
 /// One line in, one line out. A line that is not a request is answered rather than
 /// skipped: a caller waiting on a reply it will never get is worse than an error.
-fn answer(line: &str) -> String {
+fn answer(line: &str, sessions: &Arc<pty::Sessions>) -> Value {
     let request: Request = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(error) => {
@@ -113,19 +127,18 @@ fn answer(line: &str) -> String {
             );
         }
     };
-    match call(&request.method, &request.params) {
-        Ok(result) => json!({ "jsonrpc": "2.0", "id": request.id, "result": result }).to_string(),
+    match call(&request.method, &request.params, sessions) {
+        Ok(result) => json!({ "jsonrpc": "2.0", "id": request.id, "result": result }),
         Err(failure) => error_line(request.id, &failure),
     }
 }
 
-fn error_line(id: Value, failure: &Failure) -> String {
+fn error_line(id: Value, failure: &Failure) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": { "code": failure.code, "message": failure.message },
     })
-    .to_string()
 }
 
 /// Every method this helper answers, as `hello` advertises them.
@@ -135,7 +148,7 @@ fn error_line(id: Value, failure: &Failure) -> String {
 /// [`call`] does not answer is a promise that fails on first use. A test calls each
 /// name to keep the list true, and the list is in the handshake so a daemon does not
 /// have to assume what the helper it reached can do.
-const METHODS: [&str; 8] = [
+const METHODS: [&str; 13] = [
     "hello",
     "fs.read",
     "fs.write",
@@ -144,9 +157,14 @@ const METHODS: [&str; 8] = [
     "fs.mkdir",
     "fs.ignored",
     "exec",
+    "pty.open",
+    "pty.write",
+    "pty.resize",
+    "pty.kill",
+    "pty.close",
 ];
 
-fn call(method: &str, params: &Value) -> Result<Value, Failure> {
+fn call(method: &str, params: &Value, sessions: &Arc<pty::Sessions>) -> Result<Value, Failure> {
     match method {
         "hello" => hello(params),
         "fs.read" => read(params),
@@ -156,6 +174,11 @@ fn call(method: &str, params: &Value) -> Result<Value, Failure> {
         "fs.mkdir" => mkdir(params),
         "fs.ignored" => ignored(params),
         "exec" => exec(params),
+        "pty.open" => sessions.open(params),
+        "pty.write" => sessions.write(params),
+        "pty.resize" => sessions.resize(params),
+        "pty.kill" => sessions.kill(params),
+        "pty.close" => sessions.close(params),
         other => Err(Failure::method(other)),
     }
 }

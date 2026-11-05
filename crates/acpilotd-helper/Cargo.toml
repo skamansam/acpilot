@@ -16,6 +16,12 @@ path = "src/main.rs"
 # about every escape a path can contain.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A terminal on the host is the daemon's own PTY code, not a second implementation:
+# this is the crate `acpilot-host` already uses, and its platform branch (`forkpty`,
+# ConPTY) is inside it. Opening `/dev/ptmx` here would be `unsafe`, which the
+# workspace forbids, and a hand-rolled fork/exec would be the version of this file
+# that hangs on a host nobody is sitting at.
+portable-pty = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

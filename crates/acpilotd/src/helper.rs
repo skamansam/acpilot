@@ -27,13 +27,15 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use acpilot_proto::host::{HostCapabilities, HostKind};
 use serde_json::{Value, json};
+
+use crate::base64::encode_lines;
 
 /// The protocol this daemon speaks.
 ///
@@ -106,6 +108,131 @@ impl Transport {
     }
 }
 
+/// A helper process whose pipes belong to the caller.
+///
+/// [`Connection`] reads its helper's stdout on a thread and hands one line to one
+/// request, which is the wrong shape for a process that also pushes terminal output.
+/// This is the raw end: the same install-and-fall-back ladder, then the pipes, and the
+/// caller decides how to read them — [`crate::pty_remote`] reads them on a dispatcher
+/// that sorts replies from output.
+#[derive(Debug)]
+pub struct Session {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl Session {
+    /// Start `program` with `args`, without saying anything to it yet.
+    fn spawn(program: &str, args: &[String]) -> Result<Self, String> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("{program}: {error}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "the helper has no stdin".to_owned())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "the helper has no stdout".to_owned())?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
+    }
+
+    /// Shake hands, and answer with what the helper said it can do.
+    ///
+    /// The caller checks the list itself: a helper that answers protocol 1 but never
+    /// grew a PTY is a host this daemon can read files on and not open a pane on, which
+    /// is a message about the host rather than a failed call one at a time.
+    ///
+    /// # Errors
+    ///
+    /// The helper answered nothing, answered a line that is not JSON-RPC, answered
+    /// another request, or speaks another protocol.
+    pub(crate) fn hello(&mut self) -> Result<Value, String> {
+        let said = self.request(0, "hello", json!({ "protocol": PROTOCOL }))?;
+        let protocol = said
+            .get("protocol")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("the helper did not shake hands: {said}"))?;
+        if protocol != PROTOCOL {
+            return Err(format!(
+                "this daemon speaks protocol {PROTOCOL}, the helper {protocol}"
+            ));
+        }
+        Ok(said)
+    }
+
+    /// One call, read on this thread.
+    ///
+    /// Only for the window before anything is streaming — the handshake and the call
+    /// that opens a terminal — because after that the pipe belongs to a reader thread and
+    /// two readers would split the lines between them.
+    pub(crate) fn request(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let _ = writeln!(self.stdin, "{request}").and_then(|()| self.stdin.flush());
+        loop {
+            let mut line = String::new();
+            let read = self
+                .stdout
+                .read_line(&mut line)
+                .map_err(|error| format!("{method}: {error}"))?;
+            if read == 0 {
+                return Err(format!(
+                    "{method}: the helper answered nothing and closed its side"
+                ));
+            }
+            let value: Value = serde_json::from_str(&line).map_err(|error| {
+                format!("{method}: the helper answered something that is not JSON-RPC: {error}")
+            })?;
+            if value.get("id") != Some(&json!(id)) {
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no message");
+                return Err(format!("{method}: {message} (code {code})"));
+            }
+            return value
+                .get("result")
+                .cloned()
+                .ok_or_else(|| format!("{method}: the helper answered neither result nor error"));
+        }
+    }
+
+    /// End the process, after a failure that would otherwise leave it running.
+    pub(crate) fn end(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
+    /// The pipes, for a caller that will read them from here on.
+    pub(crate) fn into_parts(self) -> (Child, ChildStdin, BufReader<ChildStdout>) {
+        (self.child, self.stdin, self.stdout)
+    }
+}
+
 /// One running helper, and the pipes it answers on.
 ///
 /// Dropped when the daemon forgets the host or a call fails: a helper that stopped
@@ -139,21 +266,16 @@ impl Connection {
     ///
     /// As [`Connection::dial`], plus a helper that did not answer inside `timeout`.
     pub fn dial_within(program: &str, args: &[String], timeout: Duration) -> Result<Self, String> {
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("{program}: {error}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "the helper has no stdin".to_owned())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "the helper has no stdout".to_owned())?;
+        Self::from_session(Session::spawn(program, args)?, timeout)
+    }
+
+    /// A connection over a helper that has already been started.
+    ///
+    /// Both ladders — "the program the test named" and "install, else `PATH`" — end
+    /// here, because a helper that is running is a helper to talk to and the only
+    /// difference is which program was run.
+    fn from_session(session: Session, timeout: Duration) -> Result<Self, String> {
+        let (child, stdin, stdout) = session.into_parts();
         // Reading happens on a thread because a pipe has no read timeout: waiting on
         // it directly would make a helper that stopped reading a daemon that hung,
         // which is the failure a remote path can least afford. The thread ends when the
@@ -161,7 +283,7 @@ impl Connection {
         // being gone is how a caller learns the far side went with it.
         let (sender, replies) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
+            for line in stdout.lines() {
                 let Ok(line) = line else { break };
                 if sender.send(line).is_err() {
                     break;
@@ -356,40 +478,8 @@ fn install_script(dir: &str, bytes: &[u8]) -> String {
         ),
         dir = dir,
         name = INSTALL_NAME,
-        encoded = base64(bytes),
+        encoded = encode_lines(bytes),
     )
-}
-
-/// The standard base64 alphabet, padded, in 76-character lines.
-///
-/// Hand-rolled because the daemon has no base64 dependency and this is the only place
-/// it needs one. Text on stdin is what keeps a binary from having to be quoted: a
-/// heredoc is a byte channel, but a shell's syntax is not, and a helper that contains
-/// the delimiter's line would end the heredoc early.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4 + bytes.len() / 57 + 1);
-    for (index, chunk) in bytes.chunks(3).enumerate() {
-        if index > 0 && index % 19 == 0 {
-            out.push('\n');
-        }
-        let packed = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        out.push(char::from(ALPHABET[(packed >> 18) as usize & 63]));
-        out.push(char::from(ALPHABET[(packed >> 12) as usize & 63]));
-        out.push(if chunk.len() > 1 {
-            char::from(ALPHABET[(packed >> 6) as usize & 63])
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            char::from(ALPHABET[packed as usize & 63])
-        } else {
-            '='
-        });
-    }
-    out
 }
 
 /// Run `program args` — a shell that reads its script from stdin — and wait for it.
@@ -630,7 +720,29 @@ impl Connections {
     /// uploaded over itself. A host that refuses the write — a read-only home, a
     /// sandbox with no `sh` — still gets the `PATH` attempt, because a machine that
     /// was prepared by hand is a machine that works.
+    /// A helper whose pipes the caller reads, started by the same ladder.
+    pub(crate) fn session(&self, transport: &Transport) -> Result<Session, String> {
+        self.start(transport, Ok)
+    }
+
+    /// The same helper, with the reply queue a request/response conversation needs.
     fn dial(&self, transport: &Transport) -> Result<Connection, String> {
+        self.start(transport, |session| {
+            Connection::from_session(session, CALL_TIMEOUT)
+        })
+    }
+
+    /// The install-and-fall-back ladder, and what to build from the pipes.
+    ///
+    /// The handshake happens inside `connect` so that a helper which starts and then
+    /// fails to answer is still part of the *ladder's* answer: a host that refuses the
+    /// install and then has an old helper on `PATH` has two problems, and reporting only
+    /// the second would hide the one somebody has to fix.
+    fn start<T>(
+        &self,
+        transport: &Transport,
+        connect: impl Fn(Session) -> Result<T, String>,
+    ) -> Result<T, String> {
         let dir = self.install_dir();
         let mut problems = Vec::new();
         if let Some(bytes) = self.bundle() {
@@ -650,8 +762,8 @@ impl Connections {
                         crate::hosts::Step::Installed,
                         &dir,
                     );
-                    match Connection::dial(&program, &args) {
-                        Ok(connection) => return Ok(connection),
+                    match Session::spawn(&program, &args).and_then(&connect) {
+                        Ok(started) => return Ok(started),
                         Err(error) => problems.push(format!("the installed helper: {error}")),
                     }
                 }
@@ -665,13 +777,15 @@ impl Connections {
             crate::hosts::Step::Path,
             &dir,
         );
-        Connection::dial(&program, &args).map_err(|error| {
-            if problems.is_empty() {
-                return error;
-            }
-            problems.push(format!("{INSTALL_NAME} on the host's PATH: {error}"));
-            problems.join("; ")
-        })
+        Session::spawn(&program, &args)
+            .and_then(&connect)
+            .map_err(|error| {
+                if problems.is_empty() {
+                    return error;
+                }
+                problems.push(format!("{INSTALL_NAME} on the host's PATH: {error}"));
+                problems.join("; ")
+            })
     }
 }
 

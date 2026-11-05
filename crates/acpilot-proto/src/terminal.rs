@@ -41,7 +41,16 @@ pub struct TerminalSummary {
 pub struct CreateTerminalRequest {
     /// Session that owns the terminal.
     pub session_id: SessionId,
-    /// Program to run. Defaults to the daemon host's own shell.
+    /// Workspace to start in, when it is not the one this daemon serves.
+    ///
+    /// A workspace id from `GET /v1/workspaces`. A remote workspace's terminal runs
+    /// on that workspace's host — the machine the files are on — through its helper,
+    /// while the session that owns the pane is still this daemon's: sessions do not run
+    /// on a host yet (P8-5), so the pane is the session's without the workspace being.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Program to run. Defaults to the host's own shell — this machine's, or the
+    /// remote host's, because which shell exists is a fact about where it runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Arguments for `command`, verbatim.

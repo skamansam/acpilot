@@ -13,6 +13,12 @@ struct Helper {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    /// Notifications that arrived while a call was waiting for its answer.
+    ///
+    /// A terminal's output may be written before the response to the call that opened
+    /// it: the reader thread starts as soon as the program does. Holding the lines here
+    /// keeps one `call` = one line, and the terminal tests read them in order.
+    pending: Vec<Value>,
 }
 
 impl Helper {
@@ -29,17 +35,35 @@ impl Helper {
             child,
             stdin,
             stdout,
+            pending: Vec::new(),
         }
     }
 
-    /// One round trip: a line there, a line back.
+    /// One round trip: a line there, the response line back.
+    ///
+    /// Notifications are set aside rather than returned: the caller asked for an
+    /// answer, and a terminal's output is not one.
     fn ask(&mut self, method: &str, params: Value) -> Value {
         let request = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
         writeln!(self.stdin, "{request}").expect("write");
         self.stdin.flush().expect("flush");
+        loop {
+            let value = self.line();
+            if value.get("id").is_some() {
+                return value;
+            }
+            self.pending.push(value);
+        }
+    }
+
+    /// One line, held notifications first so a test sees the stream in order.
+    fn line(&mut self) -> Value {
+        if !self.pending.is_empty() {
+            return self.pending.remove(0);
+        }
         let mut line = String::new();
         self.stdout.read_line(&mut line).expect("read");
-        serde_json::from_str(&line).expect("a response")
+        serde_json::from_str(&line).unwrap_or_else(|error| panic!("not JSON: {error}: {line:?}"))
     }
 
     fn call(&mut self, method: &str, params: Value) -> Value {
@@ -158,8 +182,124 @@ fn a_binary_file_is_refused_rather_than_mangled() {
 #[test]
 fn an_unknown_method_is_refused_by_name() {
     let mut helper = Helper::start();
-    let error = helper.error("pty.open", json!({}));
+    // Not `pty.open`: that one exists now, and a test that named it would be asking for
+    // a missing-parameter error while claiming to be about a method this helper has not
+    // got.
+    let error = helper.error("pty.teleport", json!({}));
     assert_eq!(error["code"], -32601);
+}
+
+/// The bytes a notification carries, decoded here rather than imported: the helper's
+/// codec is inside the binary, and a test that called it would not be reading what
+/// crossed the pipe.
+fn data(event: &Value) -> String {
+    let encoded = event["params"]["data"].as_str().expect("a data payload");
+    let mut out = Vec::new();
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in encoded.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((buffer >> bits) & 0xff).expect("a byte"));
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_terminal_paints_and_then_says_how_it_ended() {
+    let mut helper = Helper::start();
+    helper.call("hello", json!({ "protocol": 1 }));
+    let opened = helper.call(
+        "pty.open",
+        json!({
+            "program": "/bin/sh",
+            "args": ["-c", "printf 'hello from the box\\n'; exit 4"],
+            "cols": 80,
+            "rows": 24,
+        }),
+    );
+    let id = opened["id"].clone();
+    assert!(
+        id.as_u64().is_some(),
+        "the host names the terminal: {opened}"
+    );
+    let mut painted = String::new();
+    loop {
+        let event = helper.line();
+        match event["method"].as_str() {
+            Some("pty.data") => {
+                assert_eq!(event["params"]["id"], id, "output belongs to its terminal");
+                painted.push_str(&data(&event));
+            }
+            Some("pty.exit") => {
+                assert_eq!(event["params"]["id"], id);
+                assert_eq!(
+                    event["params"]["code"], 4,
+                    "the code the program exited with, not a generic failure"
+                );
+                break;
+            }
+            other => panic!("the helper said something else: {other:?}: {event}"),
+        }
+    }
+    assert!(
+        painted.contains("hello from the box"),
+        "the bytes the program wrote came back: {painted:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_terminal_takes_input_and_a_new_size() {
+    let mut helper = Helper::start();
+    helper.call("hello", json!({ "protocol": 1 }));
+    let opened = helper.call(
+        "pty.open",
+        // `read` blocks until a line arrives, which is what makes this a test of the
+        // input direction rather than of a program that exited before it was typed at.
+        json!({
+            "program": "/bin/sh",
+            "args": ["-c", "read line; printf 'got:%s\\n' \"$line\""],
+            "cols": 80,
+            "rows": 24,
+        }),
+    );
+    let id = opened["id"].clone();
+    let resized = helper.call("pty.resize", json!({ "id": id, "cols": 100, "rows": 30 }));
+    assert_eq!(resized["cols"], 100);
+
+    helper.call(
+        "pty.write",
+        // Written through the same encoder the daemon uses: bytes as a JSON string would
+        // have to escape, which is why the channel is base64 in the first place.
+        json!({ "id": id, "data": "aGVsbG8K" }),
+    );
+
+    let mut painted = String::new();
+    loop {
+        let event = helper.line();
+        match event["method"].as_str() {
+            Some("pty.data") => painted.push_str(&data(&event)),
+            Some("pty.exit") => break,
+            other => panic!("the helper said something else: {other:?}: {event}"),
+        }
+    }
+    assert!(
+        painted.contains("got:hello"),
+        "the program read what the daemon typed: {painted:?}"
+    );
 }
 
 #[cfg(unix)]

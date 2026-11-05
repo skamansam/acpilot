@@ -40,6 +40,7 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
 mod auth;
+mod base64;
 // The daemon's settings: two files, then the flags (P3-1). Public because the
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
@@ -53,6 +54,7 @@ pub mod embedded;
 pub mod pidfile;
 mod platform;
 mod project;
+mod pty_remote;
 mod sessions;
 mod stats;
 mod terminals;

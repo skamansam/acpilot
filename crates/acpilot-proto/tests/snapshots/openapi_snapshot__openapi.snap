@@ -412,7 +412,7 @@ expression: canonical(document)
             "type": "array"
           },
           "command": {
-            "description": "Program to run. Defaults to the daemon host's own shell.",
+            "description": "Program to run. Defaults to the host's own shell — this machine's, or the\nremote host's, because which shell exists is a fact about where it runs.",
             "type": [
               "string",
               "null"
@@ -432,6 +432,13 @@ expression: canonical(document)
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
             "description": "Initial dimensions. Both must be non-zero: a terminal with no columns\ncannot display anything, and `vt100` takes `NonZeroU16` for the same reason."
+          },
+          "workspace": {
+            "description": "Workspace to start in, when it is not the one this daemon serves.\n\nA workspace id from `GET /v1/workspaces`. A remote workspace's terminal runs\non that workspace's host — the machine the files are on — through its helper,\nwhile the session that owns the pane is still this daemon's: sessions do not run\non a host yet (P8-5), so the pane is the session's without the workspace being.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

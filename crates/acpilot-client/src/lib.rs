@@ -424,6 +424,27 @@ impl Client {
         }
     }
 
+    /// `POST /v1/terminals`.
+    ///
+    /// Starts the program the request names — the host's own shell when it names
+    /// none — and answers with the terminal already running, so the id can be
+    /// attached to without racing the program that is supposed to paint it.
+    ///
+    /// `workspace` is which machine the shell runs on: a remote workspace's terminal
+    /// runs on that workspace's host through its helper, so the shell sees the files
+    /// the rest of the client is reading. The session that owns the pane is still
+    /// this daemon's until sessions run on a host themselves.
+    pub async fn create_terminal(
+        &self,
+        request: &acpilot_proto::terminal::CreateTerminalRequest,
+    ) -> Result<TerminalSummary, ClientError> {
+        let builder = self
+            .http
+            .post(self.request_url("/v1/terminals"))
+            .json(request);
+        self.send(builder, "/v1/terminals").await
+    }
+
     /// `GET /v1/sessions/{id}`.
     pub async fn session(&self, id: &str) -> Result<SessionSummary, ClientError> {
         self.get(&format!("/v1/sessions/{id}")).await

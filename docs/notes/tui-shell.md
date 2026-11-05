@@ -25,7 +25,8 @@ cargo run -p acpilot-cli -- tui            # the real thing
 
 Nothing is read from disk and nothing is spawned. `Tab` moves between panes, `?`
 lists the focused pane's keys, `Ctrl-P` opens the palette, `Ctrl-T` attaches the
-terminal pane.
+terminal pane — or starts a shell in the session's workspace when an agent has not
+opened one, which on a remote workspace is a shell on that host.
 
 ## Layout
 
@@ -103,7 +104,7 @@ the toast.
 
 | Where | Keys |
 | --- | --- |
-| anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
+| anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal, or a new shell when the session has none · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |

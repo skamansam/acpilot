@@ -130,6 +130,18 @@ pub enum Request {
         /// The terminal to attach to, as the daemon listed it.
         id: String,
     },
+    /// Start a shell for the open session and attach to it.
+    ///
+    /// `workspace` is where the shell runs, and it is the session's: a remote
+    /// workspace's terminal runs on that workspace's host through its helper, which
+    /// is the machine the files are on. The daemon decides that from the id, so this
+    /// window does not have to know which hosts are remote.
+    NewTerminal {
+        /// Workspace id from the session; absent for the daemon's own workspace.
+        workspace: Option<String>,
+        /// The size to start it at, before the pane's first resize.
+        size: TerminalSize,
+    },
     /// Bytes for the attached terminal, as if typed.
     TerminalWrite(Vec<u8>),
     /// The pane changed shape; tell the program.
@@ -365,6 +377,24 @@ struct TerminalLink {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// Start following one terminal, replacing nothing: the caller drops the old link.
+fn start_attach(
+    endpoint: &str,
+    token: Option<String>,
+    id: String,
+    updates: &UnboundedSender<Update>,
+) -> TerminalLink {
+    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(follow_terminal(
+        endpoint.to_owned(),
+        token,
+        id,
+        receiver,
+        updates.clone(),
+    ));
+    TerminalLink { commands, task }
+}
+
 async fn run(
     client: Client,
     token: Option<String>,
@@ -442,15 +472,40 @@ async fn run(
                     if let Some(link) = terminal.take() {
                         link.task.abort();
                     }
-                    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
-                    let task = tokio::spawn(follow_terminal(
-                        client.base().to_owned(),
-                        token.clone(),
-                        id,
-                        receiver,
-                        updates.clone(),
-                    ));
-                    terminal = Some(TerminalLink { commands, task });
+                    terminal = Some(start_attach(client.base(), token.clone(), id, &updates));
+                }
+                // The daemon starts the shell and answers with it running, so the
+                // attach below cannot arrive before there is a screen to attach to.
+                Some(Request::NewTerminal { workspace, size }) => {
+                    let Some((session, _)) = &open else {
+                        let _ = updates.send(Update::Status("no session is open".to_owned()));
+                        continue;
+                    };
+                    let request = acpilot_proto::terminal::CreateTerminalRequest {
+                        session_id: session.clone(),
+                        workspace,
+                        command: None,
+                        args: Vec::new(),
+                        cwd: None,
+                        size,
+                    };
+                    match client.create_terminal(&request).await {
+                        Ok(summary) => {
+                            let _ = updates.send(Update::Status(format!(
+                                "started {} · attaching",
+                                summary.command
+                            )));
+                            refresh_terminals(&client, &summary.session_id, &updates).await;
+                            if let Some(link) = terminal.take() {
+                                link.task.abort();
+                            }
+                            let id = summary.id;
+                            terminal = Some(start_attach(client.base(), token.clone(), id, &updates));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
                 }
                 Some(Request::TerminalWrite(bytes)) => {
                     if let Some(link) = &terminal {
@@ -1180,6 +1235,13 @@ async fn run_demo(
             }
             Request::CloseTerminal => {
                 let _ = updates.send(Update::TerminalClosed);
+            }
+            // A shell is a process, and the design pass has none: saying so is the
+            // honest answer to a key that asked for one.
+            Request::NewTerminal { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · no daemon to start a shell".to_owned(),
+                ));
             }
             Request::Resolve { id, option } => {
                 let _ = updates.send(Update::Status(format!(

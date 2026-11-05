@@ -162,7 +162,10 @@ session's transcript, answers a permission request with `y`, `a` or `n`, and sta
 the daemon if nothing is listening (ADR 0004). `Ctrl-T` opens a terminal pane over
 the shells an agent asked for — the same PTY the agent reads, typed into and resized
 live, with the program's colours — asking which one when a session has several, and
-`Ctrl-T` again leaves it without ending the program. The pane keeps ten thousand
+`Ctrl-T` again leaves it without ending the program. A session whose agent has opened
+none gets a shell of its own: it starts in the session's workspace, and on a remote
+workspace that is a shell on the host the files are on, through the same helper the
+tree reads through. The pane keeps ten thousand
 lines behind its screen: `F2` reads back through them, `/` finds a string in that
 history — case-insensitive until the query has a capital in it, landing on the
 newest match before the cursor, with `n` and `N` to walk older and newer — and `v` and `y` copy a selection to the clipboard over OSC 52,

@@ -5193,8 +5193,9 @@ impl App {
     ///
     /// One terminal is the common case and attaches straight away. Several ask
     /// which: an agent may open a shell per command, and silently opening the
-    /// first would be a pane that hides the rest. None has nothing to attach to,
-    /// and the status line says so rather than opening an empty pane.
+    /// first would be a pane that hides the rest. None starts a shell, in the
+    /// session's own workspace: a person who pressed `Ctrl-T` asked for a terminal,
+    /// and "an agent opens one" is a refusal that only makes sense to the agent.
     fn toggle_terminal(&mut self) -> Option<Request> {
         if self.terminal_picker {
             self.terminal_picker = false;
@@ -5213,10 +5214,22 @@ impl App {
         }
         match self.terminals.len() {
             0 => {
-                self.status =
-                    "this session has no terminal — an agent opens one with its terminal tool"
-                        .to_owned();
-                None
+                // The session's workspace, which is where the shell has to run: the
+                // daemon starts it on that workspace's host when the host is remote,
+                // so a pane in a remote workspace types at the machine the files are
+                // on. An empty id is the daemon's own workspace, which is what this
+                // client's own sessions are created with.
+                let workspace = self
+                    .sessions
+                    .iter()
+                    .find(|session| Some(&session.id) == self.open.as_ref())
+                    .map(|session| session.workspace_id.clone())
+                    .filter(|id| !id.is_empty());
+                let size = self
+                    .pane_size
+                    .unwrap_or(TerminalSize { cols: 80, rows: 24 });
+                self.status = "starting a shell…".to_owned();
+                Some(Request::NewTerminal { workspace, size })
             }
             1 => {
                 let id = self.terminals[0].id.clone();
@@ -8154,16 +8167,53 @@ mod tests {
     }
 
     #[test]
-    fn a_session_without_a_terminal_says_where_terminals_come_from() {
+    fn ctrl_t_starts_a_shell_in_the_sessions_workspace_when_none_is_open() {
         let mut app = App::new("http://127.0.0.1:7777");
+        let mut remote = session("s1", "one");
+        remote.workspace_id = "ssh:box:/srv/acpilot".to_owned();
+        app.apply(Update::Sessions(vec![remote]));
+        app.set_pane_size(TerminalSize {
+            cols: 100,
+            rows: 30,
+        });
         open(&mut app);
+
         let toggle = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
-        assert_eq!(app.handle_key(toggle), None);
-        assert!(app.terminal.is_none());
-        assert!(
-            app.status.contains("agent opens one"),
-            "the status says why there is nothing: {}",
-            app.status
+        assert_eq!(
+            app.handle_key(toggle),
+            Some(Request::NewTerminal {
+                // The id, not a host name: the daemon knows which workspaces are
+                // remote, and a window that guessed would be a second opinion.
+                workspace: Some("ssh:box:/srv/acpilot".to_owned()),
+                // The pane's size, so the shell does not start 80 columns wide and
+                // repaint on the first draw.
+                size: TerminalSize {
+                    cols: 100,
+                    rows: 30
+                },
+            })
+        );
+        assert!(app.terminal.is_none(), "the daemon answers with the shell");
+        assert!(app.status.contains("starting a shell"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_session_without_a_workspace_asks_for_the_daemons_own() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let mut local = session("s1", "one");
+        // What this client's own sessions are created with: the daemon serves one
+        // workspace, and an empty id is how a request says "that one".
+        local.workspace_id = String::new();
+        app.apply(Update::Sessions(vec![local]));
+        open(&mut app);
+
+        let toggle = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.handle_key(toggle),
+            Some(Request::NewTerminal {
+                workspace: None,
+                size: TerminalSize { cols: 80, rows: 24 },
+            })
         );
     }
 

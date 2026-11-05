@@ -2359,6 +2359,13 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
             let chosen = index == app.picker_selected;
             let marker = if chosen { "▸ " } else { "  " };
             let state = if terminal.alive { "" } else { " · exited" };
+            // A pane no session owns is not this session's, and the picker says
+            // so rather than letting it pass for one the agent opened here.
+            let owner = if terminal.session_id.is_none() {
+                " · no session"
+            } else {
+                ""
+            };
             let row = if chosen {
                 Style::default()
                     .bg(app.theme.bg_panel())
@@ -2373,14 +2380,14 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(app.theme.text_muted())
             };
             Line::from(vec![
-                Span::styled(format!("{marker}{}{state}", terminal.command), row),
+                Span::styled(format!("{marker}{}{state}{owner}", terminal.command), row),
                 Span::styled(format!("  {}", terminal.id), id),
             ])
         })
         .collect();
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Enter opens · j/k choose · Esc closes",
+        "Enter opens · j/k choose · n starts a shell · Esc closes",
         Style::default().fg(app.theme.accent()),
     )));
     let block = Block::default()
@@ -2738,21 +2745,28 @@ mod tests {
     }
 
     #[test]
-    fn the_terminal_picker_lists_every_terminal_the_session_has() {
+    fn the_terminal_picker_lists_the_sessions_panes_and_the_ones_nobody_owns() {
         let mut app = app_with_session();
         app.terminals
             .push(summary("agent-terminal-1", "/bin/sh -c make", true));
         app.terminals
             .push(summary("agent-terminal-2", "/bin/sh -c cargo test", false));
+        let mut orphan = summary("agent-terminal-3", "/bin/sh -c tail -f", true);
+        orphan.session_id = None;
+        app.terminals.push(orphan);
         app.terminal_picker = true;
         app.picker_selected = 1;
 
         let text = render(&mut app);
-        assert!(text.contains("Terminals · 2"), "{text}");
+        assert!(text.contains("Terminals · 3"), "{text}");
         assert!(text.contains("/bin/sh -c make"), "{text}");
         assert!(text.contains("/bin/sh -c cargo test"), "{text}");
         assert!(text.contains("exited"), "an ended program says so: {text}");
-        assert!(text.contains("Enter opens"), "{text}");
+        assert!(
+            text.contains("no session"),
+            "a pane with no owner says so: {text}"
+        );
+        assert!(text.contains("n starts a shell"), "{text}");
     }
 
     #[test]

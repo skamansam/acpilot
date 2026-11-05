@@ -631,11 +631,15 @@ process is local. The host must have been tested and its helper must offer a PTY
 the root and no absolute path outside it, since there is no `canonicalize` across
 the transport — and the helper starts `$SHELL` or `/bin/sh` with
 `TERM=xterm-256color`, because a daemon under a service manager has no terminal
-to copy a `TERM` from. The pane is still the session's: sessions run on this
-daemon (P8-5 starts them on a host), so a remote workspace's terminal is owned by
-the session that opened it.
+to copy a `TERM` from. A pane a session opened is that session's: sessions run on this daemon (P8-5
+starts them on a host). A pane an agent opened for a session the daemon could not
+map is **sessionless** instead of filed under an id nothing resolves, so a client
+that lists every pane can still offer it.
 
-`GET /v1/terminals?session=` lists them, same shape, filterable.
+`GET /v1/terminals?session=` lists them, same shape, filterable. With no
+`session` it lists every pane, the sessionless ones included — a pane an agent
+opened for a session the daemon could not map has no id to be filtered by, so the
+unfiltered listing is the only one that names it.
 
 `WS /v1/terminals/{id}/attach` is the pane. The stream is deliberately split by
 frame type, because terminal output can contain anything a shell can print:

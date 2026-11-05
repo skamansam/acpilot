@@ -295,11 +295,15 @@ impl Terminal {
     /// screen nobody can type into is not a pane any more. The handle is dropped
     /// at that point, so the agent's runtime can forget it.
     ///
+    /// `session_id` is the session the pane answers to, or `None` when the daemon
+    /// could not map the agent's session to one of its own: the pane is then
+    /// nobody's, and a client that lists panes with no session can still find it.
+    ///
     /// # Panics
     ///
     /// If there is no tokio runtime: the pump that feeds the screen is a task.
     #[must_use]
-    pub fn adopt(session_id: SessionId, handle: AgentTerminal) -> Arc<Self> {
+    pub fn adopt(session_id: Option<SessionId>, handle: AgentTerminal) -> Arc<Self> {
         let size = handle.size();
         // An agent's PTY always has a size; `vt100` insists on a non-zero one, so
         // a report of zero becomes the smallest screen rather than a panic.
@@ -307,7 +311,7 @@ impl Terminal {
         let cols = NonZeroU16::new(size.cols).unwrap_or(NonZeroU16::MIN);
         let terminal = Arc::new(Self {
             id: format!("agent-{}", handle.id()),
-            session_id: Some(session_id),
+            session_id,
             command: handle.command().to_owned(),
             driver: Driver::Agent(Mutex::new(Some(handle.clone()))),
             screen: Mutex::new(Screen {
@@ -634,7 +638,10 @@ impl Terminals {
     /// The id is the agent's, prefixed: `agent-terminal-1` cannot collide with a
     /// pane the daemon started (`t1`, `t2`), and a client that saw both can tell
     /// which is which without a second field.
-    pub fn adopt(&self, session_id: SessionId, handle: AgentTerminal) -> TerminalSummary {
+    ///
+    /// A pane with no session is kept, not dropped: the alternative to an owner
+    /// nobody recognises is a shell nobody can see.
+    pub fn adopt(&self, session_id: Option<SessionId>, handle: AgentTerminal) -> TerminalSummary {
         let terminal = Terminal::adopt(session_id, handle);
         let summary = terminal.summary();
         self.insert(terminal);

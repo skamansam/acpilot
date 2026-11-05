@@ -765,8 +765,9 @@ impl AppState {
     /// daemon owning a second process for it.
     ///
     /// A session the daemon cannot map (its `session/new` failed after the agent
-    /// chose an id, say) is filed under the agent's own id rather than dropped: a
-    /// pane with an unfamiliar owner is more useful than a shell nobody can see.
+    /// chose an id, say) becomes a **sessionless** pane rather than being dropped:
+    /// no session owns it, so it lists under no session filter, and a client that
+    /// asks for panes with no session can still find it.
     ///
     /// # Panics
     ///
@@ -779,9 +780,7 @@ impl AppState {
             loop {
                 match opened.recv().await {
                     Ok(handle) => {
-                        let session_id = sessions
-                            .id_for_acp(handle.session_id())
-                            .unwrap_or_else(|| handle.session_id().to_owned());
+                        let session_id = sessions.id_for_acp(handle.session_id());
                         panes.adopt(session_id, handle);
                     }
                     // A mirror that falls 256 terminals behind loses those

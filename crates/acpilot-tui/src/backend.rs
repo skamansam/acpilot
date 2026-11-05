@@ -268,7 +268,8 @@ pub enum Update {
     Event(SessionEvent),
     /// The pending permission list, as the daemon has it now.
     Permissions(Vec<PermissionRequest>),
-    /// The open session's terminals, as the daemon lists them.
+    /// The panes a person may attach to: the open session's, and the ones no
+    /// session owns, as the daemon lists them.
     Terminals(Vec<TerminalSummary>),
     /// The attach succeeded. The screen replay follows as [`Update::TerminalData`].
     TerminalOpened {
@@ -802,20 +803,44 @@ async fn refresh_sessions(client: &Client, updates: &UnboundedSender<Update>) {
     }
 }
 
-/// Read the open session's terminals.
+/// Read the panes a person may attach to: the open session's, and the sessionless
+/// ones.
 ///
 /// Sent as soon as a session opens as well as on every poll: an agent's shell is
 /// exactly what a person presses `Ctrl-T` for, and a list that arrives a second
 /// later is a pane that says the session has none.
+///
+/// One request rather than two, because `GET /v1/terminals` with no filter is the
+/// only listing that can name both: the session's panes and the ones an agent
+/// opened whose session this daemon could not map. A pane with no session cannot
+/// be listed under one, so filtering the answer here is the only way it is ever
+/// found.
 async fn refresh_terminals(client: &Client, session: &str, updates: &UnboundedSender<Update>) {
-    match client.terminals(Some(session)).await {
+    match client.terminals(None).await {
         Ok(terminals) => {
-            let _ = updates.send(Update::Terminals(terminals));
+            let _ = updates.send(Update::Terminals(listed(session, terminals)));
         }
         Err(error) => {
             let _ = updates.send(Update::Status(describe(&error)));
         }
     }
+}
+
+/// The panes of `session`, plus the panes no session owns.
+///
+/// Another session's shell is left out: it is already listed where it belongs,
+/// and offering it here would be a pane a person could type into without ever
+/// having opened the conversation it belongs to.
+fn listed(session: &str, terminals: Vec<TerminalSummary>) -> Vec<TerminalSummary> {
+    terminals
+        .into_iter()
+        .filter(|terminal| {
+            terminal
+                .session_id
+                .as_deref()
+                .is_none_or(|id| id == session)
+        })
+        .collect()
 }
 
 /// Read the integrations the stats bar draws.
@@ -1320,5 +1345,35 @@ fn describe(error: &ClientError) -> String {
     match error.code() {
         Some(code) => format!("{code}: {error}"),
         None => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listed;
+    use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
+
+    fn pane(id: &str, session: Option<&str>) -> TerminalSummary {
+        TerminalSummary {
+            id: id.to_owned(),
+            session_id: session.map(str::to_owned),
+            size: TerminalSize { cols: 80, rows: 24 },
+            alive: true,
+            command: "/bin/sh".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_list_keeps_the_open_sessions_panes_and_the_ones_nobody_owns() {
+        let kept = listed(
+            "s1",
+            vec![
+                pane("mine", Some("s1")),
+                pane("orphan", None),
+                pane("theirs", Some("s2")),
+            ],
+        );
+        let ids: Vec<&str> = kept.iter().map(|terminal| terminal.id.as_str()).collect();
+        assert_eq!(ids, ["mine", "orphan"]);
     }
 }

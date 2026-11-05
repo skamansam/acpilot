@@ -8099,7 +8099,7 @@
           },
           {
             "column": 18,
-            "text": "│Enter opens · j/k choose · Esc closes",
+            "text": "│Enter opens · j/k choose · n starts a shell · Esc closes",
             "style": 13
           },
           {
@@ -8652,12 +8652,12 @@
           },
           {
             "column": 61,
-            "text": "2 terminals · Enter opens · Esc closes",
+            "text": "2 terminals · Enter opens · n starts one · Esc closes",
             "style": 1
           },
           {
-            "column": 99,
-            "text": "  demo · seeded ",
+            "column": 114,
+            "text": "  demo",
             "style": 3
           }
         ],

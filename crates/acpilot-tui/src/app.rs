@@ -1833,7 +1833,12 @@ pub struct App {
     pub permission_card: bool,
     /// The prompt being composed.
     pub input: String,
-    /// Terminals the daemon has for the open session, oldest first.
+    /// Terminals a person may attach to, oldest first: the open session's, and the
+    /// panes no session owns.
+    ///
+    /// A sessionless pane is an agent's shell whose session the daemon could not
+    /// map (P3-6), or one a client asked for without a session (P8-6). It is
+    /// listed here because a pane nobody can find is a process nobody can stop.
     pub terminals: Vec<TerminalSummary>,
     /// The terminal being typed into, when one is open.
     ///
@@ -5191,11 +5196,13 @@ impl App {
 
     /// Open a terminal for the open session, or leave the one that is open.
     ///
-    /// One terminal is the common case and attaches straight away. Several ask
-    /// which: an agent may open a shell per command, and silently opening the
-    /// first would be a pane that hides the rest. None starts a shell, in the
-    /// session's own workspace: a person who pressed `Ctrl-T` asked for a terminal,
-    /// and "an agent opens one" is a refusal that only makes sense to the agent.
+    /// One terminal is the common case and attaches straight away — including a
+    /// pane no session owns, which is still the shell the person asked to see.
+    /// Several ask which: an agent may open a shell per command, and silently
+    /// opening the first would be a pane that hides the rest. None starts a shell,
+    /// in the session's own workspace: a person who pressed `Ctrl-T` asked for a
+    /// terminal, and "an agent opens one" is a refusal that only makes sense to
+    /// the agent.
     fn toggle_terminal(&mut self) -> Option<Request> {
         if self.terminal_picker {
             self.terminal_picker = false;
@@ -5214,22 +5221,8 @@ impl App {
         }
         match self.terminals.len() {
             0 => {
-                // The session's workspace, which is where the shell has to run: the
-                // daemon starts it on that workspace's host when the host is remote,
-                // so a pane in a remote workspace types at the machine the files are
-                // on. An empty id is the daemon's own workspace, which is what this
-                // client's own sessions are created with.
-                let workspace = self
-                    .sessions
-                    .iter()
-                    .find(|session| Some(&session.id) == self.open.as_ref())
-                    .map(|session| session.workspace_id.clone())
-                    .filter(|id| !id.is_empty());
-                let size = self
-                    .pane_size
-                    .unwrap_or(TerminalSize { cols: 80, rows: 24 });
                 self.status = "starting a shell…".to_owned();
-                Some(Request::NewTerminal { workspace, size })
+                Some(self.new_terminal_request())
             }
             1 => {
                 let id = self.terminals[0].id.clone();
@@ -5239,10 +5232,30 @@ impl App {
             count => {
                 self.terminal_picker = true;
                 self.picker_selected = self.picker_selected.min(count - 1);
-                self.status = format!("{count} terminals · Enter opens · Esc closes");
+                self.status =
+                    format!("{count} terminals · Enter opens · n starts one · Esc closes");
                 None
             }
         }
+    }
+
+    /// A shell in the open session's workspace, at the size the pane has.
+    ///
+    /// The workspace is the id, not a host name: the daemon knows which
+    /// workspaces are remote, and a window that guessed would be a second opinion.
+    /// An empty id is the daemon's own workspace, which is what this client's own
+    /// sessions are created with.
+    fn new_terminal_request(&self) -> Request {
+        let workspace = self
+            .sessions
+            .iter()
+            .find(|session| Some(&session.id) == self.open.as_ref())
+            .map(|session| session.workspace_id.clone())
+            .filter(|id| !id.is_empty());
+        let size = self
+            .pane_size
+            .unwrap_or(TerminalSize { cols: 80, rows: 24 });
+        Request::NewTerminal { workspace, size }
     }
 
     /// The keys the terminal picker answers to.
@@ -5262,6 +5275,13 @@ impl App {
                 if self.picker_selected + 1 < self.terminals.len() {
                     self.picker_selected += 1;
                 }
+            }
+            // A picker whose only rows are panes nobody owns would otherwise be a
+            // list that traps the person who wanted a shell of their own.
+            KeyCode::Char('n') => {
+                self.terminal_picker = false;
+                self.status = "starting a shell…".to_owned();
+                return Some(self.new_terminal_request());
             }
             KeyCode::Enter => {
                 if let Some(summary) = self.terminals.get(self.picker_selected) {
@@ -8239,6 +8259,59 @@ mod tests {
             })
         );
         assert!(!app.terminal_picker, "the question is answered");
+    }
+
+    #[test]
+    fn a_sessionless_pane_is_offered_too() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        let mut orphan = terminal();
+        orphan.session_id = None;
+        app.apply(Update::Terminals(vec![orphan]));
+
+        // One pane still needs no question, and a shell nobody owns is still the
+        // shell the person pressed `Ctrl-T` for.
+        let toggle = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.handle_key(toggle),
+            Some(Request::OpenTerminal {
+                id: "agent-terminal-1".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn the_picker_can_start_a_shell_beside_the_panes_it_lists() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Sessions(vec![session("s1", "one")]));
+        app.set_pane_size(TerminalSize {
+            cols: 100,
+            rows: 30,
+        });
+        open(&mut app);
+        let mut orphan = terminal();
+        orphan.session_id = None;
+        app.apply(Update::Terminals(vec![terminal(), orphan]));
+
+        let toggle = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(app.handle_key(toggle), None, "a question, not an attach");
+        assert!(app.terminal_picker);
+
+        // The picker is the only way to a shell when every row belongs to somebody
+        // else, so it answers to `n` as well as to a row.
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('n'))),
+            Some(Request::NewTerminal {
+                // The session's workspace, the same one `Ctrl-T` would have used.
+                workspace: Some("work".to_owned()),
+                size: TerminalSize {
+                    cols: 100,
+                    rows: 30
+                },
+            })
+        );
+        assert!(!app.terminal_picker);
+        assert!(app.status.contains("starting a shell"), "{}", app.status);
     }
 
     #[test]

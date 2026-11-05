@@ -29,7 +29,9 @@ terminal pane — or starts a shell in the session's workspace when an agent has
 opened one, which on a remote workspace is a shell on that host. The picker also
 lists panes no session owns: an agent's shell whose session the daemon could not
 map says `no session` and names the workspace it is in and the host it runs on, and
-`n` in the picker starts a shell of the session's own.
+`n` in the picker starts a shell of the session's own. Attaching to such a pane
+leaves that address on the status line while it has the keys, because the picker is
+closed by the time commands go into it.
 
 ## Layout
 

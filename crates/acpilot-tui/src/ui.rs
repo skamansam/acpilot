@@ -1421,8 +1421,23 @@ fn draw_composer(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// The status line: connection, profile, which pane has the keys, the cursor, and
-/// what just happened.
+/// Where a pane runs, when it is not in this window's own workspace and host.
+///
+/// The picker and the status line answer the question with these words, so a person
+/// who learned to read a row does not have to learn a second spelling once the pane
+/// has the keyboard. A pane a session opened is the session's, and its workspace is
+/// already the window's: the words are for the panes that are not.
+fn pane_origin(terminal: &acpilot_proto::terminal::TerminalSummary) -> Option<String> {
+    if terminal.session_id.is_some() {
+        return None;
+    }
+    let workspace = terminal.workspace.as_deref().unwrap_or("this workspace");
+    let host = terminal.host.as_deref().unwrap_or("this machine");
+    Some(format!("{workspace} on {host}"))
+}
+
+/// The status line: connection, profile, which pane has the keys and where it runs,
+/// the cursor, and what just happened.
 ///
 /// The order is the order a person reads it — is it alive, what am I in, where am I,
 /// what did it say — and the address is last because it is the thing that is almost
@@ -1449,6 +1464,16 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         format!("{} ", app.focus.label()),
         Style::default().fg(app.theme.accent()),
     ));
+    // The pane behind the keyboard may not be this window's: a sessionless shell can
+    // run in another workspace on another host, and the picker that said so is gone
+    // by the time commands are being typed into it.
+    if let Some(origin) = app
+        .terminal
+        .as_ref()
+        .and_then(|pane| pane_origin(&pane.summary))
+    {
+        spans.push(Span::styled(format!("· no session · {origin} "), dim));
+    }
     if let Some(editor) = &app.editor {
         let (line, column) = editor.position();
         spans.push(Span::styled(format!("· {line}:{column} "), dim));
@@ -2364,13 +2389,9 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
             // is part of that: a shell on another host is not the shell this window
             // implies, and a pane that will not take this session's commands is exactly
             // the one a person needs an address for.
-            let owner = if terminal.session_id.is_some() {
-                String::new()
-            } else {
-                let workspace = terminal.workspace.as_deref().unwrap_or("this workspace");
-                let host = terminal.host.as_deref().unwrap_or("this machine");
-                format!(" · no session · {workspace} on {host}")
-            };
+            let owner = pane_origin(terminal)
+                .map(|origin| format!(" · no session · {origin}"))
+                .unwrap_or_default();
             let row = if chosen {
                 Style::default()
                     .bg(app.theme.bg_panel())
@@ -2788,6 +2809,40 @@ mod tests {
             "a pane on another host says where: {text}"
         );
         assert!(text.contains("n starts a shell"), "{text}");
+    }
+
+    #[test]
+    fn the_status_line_says_where_an_attached_pane_runs() {
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 20 });
+        let mut orphan = summary("agent-terminal-3", "tail -f", true);
+        orphan.session_id = None;
+        orphan.workspace = Some("build".to_owned());
+        orphan.host = Some("ssh:box".to_owned());
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: orphan,
+            replay_bytes: 0,
+        });
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("build on ssh:box"),
+            "the status line says where the pane behind the keyboard runs: {text}"
+        );
+
+        // A pane the session owns already runs where the window does, and saying so on
+        // every attach would be noise on the path a person takes most often.
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 20 });
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: summary("agent-terminal-1", "/bin/sh -c make", true),
+            replay_bytes: 0,
+        });
+        let text = render(&mut app);
+        assert!(
+            !text.contains("this workspace on this machine"),
+            "a session's own pane says nothing about where it runs: {text}"
+        );
     }
 
     #[test]

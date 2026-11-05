@@ -165,7 +165,8 @@ live, with the program's colours — asking which one when a session has several
 `Ctrl-T` again leaves it without ending the program. The picker also lists panes no
 session owns — an agent's shell whose session the daemon could not map — and says
 `no session` beside them, along with the workspace they are in and the host they run
-on, and `n` in the picker starts a shell of the session's own.
+on, and `n` in the picker starts a shell of the session's own. That address stays on
+the status line for as long as the pane has the keys.
 A session whose agent has opened none gets one: it starts in the session's workspace,
 and on a remote workspace that is a shell on the host the files are on, through the
 same helper the tree reads through. The pane keeps ten thousand

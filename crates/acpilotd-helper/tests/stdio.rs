@@ -192,6 +192,10 @@ fn an_unknown_method_is_refused_by_name() {
 /// The bytes a notification carries, decoded here rather than imported: the helper's
 /// codec is inside the binary, and a test that called it would not be reading what
 /// crossed the pipe.
+///
+/// Unix-gated with its tests: a Windows build runs neither, and a function no test uses
+/// is `-D dead-code` on a runner that compiles this file.
+#[cfg(unix)]
 fn data(event: &Value) -> String {
     let encoded = event["params"]["data"].as_str().expect("a data payload");
     let mut out = Vec::new();

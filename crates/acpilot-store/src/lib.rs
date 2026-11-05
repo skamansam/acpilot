@@ -247,16 +247,23 @@ impl Store {
         Ok(())
     }
 
-    /// Every pin a person has recorded, oldest first.
+    /// Every pin a person has recorded, in the order they were first recorded.
+    ///
+    /// Ordered by `rowid`, not `trusted_at`, for the reason [`Store::hosts`]
+    /// documents: the column is a `jiff` timestamp in text, its fraction is
+    /// written at whatever width it needs, and text order is not time order across
+    /// those widths. `save_agent_pin` replaces a row in place, so a re-trusted
+    /// agent keeps its position while the `trusted_at` it stores still moves to the
+    /// newest approval — that column is the audit of when a person looked, not an
+    /// ordering key.
     ///
     /// # Errors
     ///
     /// A row could not be read.
     pub fn agent_pins(&self) -> Result<Vec<AgentPin>, StoreError> {
         let connection = self.lock();
-        let mut statement = connection.prepare(
-            "SELECT agent_id, fingerprint FROM agent_pins ORDER BY trusted_at, agent_id",
-        )?;
+        let mut statement =
+            connection.prepare("SELECT agent_id, fingerprint FROM agent_pins ORDER BY rowid")?;
         let rows = statement.query_map([], |row| {
             Ok(AgentPin {
                 agent_id: row.get(0)?,
@@ -380,6 +387,13 @@ impl Store {
 
     /// Every stored session, oldest first.
     ///
+    /// "Oldest" is the order the rows were created, read from `rowid` rather than
+    /// by comparing `created_at`: that column is a `jiff` timestamp in text whose
+    /// fraction is written at whatever width it needs, so `…:00Z` sorts after
+    /// `…:00.000001Z` and sorting by it can put a newer session first (see
+    /// [`Store::hosts`]). `save_session` updates a row in place, so the rowid stays
+    /// the creation order after a status change.
+    ///
     /// # Errors
     ///
     /// A row could not be read.
@@ -387,7 +401,7 @@ impl Store {
         let connection = self.lock();
         let mut statement = connection.prepare(
             "SELECT id, workspace_id, agent_id, title, status, created_at, updated_at
-             FROM sessions ORDER BY created_at, id",
+             FROM sessions ORDER BY rowid",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -904,6 +918,40 @@ mod tests {
     }
 
     #[test]
+    fn sessions_come_back_in_the_order_they_were_added() {
+        let store = Store::in_memory().expect("open");
+        store.save_session(&summary("s1")).expect("first");
+        store.save_session(&summary("s2")).expect("second");
+
+        // The two spellings that made the host list fail on macOS: text order puts
+        // the one-microsecond-later session first.
+        store
+            .lock()
+            .execute(
+                "UPDATE sessions SET created_at = '2026-11-03T10:00:00Z' WHERE id = 's1'",
+                [],
+            )
+            .expect("first timestamp");
+        store
+            .lock()
+            .execute(
+                "UPDATE sessions SET created_at = '2026-11-03T10:00:00.000001Z' WHERE id = 's2'",
+                [],
+            )
+            .expect("second timestamp");
+
+        let sessions = store.sessions().expect("read");
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1", "s2"],
+            "oldest first is the order they were created, not the text of a column"
+        );
+    }
+
+    #[test]
     fn a_host_is_stored_and_read_back() {
         let store = Store::in_memory().expect("open");
         store
@@ -990,6 +1038,53 @@ mod tests {
         assert_eq!(pins.len(), 1);
         assert_eq!(pins[0].agent_id, "mock");
         assert_eq!(pins[0].fingerprint, "bbb");
+    }
+
+    #[test]
+    fn pins_come_back_in_the_order_they_were_first_recorded() {
+        let store = Store::in_memory().expect("open");
+        store.save_agent_pin("zzz", "aaa").expect("first");
+        store.save_agent_pin("aaa", "bbb").expect("second");
+
+        // The same pair of spellings the host test uses: one whole second, one
+        // microsecond later, which as text compare the wrong way round.
+        store
+            .lock()
+            .execute(
+                "UPDATE agent_pins SET trusted_at = '2026-11-05T00:00:00Z' \
+                 WHERE agent_id = 'zzz'",
+                [],
+            )
+            .expect("first timestamp");
+        store
+            .lock()
+            .execute(
+                "UPDATE agent_pins SET trusted_at = '2026-11-05T00:00:00.000001Z' \
+                 WHERE agent_id = 'aaa'",
+                [],
+            )
+            .expect("second timestamp");
+
+        let pins = store.agent_pins().expect("read");
+        assert_eq!(
+            pins.iter()
+                .map(|pin| pin.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["zzz", "aaa"],
+            "first recorded first, even though a later approval sorts lower as text"
+        );
+
+        // Re-trusting replaces the row in place: the new approval moves the audit
+        // time, not the agent's place in the list.
+        store.save_agent_pin("zzz", "ccc").expect("re-trust");
+        let pins = store.agent_pins().expect("read");
+        assert_eq!(
+            pins.iter()
+                .map(|pin| pin.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["zzz", "aaa"]
+        );
+        assert_eq!(pins[0].fingerprint, "ccc");
     }
 
     #[test]

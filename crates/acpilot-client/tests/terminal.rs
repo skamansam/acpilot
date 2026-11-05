@@ -21,6 +21,8 @@ fn summary() -> TerminalSummary {
     TerminalSummary {
         id: "t1".to_owned(),
         session_id: Some("s1".to_owned()),
+        workspace: None,
+        host: None,
         size: TerminalSize { cols: 80, rows: 24 },
         alive: true,
         command: "/bin/sh".to_owned(),

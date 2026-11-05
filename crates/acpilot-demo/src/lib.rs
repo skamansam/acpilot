@@ -354,6 +354,8 @@ fn terminals() -> Vec<TerminalSummary> {
         TerminalSummary {
             id: "agent-terminal-1".to_owned(),
             session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize {
                 cols: 100,
                 rows: 24,
@@ -364,6 +366,8 @@ fn terminals() -> Vec<TerminalSummary> {
         TerminalSummary {
             id: "agent-terminal-2".to_owned(),
             session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 80, rows: 24 },
             alive: false,
             command: "/bin/sh -c cargo run -- tui".to_owned(),

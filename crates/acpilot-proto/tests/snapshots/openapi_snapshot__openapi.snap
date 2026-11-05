@@ -2360,6 +2360,13 @@ expression: canonical(document)
             "description": "Command that was started, for display.",
             "type": "string"
           },
+          "host": {
+            "description": "Host the pane runs on, when it is not this daemon's machine.\n\nThe id `GET /v1/hosts` lists (`ssh:user@machine`, `wsl:Ubuntu`). A shell whose\nbytes come from another host looks exactly like a local one in a picker, which is\nwhy the pane says which it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Terminal identifier."
@@ -2378,6 +2385,13 @@ expression: canonical(document)
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
             "description": "Current dimensions."
+          },
+          "workspace": {
+            "description": "Workspace the pane runs in, when it is not the one this daemon serves.\n\nA pane asked for in a named workspace runs in that tree, which on another host\nis a tree this daemon never walked. Absent means the daemon's own workspace: the\none implied by every other route.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

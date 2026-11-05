@@ -28,7 +28,8 @@ lists the focused pane's keys, `Ctrl-P` opens the palette, `Ctrl-T` attaches the
 terminal pane — or starts a shell in the session's workspace when an agent has not
 opened one, which on a remote workspace is a shell on that host. The picker also
 lists panes no session owns: an agent's shell whose session the daemon could not
-map says `no session`, and `n` in the picker starts a shell of the session's own.
+map says `no session` and names the workspace it is in and the host it runs on, and
+`n` in the picker starts a shell of the session's own.
 
 ## Layout
 

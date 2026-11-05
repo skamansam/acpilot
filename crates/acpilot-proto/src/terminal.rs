@@ -29,6 +29,20 @@ pub struct TerminalSummary {
     /// run on a host yet (P8-5). A local terminal is always a session's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
+    /// Workspace the pane runs in, when it is not the one this daemon serves.
+    ///
+    /// A pane asked for in a named workspace runs in that tree, which on another host
+    /// is a tree this daemon never walked. Absent means the daemon's own workspace: the
+    /// one implied by every other route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Host the pane runs on, when it is not this daemon's machine.
+    ///
+    /// The id `GET /v1/hosts` lists (`ssh:user@machine`, `wsl:Ubuntu`). A shell whose
+    /// bytes come from another host looks exactly like a local one in a picker, which is
+    /// why the pane says which it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Current dimensions.
     pub size: TerminalSize,
     /// Whether the child process is still running.

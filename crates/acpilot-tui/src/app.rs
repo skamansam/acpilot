@@ -8128,6 +8128,8 @@ mod tests {
         TerminalSummary {
             id: "agent-terminal-1".to_owned(),
             session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 80, rows: 24 },
             alive: true,
             command: "/bin/sh -c make".to_owned(),
@@ -8152,6 +8154,8 @@ mod tests {
         TerminalSummary {
             id: "agent-terminal-2".to_owned(),
             session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 80, rows: 24 },
             alive: false,
             command: "/bin/sh -c cargo test".to_owned(),

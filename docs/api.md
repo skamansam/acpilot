@@ -636,6 +636,12 @@ starts them on a host). A pane an agent opened for a session the daemon could no
 map is **sessionless** instead of filed under an id nothing resolves, so a client
 that lists every pane can still offer it.
 
+The summary carries `workspace` and `host` when the pane is not in the daemon's own
+workspace or on its own machine — the workspace id the request named, and the host
+id `GET /v1/hosts` lists. A picker needs both: a shell on another host looks like a
+local one otherwise, and a person typing into it deserves to know which tree it is
+in.
+
 `GET /v1/terminals?session=` lists them, same shape, filterable. With no
 `session` it lists every pane, the sessionless ones included — a pane an agent
 opened for a session the daemon could not map has no id to be filtered by, so the

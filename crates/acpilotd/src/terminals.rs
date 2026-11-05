@@ -149,6 +149,20 @@ impl Driver {
     }
 }
 
+/// Where a pane runs, so a picker can say it.
+///
+/// `None` for either half means the daemon's own: the workspace it serves, or the machine
+/// it runs on. Both are facts the caller of `POST /v1/terminals` knows and the pane's
+/// constructors do not, which is why they arrive after the terminal exists — every
+/// constructor would otherwise carry two arguments most of them pass as `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Origin {
+    /// The workspace the shell starts in, when it is not the daemon's own.
+    pub workspace: Option<String>,
+    /// The host the bytes come from, when it is not this machine.
+    pub host: Option<String>,
+}
+
 /// One running terminal.
 pub struct Terminal {
     id: TerminalId,
@@ -159,6 +173,8 @@ pub struct Terminal {
     session_id: Option<SessionId>,
     /// The command line, for display. Never re-parsed.
     command: String,
+    /// Where it runs, for a picker. Set by whoever started it; see [`Terminal::set_origin`].
+    origin: Mutex<Origin>,
     driver: Driver,
     screen: Mutex<Screen>,
     alive: AtomicBool,
@@ -204,6 +220,7 @@ impl Terminal {
             id,
             session_id,
             command: command_line,
+            origin: Mutex::new(Origin::default()),
             driver: Driver::Pty(Mutex::new(pty)),
             screen: Mutex::new(Screen {
                 parser: vt100::Parser::new(rows, cols, SCROLLBACK),
@@ -269,6 +286,7 @@ impl Terminal {
             id,
             session_id,
             command: command_line,
+            origin: Mutex::new(Origin::default()),
             driver: Driver::Remote(Mutex::new(remote)),
             screen: Mutex::new(Screen {
                 parser: vt100::Parser::new(rows, cols, SCROLLBACK),
@@ -313,6 +331,9 @@ impl Terminal {
             id: format!("agent-{}", handle.id()),
             session_id,
             command: handle.command().to_owned(),
+            // An agent's terminal runs in the workspace this daemon serves, on the
+            // machine it runs on: there is nowhere else it could be.
+            origin: Mutex::new(Origin::default()),
             driver: Driver::Agent(Mutex::new(Some(handle.clone()))),
             screen: Mutex::new(Screen {
                 parser: vt100::Parser::new(rows, cols, SCROLLBACK),
@@ -453,6 +474,15 @@ impl Terminal {
         }
     }
 
+    /// Record where the pane runs, once it exists.
+    ///
+    /// Called by the route that knows which workspace the request named. A pane that
+    /// never gets one is a pane of the daemon's own workspace on this machine, which is
+    /// what [`Origin::default`] says.
+    pub fn set_origin(&self, origin: Origin) {
+        *self.origin.lock().unwrap_or_else(PoisonError::into_inner) = origin;
+    }
+
     /// What the API reports about it.
     #[must_use]
     pub fn summary(&self) -> TerminalSummary {
@@ -474,9 +504,12 @@ impl Terminal {
                 }
             },
         };
+        let origin = self.origin.lock().unwrap_or_else(PoisonError::into_inner);
         TerminalSummary {
             id: self.id.clone(),
             session_id: self.session_id.clone(),
+            workspace: origin.workspace.clone(),
+            host: origin.host.clone(),
             size: TerminalSize {
                 cols: size.cols,
                 rows: size.rows,
@@ -741,14 +774,14 @@ pub async fn create(
     // Where the shell runs. A request that names no workspace is the one this daemon
     // serves; a remote one is a workspace row whose host is reached through its helper,
     // which is the same machine the files are on.
-    let (root, remote) = match request
+    let (root, remote, origin) = match request
         .workspace
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
     {
         None => match state.workspace() {
-            Some(workspace) => (workspace.root.clone(), None),
+            Some(workspace) => (workspace.root.clone(), None, Origin::default()),
             None => {
                 return Err(ApiError::new(AcpilotError::conflict(
                     "this daemon was started without a workspace, so a terminal has no directory to start in",
@@ -804,6 +837,7 @@ pub async fn create(
             )?
         }
     };
+    terminal.set_origin(origin);
     let summary = terminal.summary();
     state.terminals().insert(terminal);
     Ok(summary)
@@ -819,7 +853,7 @@ pub async fn create(
 fn remote_workspace(
     state: &AppState,
     id: &str,
-) -> Result<(PathBuf, Option<crate::helper::Transport>), ApiError> {
+) -> Result<(PathBuf, Option<crate::helper::Transport>, Origin), ApiError> {
     let row = state
         .workspaces()
         .list()
@@ -827,8 +861,16 @@ fn remote_workspace(
         .find(|row| row.id == id)
         .ok_or_else(|| ApiError::new(AcpilotError::not_found(format!("workspace {id}"))))?;
     let root = PathBuf::from(&row.root);
+    let workspace = Some(row.id.clone());
     if row.host_id == crate::hosts::LOCAL_HOST {
-        return Ok((root, None));
+        return Ok((
+            root,
+            None,
+            Origin {
+                workspace,
+                host: None,
+            },
+        ));
     }
     let host = state
         .hosts()
@@ -852,7 +894,14 @@ fn remote_workspace(
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| host.id.clone());
     let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
-    Ok((root, Some(transport)))
+    Ok((
+        root,
+        Some(transport),
+        Origin {
+            workspace,
+            host: Some(host.id.clone()),
+        },
+    ))
 }
 
 /// The directory a remote shell starts in, checked by string.

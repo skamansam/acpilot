@@ -1357,6 +1357,8 @@ mod tests {
         TerminalSummary {
             id: id.to_owned(),
             session_id: session.map(str::to_owned),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 80, rows: 24 },
             alive: true,
             command: "/bin/sh".to_owned(),

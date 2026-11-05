@@ -2359,12 +2359,17 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
             let chosen = index == app.picker_selected;
             let marker = if chosen { "▸ " } else { "  " };
             let state = if terminal.alive { "" } else { " · exited" };
-            // A pane no session owns is not this session's, and the picker says
-            // so rather than letting it pass for one the agent opened here.
-            let owner = if terminal.session_id.is_none() {
-                " · no session"
+            // A pane no session owns is not this session's, and the picker says so
+            // rather than letting it pass for one the agent opened here. Where it runs
+            // is part of that: a shell on another host is not the shell this window
+            // implies, and a pane that will not take this session's commands is exactly
+            // the one a person needs an address for.
+            let owner = if terminal.session_id.is_some() {
+                String::new()
             } else {
-                ""
+                let workspace = terminal.workspace.as_deref().unwrap_or("this workspace");
+                let host = terminal.host.as_deref().unwrap_or("this machine");
+                format!(" · no session · {workspace} on {host}")
             };
             let row = if chosen {
                 Style::default()
@@ -2560,6 +2565,8 @@ mod tests {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
                 session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2587,6 +2594,8 @@ mod tests {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
                 session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2632,6 +2641,8 @@ mod tests {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
                 session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2720,6 +2731,8 @@ mod tests {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
                 session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -2738,6 +2751,8 @@ mod tests {
         acpilot_proto::terminal::TerminalSummary {
             id: id.to_owned(),
             session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 60, rows: 20 },
             alive,
             command: command.to_owned(),
@@ -2751,8 +2766,10 @@ mod tests {
             .push(summary("agent-terminal-1", "/bin/sh -c make", true));
         app.terminals
             .push(summary("agent-terminal-2", "/bin/sh -c cargo test", false));
-        let mut orphan = summary("agent-terminal-3", "/bin/sh -c tail -f", true);
+        let mut orphan = summary("agent-terminal-3", "tail -f", true);
         orphan.session_id = None;
+        orphan.workspace = Some("build".to_owned());
+        orphan.host = Some("ssh:box".to_owned());
         app.terminals.push(orphan);
         app.terminal_picker = true;
         app.picker_selected = 1;
@@ -2765,6 +2782,10 @@ mod tests {
         assert!(
             text.contains("no session"),
             "a pane with no owner says so: {text}"
+        );
+        assert!(
+            text.contains("build on ssh:box"),
+            "a pane on another host says where: {text}"
         );
         assert!(text.contains("n starts a shell"), "{text}");
     }

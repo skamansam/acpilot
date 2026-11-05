@@ -194,7 +194,18 @@ impl Store {
         Ok(())
     }
 
-    /// Every host the daemon has been told about, oldest first.
+    /// Every host the daemon has been told about, in the order it was told.
+    ///
+    /// Ordered by `rowid` rather than `created_at`, because that column is a
+    /// human-readable `jiff` timestamp and its fraction is written at whatever
+    /// width it needs — none, 3, 6 or 9 digits. Comparing those strings is not
+    /// comparing times: `…T00:00:00Z` sorts *after* `…T00:00:00.000001Z`, and
+    /// `…T00:00:00.1Z` after `…T00:00:00.123456789Z`, both because `Z` and `1`
+    /// outrank the digit that continues the shorter fraction. Two hosts saved in
+    /// the same second could therefore come back in the wrong order, and did: the
+    /// macOS run of this crate's suite listed a host added second first. `rowid`
+    /// is insertion order by construction and an upsert keeps it, which is the
+    /// property a list of hosts actually wants.
     ///
     /// # Errors
     ///
@@ -202,7 +213,7 @@ impl Store {
     pub fn hosts(&self) -> Result<Vec<HostRecord>, StoreError> {
         let connection = self.lock();
         let mut statement =
-            connection.prepare("SELECT id, kind, address FROM hosts ORDER BY created_at, id")?;
+            connection.prepare("SELECT id, kind, address FROM hosts ORDER BY rowid")?;
         let rows = statement.query_map([], |row| {
             Ok(HostRecord {
                 id: row.get(0)?,
@@ -911,8 +922,63 @@ mod tests {
             .expect("ssh");
         let hosts = store.hosts().expect("read");
         assert_eq!(hosts.len(), 2);
-        assert_eq!(hosts[1].kind, HostKind::Ssh);
-        assert_eq!(hosts[1].address.as_deref(), Some("me@box"));
+        // By id rather than by position: this test is about what a row reads back
+        // as, and a position would make it fail for a reason it does not name.
+        let ssh = hosts
+            .iter()
+            .find(|host| host.id == "ssh:me@box")
+            .expect("the ssh host");
+        assert_eq!(ssh.kind, HostKind::Ssh);
+        assert_eq!(ssh.address.as_deref(), Some("me@box"));
+    }
+
+    #[test]
+    fn hosts_come_back_in_the_order_they_were_added() {
+        let store = Store::in_memory().expect("open");
+        store
+            .save_host(&HostRecord {
+                id: "local".into(),
+                kind: HostKind::Local,
+                address: None,
+            })
+            .expect("local");
+        store
+            .save_host(&HostRecord {
+                id: "ssh:me@box".into(),
+                kind: HostKind::Ssh,
+                address: Some("me@box".into()),
+            })
+            .expect("ssh");
+
+        // The two spellings a macOS run produced from ordinary saves: one whole
+        // second, one microsecond later. `2026-11-05T00:00:00.000001Z` compares
+        // *before* `2026-11-05T00:00:00Z` as text, which is why the list cannot be
+        // ordered by that column without disagreeing with the clock.
+        store
+            .lock()
+            .execute(
+                "UPDATE hosts SET created_at = '2026-11-05T00:00:00Z' WHERE id = 'local'",
+                [],
+            )
+            .expect("local timestamp");
+        store
+            .lock()
+            .execute(
+                "UPDATE hosts SET created_at = '2026-11-05T00:00:00.000001Z' \
+                 WHERE id = 'ssh:me@box'",
+                [],
+            )
+            .expect("ssh timestamp");
+
+        let hosts = store.hosts().expect("read");
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|host| host.id.as_str())
+                .collect::<Vec<_>>(),
+            ["local", "ssh:me@box"],
+            "oldest first is the order the daemon was told, not the text of a column"
+        );
     }
 
     #[test]

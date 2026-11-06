@@ -35,6 +35,20 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+/** Availability, as `GET /v1/agents` spells it. */
+export type AgentStatus = 'available' | 'missing' | 'unhealthy' | 'untrusted';
+
+/** One row of `GET /v1/agents`: an agent this profile configured. */
+export interface AgentSummary {
+  id: string;
+  name: string;
+  transport: 'acp_stdio' | 'pty' | 'http_json_rpc';
+  status: AgentStatus;
+  /** The command that will be spawned, for display. */
+  command: string;
+  protocol_version?: string;
+}
+
 /** The closed set of things that can happen on a session's stream. */
 export type SessionEventKind =
   | 'message_chunk'
@@ -86,6 +100,13 @@ export interface PermissionDecision {
 export interface CancelAccepted {
   turn_id: string | null;
   cancelled: boolean;
+}
+
+/** `POST /v1/sessions/{id}/prompt`'s answer: the turn was accepted, not finished. */
+export interface PromptAccepted {
+  session_id: string;
+  turn_id: string;
+  first_seq: number;
 }
 
 /** One row of `GET /v1/terminals`: a pane a client may attach to. */
@@ -217,6 +238,11 @@ export function terminals(token: string, signal?: AbortSignal): Promise<Terminal
   return get<TerminalSummary[]>('/v1/terminals', token, signal);
 }
 
+/** `GET /v1/agents` — the profile's agents and whether this host can run them. */
+export function agents(token: string, signal?: AbortSignal): Promise<AgentSummary[]> {
+  return get<AgentSummary[]>('/v1/agents', token, signal);
+}
+
 async function send<T>(path: string, body: unknown, token: string): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
@@ -276,6 +302,48 @@ export function resolvePermission(
     { option },
     token,
   );
+}
+
+/**
+ * `POST /v1/sessions` — start one.
+ *
+ * `workspace_id` is sent empty on purpose: the daemon refuses a workspace it does
+ * not serve and substitutes its own when the field is empty, and the page has no
+ * second root to offer. `title` is left out — the first prompt supplies one.
+ */
+export function createSession(
+  agent: string,
+  token: string,
+): Promise<SessionSummary> {
+  return send<SessionSummary>(
+    '/v1/sessions',
+    { workspace_id: '', agent_id: agent },
+    token,
+  );
+}
+
+/**
+ * `POST /v1/sessions/{id}/prompt` — start a turn.
+ *
+ * The answer is an acknowledgement; the turn streams on the session's own stream.
+ * The idempotency key is generated per press so a retried request is the same
+ * prompt rather than a second agent run.
+ */
+export function promptSession(id: string, text: string, token: string): Promise<PromptAccepted> {
+  return send<PromptAccepted>(
+    `/v1/sessions/${encodeURIComponent(id)}/prompt`,
+    { text, idempotency_key: newIdempotencyKey() },
+    token,
+  );
+}
+
+/** A key for one prompt press, used again if the request is retried. */
+function newIdempotencyKey(): string {
+  const source = globalThis.crypto;
+  if (source && typeof source.randomUUID === 'function') {
+    return source.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**

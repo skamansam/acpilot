@@ -97,9 +97,11 @@ interface StreamOptions {
   retryMaxMs?: number;
 }
 
-/** A stream that can be left. */
+/** A stream that can be left, or started again from a different point. */
 export interface StreamHandle {
   close(): void;
+  /** Abandon the current attempt and begin a new one immediately. */
+  restart(): void;
 }
 
 /**
@@ -136,14 +138,18 @@ function openStream(url: () => string, options: StreamOptions): StreamHandle {
     if (closed) {
       return;
     }
-    controller = new AbortController();
+    // The attempt's own controller, not the shared field: a restart replaces the
+    // field while the abandoned attempt is still unwinding, and a catch that read
+    // the field would find a live signal and retry a stream nobody is reading.
+    const attempt = new AbortController();
+    controller = attempt;
     try {
       const response = await doFetch(url(), {
         headers: {
           Authorization: `Bearer ${options.token}`,
           Accept: 'text/event-stream',
         },
-        signal: controller.signal,
+        signal: attempt.signal,
       });
       if (response.status === 401) {
         throw new ApiError(
@@ -185,7 +191,7 @@ function openStream(url: () => string, options: StreamOptions): StreamHandle {
       options.onStatus?.('ended');
       options.onEnd?.();
     } catch (error) {
-      if (closed || controller?.signal.aborted) {
+      if (closed || attempt.signal.aborted) {
         return;
       }
       options.onError?.(error);
@@ -220,12 +226,38 @@ function openStream(url: () => string, options: StreamOptions): StreamHandle {
         options.onStatus?.('ended');
       }
     },
+    restart() {
+      if (closed) {
+        return;
+      }
+      if (retry !== null) {
+        clearTimeout(retry);
+        retry = null;
+      }
+      controller?.abort();
+      finished = false;
+      delay = first;
+      options.onStatus?.('connecting');
+      void run();
+    },
   };
 }
 
 /** `GET /v1/sessions/{id}/events?after=`, same-origin with the page. */
 export function sessionEventsPath(id: string, after: number): string {
   return `/v1/sessions/${encodeURIComponent(id)}/events?after=${after}`;
+}
+
+/**
+ * A session stream that can be told to replay from the beginning.
+ *
+ * Not an extension of [`StreamHandle`]: the argument is the point, and a bare
+ * `restart()` would mean "reconnect", which is the thing this is not.
+ */
+export interface SessionHandle {
+  close(): void;
+  /** Start over at `from`, abandoning whatever the current attempt has read. */
+  restart(from: number): void;
 }
 
 export interface SessionStreamOptions {
@@ -252,9 +284,9 @@ export interface SessionStreamOptions {
  * instead of the events that were skipped, which is the daemon saying its replay
  * buffer ran out: the page refetches state and the next attempt starts after it.
  */
-export function followSession(options: SessionStreamOptions): StreamHandle {
+export function followSession(options: SessionStreamOptions): SessionHandle {
   let after = options.after ?? 0;
-  return openStream(() => sessionEventsPath(options.id, after), {
+  const stream = openStream(() => sessionEventsPath(options.id, after), {
     token: options.token,
     fetchImpl: options.fetchImpl,
     retryMs: options.retryMs,
@@ -284,6 +316,13 @@ export function followSession(options: SessionStreamOptions): StreamHandle {
       }
     },
   });
+  return {
+    close: () => stream.close(),
+    restart(from: number) {
+      after = from;
+      stream.restart();
+    },
+  };
 }
 
 export interface PermissionStreamOptions {
@@ -565,12 +604,17 @@ export type MarkdownBlock =
   | { kind: 'heading'; level: number; spans: Span[] }
   | { kind: 'code'; language: string; text: string }
   | { kind: 'list'; ordered: boolean; items: Span[][] }
-  | { kind: 'quote'; spans: Span[] };
+  | { kind: 'quote'; spans: Span[] }
+  | { kind: 'table'; head: string[]; rows: string[][] };
 
 const FENCE = /^\s*```\s*([\w+-]*)\s*$/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const ORDERED = /^\s*\d+[.)]\s+(.*)$/;
+// The rule under a table's header: one or more `---` cells, with or without the
+// outer pipes. A bare `---` is a horizontal rule, not a table, so a pipe is
+// required somewhere.
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
 
 /**
  * The markdown subset an agent's messages actually use.
@@ -579,6 +623,8 @@ const ORDERED = /^\s*\d+[.)]\s+(.*)$/;
  * attribute that survives is an `http(s)` link. That is the security property, not
  * a limitation — an agent that writes `<img onerror=…>` into its transcript gets
  * four characters of angle brackets printed at the reader, exactly as it should.
+ * A table is its rows and columns, and an image is its alt text linked to an
+ * `http(s)` source: the page draws no picture and makes no request for one.
  */
 export function markdown(source: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
@@ -634,6 +680,25 @@ export function markdown(source: string): MarkdownBlock[] {
       blocks.push({ kind: 'quote', spans: inline(quoted.join(' ')) });
       continue;
     }
+    const table = tableRow(line);
+    if (table && table.length > 1 && TABLE_RULE.test(lines[index + 1] ?? '')) {
+      flush();
+      const head = table;
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length) {
+        const cells = tableRow(lines[index] ?? '');
+        if (!cells || cells.length === 0) {
+          break;
+        }
+        // A short row has empty cells, not an early end: agents omit trailing
+        // pipes and blank cells all the time.
+        rows.push(head.map((_, at) => cells[at] ?? ''));
+        index += 1;
+      }
+      blocks.push({ kind: 'table', head, rows });
+      continue;
+    }
     const bullet = BULLET.exec(line);
     const numbered = ORDERED.exec(line);
     if (bullet || numbered) {
@@ -659,6 +724,24 @@ export function markdown(source: string): MarkdownBlock[] {
 }
 
 /** Inline markdown: code, bold, emphasis and links, in that precedence. */
+/**
+ * The cells of a table line, or null when the line is not one.
+ *
+ * Outer pipes are optional, which is what makes `| a | b |` and `a | b` the same
+ * row; a line with no pipe at all is prose.
+ */
+function tableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) {
+    return null;
+  }
+  return trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
 export function inline(source: string): Span[] {
   const spans: Span[] = [];
   let literal = '';
@@ -686,6 +769,24 @@ export function inline(source: string): Span[] {
         spans.push({ text: source.slice(index + 2, end), strong: true });
         index = end + 2;
         continue;
+      }
+    }
+    if (source.startsWith('![', index)) {
+      const label = source.indexOf('](', index + 2);
+      if (label !== -1) {
+        const end = source.indexOf(')', label + 2);
+        if (end !== -1) {
+          const href = source.slice(label + 2, end);
+          if (/^https?:\/\//i.test(href)) {
+            flush();
+            // The alt text, linked. The page never fetches the picture: that
+            // request would tell a host the agent named that a person read the
+            // message, and from which address, which is a beacon in a transcript.
+            spans.push({ text: source.slice(index + 2, label) || href, href });
+            index = end + 1;
+            continue;
+          }
+        }
       }
     }
     if (source[index] === '[') {
@@ -721,6 +822,46 @@ export function inline(source: string): Span[] {
   }
   flush();
   return spans;
+}
+
+/** One line of a unified diff, by the meaning of its first character. */
+export type DiffLine = { kind: 'add' | 'del' | 'hunk' | 'meta' | 'context'; text: string };
+
+/**
+ * A unified diff as lines a card can colour.
+ *
+ * The daemon's `PermissionRequest.detail` is one string — the diff for a write,
+ * the command line for a terminal — so the page does not parse it as a contract;
+ * it colours what it recognises and prints the rest as context.
+ */
+export function diffLines(detail: string): DiffLine[] {
+  return detail.split('\n').map((line) => {
+    if (line.startsWith('@@')) {
+      return { kind: 'hunk', text: line };
+    }
+    if (/^(---|\+\+\+|diff |index )/.test(line)) {
+      return { kind: 'meta', text: line };
+    }
+    if (line.startsWith('+')) {
+      return { kind: 'add', text: line };
+    }
+    if (line.startsWith('-')) {
+      return { kind: 'del', text: line };
+    }
+    return { kind: 'context', text: line };
+  });
+}
+
+/**
+ * The newest `size` turns, and how many older ones are being held back.
+ *
+ * A conversation is replayed whole, and a transcript of thousands of events is a
+ * DOM nobody scrolls. The window grows on demand rather than virtualising: the
+ * rows above the fold are cheaper to keep than the scroll anchoring they cost.
+ */
+export function windowed(turns: Turn[], size: number): { shown: Turn[]; hidden: number } {
+  const hidden = Math.max(0, turns.length - size);
+  return { shown: hidden === 0 ? turns : turns.slice(hidden), hidden };
 }
 
 /** A failure as the one sentence the page shows. */

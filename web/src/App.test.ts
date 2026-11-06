@@ -237,6 +237,7 @@ describe('a remembered token', () => {
       'Bearer stored',
       'Bearer stored',
       'Bearer stored',
+      'Bearer stored',
     ]);
     expect(target.querySelector('input#token')).toBeNull();
   });
@@ -425,6 +426,74 @@ describe('the session view', () => {
     expect(target.querySelector('.session')).not.toBeNull();
     expect(sentTokens()).toContain('Bearer stored');
   });
+
+  it('starts a session from the agent picker and opens it', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    let created: unknown = null;
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions' && (init?.method ?? 'GET') === 'GET') {
+        return json([]);
+      }
+      if (route === '/v1/sessions' && init?.method === 'POST') {
+        created = JSON.parse(String(init.body));
+        return json({ ...SESSION, id: 'session-2', title: 'a new session' });
+      }
+      if (route === '/v1/agents') {
+        return json([
+          {
+            id: 'mock-agent',
+            name: 'Mock agent',
+            transport: 'acp_stdio',
+            status: 'available',
+            command: 'mock-agent --stdio',
+          },
+        ]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-2/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-2',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'a fresh turn' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events' || route === '/v1/permissions?status=pending&session=session-2') {
+        return route === '/v1/events' ? stream('') : json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await find('form.new-session');
+    target.querySelector('form.new-session')?.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+
+    // The daemon fills in its own workspace when the field is empty, and the
+    // first prompt supplies the title.
+    await vi.waitFor(() => expect(created).toEqual({ workspace_id: '', agent_id: 'mock-agent' }));
+    await vi.waitFor(() => expect(target.textContent).toContain('a new session'));
+    await vi.waitFor(() => expect(target.textContent).toContain('a fresh turn'));
+  });
 });
 
 describe('no token', () => {
@@ -449,6 +518,7 @@ describe('no token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
     expect(sentTokens()).toEqual([
+      'Bearer typed',
       'Bearer typed',
       'Bearer typed',
       'Bearer typed',

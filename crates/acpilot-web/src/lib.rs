@@ -15,10 +15,12 @@
 //! attaches to a pane over `WS /v1/terminals/{id}/attach` with xterm.js — offering
 //! About, Quit and Detach. The token travels on that socket as the
 //! `acpilot.v1` subprotocol because a browser sets no headers on a WebSocket; see
-//! `acpilotd::auth`. The page also opens a session: its transcript streams from
-//! `GET /v1/sessions/{id}/events` over `fetch` for the same header reason,
-//! permission cards answer from the page, and **Cancel turn** asks the daemon to
-//! stop the turn in flight. The editor is the rest of the web phase (P11-3).
+//! `acpilotd::auth`. The page also starts and opens a session: it picks an agent
+//! from `GET /v1/agents`, posts `POST /v1/sessions`, prompts it, and reads the
+//! transcript from `GET /v1/sessions/{id}/events` over `fetch` for the same header
+//! reason. Permission cards answer from the page, and **Cancel turn** asks the
+//! daemon to stop the turn in flight. The editor is the rest of the web phase
+//! (P11-3).
 
 use std::collections::BTreeMap;
 use std::ops::Range;

@@ -3,6 +3,7 @@
   import {
     cancelSession,
     pendingPermissions,
+    promptSession,
     resolvePermission,
     type PermissionOption,
     type PermissionRequest,
@@ -12,10 +13,13 @@
   import {
     buildTranscript,
     describeError,
+    diffLines,
     followPermissions,
     followSession,
+    inline,
     markdown,
     permissionLabel,
+    windowed,
     type Span,
     type StreamStatus,
     type Turn,
@@ -38,6 +42,12 @@
   let answerError = $state<string | null>(null);
   let cancelNote = $state<string | null>(null);
   let cancelling = $state(false);
+  let promptText = $state('');
+  let sendingPrompt = $state(false);
+  let promptError = $state<string | null>(null);
+  // A replayed conversation can be thousands of events; only the newest page is
+  // in the DOM, and "show earlier" grows the page instead of virtualising it.
+  let windowSize = $state(200);
   const seen = new Set<number>();
   const events: SessionEvent[] = [];
 
@@ -52,6 +62,7 @@
   );
 
   const answered = $derived(Object.entries(answers));
+  const paging = $derived(windowed(turns, windowSize));
 
   /**
    * The questions still waiting, from the daemon's own list.
@@ -108,6 +119,31 @@
     }
   }
 
+  /**
+   * Start a turn.
+   *
+   * The text is cleared only once the daemon accepted it: a prompt that failed is
+   * still the sentence a person typed, and clearing it early is the one mistake
+   * this form cannot undo.
+   */
+  async function sendPrompt(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const text = promptText.trim();
+    if (!text || sendingPrompt) {
+      return;
+    }
+    sendingPrompt = true;
+    promptError = null;
+    try {
+      await promptSession(session.id, text, token);
+      promptText = '';
+    } catch (cause) {
+      promptError = describeError(cause);
+    } finally {
+      sendingPrompt = false;
+    }
+  }
+
   async function cancel(): Promise<void> {
     cancelling = true;
     cancelNote = null;
@@ -139,8 +175,15 @@
         turns = buildTranscript(events);
       },
       onResync() {
-        // The ring could not replay what was missed; the pending list is state and
-        // can be refetched, and the transcript is where the daemon still has it.
+        // The ring could not replay what was missed, so the transcript is rebuilt
+        // from the store: drop it and ask from sequence 0, which is the only way
+        // to recover the frames a resync skipped. The pending list is refetched
+        // for the same reason — it is state, and this is the moment to re-ask.
+        seen.clear();
+        events.length = 0;
+        turns = [];
+        windowSize = 200;
+        transcript.restart(0);
         void refreshPending();
       },
       onStatus(next) {
@@ -215,6 +258,25 @@
       </ul>
     {:else if block.kind === 'quote'}
       <blockquote>{@render spans(block.spans)}</blockquote>
+    {:else if block.kind === 'table'}
+      <table class="md-table">
+        <thead>
+          <tr>
+            {#each block.head as cell, cellIndex (cellIndex)}
+              <th scope="col">{@render spans(inline(cell))}</th>
+            {/each}
+          </tr>
+        </thead>
+        <tbody>
+          {#each block.rows as row, rowIndex (rowIndex)}
+            <tr>
+              {#each row as cell, cellIndex (cellIndex)}
+                <td>{@render spans(inline(cell))}</td>
+              {/each}
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     {:else}
       <p>{@render spans(block.spans)}</p>
     {/if}
@@ -257,7 +319,11 @@
           <h4 id={`permission-${request.id}`}>{request.title}</h4>
           <p class="permission-kind">{request.kind.replaceAll('_', ' ')}</p>
           {#if request.detail}
-            <pre class="permission-detail">{request.detail}</pre>
+            {#if request.kind === 'file_write' && request.detail.includes('\n')}
+              <pre class="diff" aria-label="proposed change">{#each diffLines(request.detail) as line, lineIndex (lineIndex)}<span class="diff-line" data-kind={line.kind}>{line.text}</span>{/each}</pre>
+            {:else}
+              <pre class="permission-detail">{request.detail}</pre>
+            {/if}
           {/if}
           <div class="permission-options">
             {#each request.options as option (option)}
@@ -283,9 +349,37 @@
     </ul>
   {/if}
 
+  <form class="prompt" onsubmit={(event) => void sendPrompt(event)}>
+    <label for={`prompt-${session.id}`}>Prompt this session</label>
+    <textarea
+      id={`prompt-${session.id}`}
+      rows="3"
+      bind:value={promptText}
+      disabled={sendingPrompt || session.status === 'closed'}
+      placeholder="What should the agent do?"
+    ></textarea>
+    <div class="prompt-actions">
+      <button
+        type="submit"
+        class="primary"
+        disabled={sendingPrompt || !promptText.trim() || session.status === 'closed'}
+      >
+        {sendingPrompt ? 'Sending…' : 'Send'}
+      </button>
+      {#if promptError}
+        <span class="error" role="alert">{promptError}</span>
+      {/if}
+    </div>
+  </form>
+
   {#if turns.length > 0}
+    {#if paging.hidden > 0}
+      <button type="button" class="link show-earlier" onclick={() => (windowSize += 200)}>
+        Show {Math.min(paging.hidden, 200)} earlier turns
+      </button>
+    {/if}
     <ol class="transcript">
-      {#each turns as turn, index (index)}
+      {#each paging.shown as turn (turn.seq)}
         {#if turn.kind === 'message'}
           <li class="turn" data-role={turn.role}>
             <span class="turn-role">{turn.role}</span>

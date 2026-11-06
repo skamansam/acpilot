@@ -86,6 +86,7 @@ let answeredByDaemon: boolean;
 let failure: string | null;
 let resolveBody: unknown;
 let resolveToken: string | undefined;
+let promptBody: unknown;
 
 async function findButton(label: string): Promise<HTMLButtonElement> {
   let found: HTMLButtonElement | null = null;
@@ -117,6 +118,7 @@ beforeEach(() => {
   failure = null;
   resolveBody = null;
   resolveToken = undefined;
+  promptBody = null;
 
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const route = String(input);
@@ -145,6 +147,10 @@ beforeEach(() => {
     }
     if (route === '/v1/sessions/session-1/cancel' && method === 'POST') {
       return json({ turn_id: 't1', cancelled: true });
+    }
+    if (route === '/v1/sessions/session-1/prompt' && method === 'POST') {
+      promptBody = JSON.parse(String(init?.body));
+      return json({ session_id: 'session-1', turn_id: 't2', first_seq: 2 });
     }
     return new Response('not found', { status: 404 });
   });
@@ -187,6 +193,17 @@ describe('answering a permission', () => {
     expect(answeredByDaemon).toBe(true);
   });
 
+  it("draws a write's detail as a diff instead of one blob", async () => {
+    render();
+
+    await vi.waitFor(() => expect(target.querySelector('.diff')).not.toBeNull());
+    const kinds = [...target.querySelectorAll('.diff-line')].map((line) =>
+      line.getAttribute('data-kind'),
+    );
+    expect(kinds).toEqual(['meta', 'meta']);
+    expect(target.querySelector('.diff')?.textContent).toContain('+++ b/http.rs');
+  });
+
   it('puts the card back and says why when the daemon refuses the answer', async () => {
     failure = 'the daemon said no';
     render();
@@ -199,6 +216,27 @@ describe('answering a permission', () => {
     // question — a card that stayed gone would be an answer nobody gave.
     await vi.waitFor(() => expect(target.querySelector('.permission')).not.toBeNull());
     expect(target.textContent).toContain('Write src/http.rs');
+  });
+});
+
+describe('prompting', () => {
+  it('sends the text with a retry-safe key and clears it only when accepted', async () => {
+    render();
+    const box = await vi.waitFor(() => {
+      const found = target.querySelector<HTMLTextAreaElement>('textarea');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+
+    box.value = 'write the test first';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    target.querySelector('form.prompt')?.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+
+    await vi.waitFor(() => expect(promptBody).toMatchObject({ text: 'write the test first' }));
+    expect(typeof (promptBody as { idempotency_key: unknown }).idempotency_key).toBe('string');
+    await vi.waitFor(() => expect(box.value).toBe(''));
   });
 });
 

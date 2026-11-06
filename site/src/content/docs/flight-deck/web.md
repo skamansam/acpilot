@@ -90,7 +90,21 @@ Neither stream can use `EventSource`: both need `Authorization`, and `EventSourc
 sets no headers. The page reads the same frames from a `fetch` body and reconnects
 with `after=<last sequence>`, so the token stays a header rather than a query
 string. A clean end is not retried — that is a stored conversation finishing its
-replay — while a dropped connection is, with a backoff.
+replay — while a dropped connection is, with a backoff. A `resync`, which means the
+ring no longer holds what was missed, drops the transcript and replays it from
+sequence 0: the store is the record, and a full replay is the only way to recover
+frames the ring let go.
+
+The page starts sessions too. **Start a session** picks from `GET /v1/agents` and
+posts `workspace_id: ""`, which the daemon reads as its own workspace, and the
+prompt box posts a turn with a per-press idempotency key so a retried request
+cannot start a second run. A write's permission card draws the daemon's `detail`
+as a unified diff, hunks included, and a table in the agent's markdown is drawn as
+a table; an image is its alt text, linked, and never fetched, because a fetched
+picture is a read receipt. The transcript keeps the newest 200 turns in the DOM
+and offers the rest behind **Show earlier turns**. The status badge beside a
+session's title is only as fresh as the list load — the stream updates the
+transcript, not that row.
 
 The socket is the one request in the product a browser cannot give an
 `Authorization` header to, so the token travels as the `acpilot.v1` subprotocol
@@ -146,7 +160,7 @@ the same one the CLI and the TUI talk to, so `/app` shows the build that is runn
 right now rather than a version baked into a bundle weeks ago.
 
 Still open from the web phase: the routes above, the generated API client, the
-CodeMirror editor, creating a pane from the page (it attaches to panes; `POST
-/v1/terminals` wants a session, and the page does not create sessions yet), and the
-daemon-side CSP. What exists now is the shape they hang on — embedded,
+CodeMirror editor, creating a pane from the page (it attaches to panes, and with a
+session open it now holds the id `POST /v1/terminals` wants, but it makes no such
+request), and the daemon-side CSP. What exists now is the shape they hang on — embedded,
 self-serving, one file, no asset directory to lose.

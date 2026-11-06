@@ -224,7 +224,9 @@ helper answered in this process. An unknown id is `404`. `ACPILOT_SSH` and
 ## Sessions and turns
 
 `POST /v1/sessions` takes `CreateSessionRequest { workspace_id, agent_id, title? }`
-and returns `SessionSummary`.
+and returns `SessionSummary`. `workspace_id` may be empty, which means this
+daemon's own workspace; an id it does not serve is `404`, checked before the policy
+so that answer does not depend on whether one loaded.
 
 `POST /v1/sessions/{id}/prompt` takes `PromptRequest { text, idempotency_key? }`
 and is **asynchronous**: it returns `202` with `PromptAccepted { session_id,

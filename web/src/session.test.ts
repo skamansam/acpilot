@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionEvent } from './api';
 import {
   buildTranscript,
+  diffLines,
   followPermissions,
   followSession,
   inline,
@@ -16,6 +17,7 @@ import {
   permissionLabel,
   sessionEventsPath,
   SseParser,
+  windowed,
 } from './session';
 
 const TOKEN = 'the-daemon-token';
@@ -141,7 +143,7 @@ describe('the session stream', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe('/v1/sessions/s1/events?after=4');
   });
 
-  it('a resync hands the caller the newest sequence and resumes after it', async () => {
+  it('a resync can replay the transcript from the beginning', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(sse(frame('resync', { latest_seq: 41 })))
@@ -151,13 +153,19 @@ describe('the session stream', () => {
     const stream = followSession({
       id: 's1',
       token: TOKEN,
-      onResync: (latest) => resyncs.push(latest),
+      onResync: (latest) => {
+        resyncs.push(latest);
+        // The frames the resync skipped are gone from the ring, but the store
+        // still has the conversation: ask for it again from the first sequence.
+        stream.restart(0);
+      },
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
-    // The frame names a sequence the stream no longer holds; the view refetches
-    // state, and a reconnect starts after what the daemon still has.
     await vi.waitFor(() => expect(resyncs).toEqual([41]));
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     stream.close();
+
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe('/v1/sessions/s1/events?after=0');
   });
 
   it('an ended stream says so and is not retried', async () => {
@@ -383,6 +391,27 @@ describe('markdown', () => {
     ]);
   });
 
+  it('draws a table and never fetches the picture an image names', () => {
+    const blocks = markdown(
+      ['| what | where |', '| --- | --- |', '| add | session.ts |', '| drop | web/src |'].join('\n'),
+    );
+
+    expect(blocks[0]).toEqual({
+      kind: 'table',
+      head: ['what', 'where'],
+      rows: [
+        ['add', 'session.ts'],
+        ['drop', 'web/src'],
+      ],
+    });
+    // An image is its alt text, linked: the page must not tell a host the agent
+    // named that a person read the message, and from where.
+    expect(inline('![a chart](https://example.com/c.png)')).toEqual([
+      { text: 'a chart', href: 'https://example.com/c.png' },
+    ]);
+    expect(inline('![x](javascript:alert(1))')).toEqual([{ text: '![x](javascript:alert(1))' }]);
+  });
+
   it('a fence still open at the end of a chunk is code, not lost text', () => {
     expect(markdown('```\npartial')).toEqual([
       { kind: 'code', language: '', text: 'partial' },
@@ -393,5 +422,31 @@ describe('markdown', () => {
     expect(permissionLabel('allow_once')).toBe('Allow once');
     expect(permissionLabel('allow_always')).toBe('Allow always');
     expect(permissionLabel('deny')).toBe('Deny');
+  });
+});
+
+describe('a proposed diff', () => {
+  it('colours a unified diff by the meaning of each line', () => {
+    expect(diffLines('@@ -1 +1 @@\n--- a/x\n+++ b/x\n-old\n+new\n same')).toEqual([
+      { kind: 'hunk', text: '@@ -1 +1 @@' },
+      { kind: 'meta', text: '--- a/x' },
+      { kind: 'meta', text: '+++ b/x' },
+      { kind: 'del', text: '-old' },
+      { kind: 'add', text: '+new' },
+      { kind: 'context', text: ' same' },
+    ]);
+  });
+});
+
+describe('the transcript window', () => {
+  it('keeps the newest turns and counts the ones it holds back', () => {
+    const turns = buildTranscript([
+      chunk(1, 'user', 'a'),
+      chunk(2, 'assistant', 'b'),
+      chunk(3, 'user', 'c'),
+    ]);
+
+    expect(windowed(turns, 2)).toEqual({ shown: turns.slice(1), hidden: 1 });
+    expect(windowed(turns, 10)).toEqual({ shown: turns, hidden: 0 });
   });
 });

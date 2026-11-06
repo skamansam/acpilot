@@ -2,12 +2,15 @@
   import { onMount } from 'svelte';
   import {
     ApiError,
+    agents as listAgents,
+    createSession,
     health,
     readToken,
     sessions as listSessions,
     stats as readStats,
     terminals as listTerminals,
     writeToken,
+    type AgentSummary,
     type Health,
     type SessionSummary,
     type StatRow,
@@ -48,6 +51,14 @@
   // `panesFor` keeps that session's panes *plus* every pane nobody owns, and never
   // drops a pane with no `session_id`.
   let openSession = $state<string | null>(null);
+  // The agents this profile configured, and the one the form will start. An
+  // empty list is a daemon with no `agents.toml`: there is nothing to start, and
+  // the form says that instead of offering an empty picker.
+  let agentList = $state<AgentSummary[]>([]);
+  let agentsNote = $state<string | null>(null);
+  let chosenAgent = $state('');
+  let creating = $state(false);
+  let createError = $state<string | null>(null);
   // Provenance is one click away, the same key (F4) the terminal uses: a bar has no
   // room for where a number came from, and a bar that never says is a claim.
   let sources = $state(false);
@@ -100,7 +111,7 @@
     loading = true;
     error = null;
     try {
-      const [status, sessions, bar, terminals] = await Promise.all([
+      const [status, sessions, bar, terminals, agents] = await Promise.all([
         health(token, current.signal),
         listSessions(token, current.signal),
         // The bar is the one part of the page a daemon older than this build may
@@ -111,6 +122,9 @@
         // and every pane nobody owns, so a shell in another workspace is not hidden
         // by a list that asked only for one session's.
         listTerminals(token, current.signal).catch(() => null),
+        // As with the bar and the panes: an older daemon that does not answer
+        // for its agents costs the page the form, not the sessions.
+        listAgents(token, current.signal).catch(() => null),
       ]);
       healthInfo = status;
       rows = sessions;
@@ -127,6 +141,16 @@
       panesNote = terminals
         ? null
         : 'This daemon did not list its terminals; the terminal needs a build that serves /v1/terminals.';
+      agentList = agents ?? [];
+      agentsNote = agents
+        ? null
+        : 'This daemon did not list its agents; a session cannot be started from here.';
+      // Keep the picker on an agent that still exists, defaulting to the first one
+      // this host can actually run.
+      const runnable = agentList.filter((agent) => agent.status === 'available');
+      if (!agentList.some((agent) => agent.id === chosenAgent)) {
+        chosenAgent = (runnable[0] ?? agentList[0])?.id ?? '';
+      }
       // A pane that ended while this view was open is a row nothing can attach to.
       if (openPane && !panes.some((pane) => pane.id === openPane?.id)) {
         openPane = null;
@@ -141,6 +165,9 @@
       statsNote = null;
       panes = [];
       panesNote = null;
+      agentList = [];
+      agentsNote = null;
+      chosenAgent = '';
       openPane = null;
       if (cause instanceof ApiError) {
         error = cause.message;
@@ -184,11 +211,40 @@
     statsNote = null;
     panes = [];
     panesNote = null;
+    agentList = [];
+    agentsNote = null;
+    chosenAgent = '';
+    createError = null;
     openPane = null;
     openSession = null;
     error = null;
     loading = false;
     writeToken('');
+  }
+
+  /**
+   * Start a session and open it.
+   *
+   * The daemon attaches the agent before it answers, so a failure here is the
+   * agent saying no, and the message is shown where the button was pressed
+   * rather than as a page-wide error.
+   */
+  async function startSession(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    if (!chosenAgent || creating) {
+      return;
+    }
+    creating = true;
+    createError = null;
+    try {
+      const created = await createSession(chosenAgent, token);
+      rows = [created, ...rows.filter((row) => row.id !== created.id)];
+      openSession = created.id;
+    } catch (cause) {
+      createError = cause instanceof ApiError ? cause.message : String(cause);
+    } finally {
+      creating = false;
+    }
   }
 
   function quit(): void {
@@ -349,6 +405,30 @@
           </p>
         {/if}
       </section>
+
+      <form class="new-session" onsubmit={(event) => void startSession(event)}>
+        <label for="agent">Start a session</label>
+        <div class="new-session-row">
+          <select id="agent" bind:value={chosenAgent} disabled={creating || agentList.length === 0}>
+            {#each agentList as agent (agent.id)}
+              <option value={agent.id}>{agent.name} · {agent.status}</option>
+            {/each}
+          </select>
+          <button type="submit" class="primary" disabled={creating || !chosenAgent}>
+            {creating ? 'Starting…' : 'Start session'}
+          </button>
+        </div>
+        {#if agentsNote}
+          <p class="note">{agentsNote}</p>
+        {:else if agentList.length === 0}
+          <p class="note">
+            This profile has no agents. Add an <code>agents.toml</code> and refresh.
+          </p>
+        {/if}
+        {#if createError}
+          <p class="error" role="alert">{createError}</p>
+        {/if}
+      </form>
 
       <div class="card">
         <table>

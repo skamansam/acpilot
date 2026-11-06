@@ -254,3 +254,21 @@ describe('the attach socket', () => {
     expect(exits).toEqual([undefined]);
   });
 });
+
+describe('the pane filter', () => {
+  it("keeps the open session's panes and every pane nobody owns", () => {
+    const mine = pane({ id: 't1', session_id: 's1' });
+    const theirs = pane({ id: 't2', session_id: 's2' });
+    const orphan = pane({ id: 't3', session_id: undefined, workspace: 'build', host: 'ssh:box' });
+
+    // Another session's shell is left out: offering it here would be a pane a
+    // person could type into without the conversation it belongs to. The orphan is
+    // not another session's — it is a process nobody can find if it is hidden.
+    expect(panesFor([mine, theirs, orphan], 's1').map((entry) => entry.id)).toEqual(['t1', 't3']);
+    expect(panesFor([mine, theirs, orphan], null).map((entry) => entry.id)).toEqual([
+      't1',
+      't2',
+      't3',
+    ]);
+  });
+});

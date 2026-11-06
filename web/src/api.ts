@@ -1,10 +1,10 @@
 // The daemon API, as much of it as the shell uses.
 //
 // Hand-written rather than generated from the OpenAPI document: the generated
-// client (P11-2) is a phase of its own, and the two routes here are small enough
-// that a wrong field name is caught by `svelte-check` in the component instead
-// of by a browser at runtime. When the generated client lands, this module is
-// the only thing that changes.
+// client (P11-2) is a phase of its own, and the routes here are small enough that
+// a wrong field name is caught by `svelte-check` in the component instead of by a
+// browser at runtime. When the generated client lands, this module is the only
+// thing that changes.
 
 /** What `GET /v1/health` answers. */
 export interface Health {
@@ -33,6 +33,59 @@ export interface SessionSummary {
   status: SessionStatus;
   created_at: string;
   updated_at: string;
+}
+
+/** The closed set of things that can happen on a session's stream. */
+export type SessionEventKind =
+  | 'message_chunk'
+  | 'thought'
+  | 'tool_call'
+  | 'plan'
+  | 'mode_changed'
+  | 'notice'
+  | 'compaction'
+  | 'commands_changed';
+
+/**
+ * One frame of `GET /v1/sessions/{id}/events`.
+ *
+ * `payload` is the agent's own shape and is deliberately not modelled: every
+ * adapter puts different fields there, and a page that refused the ones it did
+ * not know would hide a turn instead of drawing what it could.
+ */
+export interface SessionEvent {
+  seq: number;
+  session_id: string;
+  kind: SessionEventKind;
+  at: string;
+  payload: Record<string, unknown>;
+}
+
+/** What a caller may answer a permission request with. */
+export type PermissionOption = 'allow_once' | 'allow_always' | 'deny';
+
+/** One pending request, as `GET /v1/permissions?status=pending` lists it. */
+export interface PermissionRequest {
+  id: string;
+  session_id: string;
+  kind: string;
+  title: string;
+  detail: string;
+  options: PermissionOption[];
+  created_at: string;
+}
+
+/** The decision the daemon applied, with the name of who made it. */
+export interface PermissionDecision {
+  option: PermissionOption;
+  decided_by: string;
+  at: string;
+}
+
+/** `POST /v1/sessions/{id}/cancel`'s answer. */
+export interface CancelAccepted {
+  turn_id: string | null;
+  cancelled: boolean;
 }
 
 /** One row of `GET /v1/terminals`: a pane a client may attach to. */
@@ -162,4 +215,75 @@ export function stats(token: string, signal?: AbortSignal): Promise<StatRow[]> {
  */
 export function terminals(token: string, signal?: AbortSignal): Promise<TerminalSummary[]> {
   return get<TerminalSummary[]>('/v1/terminals', token, signal);
+}
+
+async function send<T>(path: string, body: unknown, token: string): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) {
+    throw new ApiError(401, 'That token was not accepted. Copy it from the daemon log or token file.');
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new ApiError(
+      response.status,
+      text.trim() || `The daemon answered ${response.status} ${response.statusText}.`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+/**
+ * `GET /v1/permissions?status=pending&session=` — the questions still waiting.
+ *
+ * Pending requests are state, not history: the stream carries new ones while the
+ * page is connected, and this is how a page that just opened learns the ones it
+ * was not there for.
+ */
+export function pendingPermissions(
+  token: string,
+  session: string,
+  signal?: AbortSignal,
+): Promise<PermissionRequest[]> {
+  return get<PermissionRequest[]>(
+    `/v1/permissions?status=pending&session=${encodeURIComponent(session)}`,
+    token,
+    signal,
+  );
+}
+
+/**
+ * `POST /v1/permissions/{id}/resolve` — answer one question.
+ *
+ * Retry-safe by the daemon's own rule: the same option twice returns the same
+ * decision, a different option after one was applied is `409` because the agent
+ * has already acted. `deny` is an answer, not a dismissal.
+ */
+export function resolvePermission(
+  id: string,
+  option: PermissionOption,
+  token: string,
+): Promise<PermissionDecision> {
+  return send<PermissionDecision>(
+    `/v1/permissions/${encodeURIComponent(id)}/resolve`,
+    { option },
+    token,
+  );
+}
+
+/**
+ * `POST /v1/sessions/{id}/cancel` — ask the agent to stop the turn in flight.
+ *
+ * Cancelling an idle session is `202` with `cancelled: false` rather than an
+ * error: the caller's intent is already true.
+ */
+export function cancelSession(id: string, token: string): Promise<CancelAccepted> {
+  return send<CancelAccepted>(`/v1/sessions/${encodeURIComponent(id)}/cancel`, {}, token);
 }

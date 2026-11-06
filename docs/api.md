@@ -289,6 +289,11 @@ the session's monotonic `seq` (starting at 1). The stream is the source of truth
 for what an agent did, and the transcript behind it is what makes replay
 possible.
 
+Both streams need `Authorization`, so a browser page cannot take them with
+`EventSource`, which sends no headers. The web shell reads the same frames from a
+`fetch` body and reconnects with `?after=<last sequence>`; the format does not
+change, and the token stays a header rather than a query string.
+
 ```
 id: 41
 event: session

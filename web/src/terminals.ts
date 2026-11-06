@@ -28,8 +28,8 @@ export function attachPath(id: string): string {
  * A pane with no `session_id` is not another session's leftover — it is a shell
  * in a remote workspace, or an agent's shell whose session the daemon could not
  * map — so filtering strictly by session hides a process nobody can then find.
- * With no session open (this page has no session view yet, P11-4) every pane is
- * listed, which is the same rule with nothing to exclude.
+ * With no session open every pane is listed, which is the same rule with nothing
+ * to exclude.
  */
 export function panesFor(
   panes: TerminalSummary[],

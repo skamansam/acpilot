@@ -374,6 +374,59 @@ describe('the terminals', () => {
   });
 });
 
+describe('the session view', () => {
+  it('opens a session from the table and streams its transcript', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([PANE, ORPHAN]);
+      }
+      if (route === '/v1/sessions/session-1/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-1',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'hello from the agent' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events') {
+        return stream('');
+      }
+      if (route === '/v1/permissions?status=pending&session=session-1') {
+        return json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    const open = await findButton('Open');
+    open.click();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('hello from the agent'));
+    expect(target.querySelector('.session')).not.toBeNull();
+    expect(sentTokens()).toContain('Bearer stored');
+  });
+});
+
 describe('no token', () => {
   it('is a form, and no request at all', async () => {
     render();

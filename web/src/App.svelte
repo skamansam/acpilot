@@ -14,6 +14,7 @@
     type TerminalSummary,
     type Track,
   } from './api';
+  import Session from './Session.svelte';
   import Terminal from './Terminal.svelte';
   import { paneWhere, panesFor } from './terminals';
 
@@ -43,10 +44,10 @@
   // The pane being drawn, when one is. The process belongs to the daemon: closing
   // this view detaches, and the program keeps running.
   let openPane = $state<TerminalSummary | null>(null);
-  // There is no session view yet (P11-4), so no session is open. When one arrives
-  // its id goes here, and `panesFor` keeps that session's panes *plus* the ones
-  // nobody owns — the filter must never drop a pane with no `session_id`.
-  const openSession: string | null = null;
+  // The session whose transcript is open. It also narrows the terminal list:
+  // `panesFor` keeps that session's panes *plus* every pane nobody owns, and never
+  // drops a pane with no `session_id`.
+  let openSession = $state<string | null>(null);
   // Provenance is one click away, the same key (F4) the terminal uses: a bar has no
   // room for where a number came from, and a bar that never says is a claim.
   let sources = $state(false);
@@ -56,6 +57,7 @@
 
   const version = $derived(healthInfo?.version ?? buildVersion);
   const connected = $derived(healthInfo !== null);
+  const viewSession = $derived(rows.find((row) => row.id === openSession) ?? null);
 
   let controller: AbortController | null = null;
 
@@ -112,6 +114,11 @@
       ]);
       healthInfo = status;
       rows = sessions;
+      // A session that vanished from the list has no transcript to show; keeping
+      // the view up would leave a stream running for a row nobody can see.
+      if (openSession && !rows.some((row) => row.id === openSession)) {
+        openSession = null;
+      }
       integrations = bar ?? [];
       panes = terminals ? panesFor(terminals, openSession) : [];
       statsNote = bar
@@ -178,6 +185,7 @@
     panes = [];
     panesNote = null;
     openPane = null;
+    openSession = null;
     error = null;
     loading = false;
     writeToken('');
@@ -356,7 +364,12 @@
           <tbody>
             {#each rows as row (row.id)}
               <tr>
-                <td>{row.title || row.id}</td>
+                <td>
+                  <button type="button" class="link" onclick={() => (openSession = row.id)}>
+                    Open
+                  </button>
+                  {row.title || row.id}
+                </td>
                 <td class="muted">{row.agent_id}</td>
                 <td><span class="status" data-status={row.status}>{row.status}</span></td>
                 <td class="muted">{when(row.updated_at)}</td>
@@ -371,6 +384,12 @@
           </tbody>
         </table>
       </div>
+
+      {#if viewSession}
+        {#key viewSession.id}
+          <Session session={viewSession} {token} onclose={() => (openSession = null)} />
+        {/key}
+      {/if}
 
       <section class="terminals" aria-labelledby="terminals-title">
         <div class="stats-head">
@@ -456,8 +475,8 @@
       </form>
 
       <p class="note">
-        The editor and the transcript arrive with the rest of the web phase (P11-3,
-        P11-4) — until then the TUI and the desktop app are the cockpits for both.
+        The editor arrives with the rest of the web phase (P11-3) — until then the
+        TUI and the desktop app are the cockpit for editing.
       </p>
     {/if}
 

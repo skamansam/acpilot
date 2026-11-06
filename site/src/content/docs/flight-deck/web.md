@@ -50,8 +50,7 @@ daemon does not pretend to be a web server fleet.
 
 ## Status
 
-The Svelte app exists and is what ships, with the editor and the transcript still
-to come.
+The Svelte app exists and is what ships, with the editor still to come.
 `web/` is Svelte 5 + Vite + TypeScript; `npm run build` emits **one HTML file**
 into `crates/acpilot-web/assets/`, with its script and stylesheet inlined, and
 `acpilotd` serves that at `/app`. The built file is committed, so building the
@@ -75,6 +74,23 @@ not an owner: detaching or closing the tab leaves the program running, a dropped
 socket reattaches with backoff and replays the screen, and an exit notice is the
 only close that ends the view. Copy and paste are `Ctrl-Shift-C` and
 `Ctrl-Shift-V`, so `Ctrl-C` stays the interrupt a shell expects.
+
+**Sessions** is the view a turn happens in. **Open** on a row streams that
+session's transcript from `GET /v1/sessions/{id}/events` and draws messages, tool
+calls and notices, with the agent's markdown rendered — headings, fences, lists,
+inline code and `http(s)` links, all as text nodes, so an agent cannot write markup
+into the page. A permission request appears on the profile-wide `GET /v1/events`
+stream, or is fetched from the pending list when the page opens after the request,
+and its card is answered **optimistically**: it goes on the press and comes back if
+the daemon refuses, because the pending list — not the page — is the record of what
+is still a question. **Cancel turn** asks the daemon to stop the turn in flight and
+says whether there was one to stop.
+
+Neither stream can use `EventSource`: both need `Authorization`, and `EventSource`
+sets no headers. The page reads the same frames from a `fetch` body and reconnects
+with `after=<last sequence>`, so the token stays a header rather than a query
+string. A clean end is not retried — that is a stored conversation finishing its
+replay — while a dropped connection is, with a backoff.
 
 The socket is the one request in the product a browser cannot give an
 `Authorization` header to, so the token travels as the `acpilot.v1` subprotocol
@@ -130,7 +146,7 @@ the same one the CLI and the TUI talk to, so `/app` shows the build that is runn
 right now rather than a version baked into a bundle weeks ago.
 
 Still open from the web phase: the routes above, the generated API client, the
-CodeMirror editor, the SSE transcript, creating a pane from the page (it attaches
-to panes; `POST /v1/terminals` wants a session, and there is no session view yet),
-and the daemon-side CSP. What exists now is the shape they hang on — embedded,
+CodeMirror editor, creating a pane from the page (it attaches to panes; `POST
+/v1/terminals` wants a session, and the page does not create sessions yet), and the
+daemon-side CSP. What exists now is the shape they hang on — embedded,
 self-serving, one file, no asset directory to lose.

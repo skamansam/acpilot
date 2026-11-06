@@ -59,7 +59,8 @@ Frozen for v1. `WS` routes are upgraded, not JSON responses.
 ```
 GET    /v1/health
 GET    /v1/openapi.json
-GET    /app                              (HTML, no token: the web shell)
+GET    /                                 (HTML, no token: the web app)
+GET    /app                              (HTML, no token: the same page, the old spelling)
 GET    /app/stats                        (JSON: the page's measured bar, token required)
 GET    /docs                             (HTML, no token: Swagger UI, --features docs)
 
@@ -160,6 +161,17 @@ implementation of the arithmetic in JavaScript is one that drifts. Same rows, sa
 order, measured by `acpilot-stats` — the crate the TUI and the desktop app also
 draw. It is under `/app` because it is a rendering of the contract rather than part
 of it, and it needs the token: an agent roster is not the page's own business.
+
+The page itself is served at `/` and `/app` with
+`Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline';
+style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src
+'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, plus
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+`X-Frame-Options: DENY`. The bundle is one inline file, so its script and style
+are the only inline exceptions; everything it may reach is its own origin. The
+page is unauthenticated because a browser cannot attach a header to a typed
+address, which is exactly why it may not be framed: a framed page is where a
+clickjacked token field comes from.
 
 Three names are frozen here because two documents disagreed, and the wire is
 harder to rename than prose:

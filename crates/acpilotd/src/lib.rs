@@ -25,7 +25,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -1595,18 +1595,68 @@ fn events_doc() {}
 )]
 fn resolve_doc() {}
 
-/// The web shell: a page that says which build is answering, and can leave.
+/// What the page may load, and what may be done to it.
+///
+/// `default-src 'none'` is the starting point, and every entry after it is a
+/// permission the one-file bundle needs: its script and its stylesheet are inline
+/// (there is no second asset to name), and its requests are same-origin (the API,
+/// the two streams and the terminal socket). `frame-ancestors 'none'` matters
+/// most: a page that can be framed is a page whose token field can be clickjacked
+/// out of a person, and `/` is unauthenticated precisely so it can be typed. The
+/// policy is on the HTML only — JSON needs none of this, and a CSP on a stream
+/// says nothing about a stream.
+const PAGE_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; \
+                       style-src 'unsafe-inline'; img-src 'self' data:; \
+                       font-src 'self'; connect-src 'self'; base-uri 'none'; \
+                       form-action 'none'; frame-ancestors 'none'";
+
+/// The web app: the SPA at the daemon's root, and again at `/app`.
+///
+/// `/` is the entry point a person types. `/app` stays because it is where the
+/// page has been published — in the docs, in links from a terminal, and in the
+/// paths the page itself asks for (`/app/stats`, `/app/palette/events`). Two
+/// spellings of one page, not two pages: the handler and the headers are the same
+/// function, so they cannot disagree.
 ///
 /// Served without a token, like `/docs`, because a browser cannot attach a header
 /// to a typed address — and this page holds no data at all: one HTML file, the
 /// version, and two buttons. What it proves is that the daemon can be reached from
 /// a browser at all, which is the first question when the web UI is the one that
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
-async fn web_app(State(state): State<AppState>) -> Html<String> {
-    Html(match state.web_palette() {
+async fn web_app(State(state): State<AppState>) -> Response {
+    let html = match state.web_palette() {
         Some(theme) => acpilot_web::themed_page(acpilot_core::VERSION, &theme),
         None => acpilot_web::page(acpilot_core::VERSION),
-    })
+    };
+    page_response(html)
+}
+
+/// The page with the headers it is served under.
+///
+/// One function so a second page route cannot be added with the policy missing.
+/// `no-referrer` is the second half of the token story: the page holds the secret
+/// in session storage, and any outbound link must not be able to learn which
+/// daemon address it was read on.
+fn page_response(html: String) -> Response {
+    let mut response = Html(html).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(PAGE_CSP),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    response
 }
 
 /// The web page's colours, as they change.
@@ -1864,6 +1914,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/lsp/servers", get(lsp_servers))
         .route("/v1/openapi.json", get(openapi))
+        .route("/", get(web_app))
         .route("/app", get(web_app))
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())

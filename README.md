@@ -259,9 +259,12 @@ accessibility. Talks to the daemon exactly as the TUI does.
 
 ### Web — `acpilot serve --http`
 
-`acpilotd` serves a compiled SPA (CodeMirror 6 + xterm.js) plus the API. Same daemon,
-same sessions; a browser tab can watch an agent run on the office workstation. Token
-auth, optional TLS termination, no cloud dependency.
+`acpilot serve --http` starts the daemon and prints the page URL (`http://127.0.0.1:7777/`
+by default); `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a compiled SPA
+(CodeMirror 6 + xterm.js) plus the API — same daemon, same sessions, so a browser tab can
+watch an agent run on the office workstation. Token auth, optional TLS termination, no cloud
+dependency; the token is printed on the run that creates it and lives in a `0600` file after
+that.
 
 ### API — HTTP + SSE + WS
 

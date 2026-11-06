@@ -203,6 +203,10 @@ fn help_is_stable() {
     let secret = acpilot(&["secret", "--help"]);
     assert!(secret.status.success());
     insta::assert_snapshot!("secret_help", stdout(&secret));
+
+    let serve = acpilot(&["serve", "--help"]);
+    assert!(serve.status.success());
+    insta::assert_snapshot!("serve_help", stdout(&serve));
 }
 
 #[test]

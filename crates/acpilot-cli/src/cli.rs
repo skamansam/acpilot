@@ -127,6 +127,35 @@ pub enum Command {
         #[arg(long)]
         no_mouse: bool,
     },
+    /// Serve the daemon and the web UI over HTTP, printing the token once.
+    ///
+    /// One process, serving the same state `/v1` answers from: a browser at the
+    /// printed URL talks to the daemon a TUI would attach to, not to a copy of it.
+    /// Every request needs `Authorization: Bearer <token>` except the page itself,
+    /// which a browser cannot give a header to when the address is typed.
+    ///
+    /// The token is printed on the run that creates it, and only then unless
+    /// `--token` asks for it again: a secret in a scrollback is still a secret, and
+    /// printing it on every start puts it there once per restart.
+    Serve {
+        /// Listen on the default loopback port, `127.0.0.1:7777`.
+        ///
+        /// `--bind` chooses another address and implies this one.
+        #[arg(long)]
+        http: bool,
+        /// The address to bind, for example `0.0.0.0:7777`.
+        #[arg(long, value_name = "ADDR")]
+        bind: Option<String>,
+        /// Print the bearer token even on a run that did not create it.
+        #[arg(long)]
+        token: bool,
+        /// Profile directory the daemon serves.
+        #[arg(long, value_name = "DIR")]
+        profile: Option<PathBuf>,
+        /// Workspace root the daemon serves. Defaults to this directory.
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+    },
 }
 
 /// Everything under `acpilot token`.
@@ -281,6 +310,19 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Ext { command }) => run_ext(command),
         Some(Command::Secret { command }) => run_secret(command),
         Some(Command::Token { command }) => run_token(command),
+        Some(Command::Serve {
+            http,
+            bind,
+            token,
+            profile,
+            workspace,
+        }) => run_serve(ServeFlags {
+            http,
+            bind,
+            token,
+            profile,
+            workspace,
+        }),
         Some(Command::Tui {
             path,
             api_url,
@@ -493,6 +535,133 @@ fn run_tui(flags: TuiFlags) -> u8 {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
         }
+    }
+}
+
+/// The address `acpilot serve --http` listens on.
+const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7777";
+
+/// What `acpilot serve` was asked for.
+struct ServeFlags {
+    /// Listen on the default loopback port.
+    http: bool,
+    /// The address to bind.
+    bind: Option<String>,
+    /// Print the token even on a run that did not create it.
+    token: bool,
+    /// The profile the daemon serves.
+    profile: Option<PathBuf>,
+    /// The workspace root it serves.
+    workspace: Option<PathBuf>,
+}
+
+/// Serve the daemon and the web UI over HTTP until interrupted.
+///
+/// The runtime is built here because the daemon's future is async and this binary
+/// is not: `ensure_or_embed_blocking` would start the embedded listener, which
+/// binds `127.0.0.1:0` with a token no other process can learn — exactly what a
+/// browser on another machine cannot use.
+fn run_serve(flags: ServeFlags) -> u8 {
+    let ServeFlags {
+        http,
+        bind,
+        token,
+        profile,
+        workspace,
+    } = flags;
+    let Some(addr) = bind.or_else(|| http.then(|| DEFAULT_SERVE_ADDR.to_owned())) else {
+        eprintln!(
+            "acpilot serve: pass --http to listen on {DEFAULT_SERVE_ADDR}, or --bind <ADDR> for \
+             another address"
+        );
+        return exit::USAGE;
+    };
+
+    // Before the bind, like the daemon does it: a listener that is up for even a
+    // moment without an answer to "who are you" is the hole the token closes. The
+    // file is read first only to tell a first run from a later one.
+    let token_path = acpilot_host::token::path();
+    let existing = acpilot_host::token::read(&token_path).ok().flatten();
+    let secret = match acpilot_host::token::load_or_create(&token_path) {
+        Ok(secret) => secret,
+        Err(error) => {
+            eprintln!(
+                "acpilot serve: cannot read or write {}: {error}",
+                token_path.display()
+            );
+            return exit::FAILURE;
+        }
+    };
+    if existing.is_none() {
+        println!("acpilot serve: token {secret}");
+        println!(
+            "acpilot serve: this run created it, so it is printed once; it is also in {}",
+            token_path.display()
+        );
+    } else if token {
+        println!("acpilot serve: token {secret}");
+    } else {
+        println!(
+            "acpilot serve: token in {} (--token prints it)",
+            token_path.display()
+        );
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot serve: cannot start a runtime: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+    // Inside the runtime: startup spawns the compaction and reaping timers.
+    let state = match runtime.block_on(async { acpilotd::startup(profile.as_deref(), &workspace) })
+    {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!("acpilot serve: {error}");
+            return exit::FAILURE;
+        }
+    };
+
+    println!("acpilot serve: http://{}/", browse_at(&addr));
+    if browse_at(&addr) != addr {
+        println!("acpilot serve: bound on {addr}, so another machine reaches it at that port");
+    }
+
+    runtime.block_on(async move {
+        let served = acpilotd::serve(
+            acpilotd::router_with(state.clone()),
+            acpilotd::Target::Tcp(addr),
+            acpilotd::shutdown(),
+        )
+        .await;
+        // Language servers are processes, and the router's drop is not their end.
+        state.language_servers().shutdown().await;
+        match served {
+            Ok(()) => exit::SUCCESS,
+            Err(error) => {
+                eprintln!("acpilot serve: {error}");
+                exit::FAILURE
+            }
+        }
+    })
+}
+
+/// The address a browser can actually open.
+///
+/// `--bind 0.0.0.0` is the right address to listen on and the wrong one to type:
+/// a wildcard is not a host. The port is what the line is about, so it is kept.
+fn browse_at(addr: &str) -> String {
+    match addr.rsplit_once(':') {
+        Some((host, port)) if host == "0.0.0.0" || host == "::" || host == "[::]" => {
+            format!("127.0.0.1:{port}")
+        }
+        _ => addr.to_owned(),
     }
 }
 
@@ -877,5 +1046,19 @@ fn fail(error: &ExtensionError) -> u8 {
             exit::CONFLICT
         }
         _ => exit::FAILURE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wildcard_bind_is_printed_as_a_host_a_browser_can_open() {
+        // The address to listen on and the address to type are not the same one:
+        // `0.0.0.0` is a wildcard, not a host a browser resolves.
+        assert_eq!(browse_at("0.0.0.0:7777"), "127.0.0.1:7777");
+        assert_eq!(browse_at("[::]:7777"), "127.0.0.1:7777");
+        assert_eq!(browse_at("127.0.0.1:7777"), "127.0.0.1:7777");
     }
 }

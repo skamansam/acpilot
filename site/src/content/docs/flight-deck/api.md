@@ -25,7 +25,7 @@ GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/
 GET /v1/stats                   # one row per integration: context usage, credits, and where each came from
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs; asks for the token
-GET /app                        # the web shell: build version, About, quit; no token
+GET /                          # the web app: build version, About, quit; no token. `/app` is the same page
 GET /app/stats                  # the shell's stats bar, measured by the daemon; needs the token
 ```
 

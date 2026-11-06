@@ -37,6 +37,10 @@ acpilot-tui = { workspace = true }
 # `tui --demo`: the seeded world the design pass draws, which needs no daemon.
 acpilot-demo = { workspace = true }
 clap = { workspace = true }
+# `acpilot serve` hosts the daemon in this process, so it needs the runtime the
+# daemon's `serve` future runs on; the client's blocking helper only starts the
+# embedded loopback listener, which cannot take the address a browser is given.
+tokio = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

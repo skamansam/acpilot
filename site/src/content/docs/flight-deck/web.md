@@ -44,16 +44,25 @@ shows — including for a server running on the SSH host.
 
 ## Auth
 
-Loopback is no-token by default. Anything that is not loopback needs a bearer
-token, stored as an argon2 hash. TLS termination is the deployment's job; the
-daemon does not pretend to be a web server fleet.
+The unix socket needs no token: its access control is the filesystem. Anything on
+TCP — loopback included — needs a bearer token: a random value in a `0600` file
+beside the socket, compared in constant time. There is no user database, so there
+is no password hash to store; the file is the only place the secret lives. TLS
+termination is the deployment's job; the daemon does not pretend to be a web
+server fleet.
+
+The page itself is served with a strict policy: `default-src 'none'`, inline
+script and style only (the bundle is one file), `connect-src 'self'` for the API
+and the streams, `frame-ancestors 'none'` so the token field cannot be clickjacked,
+and `Referrer-Policy: no-referrer` so a link out cannot name the daemon.
 
 ## Status
 
 The Svelte app exists and is what ships, with the editor still to come.
 `web/` is Svelte 5 + Vite + TypeScript; `npm run build` emits **one HTML file**
 into `crates/acpilot-web/assets/`, with its script and stylesheet inlined, and
-`acpilotd` serves that at `/app`. The built file is committed, so building the
+`acpilotd` serves that at `/` — and at `/app`, the spelling existing links and the
+page's own subpaths use. The built file is committed, so building the
 daemon needs no Node; CI rebuilds it and fails if the committed page drifted from
 its source.
 
@@ -117,10 +126,10 @@ a header to a typed address and the page holds no data; every API call behind it
 is still guarded.
 
 The page's colours come from the same theme extension the terminal and the window
-read: `/app` inlines the web theme's palette into its `:root`, and the page then
+read: `/` (and `/app`) inlines the web theme's palette into its `:root`, and the page then
 listens on `GET /app/palette/events` so saving a theme anywhere — the TUI, the
 desktop app, another tab — repaints an open page instead of waiting for a reload.
-That stream is one of the unauthenticated routes, alongside `/app` and `/docs`.
+That stream is one of the unauthenticated routes, alongside `/`, `/app` and `/docs`.
 
 The bar's rows are measured by the daemon, not by the page: `GET /app/stats`
 answers the same rows `acpilot-stats` builds for the terminal and the desktop app,
@@ -150,17 +159,18 @@ the `web` and `check` jobs, so the repaint and the attach are gates rather than
 demonstrations.
 
 ```bash
-cargo run -p acpilotd -- --addr 127.0.0.1:7777
-# then open http://127.0.0.1:7777/app
-# the token is in $XDG_RUNTIME_DIR/acpilot/token and in the daemon's log
+acpilot serve --http                  # loopback, http://127.0.0.1:7777/
+acpilot serve --bind 0.0.0.0:7777    # the same over the LAN; every request needs the token
+# the token is printed on the run that creates it, and lives after that in
+# $XDG_RUNTIME_DIR/acpilot/token; `acpilot serve --token` prints it again
 ```
 
-Between the `cargo run` and the page there is one step people miss: this daemon is
-the same one the CLI and the TUI talk to, so `/app` shows the build that is running
-right now rather than a version baked into a bundle weeks ago.
+Between the command and the page there is one step people miss: this daemon is the
+same one the CLI and the TUI talk to, so `/` shows the build that is running right
+now rather than a version baked into a bundle weeks ago.
 
 Still open from the web phase: the routes above, the generated API client, the
-CodeMirror editor, creating a pane from the page (it attaches to panes, and with a
-session open it now holds the id `POST /v1/terminals` wants, but it makes no such
-request), and the daemon-side CSP. What exists now is the shape they hang on — embedded,
-self-serving, one file, no asset directory to lose.
+CodeMirror editor, and creating a pane from the page (it attaches to panes, and with
+a session open it now holds the id `POST /v1/terminals` wants, but it makes no such
+request). What exists now is the shape they hang on — embedded, self-serving, one
+file, no asset directory to lose.

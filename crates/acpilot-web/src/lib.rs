@@ -1,4 +1,5 @@
-//! Serves the compiled web UI from the daemon binary.
+//! Serves the compiled web UI from the daemon binary, at `/` (and at `/app`, the
+//! spelling existing links and the page's own subpaths use).
 //!
 //! That is one page, built by `web/` (Svelte 5 + Vite) into
 //! `assets/index.html`: a single file with its script and stylesheet inlined, so

@@ -117,8 +117,65 @@ async fn wrong_methods_and_routes_do_not_fall_through_to_the_api() {
     let (status, _) = get("/v1").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _) = get("/").await;
+    let (status, _) = get("/nothing-here").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_page_is_served_at_the_root_with_its_policy() {
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router is infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    let csp = headers
+        .get("content-security-policy")
+        .and_then(|value| value.to_str().ok())
+        .expect("the page has a policy");
+    // The bundle is one file, so its script and style are inline; everything else
+    // is a source the page may not reach, and a frame may not put it in.
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert!(csp.contains("script-src 'unsafe-inline'"), "{csp}");
+    assert!(csp.contains("connect-src 'self'"), "{csp}");
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert_eq!(
+        headers.get("x-content-type-options"),
+        Some(&"nosniff".parse().expect("header value"))
+    );
+    assert_eq!(
+        headers.get("referrer-policy"),
+        Some(&"no-referrer".parse().expect("header value")),
+        "the page holds a token, so a link out must not name the daemon address"
+    );
+
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let html = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    assert!(
+        html.contains(acpilot_core::VERSION),
+        "the page says which build is answering"
+    );
+}
+
+#[tokio::test]
+async fn the_published_path_is_the_same_page() {
+    // `/app` is where the page has been linked from and where its own subpaths
+    // live; `/` is what a person types. One handler, so the two cannot drift.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    assert_eq!(
+        body_of(state.clone(), "/").await,
+        body_of(state, "/app").await
+    );
 }
 
 #[tokio::test]

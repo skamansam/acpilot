@@ -57,7 +57,7 @@ acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
 acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
-acpilot serve [--http]
+acpilot serve --http [--bind <addr>] [--token] [--profile <dir>] [--workspace <dir>]
 acpilot doctor
 ```
 
@@ -86,6 +86,15 @@ $ acpilot tui --no-spawn            # attach or fail: tests, CI, a service manag
 $ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
 $ acpilot tui --no-mouse            # the terminal keeps its own drag-to-select
 ```
+
+```bash
+$ acpilot serve --http                 # the web UI at http://127.0.0.1:7777/
+$ acpilot serve --bind 0.0.0.0:7777    # the same over the LAN; the token guards every call
+```
+
+The token is printed on the run that creates it, and only then unless `--token`
+asks again: it is also in the daemon's runtime directory, and `acpilot token
+rotate` replaces it without restarting anything.
 
 Mouse reporting is on: the menu bar, the dividers, a click that lands the caret, a
 drag that selects and the wheel all need it. It costs the terminal its own

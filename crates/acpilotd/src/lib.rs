@@ -123,6 +123,15 @@ pub struct Health {
     /// something a client should have named.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The profile this daemon serves, by directory name.
+    ///
+    /// The web page's addresses name a profile (`/p/:profile/...`) and every
+    /// request carries it as `X-Acpilot-Profile`. A browser cannot see the
+    /// directory the daemon was started with, so this is where it learns the name
+    /// to put in the address instead of inventing one. Absent when the daemon was
+    /// started without `--profile`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// How this daemon was installed, when a marker says (ADR 0010).
     ///
     /// A client whose version does not match reports the difference and needs to know
@@ -214,6 +223,7 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
         version: env!("CARGO_PKG_VERSION"),
         api: acpilot_proto::API_PREFIX,
         workspace: state.workspace().map(|workspace| workspace.id.clone()),
+        profile: state.profile_name().map(str::to_owned),
         // Asked of the binary that is running, not of `PATH`: a second copy on this
         // machine is a different installation and says so for itself.
         install: std::env::current_exe()
@@ -248,6 +258,12 @@ pub struct AppState {
     broker: Option<Arc<Broker>>,
     /// The workspace sessions open in, when the daemon was given one.
     workspace: Option<Workspace>,
+    /// The profile this daemon serves, by directory name.
+    ///
+    /// Kept so `GET /v1/health` can name it: the web page's routes take a profile
+    /// segment, and a page that guessed the name would be addressing a profile
+    /// nobody started.
+    profile: Option<String>,
     /// The hosts this daemon knows, the one it runs on first.
     ///
     /// A registry rather than a table read per request: the local host's
@@ -374,6 +390,7 @@ impl Default for AppState {
             agents: None,
             broker: None,
             workspace: None,
+            profile: None,
             hosts: Arc::new(hosts::Hosts::default()),
             workspaces: Arc::default(),
             sessions: Sessions::default(),
@@ -395,6 +412,18 @@ impl AppState {
     /// No profile loaded: the agent list is empty and nothing is pending.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Serve this profile's name in `GET /v1/health`.
+    #[must_use]
+    pub fn with_profile_name(mut self, profile: Option<String>) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// The profile directory's name, when this daemon was started with one.
+    pub fn profile_name(&self) -> Option<&str> {
+        self.profile.as_deref()
     }
 
     /// Serve this profile's agents.
@@ -899,6 +928,13 @@ pub fn state_for_profile(
     workspace: &std::path::Path,
 ) -> Result<AppState, StateError> {
     let profile = acpilot_profile::Profile::open(directory)?;
+    // The directory's own name, not the path: the page writes it into an address,
+    // and an absolute host path there would be a filesystem fact a browser has no
+    // business knowing (the same rule `health.workspace` follows).
+    let name = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
     let policy = profile.policy()?;
     let workspace = workspace_at(workspace)?;
     tracing::info!(
@@ -909,6 +945,7 @@ pub fn state_for_profile(
     );
     let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
     let state = AppState::new()
+        .with_profile_name(name)
         .with_broker(broker)
         .with_workspace(workspace);
     Ok(match load_agents(&profile)? {
@@ -1927,6 +1964,11 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/openapi.json", get(openapi))
         .route("/", get(web_app))
         .route("/app", get(web_app))
+        // The addresses the page writes into the location bar. A reload of a
+        // shared link is a page request, so the daemon has to answer with the
+        // page here too — otherwise every deep link is a 404 one refresh later.
+        .route("/p/{profile}/w/{workspace}", get(web_app))
+        .route("/p/{profile}/s/{session}", get(web_app))
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
         .merge(hosts::routes())

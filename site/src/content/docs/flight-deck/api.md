@@ -33,7 +33,10 @@ GET /app/stats                  # the shell's stats bar, measured by the daemon;
 (`workspace`, omitted when it serves none), which is how a client confirms that
 the daemon it found is the one for the directory it was asked about — the check
 behind `acpilot tui --workspace <dir>` refusing a mismatch instead of showing
-another project's sessions.
+another project's sessions. It also reports `profile`, the profile directory's
+name, omitted when the daemon was started without one: the web page writes it into its
+`/p/:profile/...` addresses, and a page that guessed would be addressing a profile
+nobody started.
 
 `GET /v1/agents` answers from the profile the daemon was started with —
 `acpilotd --profile <dir>` reads that directory's `agents.toml` — and reports

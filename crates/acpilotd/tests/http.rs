@@ -46,6 +46,31 @@ async fn health_reports_the_service_and_its_api_version() {
 }
 
 #[tokio::test]
+async fn health_names_the_profile_the_page_addresses() {
+    // The page writes `/p/<profile>/...` into the address bar and sends
+    // `X-Acpilot-Profile` on every request. A browser cannot read the daemon's
+    // flags, so the name has to come from here.
+    let state = AppState::new().with_profile_name(Some("work".to_owned()));
+    let (status, body) = get_from(router_with(state), "/v1/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["profile"], "work");
+}
+
+#[tokio::test]
+async fn the_page_is_served_at_the_addresses_it_writes() {
+    // `openSession` puts `/p/<profile>/s/<id>` in the location bar. A refresh
+    // there must be the page, not a 404 a person cannot get out of.
+    for uri in ["/p/work/w/acpilot", "/p/work/s/session-1"] {
+        let (status, _) = get(uri).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{uri} is an address the page writes"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_daemon_without_a_profile_still_names_the_workspace_it_serves() {
     // The client that spawns a daemon names a directory even when it has no
     // profile, and uses `health.workspace` to check that the daemon it found is

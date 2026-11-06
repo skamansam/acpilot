@@ -22,6 +22,8 @@ export interface Health {
   api: string;
   /** The one workspace this daemon serves, when it was started against one. */
   workspace: string | null;
+  /** The profile directory's name, when the daemon was started with one. */
+  profile?: string | null;
 }
 
 /** Lifecycle state, as `GET /v1/sessions` spells it. */
@@ -65,6 +67,12 @@ export type PromptAccepted = components['schemas']['PromptAccepted'];
 
 /** One row of `GET /v1/terminals`: a pane a client may attach to. */
 export type TerminalSummary = components['schemas']['TerminalSummary'];
+
+/** One row of `GET /v1/workspaces`: a directory this daemon may serve. */
+export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
+
+/** One profile, as `GET /v1/profiles` will list it (P4-8). */
+export type ProfileSummary = components['schemas']['ProfileSummary'];
 
 /** Where one figure came from, as the daemon spells it. */
 export type StatSource = 'server' | 'configured' | 'estimated' | 'unknown';
@@ -129,9 +137,29 @@ export function writeToken(token: string): void {
   }
 }
 
+/**
+ * The profile the page's address names.
+ *
+ * Kept beside the token because it is the same kind of fact — a request needs it,
+ * and no response carries it. `setProfile` is called from one place, the page's
+ * route change, so a request cannot be sent for a profile the address does not
+ * say. The daemon serves one profile today and ignores the header; the field is
+ * what the address and the streams agree on until `GET /v1/profiles` lands (P4-8).
+ */
+let profile = '';
+
+export function setProfile(next: string): void {
+  profile = next;
+}
+
+/** The profile header alone, for the streams that assemble their own requests. */
+export function profileHeader(): Record<string, string> {
+  return profile ? { 'X-Acpilot-Profile': profile } : {};
+}
+
 /** The headers every typed call carries. The token travels here, never in a URL. */
 function auth(token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+  return { ...profileHeader(), Authorization: `Bearer ${token}`, Accept: 'application/json' };
 }
 
 /** The typed client, on paths generated from the document the daemon serves. */
@@ -239,6 +267,45 @@ export async function terminals(
   signal?: AbortSignal,
 ): Promise<TerminalSummary[]> {
   return answered(await client.GET('/v1/terminals', { headers: auth(token), signal }));
+}
+
+/**
+ * `GET /v1/workspaces` — the directories this daemon may serve.
+ *
+ * Off the document, like `/v1/health`: the route exists but the crate that serves
+ * it registers no `utoipa` path, so the generated client cannot know it. The
+ * daemon always names its own workspace in health, so a failure here costs the
+ * picker, not the page: the address still says which workspace it is on.
+ */
+export function workspaces(token: string, signal?: AbortSignal): Promise<WorkspaceSummary[]> {
+  return get<WorkspaceSummary[]>('/v1/workspaces', token, signal);
+}
+
+/**
+ * `GET /v1/profiles` — the profiles a daemon that implements P4-8 serves.
+ *
+ * Off the document on purpose: the profiles API is not in the frozen contract
+ * yet, so this is a probe of the daemon rather than a route the page can rely on.
+ * A `404` is the answer a single-profile build gives, and the page then shows the
+ * one profile its address already names.
+ */
+export function profiles(token: string, signal?: AbortSignal): Promise<ProfileSummary[]> {
+  return get<ProfileSummary[]>('/v1/profiles', token, signal);
+}
+
+/** `GET /v1/sessions/{id}` — one session, for an address that names one. */
+export async function session(
+  id: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<SessionSummary> {
+  return answered(
+    await client.GET('/v1/sessions/{id}', {
+      params: { path: { id } },
+      headers: auth(token),
+      signal,
+    }),
+  );
 }
 
 /** `GET /v1/agents` — the profile's agents and whether this host can run them. */

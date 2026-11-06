@@ -10,13 +10,20 @@
     stats as readStats,
     terminals as listTerminals,
     writeToken,
+    profiles as listProfiles,
+    session as readSession,
+    setProfile,
+    workspaces as listWorkspaces,
     type AgentSummary,
     type Health,
+    type ProfileSummary,
     type SessionSummary,
     type StatRow,
     type TerminalSummary,
     type Track,
+    type WorkspaceSummary,
   } from './api';
+  import { DEFAULT_PROFILE, parseRoute, routePath, scopeSessions, type Route } from './routes';
   import Session from './Session.svelte';
   import Terminal from './Terminal.svelte';
   import { paneWhere, panesFor } from './terminals';
@@ -27,12 +34,28 @@
   const buildVersion =
     document.querySelector<HTMLMetaElement>('meta[name="acpilot-version"]')?.content ?? 'unknown';
 
+  // The address the page was opened at, if it named one. A link with a profile in
+  // it is a decision the page keeps; a bare `/` is placed on the daemon's own
+  // profile and workspace after health answers.
+  const initialRoute = parseRoute(location.pathname);
+  let route = $state<Route>(initialRoute ?? { profile: DEFAULT_PROFILE });
+
   let token = $state(readToken());
   let draft = $state('');
   let loading = $state(false);
   let error = $state<string | null>(null);
   let healthInfo = $state<Health | null>(null);
-  let rows = $state<SessionSummary[]>([]);
+  let allRows = $state<SessionSummary[]>([]);
+  // The rows the address is about: a workspace address scopes the table, a
+  // session address shows the workspace it belongs to (no scope) so the list it
+  // came from is still there. A function rather than an inline expression because
+  // `workspaceList` is declared below: the derivation runs after the component is
+  // set up, and a direct reference would read like a use before declaration.
+  const rows = $derived(scopeRows(allRows));
+
+  function scopeRows(list: SessionSummary[]): SessionSummary[] {
+    return scopeSessions(list, route.workspace, workspaceList);
+  }
   let integrations = $state<StatRow[]>([]);
   // Why the bar is empty when the daemon has nothing to say about it: a bar that
   // could not be read is not a roster of none, and an older daemon that never
@@ -47,15 +70,24 @@
   // The pane being drawn, when one is. The process belongs to the daemon: closing
   // this view detaches, and the program keeps running.
   let openPane = $state<TerminalSummary | null>(null);
-  // The session whose transcript is open. It also narrows the terminal list:
-  // `panesFor` keeps that session's panes *plus* every pane nobody owns, and never
-  // drops a pane with no `session_id`.
-  let openSession = $state<string | null>(null);
+  // The session whose transcript is open is the one the address names. It also
+  // narrows the terminal list: `panesFor` keeps that session's panes *plus* every
+  // pane nobody owns, and never drops a pane with no `session_id`.
+  const openSession = $derived(route.session ?? null);
   // The agents this profile configured, and the one the form will start. An
   // empty list is a daemon with no `agents.toml`: there is nothing to start, and
   // the form says that instead of offering an empty picker.
   let agentList = $state<AgentSummary[]>([]);
   let agentsNote = $state<string | null>(null);
+  // The profiles `GET /v1/profiles` lists, empty on a daemon that serves one
+  // profile and has no profiles API (P4-8). The address's profile is still
+  // shown, because it is what every request names.
+  let profileList = $state<ProfileSummary[]>([]);
+  let workspaceList = $state<WorkspaceSummary[]>([]);
+  // A session an address names that the list does not have: asked for by id, so a
+  // shared link opens the conversation instead of an empty transcript.
+  let directSession = $state<SessionSummary | null>(null);
+  let routeError = $state<string | null>(null);
   let chosenAgent = $state('');
   let creating = $state(false);
   let createError = $state<string | null>(null);
@@ -68,7 +100,16 @@
 
   const version = $derived(healthInfo?.version ?? buildVersion);
   const connected = $derived(healthInfo !== null);
-  const viewSession = $derived(rows.find((row) => row.id === openSession) ?? null);
+  const viewSession = $derived(
+    route.session
+      ? (rows.find((row) => row.id === route.session) ??
+        (directSession?.id === route.session ? directSession : null))
+      : null,
+  );
+  const activeWorkspace = $derived(
+    workspaceList.find((row) => row.name === route.workspace || row.id === route.workspace) ??
+      null,
+  );
 
   let controller: AbortController | null = null;
 
@@ -105,13 +146,14 @@
     if (!token) {
       return;
     }
+    setProfile(route.profile);
     controller?.abort();
     const current = new AbortController();
     controller = current;
     loading = true;
     error = null;
     try {
-      const [status, sessions, bar, terminals, agents] = await Promise.all([
+      const [status, sessions, bar, terminals, agents, profiles, workspaces] = await Promise.all([
         health(token, current.signal),
         listSessions(token, current.signal),
         // The bar is the one part of the page a daemon older than this build may
@@ -125,13 +167,30 @@
         // As with the bar and the panes: an older daemon that does not answer
         // for its agents costs the page the form, not the sessions.
         listAgents(token, current.signal).catch(() => null),
+        // The profiles API is P4-8 and not in the frozen contract; a daemon that
+        // does not serve it answers 404, which costs the switcher its list, not
+        // the page.
+        listProfiles(token, current.signal).catch(() => null),
+        // The workspaces the picker offers. The daemon's own is in health even
+        // when this route is absent, so the address still has a workspace.
+        listWorkspaces(token, current.signal).catch(() => null),
       ]);
       healthInfo = status;
-      rows = sessions;
-      // A session that vanished from the list has no transcript to show; keeping
-      // the view up would leave a stream running for a row nobody can see.
-      if (openSession && !rows.some((row) => row.id === openSession)) {
-        openSession = null;
+      allRows = sessions;
+      profileList = profiles ?? [];
+      workspaceList = workspaces ?? [];
+      // A bare address takes the daemon's profile; a link with one in it keeps it.
+      // The URL is the state, so this is a `replaceState`: no extra history entry
+      // for a page that has not navigated anywhere.
+      if (!initialRoute && status.profile && route.profile !== status.profile) {
+        route = { ...route, profile: status.profile };
+        setProfile(route.profile);
+      }
+      if (!route.workspace && !route.session) {
+        const served = status.workspace ?? workspaceList[0]?.name;
+        if (served) {
+          navigate({ profile: route.profile, workspace: served }, true);
+        }
       }
       integrations = bar ?? [];
       panes = terminals ? panesFor(terminals, openSession) : [];
@@ -155,12 +214,36 @@
       if (openPane && !panes.some((pane) => pane.id === openPane?.id)) {
         openPane = null;
       }
+      // An address that names a session the list does not have is one this
+      // process has not listed yet; ask for it by id rather than leaving a real
+      // address over an empty transcript. A session that is gone sends the page
+      // back to the workspace it came from, with the reason.
+      routeError = null;
+      if (route.session && !rows.some((row) => row.id === route.session)) {
+        try {
+          directSession = await readSession(route.session, token, current.signal);
+        } catch (cause) {
+          if (current.signal.aborted) {
+            return;
+          }
+          directSession = null;
+          routeError = `No session ${route.session} on this daemon.`;
+          const served = status.workspace ?? workspaceList[0]?.name;
+          navigate({ profile: route.profile, ...(served ? { workspace: served } : {}) }, true);
+        }
+      } else {
+        directSession = null;
+      }
     } catch (cause) {
       if (current.signal.aborted) {
         return;
       }
       healthInfo = null;
-      rows = [];
+      allRows = [];
+      profileList = [];
+      workspaceList = [];
+      directSession = null;
+      routeError = null;
       integrations = [];
       statsNote = null;
       panes = [];
@@ -206,7 +289,11 @@
     token = '';
     draft = '';
     healthInfo = null;
-    rows = [];
+    allRows = [];
+    profileList = [];
+    workspaceList = [];
+    directSession = null;
+    routeError = null;
     integrations = [];
     statsNote = null;
     panes = [];
@@ -216,7 +303,6 @@
     chosenAgent = '';
     createError = null;
     openPane = null;
-    openSession = null;
     error = null;
     loading = false;
     writeToken('');
@@ -238,8 +324,9 @@
     createError = null;
     try {
       const created = await createSession(chosenAgent, token);
-      rows = [created, ...rows.filter((row) => row.id !== created.id)];
-      openSession = created.id;
+      allRows = [created, ...allRows.filter((row) => row.id !== created.id)];
+      directSession = null;
+      navigate({ profile: route.profile, session: created.id });
     } catch (cause) {
       createError = cause instanceof ApiError ? cause.message : String(cause);
     } finally {
@@ -283,7 +370,55 @@
     return Number.isNaN(at.valueOf()) ? iso : at.toLocaleString();
   }
 
+  /** Go to an address, and let the page follow it. */
+  function navigate(next: Route, replace = false): void {
+    const url = routePath(next);
+    if (replace) {
+      history.replaceState({}, '', url);
+    } else {
+      history.pushState({}, '', url);
+    }
+    route = next;
+    setProfile(next.profile);
+  }
+
+  /** Open a session by putting it in the address, which is where the page reads it. */
+  function open(id: string): void {
+    navigate({ profile: route.profile, session: id });
+  }
+
+  /** Back to the workspace, keeping the profile the address names. */
+  function closeSession(): void {
+    const served = activeWorkspace?.name ?? workspaceList[0]?.name ?? route.workspace;
+    navigate({ profile: route.profile, ...(served ? { workspace: served } : {}) });
+  }
+
+  function switchWorkspace(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    navigate({ profile: route.profile, ...(value ? { workspace: value } : {}) });
+  }
+
+  function switchProfile(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (!value || value === route.profile) {
+      return;
+    }
+    // The header is how every request names a profile, so the change is a reload
+    // rather than a filter over rows fetched for the old one.
+    navigate({ profile: value, ...(route.workspace ? { workspace: route.workspace } : {}) });
+    void load();
+  }
+
+  /** The back button: the address changed, so the page re-reads it. */
+  function followed(): void {
+    route =
+      parseRoute(location.pathname) ?? { profile: route.profile, workspace: route.workspace };
+    setProfile(route.profile);
+    void load();
+  }
+
   onMount(() => {
+    window.addEventListener('popstate', followed);
     if (token) {
       void load();
     }
@@ -292,6 +427,7 @@
       applyPalette(event as MessageEvent<string>);
     });
     return () => {
+      window.removeEventListener('popstate', followed);
       controller?.abort();
       paletteSource?.close();
       paletteSource = null;
@@ -316,6 +452,37 @@
 <div class="shell">
   <header class="topbar">
     <h1 class="brand">Acpilot</h1>
+    <div class="scope">
+      <label for="profile">Profile</label>
+      <select
+        id="profile"
+        value={route.profile}
+        onchange={switchProfile}
+        disabled={profileList.length < 2}
+        title={profileList.length < 2
+          ? 'This daemon serves one profile. Switching needs the profiles API (P4-8).'
+          : 'Requests name this profile in X-Acpilot-Profile.'}
+      >
+        {#each profileList as entry (entry.id)}
+          <option value={entry.id}>{entry.label}</option>
+        {/each}
+        {#if !profileList.some((entry) => entry.id === route.profile)}
+          <option value={route.profile}>{route.profile}</option>
+        {/if}
+      </select>
+      <label for="workspace">Workspace</label>
+      <select id="workspace" value={route.workspace ?? ''} onchange={switchWorkspace}>
+        {#if !route.workspace}
+          <option value="">every workspace</option>
+        {/if}
+        {#each workspaceList as entry (entry.id)}
+          <option value={entry.name}>{entry.name}</option>
+        {/each}
+        {#if route.workspace && !workspaceList.some((entry) => entry.name === route.workspace)}
+          <option value={route.workspace}>{route.workspace}</option>
+        {/if}
+      </select>
+    </div>
     <span class="version">Version {version}</span>
   </header>
 
@@ -430,9 +597,15 @@
         {/if}
       </form>
 
-      <div class="card">
-        <table>
-          <caption class="visually-hidden">Sessions this daemon knows about</caption>
+      <div class="panels">
+        <section class="panel" aria-labelledby="sessions-title">
+          <h3 id="sessions-title">Sessions</h3>
+          {#if routeError}
+            <p class="error" role="alert">{routeError}</p>
+          {/if}
+          <div class="card">
+            <table>
+              <caption class="visually-hidden">Sessions this daemon knows about</caption>
           <thead>
             <tr>
               <th scope="col">Session</th>
@@ -445,7 +618,7 @@
             {#each rows as row (row.id)}
               <tr>
                 <td>
-                  <button type="button" class="link" onclick={() => (openSession = row.id)}>
+                  <button type="button" class="link" onclick={() => open(row.id)}>
                     Open
                   </button>
                   {row.title || row.id}
@@ -462,14 +635,25 @@
               </tr>
             {/each}
           </tbody>
-        </table>
-      </div>
+            </table>
+          </div>
+        </section>
 
-      {#if viewSession}
-        {#key viewSession.id}
-          <Session session={viewSession} {token} onclose={() => (openSession = null)} />
-        {/key}
-      {/if}
+        <section class="panel" aria-labelledby="transcript-title">
+          <h3 id="transcript-title">Transcript</h3>
+          {#if viewSession}
+            {#key viewSession.id}
+              <Session session={viewSession} {token} onclose={closeSession} />
+            {/key}
+          {:else}
+            <p class="note">
+              Pick a session on the left, or open the one in the address bar. A
+              session's turn is streamed here; the address keeps which one, so a
+              refresh does not lose it.
+            </p>
+          {/if}
+        </section>
+      </div>
 
       <section class="terminals" aria-labelledby="terminals-title">
         <div class="stats-head">

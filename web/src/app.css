@@ -876,3 +876,59 @@ a:focus-visible {
 .prompt-actions .error {
   margin: 0;
 }
+
+/*
+ * The cockpit's panels, the way the TUI arranges them: the list of conversations
+ * on the left, the one being read on the right, terminals and the bar below. A
+ * narrow window stacks them rather than squeezing two columns into a phone.
+ */
+.scope {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.scope select {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.scope select:disabled {
+  opacity: 1;
+  color: var(--text-muted);
+}
+
+.topbar {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: minmax(18rem, 2fr) 3fr;
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1.5rem;
+}
+
+.panel {
+  min-width: 0;
+}
+
+.panel > h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+@media (max-width: 60rem) {
+  .panels {
+    grid-template-columns: 1fr;
+  }
+}

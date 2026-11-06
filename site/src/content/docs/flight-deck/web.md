@@ -26,6 +26,16 @@ Routes are profile- and workspace-aware:
 /p/:profile/s/:session
 ```
 
+The page writes those addresses itself: opening a session from the list pushes
+`/p/<profile>/s/<id>`, the workspace picker pushes `/p/<profile>/w/<name>`, and
+the daemon serves the page at both, so a refresh or a link sent to a colleague
+lands on the same view. The profile segment comes from `GET /v1/health`, which
+names the directory the daemon was started with, and every request carries that
+profile as `X-Acpilot-Profile` — the streams too, because an SSE subscription
+binds its profile at connect. Switching profiles needs `GET /v1/profiles`, which
+a single-profile daemon does not serve yet (P4-8), so the picker shows the one the
+address names and says why it is a label rather than a choice.
+
 ## Pieces
 
 | Need | Choice | Why |
@@ -169,7 +179,7 @@ Between the command and the page there is one step people miss: this daemon is t
 same one the CLI and the TUI talk to, so `/` shows the build that is running right
 now rather than a version baked into a bundle weeks ago.
 
-Still open from the web phase: the routes above, the CodeMirror editor, and
+Still open from the web phase: the CodeMirror editor, and
 creating a pane from the page (it attaches to panes, and with
 a session open it now holds the id `POST /v1/terminals` wants, but it makes no such
 request). What exists now is the shape they hang on — embedded, self-serving, one

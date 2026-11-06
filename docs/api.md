@@ -112,7 +112,10 @@ GET    /v1/stats
 ```
 
 `GET /v1/health` is the one route a client calls before it trusts anything else:
-`{ok, service, version, api, workspace?, install?}`. `install` is how the running
+`{ok, service, version, api, workspace?, profile?, install?}`. `profile` is the
+name of the profile directory the daemon was started with, and is omitted when it
+has none: the web page writes it into `/p/:profile/...` rather than inventing a
+name for a daemon that cannot see its own flags. `install` is how the running
 binary was installed, when that installation left a marker (ADR 0010): `{method,
 version?}`, where `method` decides who may reconcile a version difference — a package
 manager that owns the files, or the program itself for a tarball or a `cargo install`.

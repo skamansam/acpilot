@@ -12,7 +12,13 @@
 // component because they are rules, not drawing: what merges into one message,
 // which payload key holds the text, and that agent output can never become markup.
 
-import { ApiError, type PermissionOption, type PermissionRequest, type SessionEvent } from './api';
+import {
+  ApiError,
+  profileHeader,
+  type PermissionOption,
+  type PermissionRequest,
+  type SessionEvent,
+} from './api';
 
 /** One parsed server-sent event frame. */
 export interface SseFrame {
@@ -146,6 +152,10 @@ function openStream(url: () => string, options: StreamOptions): StreamHandle {
     try {
       const response = await doFetch(url(), {
         headers: {
+          // The same profile the page's address names, on the stream as well: an
+          // SSE subscription binds its profile at connect (docs/api.md), so
+          // leaving it off here would subscribe to the active one instead.
+          ...profileHeader(),
           Authorization: `Bearer ${options.token}`,
           Accept: 'text/event-stream',
         },

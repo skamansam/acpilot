@@ -189,6 +189,9 @@ beforeEach(() => {
   target = document.createElement('div');
   document.body.append(target);
   sessionStorage.clear();
+  // happy-dom keeps the location between tests; a deep link in one test must not
+  // decide the address the next one starts at.
+  history.replaceState({}, '', '/');
   cleanups = [];
   // The repaint writes inline style onto the document element; a test that starts
   // with yesterday's colours would pass for the wrong reason.
@@ -246,6 +249,8 @@ describe('a remembered token', () => {
     expect(target.textContent).toContain('a session that exists');
     expect(target.textContent).toContain('v1');
     expect(sentTokens()).toEqual([
+      'Bearer stored',
+      'Bearer stored',
       'Bearer stored',
       'Bearer stored',
       'Bearer stored',
@@ -437,6 +442,9 @@ describe('the session view', () => {
 
     await vi.waitFor(() => expect(target.textContent).toContain('hello from the agent'));
     expect(target.querySelector('.session')).not.toBeNull();
+    // Opening a session is a navigation: the address says which one is open, so a
+    // refresh and a link copied from the bar both land here.
+    expect(location.pathname).toBe('/p/default/s/session-1');
     expect(sentTokens()).toContain('Bearer stored');
   });
 
@@ -506,6 +514,109 @@ describe('the session view', () => {
     await vi.waitFor(() => expect(created).toEqual({ workspace_id: '', agent_id: 'mock-agent' }));
     await vi.waitFor(() => expect(target.textContent).toContain('a new session'));
     await vi.waitFor(() => expect(target.textContent).toContain('a fresh turn'));
+    expect(location.pathname).toBe('/p/default/s/session-2');
+  });
+
+  it('opens the session a shared address names', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    history.replaceState({}, '', '/p/work/s/session-9');
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-9') {
+        return json({ ...SESSION, id: 'session-9', title: 'a linked session' });
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-9/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-9',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'a linked turn' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events' || route === '/v1/permissions?status=pending&session=session-9') {
+        return route === '/v1/events' ? stream('') : json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('a linked turn'));
+    // The link's profile is the page's profile too: the URL is not rewritten to
+    // the daemon's own name just because it has one.
+    expect(location.pathname).toBe('/p/work/s/session-9');
+    expect(
+      fetchMock.mock.calls.some(([input, init]) => {
+        // The typed client sends a `Request`; the stream and the off-contract
+        // routes send `(url, init)`, which is why the adapter exists. Either way,
+        // the profile the address names has to be on the request.
+        const headers =
+          input instanceof Request
+            ? input.headers
+            : ((init as RequestInit | undefined)?.headers as
+                | Record<string, string>
+                | undefined);
+        const value =
+          headers instanceof Headers
+            ? headers.get('X-Acpilot-Profile')
+            : (headers?.['X-Acpilot-Profile'] ?? headers?.['x-acpilot-profile']);
+        return value === 'work';
+      }),
+    ).toBe(true);
+  });
+
+  it('the workspace picker changes the address and the sessions it shows', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    const workspaces = [
+      { id: 'local:/acpilot', name: 'acpilot', host_id: 'local', root: '/acpilot', session_count: 1 },
+      { id: 'local:/build', name: 'build', host_id: 'local', root: '/build', session_count: 0 },
+    ];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/v1/workspaces') {
+        return json(workspaces);
+      }
+      if (route === '/app/stats') {
+        return json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    const select = await find<HTMLSelectElement>('select#workspace');
+    await vi.waitFor(() => expect(select.options.length).toBe(2));
+    select.value = 'build';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/default/w/build'));
+    await vi.waitFor(() => expect(target.textContent).not.toContain('a session that exists'));
   });
 });
 
@@ -531,6 +642,8 @@ describe('no token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
     expect(sentTokens()).toEqual([
+      'Bearer typed',
+      'Bearer typed',
       'Bearer typed',
       'Bearer typed',
       'Bearer typed',

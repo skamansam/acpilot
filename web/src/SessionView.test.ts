@@ -6,6 +6,8 @@
 // says what the daemon actually did.
 
 import { mount, unmount } from 'svelte';
+
+import { plainFetch, type PlainFetch } from './test-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Session from './Session.svelte';
 import type { PermissionRequest, SessionSummary } from './api';
@@ -121,8 +123,12 @@ beforeEach(() => {
   promptBody = null;
 
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Typed API calls arrive as a `Request`; the transcript stream is still a
+    // plain `fetch(url, init)`. One shape for the routes the tests match on.
+    // `plainFetch` already turned a typed client's `Request` into this shape.
+    const request = new Request(new URL(String(input), 'http://localhost'), init);
     const route = String(input);
-    const method = init?.method ?? 'GET';
+    const method = request.method;
     if (route === '/v1/sessions/session-1/events?after=0') {
       return sse(TRANSCRIPT);
     }
@@ -133,8 +139,8 @@ beforeEach(() => {
       return json(answeredByDaemon ? [] : pending);
     }
     if (route === '/v1/permissions/p1/resolve' && method === 'POST') {
-      resolveBody = JSON.parse(String(init?.body));
-      resolveToken = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      resolveBody = JSON.parse(await request.text());
+      resolveToken = request.headers.get('Authorization') ?? undefined;
       if (failure !== null) {
         return new Response(failure, { status: 500 });
       }
@@ -149,12 +155,12 @@ beforeEach(() => {
       return json({ turn_id: 't1', cancelled: true });
     }
     if (route === '/v1/sessions/session-1/prompt' && method === 'POST') {
-      promptBody = JSON.parse(String(init?.body));
+      promptBody = JSON.parse(await request.text());
       return json({ session_id: 'session-1', turn_id: 't2', first_seq: 2 });
     }
     return new Response('not found', { status: 404 });
   });
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', plainFetch(fetchMock as unknown as PlainFetch));
 });
 
 afterEach(() => {
@@ -248,11 +254,14 @@ describe('cancelling', () => {
     cancel.click();
 
     await vi.waitFor(() => expect(target.textContent).toContain('Asked the agent to stop t1.'));
+    // `plainFetch` turns the typed client's `Request` into this shape, and header
+    // names survive a `Request` in lower case.
     const call = fetchMock.mock.calls.find(
       ([input]) => String(input) === '/v1/sessions/session-1/cancel',
     ) as unknown as [string, RequestInit] | undefined;
     expect(call).toBeDefined();
     expect(call?.[1].method ?? 'GET').toBe('POST');
-    expect((call?.[1].headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`);
+    const headers = call?.[1].headers as Record<string, string>;
+    expect(headers.Authorization ?? headers.authorization).toBe(`Bearer ${TOKEN}`);
   });
 });

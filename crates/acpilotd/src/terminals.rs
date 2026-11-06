@@ -1215,6 +1215,7 @@ pub fn routes() -> Router<AppState> {
 #[allow(dead_code)]
 #[utoipa::path(
     get,
+    operation_id = "list_terminals",
     path = "/v1/terminals",
     tag = "terminals",
     summary = "List terminals",
@@ -1226,6 +1227,7 @@ fn list_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     post,
+    operation_id = "create_terminal",
     path = "/v1/terminals",
     tag = "terminals",
     summary = "Start a terminal",

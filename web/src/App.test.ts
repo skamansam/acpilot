@@ -8,6 +8,8 @@
 // moment the daemon says no.
 
 import { mount, unmount } from 'svelte';
+
+import { plainFetch, type PlainFetch } from './test-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
 import type { Health, SessionSummary, StatRow, TerminalSummary } from './api';
@@ -140,10 +142,21 @@ function render(): void {
 }
 
 function sentTokens(): (string | undefined)[] {
-  return fetchMock.mock.calls.map(([, init]) => {
+  return fetchMock.mock.calls.map(([input, init]) => {
+    // The typed API calls go out as `Request`s; streams and the off-contract
+    // routes still call `fetch(url, init)`.
+    if (input instanceof Request) {
+      return input.headers.get('Authorization') ?? undefined;
+    }
     const headers = (init as RequestInit | undefined)?.headers as Record<string, string> | undefined;
-    return headers?.Authorization;
+    // Header names survive a `Request` in lower case.
+    return headers?.Authorization ?? headers?.authorization;
   });
+}
+
+/** The path a mocked call asked for, whichever shape it used. */
+function routeOf(input: RequestInfo | URL): string {
+  return input instanceof Request ? new URL(input.url).pathname : String(input);
 }
 
 async function find<T extends Element>(selector: string): Promise<T> {
@@ -184,7 +197,7 @@ beforeEach(() => {
   vi.stubGlobal('EventSource', FakeEventSource);
 
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const route = String(input);
+    const route = routeOf(input);
     if (route === '/v1/health') {
       return json(HEALTH);
     }
@@ -199,7 +212,7 @@ beforeEach(() => {
     }
     return new Response('not found', { status: 404 });
   });
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', plainFetch(fetchMock as unknown as PlainFetch));
 
   // happy-dom implements <dialog>; if a version ever does not, the About effect
   // would throw on mount and every test would fail for a reason that is not the

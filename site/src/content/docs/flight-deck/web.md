@@ -169,8 +169,8 @@ Between the command and the page there is one step people miss: this daemon is t
 same one the CLI and the TUI talk to, so `/` shows the build that is running right
 now rather than a version baked into a bundle weeks ago.
 
-Still open from the web phase: the routes above, the generated API client, the
-CodeMirror editor, and creating a pane from the page (it attaches to panes, and with
+Still open from the web phase: the routes above, the CodeMirror editor, and
+creating a pane from the page (it attaches to panes, and with
 a session open it now holds the id `POST /v1/terminals` wants, but it makes no such
 request). What exists now is the shape they hang on — embedded, self-serving, one
 file, no asset directory to lose.

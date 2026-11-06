@@ -10923,7 +10923,9 @@ dependencies = [
  "acpilot-agent",
  "acpilot-extensions",
  "acpilot-showcase",
+ "acpilotd",
  "clap",
+ "serde_json",
 ]
 
 [[package]]

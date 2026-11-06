@@ -42,6 +42,17 @@ enum Task {
     /// developer's shell does not. It is the mirror of `check --no-web`, which is
     /// everything except this.
     WebCheck,
+    /// Write the web client's copy of the daemon's OpenAPI document, or compare it
+    /// with the committed one.
+    ///
+    /// The document is committed because the TypeScript generated from it is
+    /// committed: a generator that asked a running daemon would be a build step
+    /// that only works on the machine that has one. `web-check` runs the compare.
+    WebSchema {
+        /// Compare instead of writing; a difference fails.
+        #[arg(long)]
+        check: bool,
+    },
     /// The desktop shell's half of the gate alone: its lint, its link, and its
     /// tests.
     ///
@@ -138,6 +149,13 @@ fn main() -> ExitCode {
         Task::Check { no_web } => run_check(no_web),
         Task::WebCheck => {
             if check_web() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Task::WebSchema { check } => {
+            if write_web_schema(check) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -362,6 +380,65 @@ fn run_app(app: App, args: &[String]) -> ExitCode {
     }
 }
 
+/// Write — or with `check`, compare — the OpenAPI document the web client is
+/// generated from.
+///
+/// Sorted by key because the same document must produce the same bytes from two
+/// builds: `serde_json`'s map order depends on whether the `preserve_order`
+/// feature was unified into the build, which differs between `cargo test -p` and a
+/// workspace build. Key order is not a wire property.
+fn write_web_schema(check: bool) -> bool {
+    let document =
+        serde_json::to_value(acpilotd::openapi_document()).expect("an OpenAPI document is JSON");
+    let rendered = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&canonical_document(document)).expect("valid JSON serialises")
+    );
+    let path = path_in_repo(WEB_OPENAPI);
+
+    if check {
+        if fs::read_to_string(&path).unwrap_or_default() != rendered {
+            eprintln!(
+                "==> drift (web): {} is not the document this build serves; run `cargo xtask web-schema` and commit it",
+                path.display()
+            );
+            return false;
+        }
+        return true;
+    }
+
+    match fs::write(&path, rendered) {
+        Ok(()) => {
+            println!("==> wrote {WEB_OPENAPI}");
+            true
+        }
+        Err(error) => {
+            eprintln!("==> schema (web): cannot write {}: {error}", path.display());
+            false
+        }
+    }
+}
+
+/// Sort every object key, recursively, so the committed document is byte-stable.
+fn canonical_document(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonical_document(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(canonical_document).collect())
+        }
+        other => other,
+    }
+}
+
 /// The address `cargo xtask dev` binds the daemon to.
 ///
 /// `web/vite.config.ts` proxies `/v1` to exactly this address, so the fact is
@@ -471,13 +548,26 @@ fn check_web() -> bool {
     if !install_web_dependencies() {
         return false;
     }
+    if !write_web_schema(true) {
+        return false;
+    }
 
+    // Read before the scripts and again after: `schema` regenerates the types, so a
+    // change is a committed file that is behind the document it was generated from.
+    let types = web_dir().join(WEB_TYPES);
+    let types_before = fs::read(&types).unwrap_or_default();
     for (label, args) in WEB_UNIT_STEPS {
         let mut command = Command::new(npm());
         command.args(args).current_dir(web_dir());
         if !run_step(label, command) {
             return false;
         }
+    }
+    if fs::read(&types).unwrap_or_default() != types_before {
+        eprintln!(
+            "==> drift (web): {WEB_TYPES} is not what `npm run schema` writes; commit the regenerated file"
+        );
+        return false;
     }
 
     // `npm run test:live` spawns the daemon this checkout built, so one has to
@@ -510,10 +600,18 @@ fn check_web() -> bool {
 /// Named here rather than written out at each call so a test can hold them against
 /// `web/package.json`: a renamed script would otherwise fail as `Missing script`,
 /// which reads like a broken checkout.
-const WEB_UNIT_STEPS: [(&str, &[&str]); 2] = [
+const WEB_UNIT_STEPS: [(&str, &[&str]); 3] = [
+    // First, because the type check is what reads the generated file.
+    ("schema (web)", &["run", "schema"]),
     ("types (web)", &["run", "check"]),
     ("test (web)", &["test"]),
 ];
+
+/// The generated TypeScript, relative to `web/`.
+const WEB_TYPES: &str = "src/api/schema.d.ts";
+
+/// The committed document, relative to the repository root.
+const WEB_OPENAPI: &str = "web/src/api/openapi.json";
 
 /// The live test, after the daemon build it needs. Separate from the pair above
 /// because of that build step, not because of the command.

@@ -35,13 +35,27 @@ const SESSION = {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
+// A typed call goes out as a `Request`; the two hand-written routes still call
+// `fetch(path, init)`. The helpers read both shapes so a test can say what it
+// means — the header and the path — without knowing which call made it.
+function request(call: number): Request {
+  const input = fetchMock.mock.calls[call]?.[0] as Request | string | undefined;
+  if (input instanceof Request) {
+    return input;
+  }
+  return new Request(
+    new URL(String(input), 'http://localhost'),
+    fetchMock.mock.calls[call]?.[1] as RequestInit | undefined,
+  );
+}
+
 function authorization(call: number): string | undefined {
-  const init = fetchMock.mock.calls[call]?.[1] as RequestInit | undefined;
-  return (init?.headers as Record<string, string> | undefined)?.Authorization;
+  return request(call).headers.get('Authorization') ?? undefined;
 }
 
 function path(call: number): string {
-  return String(fetchMock.mock.calls[call]?.[0]);
+  const url = new URL(request(call).url, 'http://localhost');
+  return url.pathname + url.search;
 }
 
 beforeEach(() => {
@@ -112,6 +126,10 @@ describe('the token on the wire', () => {
     expect(rows.map((row) => row.id)).toEqual(['session-1']);
     expect(path(0)).toBe('/v1/sessions');
     expect(authorization(0)).toBe('Bearer s3cret');
+    expect(request(0).method).toBe('GET');
+    // A browser refuses `new Request('/v1/sessions')`; the client must hand it an
+    // absolute URL, which is why the base URL is the page's own origin.
+    expect(new URL(request(0).url).origin).toBe(location.origin);
   });
 
   it('a refusal is an error the page can act on, not a JSON parse failure', async () => {

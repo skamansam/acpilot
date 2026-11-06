@@ -1,12 +1,20 @@
 // The daemon API, as much of it as the shell uses.
 //
-// Hand-written rather than generated from the OpenAPI document: the generated
-// client (P11-2) is a phase of its own, and the routes here are small enough that
-// a wrong field name is caught by `svelte-check` in the component instead of by a
-// browser at runtime. When the generated client lands, this module is the only
-// thing that changes.
+// The calls go through `openapi-fetch` against `api/schema.d.ts`, which
+// `npm run schema` generates from `api/openapi.json` — the document the daemon
+// serves, committed. A renamed field or a missing route is a type error here
+// rather than a browser that draws nothing.
+//
+// Two routes are not in that document and keep hand-written shapes, said out loud
+// so they are not mistaken for generated ones: `/v1/health`, the liveness answer
+// the contract never described, and `/app/stats`, which is a rendering of the
+// contract rather than part of it.
 
-/** What `GET /v1/health` answers. */
+import createClient from 'openapi-fetch';
+
+import type { components, paths } from './api/schema';
+
+/** What `GET /v1/health` answers. Not in the OpenAPI document: see above. */
 export interface Health {
   ok: boolean;
   service: string;
@@ -17,48 +25,19 @@ export interface Health {
 }
 
 /** Lifecycle state, as `GET /v1/sessions` spells it. */
-export type SessionStatus =
-  | 'idle'
-  | 'busy'
-  | 'awaiting_permission'
-  | 'closed'
-  | 'failed';
+export type SessionStatus = components['schemas']['SessionStatus'];
 
 /** One row of `GET /v1/sessions`. */
-export interface SessionSummary {
-  id: string;
-  workspace_id: string;
-  agent_id: string;
-  title: string;
-  status: SessionStatus;
-  created_at: string;
-  updated_at: string;
-}
+export type SessionSummary = components['schemas']['SessionSummary'];
 
 /** Availability, as `GET /v1/agents` spells it. */
-export type AgentStatus = 'available' | 'missing' | 'unhealthy' | 'untrusted';
+export type AgentStatus = components['schemas']['AgentStatus'];
 
 /** One row of `GET /v1/agents`: an agent this profile configured. */
-export interface AgentSummary {
-  id: string;
-  name: string;
-  transport: 'acp_stdio' | 'pty' | 'http_json_rpc';
-  status: AgentStatus;
-  /** The command that will be spawned, for display. */
-  command: string;
-  protocol_version?: string;
-}
+export type AgentSummary = components['schemas']['AgentSummary'];
 
 /** The closed set of things that can happen on a session's stream. */
-export type SessionEventKind =
-  | 'message_chunk'
-  | 'thought'
-  | 'tool_call'
-  | 'plan'
-  | 'mode_changed'
-  | 'notice'
-  | 'compaction'
-  | 'commands_changed';
+export type SessionEventKind = components['schemas']['SessionEventKind'];
 
 /**
  * One frame of `GET /v1/sessions/{id}/events`.
@@ -67,62 +46,25 @@ export type SessionEventKind =
  * adapter puts different fields there, and a page that refused the ones it did
  * not know would hide a turn instead of drawing what it could.
  */
-export interface SessionEvent {
-  seq: number;
-  session_id: string;
-  kind: SessionEventKind;
-  at: string;
-  payload: Record<string, unknown>;
-}
+export type SessionEvent = components['schemas']['SessionEvent'];
 
 /** What a caller may answer a permission request with. */
-export type PermissionOption = 'allow_once' | 'allow_always' | 'deny';
+export type PermissionOption = components['schemas']['PermissionOption'];
 
 /** One pending request, as `GET /v1/permissions?status=pending` lists it. */
-export interface PermissionRequest {
-  id: string;
-  session_id: string;
-  kind: string;
-  title: string;
-  detail: string;
-  options: PermissionOption[];
-  created_at: string;
-}
+export type PermissionRequest = components['schemas']['PermissionRequest'];
 
 /** The decision the daemon applied, with the name of who made it. */
-export interface PermissionDecision {
-  option: PermissionOption;
-  decided_by: string;
-  at: string;
-}
+export type PermissionDecision = components['schemas']['PermissionDecision'];
 
 /** `POST /v1/sessions/{id}/cancel`'s answer. */
-export interface CancelAccepted {
-  turn_id: string | null;
-  cancelled: boolean;
-}
+export type CancelAccepted = components['schemas']['CancelAccepted'];
 
 /** `POST /v1/sessions/{id}/prompt`'s answer: the turn was accepted, not finished. */
-export interface PromptAccepted {
-  session_id: string;
-  turn_id: string;
-  first_seq: number;
-}
+export type PromptAccepted = components['schemas']['PromptAccepted'];
 
 /** One row of `GET /v1/terminals`: a pane a client may attach to. */
-export interface TerminalSummary {
-  id: string;
-  /** Absent for a pane no session owns: another workspace's shell, or an agent's
-   * shell whose session the daemon could not map. */
-  session_id?: string;
-  /** The workspace the pane runs in, when it is not this daemon's own. */
-  workspace?: string;
-  /** The host it runs on, when it is not this daemon's machine (`ssh:me@box`). */
-  host?: string;
-  size: { cols: number; rows: number };
-  alive: boolean;
-  command: string;
-}
+export type TerminalSummary = components['schemas']['TerminalSummary'];
 
 /** Where one figure came from, as the daemon spells it. */
 export type StatSource = 'server' | 'configured' | 'estimated' | 'unknown';
@@ -187,17 +129,72 @@ export function writeToken(token: string): void {
   }
 }
 
+/** The headers every typed call carries. The token travels here, never in a URL. */
+function auth(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+}
+
+/** The typed client, on paths generated from the document the daemon serves. */
+const client = createClient<paths>({
+  // Absolute, because the client builds a `Request` before it calls fetch and a
+  // browser refuses `new Request('/v1/sessions')` — a relative base would work in
+  // the test DOM and throw in the page. The page is served by the daemon it talks
+  // to, so its own origin is the right one.
+  baseUrl: globalThis.location?.origin ?? '',
+  // Resolved per call, not captured at import: a test that stubs `globalThis.fetch`
+  // after importing this module must get its stub rather than the network, and a
+  // page that installs a proxy fetch later should get that one.
+  fetch: (request) => globalThis.fetch(request),
+});
+
+client.use({
+  async onResponse({ response }) {
+    if (response.ok) {
+      return response;
+    }
+    if (response.status === 401) {
+      throw new ApiError(
+        401,
+        'That token was not accepted. Copy it from the daemon log or token file.',
+      );
+    }
+    // The daemon answers errors as JSON when it can; a proxy in front of it may
+    // answer HTML instead, which is why the body is not parsed as a contract.
+    // Cloned because the client has already read the body it parsed.
+    const body = await response.clone().text().catch(() => '');
+    throw new ApiError(
+      response.status,
+      body.trim() || `The daemon answered ${response.status} ${response.statusText}.`,
+    );
+  },
+});
+
+/**
+ * The body of a successful answer.
+ *
+ * A 2xx with no body is a daemon this page cannot use; saying so once, here, keeps
+ * every call below from carrying a branch it never takes.
+ */
+function answered<T>(result: { data?: T; response: Response }): T {
+  if (result.data === undefined) {
+    throw new ApiError(result.response.status, 'The daemon answered without a body.');
+  }
+  return result.data;
+}
+
+/** A `GET` for the two routes the document does not describe. */
 async function get<T>(path: string, token: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    headers: auth(token),
     signal,
   });
   if (response.status === 401) {
-    throw new ApiError(401, 'That token was not accepted. Copy it from the daemon log or token file.');
+    throw new ApiError(
+      401,
+      'That token was not accepted. Copy it from the daemon log or token file.',
+    );
   }
   if (!response.ok) {
-    // The daemon answers errors as JSON when it can; a proxy in front of it may
-    // answer HTML instead, which is why the body is not parsed as a contract.
     const body = await response.text().catch(() => '');
     throw new ApiError(
       response.status,
@@ -211,8 +208,11 @@ export function health(token: string, signal?: AbortSignal): Promise<Health> {
   return get<Health>('/v1/health', token, signal);
 }
 
-export function sessions(token: string, signal?: AbortSignal): Promise<SessionSummary[]> {
-  return get<SessionSummary[]>('/v1/sessions', token, signal);
+export async function sessions(
+  token: string,
+  signal?: AbortSignal,
+): Promise<SessionSummary[]> {
+  return answered(await client.GET('/v1/sessions', { headers: auth(token), signal }));
 }
 
 /**
@@ -234,36 +234,16 @@ export function stats(token: string, signal?: AbortSignal): Promise<StatRow[]> {
  * workspace, or an agent's shell whose session could not be mapped), and asking
  * for one session's panes hides a process that is still running.
  */
-export function terminals(token: string, signal?: AbortSignal): Promise<TerminalSummary[]> {
-  return get<TerminalSummary[]>('/v1/terminals', token, signal);
+export async function terminals(
+  token: string,
+  signal?: AbortSignal,
+): Promise<TerminalSummary[]> {
+  return answered(await client.GET('/v1/terminals', { headers: auth(token), signal }));
 }
 
 /** `GET /v1/agents` — the profile's agents and whether this host can run them. */
-export function agents(token: string, signal?: AbortSignal): Promise<AgentSummary[]> {
-  return get<AgentSummary[]>('/v1/agents', token, signal);
-}
-
-async function send<T>(path: string, body: unknown, token: string): Promise<T> {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (response.status === 401) {
-    throw new ApiError(401, 'That token was not accepted. Copy it from the daemon log or token file.');
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new ApiError(
-      response.status,
-      text.trim() || `The daemon answered ${response.status} ${response.statusText}.`,
-    );
-  }
-  return (await response.json()) as T;
+export async function agents(token: string, signal?: AbortSignal): Promise<AgentSummary[]> {
+  return answered(await client.GET('/v1/agents', { headers: auth(token), signal }));
 }
 
 /**
@@ -273,15 +253,17 @@ async function send<T>(path: string, body: unknown, token: string): Promise<T> {
  * page is connected, and this is how a page that just opened learns the ones it
  * was not there for.
  */
-export function pendingPermissions(
+export async function pendingPermissions(
   token: string,
   session: string,
   signal?: AbortSignal,
 ): Promise<PermissionRequest[]> {
-  return get<PermissionRequest[]>(
-    `/v1/permissions?status=pending&session=${encodeURIComponent(session)}`,
-    token,
-    signal,
+  return answered(
+    await client.GET('/v1/permissions', {
+      params: { query: { status: 'pending', session } },
+      headers: auth(token),
+      signal,
+    }),
   );
 }
 
@@ -292,15 +274,17 @@ export function pendingPermissions(
  * decision, a different option after one was applied is `409` because the agent
  * has already acted. `deny` is an answer, not a dismissal.
  */
-export function resolvePermission(
+export async function resolvePermission(
   id: string,
   option: PermissionOption,
   token: string,
 ): Promise<PermissionDecision> {
-  return send<PermissionDecision>(
-    `/v1/permissions/${encodeURIComponent(id)}/resolve`,
-    { option },
-    token,
+  return answered(
+    await client.POST('/v1/permissions/{id}/resolve', {
+      params: { path: { id } },
+      body: { option },
+      headers: auth(token),
+    }),
   );
 }
 
@@ -311,14 +295,12 @@ export function resolvePermission(
  * not serve and substitutes its own when the field is empty, and the page has no
  * second root to offer. `title` is left out — the first prompt supplies one.
  */
-export function createSession(
-  agent: string,
-  token: string,
-): Promise<SessionSummary> {
-  return send<SessionSummary>(
-    '/v1/sessions',
-    { workspace_id: '', agent_id: agent },
-    token,
+export async function createSession(agent: string, token: string): Promise<SessionSummary> {
+  return answered(
+    await client.POST('/v1/sessions', {
+      body: { workspace_id: '', agent_id: agent },
+      headers: auth(token),
+    }),
   );
 }
 
@@ -329,11 +311,17 @@ export function createSession(
  * The idempotency key is generated per press so a retried request is the same
  * prompt rather than a second agent run.
  */
-export function promptSession(id: string, text: string, token: string): Promise<PromptAccepted> {
-  return send<PromptAccepted>(
-    `/v1/sessions/${encodeURIComponent(id)}/prompt`,
-    { text, idempotency_key: newIdempotencyKey() },
-    token,
+export async function promptSession(
+  id: string,
+  text: string,
+  token: string,
+): Promise<PromptAccepted> {
+  return answered(
+    await client.POST('/v1/sessions/{id}/prompt', {
+      params: { path: { id } },
+      body: { text, idempotency_key: newIdempotencyKey() },
+      headers: auth(token),
+    }),
   );
 }
 
@@ -352,6 +340,11 @@ function newIdempotencyKey(): string {
  * Cancelling an idle session is `202` with `cancelled: false` rather than an
  * error: the caller's intent is already true.
  */
-export function cancelSession(id: string, token: string): Promise<CancelAccepted> {
-  return send<CancelAccepted>(`/v1/sessions/${encodeURIComponent(id)}/cancel`, {}, token);
+export async function cancelSession(id: string, token: string): Promise<CancelAccepted> {
+  return answered(
+    await client.POST('/v1/sessions/{id}/cancel', {
+      params: { path: { id } },
+      headers: auth(token),
+    }),
+  );
 }

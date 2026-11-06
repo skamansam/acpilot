@@ -2342,6 +2342,7 @@ fn read_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     get,
+    operation_id = "list_files",
     path = "/v1/files/list",
     tag = "files",
     summary = "List a directory",

@@ -121,6 +121,49 @@ async fn wrong_methods_and_routes_do_not_fall_through_to_the_api() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Collect every `$ref` the document contains, at any depth.
+fn references(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(reference)) = map.get("$ref") {
+                found.push(reference.clone());
+            }
+            for value in map.values() {
+                references(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                references(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn every_reference_in_the_served_document_resolves() {
+    // A `$ref` to a schema nobody registered is a document a strict client refuses
+    // to generate from — which is how this was found, by pointing
+    // `openapi-typescript` at it. The snapshot cannot see it: it is valid JSON and
+    // the missing component is only a name.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    let body = body_of(state, "/v1/openapi.json").await;
+    let document: serde_json::Value = serde_json::from_str(&body).expect("the document is JSON");
+    let mut found = Vec::new();
+    references(&document, &mut found);
+    assert!(!found.is_empty(), "the document has operations");
+    for reference in found {
+        let pointer = reference
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("{reference} is not a local reference"));
+        assert!(
+            document.pointer(pointer).is_some(),
+            "{reference} does not resolve"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_page_is_served_at_the_root_with_its_policy() {
     let response = router()

@@ -1981,6 +1981,46 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "ReferencesRequest": {
+        "description": "Request body for `POST /v1/files/references`.\n\nThe query-string form of the same question, plus the buffer the editor is holding.\nA file edited and not saved is the file the person is reading, so the search has\nto run over the text that was sent rather than over what the last save left on\ndisk — otherwise a use typed a moment ago is missing from the list and a use\ndeleted a moment ago is still in it.",
+        "properties": {
+          "offset": {
+            "description": "The caret's offset in that file, counted in characters, which is what a server\nresolves a name to a symbol with.\n\nCharacters rather than bytes because a caret is a glyph: the daemon converts to\nthe server's own unit, and a byte offset would drift left of the caret the first\ntime a line held a `日`. Absent means no caret: the text is still the version the\nsearch reads, and no server is asked, because resolving a name needs a place.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The file the caret is in, workspace-relative.",
+            "type": "string"
+          },
+          "q": {
+            "description": "The identifier to look for: one word.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it, for the file `path` names.\n\nSent for the open file only: the rest of the workspace is read where it is,\nbecause a client for a remote daemon does not have it. Sending it is not a\nsave — nothing here writes — and the daemon never asks for a second copy of a\nfile it can read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "q",
+          "path"
+        ],
+        "type": "object"
+      },
       "RunRequest": {
         "description": "Request body for `POST /v1/recipes/{id}/runs`.",
         "properties": {
@@ -2187,7 +2227,11 @@ expression: canonical(document)
             "description": "What happened."
           },
           "payload": {
-            "description": "Kind-specific payload.",
+            "additionalProperties": {},
+            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\", and a client generated from that refuses\nevery payload an adapter actually sends.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "seq": {

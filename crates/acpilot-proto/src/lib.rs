@@ -87,6 +87,7 @@ pub const API_PREFIX: &str = "/v1";
         file::LineChange,
         file::LineMark,
         file::Reference,
+        file::ReferencesRequest,
         project::ProjectMap,
         project::MapArea,
         terminal::TerminalSize,

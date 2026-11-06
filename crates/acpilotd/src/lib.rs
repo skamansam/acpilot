@@ -1482,6 +1482,17 @@ fn option_str(option: PermissionOption) -> &'static str {
 }
 
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(openapi_document())
+}
+
+/// The document `/v1/openapi.json` serves, and the one the web client's
+/// TypeScript is generated from.
+///
+/// Public because the generated client must be generated from the *served*
+/// document: the schemas come from `acpilot-proto`, but the paths are inserted
+/// here, one per module, so a document assembled anywhere else would be the
+/// components without a single operation in them.
+pub fn openapi_document() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
     // Trust is a route of its own module: what a pin is and where it lives is
     // documented there, and the document only needs the operation.
@@ -1542,7 +1553,7 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             _ => {}
         }
     }
-    Json(document)
+    document
 }
 
 /// OpenAPI registration for the pending list.

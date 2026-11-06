@@ -1567,6 +1567,7 @@ pub fn routes() -> Router<AppState> {
 #[allow(dead_code)]
 #[utoipa::path(
     get,
+    operation_id = "list_sessions",
     path = "/v1/sessions",
     tag = "sessions",
     summary = "List sessions",
@@ -1577,6 +1578,7 @@ fn list_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     post,
+    operation_id = "create_session",
     path = "/v1/sessions",
     tag = "sessions",
     summary = "Start a session",
@@ -1654,6 +1656,7 @@ fn cancel_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     get,
+    operation_id = "session_events",
     path = "/v1/sessions/{id}/events",
     tag = "sessions",
     summary = "Follow a session's events",

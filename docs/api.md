@@ -52,6 +52,14 @@ right and this file is a bug.
 - **Errors are always the envelope below**, including on SSE handshakes and from
   the WS upgrade when the request itself is bad.
 
+## The document is also a build input
+
+`web/src/api/openapi.json` is the document the daemon serves, committed, and
+`web/src/api/schema.d.ts` is the TypeScript generated from it. `cargo xtask
+web-schema` writes the first and `npm run schema` the second; the web half of the
+gate regenerates both and fails when the committed copies are behind, so a wire
+change cannot land without the page's types moving with it.
+
 ## Endpoints
 
 Frozen for v1. `WS` routes are upgraded, not JSON responses.

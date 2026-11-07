@@ -56,6 +56,9 @@ pub mod pidfile;
 mod platform;
 mod project;
 mod pty_remote;
+// Every profile under `<config>/profiles`, and the header rule that picks one per
+// request: `GET /v1/profiles` and `X-Acpilot-Profile` are its surface.
+pub mod profiles;
 mod sessions;
 mod stats;
 mod terminals;
@@ -1534,6 +1537,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
     // Trust is a route of its own module: what a pin is and where it lives is
     // documented there, and the document only needs the operation.
     trust::register(&mut document);
+    profiles::register(&mut document);
     let paths = &mut document.paths.paths;
     paths.insert(
         "/v1/agents".to_owned(),

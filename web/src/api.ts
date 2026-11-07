@@ -147,10 +147,10 @@ export function writeToken(token: string): void {
  * The profile the page's address names.
  *
  * Kept beside the token because it is the same kind of fact — a request needs it,
- * and no response carries it. `setProfile` is called from one place, the page's
- * route change, so a request cannot be sent for a profile the address does not
- * say. The daemon serves one profile today and ignores the header; the field is
- * what the address and the streams agree on until `GET /v1/profiles` lands (P4-8).
+ * and no response carries it. `setProfile` is called from the page's route change,
+ * so a request cannot be sent for a profile the address does not say. The daemon
+ * resolves it to one of the profiles it serves; `activate` is what makes the
+ * streams, which carry no header, agree with the next address.
  */
 let profile = '';
 
@@ -287,16 +287,31 @@ export function workspaces(token: string, signal?: AbortSignal): Promise<Workspa
   return get<WorkspaceSummary[]>('/v1/workspaces', token, signal);
 }
 
+/** `GET /v1/profiles` — every profile this daemon serves, the active one marked. */
+export async function profiles(token: string, signal?: AbortSignal): Promise<ProfileSummary[]> {
+  return answered(await client.GET('/v1/profiles', { headers: auth(token), signal }));
+}
+
 /**
- * `GET /v1/profiles` — the profiles a daemon that implements P4-8 serves.
+ * `POST /v1/profiles/{id}/activate` — the profile headerless reads are about.
  *
- * Off the document on purpose: the profiles API is not in the frozen contract
- * yet, so this is a probe of the daemon rather than a route the page can rely on.
- * A `404` is the answer a single-profile build gives, and the page then shows the
- * one profile its address already names.
+ * The page calls this before it moves the address, because the streams bind at
+ * connect and cannot carry the header: the palette is the active profile's until
+ * it reconnects, so activating first is what makes the new address and the new
+ * colours agree.
  */
-export function profiles(token: string, signal?: AbortSignal): Promise<ProfileSummary[]> {
-  return get<ProfileSummary[]>('/v1/profiles', token, signal);
+export async function activateProfile(id: string, token: string): Promise<ProfileSummary> {
+  return answered(
+    await client.POST('/v1/profiles/{id}/activate', {
+      params: { path: { id } },
+      // The header names the profile the request is about, not the page's current
+      // one. The route lives on the daemon's profiles router rather than a
+      // profile's, so it reads the path; and the address moves only after the
+      // daemon agrees, so a click on the first frame — before health has been
+      // adopted — would otherwise carry no profile header at all.
+      headers: { ...auth(token), 'X-Acpilot-Profile': id },
+    }),
+  );
 }
 
 /** `GET /v1/sessions/{id}` — one session, for an address that names one. */

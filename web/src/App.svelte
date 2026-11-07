@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import {
     ApiError,
+    activateProfile,
     agents as listAgents,
     createSession,
     health,
@@ -40,6 +41,12 @@
   // profile and workspace after health answers.
   const initialRoute = parseRoute(location.pathname);
   let route = $state<Route>(initialRoute ?? { profile: DEFAULT_PROFILE });
+  // Whether the address's profile is one the daemon has confirmed. A bare `/`
+  // has not named one, so the first load asks without the header (the active
+  // profile) and adopts `health.profile`; every load after that names it. Sending
+  // the default before asking would be a header naming an identity the daemon
+  // may not serve, and it refuses that rather than ignoring it.
+  let adopted = false;
 
   let token = $state(readToken());
   let draft = $state('');
@@ -92,6 +99,10 @@
   let chosenAgent = $state('');
   let creating = $state(false);
   let createError = $state<string | null>(null);
+  // Why a profile switch was refused. The address only moves once the daemon has
+  // accepted the activation, so a failed switch leaves the page on the profile it
+  // is actually talking to rather than on the one it asked for.
+  let profileError = $state<string | null>(null);
   // Provenance is one click away, the same key (F4) the terminal uses: a bar has no
   // room for where a number came from, and a bar that never says is a claim.
   let sources = $state(false);
@@ -143,11 +154,28 @@
     }
   }
 
+  /**
+   * Open the palette stream, replacing one that is already open.
+   *
+   * The stream is one of the two subscriptions that cannot carry
+   * `X-Acpilot-Profile` (an `EventSource` sends no headers), so it binds the
+   * active profile when it connects. A switch therefore reconnects it; leaving
+   * the old socket open would repaint the new profile's page with the previous
+   * profile's colours, which is the one way a theme can lie about identity.
+   */
+  function followPalette(): void {
+    paletteSource?.close();
+    paletteSource = new EventSource('/app/palette/events');
+    paletteSource.addEventListener('palette', (event) => {
+      applyPalette(event as MessageEvent<string>);
+    });
+  }
+
   async function load(): Promise<void> {
     if (!token) {
       return;
     }
-    setProfile(route.profile);
+    setProfile(initialRoute !== null || adopted ? route.profile : '');
     controller?.abort();
     const current = new AbortController();
     controller = current;
@@ -193,6 +221,14 @@
           navigate({ profile: route.profile, workspace: served }, true);
         }
       }
+      // From here on the address names a profile the daemon has just reported, so
+      // the panes that mount after this load can send it too. A daemon with no
+      // profile keeps geting no header: it has no name to accept.
+      adopted = Boolean(status.profile);
+      if (status.profile && route.profile !== status.profile) {
+        route = { ...route, profile: status.profile };
+      }
+      setProfile(adopted ? route.profile : '');
       integrations = bar ?? [];
       panes = terminals ? panesFor(terminals, openSession) : [];
       statsNote = bar
@@ -399,14 +435,28 @@
     navigate({ profile: route.profile, ...(value ? { workspace: value } : {}) });
   }
 
-  function switchProfile(event: Event): void {
-    const value = (event.currentTarget as HTMLSelectElement).value;
+  async function switchProfile(event: Event): Promise<void> {
+    const select = event.currentTarget as HTMLSelectElement;
+    const value = select.value;
     if (!value || value === route.profile) {
       return;
     }
-    // The header is how every request names a profile, so the change is a reload
-    // rather than a filter over rows fetched for the old one.
+    profileError = null;
+    try {
+      // Activation first: it is what a headerless read — and the palette stream
+      // about to reconnect — will be about. The address moves only after the
+      // daemon has agreed, so a refused switch is not a page showing one profile
+      // under another one's name.
+      await activateProfile(value, token);
+    } catch (cause) {
+      profileError = cause instanceof ApiError ? cause.message : String(cause);
+      select.value = route.profile;
+      return;
+    }
+    // The header is how every request names a profile, so the change re-reads the
+    // page's data rather than filtering rows fetched for the old identity.
     navigate({ profile: value, ...(route.workspace ? { workspace: route.workspace } : {}) });
+    followPalette();
     void load();
   }
 
@@ -423,10 +473,7 @@
     if (token) {
       void load();
     }
-    paletteSource = new EventSource('/app/palette/events');
-    paletteSource.addEventListener('palette', (event) => {
-      applyPalette(event as MessageEvent<string>);
-    });
+    followPalette();
     return () => {
       window.removeEventListener('popstate', followed);
       controller?.abort();
@@ -458,11 +505,11 @@
       <select
         id="profile"
         value={route.profile}
-        onchange={switchProfile}
+        onchange={(event) => void switchProfile(event)}
         disabled={profileList.length < 2}
         title={profileList.length < 2
-          ? 'This daemon serves one profile. Switching needs the profiles API (P4-8).'
-          : 'Requests name this profile in X-Acpilot-Profile.'}
+          ? 'This daemon serves one profile; there is nothing to switch to.'
+          : 'Switching activates the profile here and sends X-Acpilot-Profile on every request.'}
       >
         {#each profileList as entry (entry.id)}
           <option value={entry.id}>{entry.label}</option>
@@ -494,6 +541,9 @@
         Connected to the daemon at this address. Everything it will do for this
         browser needs the token you gave it, and nothing else is stored.
       </p>
+      {#if profileError}
+        <p class="error" role="alert">{profileError}</p>
+      {/if}
 
       <dl class="facts">
         <div>

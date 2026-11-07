@@ -112,8 +112,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The state and the background work are one call so that the embedded daemon
     // a client runs in its own process (P6-11) gets exactly what this binary gives.
-    let state =
-        acpilotd::startup(config.profile.as_deref(), &config.workspace)?.with_cors(config.cors);
+    // Every profile under the config root, plus the one the flags named: the
+    // daemon answers `GET /v1/profiles`, and a request names its profile in
+    // `X-Acpilot-Profile`. A profile that does not load costs its own row, not the
+    // others — except the started one, whose refusal is the launch's.
+    let profiles = std::sync::Arc::new(acpilotd::profiles::Profiles::discover(
+        config.profile.as_deref(),
+        &config.workspace,
+        config.cors,
+    )?);
     tracing::info!(
         endpoint = %config.target,
         database = %config.database.display(),
@@ -122,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     acpilotd::serve(
-        acpilotd::router_with(state.clone()),
+        acpilotd::profiles::router(profiles.clone()),
         config.target.clone(),
         acpilotd::shutdown(),
     )
@@ -131,8 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The language servers are processes, and the router's drop is not their end:
     // a task holding an `AppState` clone keeps the registry alive past `serve`. So
     // the daemon stops them here, on the way out, with the same `shutdown`/`exit`
-    // pair and the same kill a probe in `acpilot-lsp` uses.
-    state.language_servers().shutdown().await;
+    // pair and the same kill a probe in `acpilot-lsp` uses — one per profile.
+    profiles.shutdown_language_servers().await;
 
     // Removed before the return, so a clean exit leaves no record saying a daemon
     // is running; the drop is idempotent, but the order here is the readable one.

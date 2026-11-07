@@ -798,6 +798,36 @@ Three rules:
     profile at connect; a global `GET /v1/events` carries only `profile.*` and `daemon.*`.
   - Generated TS/Rust clients take `profile` in their constructor, so forgetting it is a compile
     error, not a runtime surprise.
+  - **Started 2026-11-06 (the switcher's half):** `acpilotd` serves every profile directory under
+    `<config>/profiles` plus the one `--profile` named. `crates/acpilotd/src/profiles.rs` opens each
+    profile once — its policy, `agents.toml`, database, sessions, terminals and language servers —
+    and builds the router it would have had alone; a request is dispatched to the router its
+    `X-Acpilot-Profile` names, so a handler cannot reach another profile's state because its
+    `AppState` has no reference to it. `GET /v1/profiles` lists the `ProfileSummary` rows (the active
+    one marked, `agent_count` from that profile's registry), `GET /v1/profiles/{id}` answers one, and
+    `POST /v1/profiles/{id}/activate` makes a profile the answer for a headerless read — in memory
+    for the life of the process. An unknown name is `404` listing what the daemon serves; a mutating
+    request without the header is `400 invalid_request` when there are two or more profiles, while a
+    one-profile daemon keeps answering the TUI and CLI, which do not send it yet. A profile that
+    fails to load is skipped with a warning unless it is the one `--profile` named. The web page's
+    picker is now a real choice: it lists the profiles, activates the chosen one, moves the address
+    to `/p/<profile>/...`, reloads the page's data and reconnects the palette stream (an
+    `EventSource` sends no header, so it bound the previous active profile). **Tests:** 2 in the new
+    `crates/acpilotd/tests/profiles.rs` (listing and active marking; header selection of agents;
+    the missing-header `400`; the unknown-name `404` naming both profiles; activation changing
+    `/v1/health`; a broken profile not taking the good one with it) and 1 in `web/src/App.test.ts`
+    (activation POST, address, and the palette reconnect), with the document regenerated for the
+    three routes.
+  - **Open:** create, patch, delete, export and the preferences routes are not served — their request
+    shapes have no proto types yet, and adding them is a wire decision rather than a handler. Activation
+    is not persisted: `active_profile` in the settings cascade (P4-2) is what the next launch reads, so a
+    browser's choice lasts as long as the daemon. The started profile stays active by default, and a
+    daemon serving one profile does not require the header (deliberate: its older clients would break,
+    and there is no second identity to guess); the `400` applies from two profiles up. `acpilot-client`,
+    the TUI and the CLI do not send `X-Acpilot-Profile` yet, so a multi-profile daemon refuses their
+    mutations until they do — that client half and the generated constructors' `profile` argument are
+    still this task. `GET /v1/events` stays per-profile rather than global: it is still the profile's
+    stream, and the activation switch does not re-target an open one.
 
 - [ ] **P4-9 · CLI** (0.5d)
   - `acpilot profile new|ls|show|use|rm|export|import|diff`; global `--profile`, accepted before
@@ -1505,7 +1535,7 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 - [x] **P11-1** `web/`: Vite + Svelte 5 + TS; layout mirrors TUI panels; profile switcher bound to `X-Acpilot-Profile`; router for `/p/:profile/w/:workspace`, `/p/:profile/s/:session`. — **done 2026-11-06**
   - **Result (2026-11-06):** the address is the page's state. `web/src/routes.ts` parses and writes both published shapes (and the `/app/p/...` spelling the page was served under), the page pushes `/p/<profile>/s/<id>` when a session opens and `/p/<profile>/w/<name>` when the workspace picker moves, and back is a route change the page follows rather than a browser state it ignores. `acpilotd` serves the page at both addresses, so a refresh or a shared link lands on the same view instead of a 404; `GET /v1/health` gained `profile`, the profile directory's own name, because a browser cannot read the daemon's flags and a page that invented `default` would be naming a profile nobody started. Every typed call and both SSE streams carry `X-Acpilot-Profile`, and the workspace picker is filled from `GET /v1/workspaces` with sessions scoped by the row's id **or** label (both appear in links). A link naming a session the list does not have is resolved with `GET /v1/sessions/{id}`; one naming a session that is gone sends the page back to its workspace with the reason. The layout is now the cockpit's: profile and workspace in the top bar, sessions on the left, the transcript on the right, terminals and the stats bar below, stacking under 60rem. The profile switcher asks `GET /v1/profiles` and enables itself when a daemon answers; on today's single-profile daemon it shows the address's profile, disabled, with the reason in its title. **Tests:** 4 in the new `routes.test.ts` (both shapes round-trip with escapes, `/app` normalises, a bad escape is kept, workspace scoping by id and label), 3 in `App.test.ts` (a deep link resolves the session it names and sends its profile, opening a row moves the address, the workspace picker moves both address and table), and 2 in `crates/acpilotd/tests/http.rs` (health names the profile; both page addresses answer 200). The 61 existing web tests still pass, with the load's two new tolerant calls counted.
-  - **Open:** the daemon does not read `X-Acpilot-Profile` yet and does not serve `GET /v1/profiles` — that is P4-8, so on today's daemon the header is consistent but not an identity, and the switcher cannot list another profile. The terminal socket cannot carry the header (a browser sets no headers on a WebSocket), so an attach binds whatever profile the daemon serves; when P4-8 lands the subprotocol has to name the profile the way it names the token. The workspace picker's names are the daemon's labels, and a session's `workspace_id` is matched against both the label and the id rather than resolved by the daemon — a rename would need a reload to re-scope. `GET /v1/sessions` is still unfiltered by workspace (a client narrows, the daemon does not). The address names one session, so two panes of the same session cannot be open at once; that is a split-view question, not a routing one.
+  - **Open:** the daemon now reads `X-Acpilot-Profile` and serves `GET /v1/profiles` (P4-8's first half, 2026-11-06), so the switcher is a real choice; the header still travels by hand in the page rather than through a generated client constructor. The terminal socket cannot carry the header (a browser sets no headers on a WebSocket), so an attach still binds the active profile — the subprotocol has to name the profile the way it names the token, which is P4-8's remaining piece for sockets. The workspace picker's names are the daemon's labels, and a session's `workspace_id` is matched against both the label and the id rather than resolved by the daemon — a rename would need a reload to re-scope. `GET /v1/sessions` is still unfiltered by workspace (a client narrows, the daemon does not). The address names one session, so two panes of the same session cannot be open at once; that is a split-view question, not a routing one.
   - **Started 2026-10-24:** `web/` exists — Svelte 5 + Vite + TypeScript, `vite-plugin-singlefile` so the build is one HTML file with its script and stylesheet inlined, written straight into `crates/acpilot-web/assets/` and committed. Connect-with-token, health, and the session list are in; the router, the profile switcher and the panel layout are not.
   - **One command for the web too (2026-10-29):** `cargo xtask check` runs the web UI's steps: `npm run check`, `npm test`, a daemon build for `npm run test:live`, then `npm run build` and a `git status` comparison of the page it wrote. A type error `svelte-check` sees, a failing live repaint, or a `.svelte` edit nobody rebuilt now fails locally with the same messages the runner gives. They are `cargo xtask web-check`, which is also the `web` job's one step, so the two cannot drift; `check --no-web` leaves them out for a Rust-only loop.
   - **The dev loop (2026-10-28):** `cargo xtask web-build` is `npm run build` with the install and the drift answer around it — it ends by saying whether the committed page changed, which is the diff CI fails on. `cargo xtask dev` runs the daemon on `127.0.0.1:7777` with the Vite dev server over it, so a `.svelte` edit is a reload; the address is one fact in two languages, and a test compares the task with `web/vite.config.ts`. Either process stopping stops both.

@@ -32,9 +32,11 @@ the daemon serves the page at both, so a refresh or a link sent to a colleague
 lands on the same view. The profile segment comes from `GET /v1/health`, which
 names the directory the daemon was started with, and every request carries that
 profile as `X-Acpilot-Profile` — the streams too, because an SSE subscription
-binds its profile at connect. Switching profiles needs `GET /v1/profiles`, which
-a single-profile daemon does not serve yet (P4-8), so the picker shows the one the
-address names and says why it is a label rather than a choice.
+binds its profile at connect. The picker is filled from `GET /v1/profiles`;
+choosing a profile calls `POST /v1/profiles/{id}/activate`, moves the address,
+re-reads the page for the new identity and reconnects the palette stream, which
+binds at connect and cannot carry the header. A daemon that serves one profile
+disables the picker rather than offering a choice it cannot honour.
 
 ## Editing
 

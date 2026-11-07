@@ -618,10 +618,14 @@ fn run_serve(flags: ServeFlags) -> u8 {
         }
     };
     let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
-    // Inside the runtime: startup spawns the compaction and reaping timers.
-    let state = match runtime.block_on(async { acpilotd::startup(profile.as_deref(), &workspace) })
-    {
-        Ok(state) => state,
+    // Inside the runtime: startup spawns the compaction and reaping timers, once
+    // per profile. `serve` hosts every profile the config root holds, the same
+    // way `acpilotd` does; `--profile` chooses which one a headerless read is
+    // about, not which one exists.
+    let profiles = match runtime.block_on(async {
+        acpilotd::profiles::Profiles::discover(profile.as_deref(), &workspace, false)
+    }) {
+        Ok(profiles) => std::sync::Arc::new(profiles),
         Err(error) => {
             eprintln!("acpilot serve: {error}");
             return exit::FAILURE;
@@ -635,13 +639,13 @@ fn run_serve(flags: ServeFlags) -> u8 {
 
     runtime.block_on(async move {
         let served = acpilotd::serve(
-            acpilotd::router_with(state.clone()),
+            acpilotd::profiles::router(profiles.clone()),
             acpilotd::Target::Tcp(addr),
             acpilotd::shutdown(),
         )
         .await;
         // Language servers are processes, and the router's drop is not their end.
-        state.language_servers().shutdown().await;
+        profiles.shutdown_language_servers().await;
         match served {
             Ok(()) => exit::SUCCESS,
             Err(error) => {

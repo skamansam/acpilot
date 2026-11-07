@@ -3302,6 +3302,93 @@
         "summary": "Answer a pending request"
       }
     },
+    "/v1/profiles": {
+      "get": {
+        "description": "One row per profile directory that loaded, with the active one marked. A daemon started without a profile and with none on disk answers an empty list.",
+        "operationId": "list_profiles_doc",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every profile this daemon can serve"
+          }
+        },
+        "summary": "List the profiles this daemon serves"
+      }
+    },
+    "/v1/profiles/{id}": {
+      "get": {
+        "operationId": "read_profile_doc",
+        "parameters": [
+          {
+            "description": "The profile's directory name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSummary"
+                }
+              }
+            },
+            "description": "The profile"
+          },
+          "404": {
+            "description": "No profile by that name on this daemon"
+          }
+        },
+        "summary": "One profile"
+      }
+    },
+    "/v1/profiles/{id}/activate": {
+      "post": {
+        "description": "In memory for the life of this daemon: streams that bind at connect are unaffected until they reconnect, and persisting the choice is the settings cascade's job rather than a runtime request's.",
+        "operationId": "activate_profile_doc",
+        "parameters": [
+          {
+            "description": "The profile's directory name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSummary"
+                }
+              }
+            },
+            "description": "The profile, now active"
+          },
+          "404": {
+            "description": "No profile by that name on this daemon"
+          }
+        },
+        "summary": "Make a profile the one headerless reads are about"
+      }
+    },
     "/v1/project/map": {
       "get": {
         "operationId": "map_doc",

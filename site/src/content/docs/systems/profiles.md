@@ -72,5 +72,11 @@ practical answer to "why is it doing that?".
 
 ## Status
 
-Not started. The profiles phase (P4) will land the resolution function, the cascade, and the isolation
-tests before any UI exposes a profile switcher.
+Partial. A daemon serves every profile directory under `<config>/profiles` and
+dispatches each request by `X-Acpilot-Profile`: each profile has its own agents,
+policy, database, sessions and language servers. `GET /v1/profiles`, `GET
+/v1/profiles/{id}` and `POST /v1/profiles/{id}/activate` are served, and the web
+cockpit's profile picker uses them. Creating, renaming, deleting, exporting a
+profile and the per-profile preferences routes are still open (P4-8), as are
+resolution (`--profile` > environment > marker > `active_profile`) and the
+isolation matrix (P4-2, P4-10).

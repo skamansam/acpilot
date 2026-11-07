@@ -299,9 +299,10 @@ The list is **frozen** for v1, with the reasoning and the rejected alternatives 
 [`docs/api.md`](docs/api.md). Providers, models, recipes and the ACP bridge are deliberately
 later; none of them changes a route above.
 
-Every route takes `X-Acpilot-Profile`; on a mutating request the header is *required* — a
-client cannot silently act as the wrong identity. On a read or a stream, omitting it means
-the active profile, and a stream binds whichever profile it was opened with.
+Every route takes `X-Acpilot-Profile`; a daemon that serves more than one profile *requires*
+it on a mutating request — a client cannot silently act as the wrong identity. On a read or
+a stream, omitting it means the active profile (`POST /v1/profiles/{id}/activate` changes
+it), and a stream binds whichever profile it was opened with.
 
 Agent output streams over SSE with a per-session monotonic sequence number: `Last-Event-ID`
 replays from the transcript, a heartbeat every 15 s proves the stream is alive, and an id

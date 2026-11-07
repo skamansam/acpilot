@@ -16,11 +16,13 @@ right and this file is a bug.
 - **JSON only**, UTF-8, `Content-Type: application/json`. Timestamps are RFC 3339
   in UTC; ids are opaque strings and must never be parsed or constructed by a
   client.
-- **`X-Acpilot-Profile` is required on every mutating request** (`POST`, `PUT`,
-  `PATCH`, `DELETE`). Missing is `400 invalid_request`, not "use the active one":
-  guessing an identity is how work gets sent with the wrong key. On reads it is
-  optional and selects the profile explicitly; omitting it means the active
-  profile.
+- **`X-Acpilot-Profile` is required on a mutating request when the daemon serves
+  more than one profile** (`POST`, `PUT`, `PATCH`, `DELETE`). Missing is `400
+  invalid_request`, not "use the active one": guessing an identity is how work
+  gets sent with the wrong key. A daemon with one profile keeps answering clients
+  that predate the header, because it has no second identity to confuse. On reads
+  and streams it is optional and selects the profile explicitly; omitting it
+  means the active profile.
 - **SSE and WS connections bind their profile at connect.** Switching profile is
   a reconnect, never a frame on the existing stream.
 - **Auth**: the default endpoint is the daemon's unix socket, and the filesystem
@@ -123,6 +125,25 @@ It is absent when no marker was found, which is treated as nobody's to replace. 
 started with and is omitted when it has none; a client uses it to check that the
 daemon already listening is serving the directory it was asked about, rather than
 restarting a daemon that may be mid-turn (ADR 0004 §2).
+
+## Profiles
+
+A daemon serves every profile directory under `<config>/profiles` plus the one
+`--profile` named. Each is opened once, with its own `agents.toml`, policy,
+database, sessions and language servers; a directory without a `config.toml` is
+not a profile, and one that fails to load costs its own row rather than the
+daemon. `GET /v1/profiles` lists them as `ProfileSummary`, `GET
+/v1/profiles/{id}` answers one, and `POST /v1/profiles/{id}/activate` makes a
+profile the one a request without `X-Acpilot-Profile` is about, for the life of
+the process. Persisting that choice is the settings cascade's `active_profile`,
+not a runtime request's.
+
+A request is dispatched to the profile its header names. An unknown name is
+`404`, and the message lists the profiles this daemon serves. A mutating request
+without the header is `400` when there is a choice: a daemon with two or more
+profiles refuses to guess. Reads and streams without a header are the active
+profile; a stream binds at connect, so a switch is a reconnect rather than a
+frame on an open stream.
 
 **Deliberately not v1**: providers and models, the model lab and recipes, the ACP
 bridge and remote drivers, and extensions. They follow the same conventions when

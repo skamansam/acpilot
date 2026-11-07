@@ -55,6 +55,13 @@ const ORPHAN: TerminalSummary = {
 
 // One row of each shape the bar has to draw: a measured context window, and an
 // estimate with no denominator that is also old enough to say so.
+// The switcher's rows: two identities, one active. A daemon that serves one
+// profile answers with one row, and the picker disables itself.
+const PROFILES = [
+  { id: 'work', label: 'Work', active: true, agent_count: 1, workspace_count: 1 },
+  { id: 'personal', label: 'Personal', active: false, agent_count: 2, workspace_count: 1 },
+];
+
 const STATS: StatRow[] = [
   {
     id: 'lmstudio',
@@ -212,6 +219,13 @@ beforeEach(() => {
     }
     if (route === '/v1/terminals') {
       return json([PANE, ORPHAN]);
+    }
+    if (route === '/v1/profiles') {
+      return json(PROFILES);
+    }
+    if (route.startsWith('/v1/profiles/') && route.endsWith('/activate')) {
+      const id = route.split('/')[3] ?? '';
+      return json({ ...PROFILES[0], id, active: true });
     }
     // The editor lists the workspace root when it mounts. A test that opens a
     // file answers the read route itself; an empty root is enough here.
@@ -625,6 +639,38 @@ describe('the session view', () => {
 
     await vi.waitFor(() => expect(location.pathname).toBe('/p/default/w/build'));
     await vi.waitFor(() => expect(target.textContent).not.toContain('a session that exists'));
+  });
+});
+
+describe('the profile switcher', () => {
+  it('activates the profile, moves the address, and rebinds the palette stream', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const select = await find<HTMLSelectElement>('select#profile');
+    await vi.waitFor(() => expect(select.options.length).toBeGreaterThanOrEqual(3));
+    expect(select.disabled, 'two profiles is a choice').toBe(false);
+
+    select.value = 'personal';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/personal/w/acpilot'));
+    const activation = fetchMock.mock.calls.find(
+      ([input]) => routeOf(input as RequestInfo) === '/v1/profiles/personal/activate',
+    );
+    expect(activation, 'the page activated the profile').toBeDefined();
+    const [, init] = activation! as [string, RequestInit];
+    expect(init.method).toBe('POST');
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    // The request names the profile it is about rather than whatever the page's
+    // last load adopted: a click before health answers has no adopted profile.
+    // The client's header names keep their spelling when the request is built
+    // from an init rather than a `Request`; both spellings are the same header.
+    expect(headers['X-Acpilot-Profile'] ?? headers['x-acpilot-profile']).toBe('personal');
+    // The stream binds at connect and sends no header, so the new address's
+    // colours would be the old profile's until it reconnected.
+    expect(FakeEventSource.instances.length).toBe(2);
   });
 });
 

@@ -586,6 +586,16 @@ fn check_web() -> bool {
         return false;
     }
 
+    // The page before the binaries: `acpilot` embeds the built page, so an e2e
+    // run against a binary built first would drive the previous page from `web/`
+    // — the exact drift this task exists to catch, hidden inside the test that is
+    // supposed to catch it.
+    let mut build = Command::new(npm());
+    build.args(WEB_PAGE_BUILD).current_dir(web_dir());
+    if !run_step("build (web, for the embedded page)", build) {
+        return false;
+    }
+
     // The e2e test drives a real browser against `acpilot serve`, so both binaries
     // it starts have to exist: the CLI that hosts the daemon and the fixture agent
     // the profile names. Built here for the same reason as the daemon above — a
@@ -600,12 +610,6 @@ fn check_web() -> bool {
     let mut e2e = Command::new(npm());
     e2e.args(args).current_dir(web_dir());
     if !run_step(label, e2e) {
-        return false;
-    }
-
-    let mut build = Command::new(npm());
-    build.args(WEB_PAGE_BUILD).current_dir(web_dir());
-    if !run_step("build (web, for the embedded page)", build) {
         return false;
     }
 

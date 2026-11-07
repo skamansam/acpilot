@@ -85,6 +85,10 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+# `oneshot` is how the profile registry hands a request to the router of the
+# profile its header names; the workspace already carries tower under axum, so
+# this declares the half the daemon calls rather than adding a second copy.
+tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

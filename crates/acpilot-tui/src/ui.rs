@@ -21,6 +21,7 @@ use crate::app::{
     App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneArea,
     PaneMode, Panel, Side, TerminalPane, Toast, Viewports, about_lines, first_visible, menu_title,
 };
+use crate::keymap::Context;
 
 /// How wide the outline's column is.
 ///
@@ -2021,10 +2022,13 @@ const COPY_KEYS: [(&str, &str); 10] = [
 
 /// The keys the pane with the keyboard answers to, and what to call it.
 ///
-/// A pane being read answers to the copy keys rather than to its own: the motions
-/// are the whole of what it does, and a person who asks for the list while
-/// scrolling asked for the motions.
-fn keys_for(app: &App) -> (&'static str, &'static [(&'static str, &'static str)]) {
+/// The editor's list is the keymap's, because those keys are: rebinding
+/// `move-down` or the palette changes what this card says, and the client's keys
+/// are appended after the pane's because they are live there too. A pane whose own
+/// keys are still the crate's match arms keeps its written list, which names the
+/// client's keys in the pane alongside its own — the same card a person has always
+/// read, and the place the next piece of the keymap work lands.
+fn keys_for(app: &App) -> (&'static str, Vec<(String, &'static str)>) {
     let reading = app.focus == Focus::Transcript
         || (app.focus == Focus::Terminal
             && app
@@ -2032,13 +2036,36 @@ fn keys_for(app: &App) -> (&'static str, &'static [(&'static str, &'static str)]
                 .as_ref()
                 .is_some_and(|pane| pane.mode == PaneMode::Copy));
     if reading {
-        return ("copy mode", &COPY_KEYS);
+        return (
+            "copy mode",
+            COPY_KEYS
+                .iter()
+                .map(|(key, what)| ((*key).to_owned(), *what))
+                .collect(),
+        );
     }
     // No insert-mode list here: `?` is a character in insert mode, so the panel
     // cannot open while those keys are the pane's. The way in is on the normal-mode
     // list and the insert keys are in `docs/notes/tui-shell.md`, which is the one
     // place a person reading the settings can find them.
-    (app.focus.label(), pane_keys(app.focus))
+    // The editor's verbs come from the table, then the client's — they are the same
+    // in every pane and a person who rebound the palette expects the card to say so.
+    // The other panes keep their written list, which is shorter than a table dump and
+    // already names the client's keys among them.
+    if app.focus == Focus::Editor {
+        let mut rows = app.keymap.rows(Context::Editor);
+        rows.extend(app.keymap.rows(Context::App));
+        // Not in the table: one plans a task and the other asks the daemon, and the
+        // one that plans is not a verb a person should be able to bind.
+        rows.push(("f12".to_owned(), "go to definition"));
+        rows.push(("shift-f12".to_owned(), "find references"));
+        return (Focus::Editor.label(), rows);
+    }
+    let rows = pane_keys(app.focus)
+        .iter()
+        .map(|(key, what)| ((*key).to_owned(), *what))
+        .collect();
+    (app.focus.label(), rows)
 }
 
 /// The keys a pane answers to, as the which-key panel lists them.
@@ -2054,25 +2081,9 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-←/→", "narrower / wider"),
             ("?", "these keys"),
         ],
-        Focus::Editor => &[
-            ("h j k l", "move"),
-            ("0 / $", "start / end of line"),
-            ("pgup / pgdn", "a page"),
-            ("/ or ctrl-f", "find in file"),
-            ("n / N", "next / previous match"),
-            ("ctrl-g", "go to line"),
-            ("ctrl-s", "save"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("i a I A", "insert here / after / line ends"),
-            ("o / O", "a line below / above"),
-            ("v", "visual selection"),
-            (":w / :q", "write / quit"),
-            ("u / ctrl-z", "undo"),
-            ("ctrl-y", "redo"),
-            ("x", "delete a character"),
-            ("f12", "go to definition"),
-            ("shift-f12", "find references"),
-        ],
+        // The editor's keys are the keymap's; this arm exists because the match is on
+        // every pane and the key list asks the table instead.
+        Focus::Editor => &[],
         Focus::References => &[
             ("j / k", "move"),
             ("enter", "open the use"),
@@ -2931,6 +2942,33 @@ mod tests {
         assert!(
             !text.contains("interrupt the program"),
             "the shell's keys are not the pane's while it is being read: {text}"
+        );
+    }
+
+    #[test]
+    fn the_key_list_shows_the_keys_in_force_rather_than_the_ones_it_grew_with() {
+        let mut app = app_with_session();
+        app.focus = Focus::Editor;
+        app.keymap =
+            crate::keymap::Keymap::from_toml("[keys]\npalette = [\"f1\"]\n").expect("a keymap");
+
+        // Asked of the list rather than of a drawn screen: the card clips its tail
+        // on a short terminal, and a test of which bindings are listed should not
+        // depend on whether this one happens to fit.
+        let (pane, rows) = keys_for(&app);
+        assert_eq!(pane, "editor");
+        assert!(
+            rows.iter()
+                .any(|(keys, what)| keys == "f1" && *what == "commands"),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(keys, _)| !keys.contains("ctrl-p")),
+            "the chord the file moved is not listed as if it still worked: {rows:?}"
+        );
+        assert!(
+            rows.first().is_some_and(|(_, what)| *what == "move up"),
+            "the pane's own keys come first: {rows:?}"
         );
     }
 

@@ -242,6 +242,20 @@ leaves it. `:` opens a command line — `:w` is the same daemon write as `Ctrl-S
 line and `:e path` opens a file — and a run of Up/Down keeps the column it started
 from across a short line. Shift-click extends the selection from its start.
 
+The keys are a file, not a build. `keymap.toml` beside `config.toml` chooses
+`preset = "vim"` — the table above — or `"vscode"`, which moves with the arrows and
+`Home`/`End` instead of `hjkl` and `0`/`$` and puts the palette on `Ctrl-Shift-P` as
+well as `Ctrl-P`, and rebinds any of the client's keys or the editor's normal and
+visual verbs by name under `[keys]`: `palette = ["ctrl-p", "f1"]`,
+`move-down = ["down", "j", "ctrl-n"]`, an empty list to unbind. A name that is not
+a verb, a key that is not a key, and one key given two verbs in one context are
+refused with the word that was wrong; a swap of two keys is legal, because the
+table is checked once the whole file has been applied. A file that does not load
+leaves the client on the preset and says so rather than starting on no keys at all,
+and `?` lists the bindings in force, so the panel cannot promise a chord the client
+has stopped answering. Insert mode is not in the file: every printable key there is
+text, which is what being a text field means.
+
 `acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
 sidebar, command palette, which-key hints and the stats bar — with no daemon and
 nothing read from disk. Every command that is not built yet is tagged with the task

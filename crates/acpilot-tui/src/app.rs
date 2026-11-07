@@ -17,6 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::backend::{Request, Update};
 use crate::editor::{EditorPane, Mode};
+use crate::keymap::{Action, Context, Keymap};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
@@ -1905,6 +1906,12 @@ pub struct App {
     /// The widths last read or written, so a launch that changed nothing writes
     /// nothing.
     pub layout_saved: Layout,
+    /// The keys in force: a preset, with `keymap.toml`'s overrides on top.
+    ///
+    /// On the app rather than in a `static` because a test and the design pass must
+    /// be able to run a table nobody's file chose, and because `?` lists what this
+    /// app actually answers to rather than what the crate used to.
+    pub keymap: Keymap,
     /// The size the terminal pane was last drawn at.
     ///
     /// The event loop tells the app every frame and the program only when this
@@ -2036,6 +2043,7 @@ impl App {
             drag_scroll: false,
             layout_path: None,
             layout_saved: Layout::default(),
+            keymap: Keymap::default(),
             pane_size: None,
             focus: Focus::Sessions,
             status: "connecting".to_owned(),
@@ -2815,7 +2823,7 @@ impl App {
         // The palette is the outermost question. `Ctrl-P` asks it and dismisses it,
         // and while it is up it owns the keyboard: it is drawn over every pane, so a
         // key reaching one of them would be a key acting on something invisible.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+        if self.action(Context::App, key) == Some(Action::Palette) {
             self.toggle_palette();
             return None;
         }
@@ -2833,7 +2841,7 @@ impl App {
         // The menu bar. `F9` is the key terminals have kept for menus since before
         // windows, and while the bar is up it owns the keyboard: a row drawn over a
         // pane is still the menu's key.
-        if key.code == KeyCode::F(9) {
+        if self.action(Context::App, key) == Some(Action::Menu) {
             self.toggle_menu();
             return None;
         }
@@ -2845,7 +2853,7 @@ impl App {
         // handled, so `?` then `j` scrolls rather than merely closing a panel.
         if self.which_key {
             self.which_key = false;
-            if key.code == KeyCode::Char('?') {
+            if self.action(Context::App, key) == Some(Action::KeyList) {
                 return None;
             }
         }
@@ -2862,7 +2870,7 @@ impl App {
         // Ctrl-T is the way in and out of the terminal pane, and it outranks the
         // permission card: a shell that could not be left because an agent was
         // waiting would be a pane that traps the session.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+        if self.action(Context::App, key) == Some(Action::Terminal) {
             return self.toggle_terminal();
         }
 
@@ -2878,7 +2886,7 @@ impl App {
         // `F3` are — a pane whose keys are text gives up nothing printable for it —
         // and handled before the terminal takes the keyboard, because a bar is the
         // client's and a shell has no use for a function key that prints nothing.
-        if key.code == KeyCode::F(4) {
+        if self.action(Context::App, key) == Some(Action::StatsSources) {
             self.stats_sources = !self.stats_sources;
             return None;
         }
@@ -2891,7 +2899,7 @@ impl App {
             .as_ref()
             .is_some_and(|pane| pane.mode == PaneMode::Copy)
         {
-            if key.code == KeyCode::Char('?') {
+            if self.action(Context::App, key) == Some(Action::KeyList) {
                 self.which_key = true;
                 return None;
             }
@@ -2932,7 +2940,7 @@ impl App {
         // to swallow it, because `Ctrl-D` in a shell is end-of-file and a pane
         // being typed into must keep it; from behind a terminal the review is one
         // `Ctrl-P` away instead.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
+        if self.action(Context::App, key) == Some(Action::Review) {
             self.toggle_review();
             return None;
         }
@@ -2940,7 +2948,7 @@ impl App {
         // F3 is the transcript's way in, the sibling of the terminal's F2, and the
         // way back out: a function key on purpose, so no pane whose keys are text
         // has to give one up. `Tab` reaches the same pane without it.
-        if key.code == KeyCode::F(3) {
+        if self.action(Context::App, key) == Some(Action::Transcript) {
             if self.focus == Focus::Transcript {
                 self.set_focus(Focus::Sessions);
             } else {
@@ -2951,44 +2959,39 @@ impl App {
 
         // The divider keys. A chord rather than a mode, because a layout is adjusted
         // once and then read; the pane with the keyboard is the one that changes.
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Left => {
-                    self.resize(false);
-                    return None;
-                }
-                KeyCode::Right => {
-                    self.resize(true);
-                    return None;
-                }
-                _ => {}
+        match self.action(Context::App, key) {
+            Some(Action::Narrower) => {
+                self.resize(false);
+                return None;
             }
+            Some(Action::Wider) => {
+                self.resize(true);
+                return None;
+            }
+            _ => {}
         }
 
         // The chords the client owns. Anything else with a Ctrl in it falls through
         // to the focused pane, because a pane has chords of its own — Ctrl-S in the
         // editor, Ctrl-F in a terminal's copy mode.
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('c') | KeyCode::Char('q') => {
-                    self.should_quit = true;
-                    return Some(Request::Quit);
-                }
-                KeyCode::Char('r') => {
-                    return Some(Request::Refresh {
-                        include_ignored: self.show_ignored,
-                    });
-                }
-                // `Shift` is required: `Ctrl-F` belongs to the editor's find box,
-                // and a chord that meant both would be a bug report. Where the
-                // terminal cannot tell the two apart, the palette's row still
-                // opens this.
-                KeyCode::Char('f' | 'F') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    self.open_grep();
-                    return None;
-                }
-                _ => {}
+        match self.action(Context::App, key) {
+            Some(Action::Quit) => {
+                self.should_quit = true;
+                return Some(Request::Quit);
             }
+            Some(Action::Refresh) => {
+                return Some(Request::Refresh {
+                    include_ignored: self.show_ignored,
+                });
+            }
+            // `Ctrl-F` is the editor's find box, which is why the content search
+            // takes the shift; a file can move either, and the table is where the
+            // two are kept apart now.
+            Some(Action::Grep) => {
+                self.open_grep();
+                return None;
+            }
+            _ => {}
         }
 
         if self.permission_card && !self.permissions.is_empty() {
@@ -3054,11 +3057,14 @@ impl App {
         // The files pane's find is a text box too: `?` is a character in a path, and a
         // box that opened the key list on one would be a box nobody could type into.
         let editing_a_query = self.search.is_some() && self.focus == Focus::Files;
-        if key.code == KeyCode::Char('?') && self.focus != Focus::Prompt && !editing_a_query {
+        if self.action(Context::App, key) == Some(Action::KeyList)
+            && self.focus != Focus::Prompt
+            && !editing_a_query
+        {
             self.which_key = true;
             return None;
         }
-        if key.code == KeyCode::Tab {
+        if self.action(Context::App, key) == Some(Action::NextFocus) {
             // Tab never lands in the terminal: a shell wants the byte, so the pane
             // is entered and left with Ctrl-T and the cycle skips it. The transcript
             // is skipped too when there is nothing in it or a terminal covers it,
@@ -3907,10 +3913,17 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         // A save is the pane's rather than the buffer's: the write goes through the
-        // daemon, so the key is answered before the document is borrowed.
-        if control && key.code == KeyCode::Char('s') {
+        // daemon, so the key is answered before the document is borrowed. The key is
+        // the keymap's like every other verb, so moving it off `Ctrl-S` moves the
+        // request with it rather than leaving a chord nobody can find.
+        if self.action(Context::App, key) == Some(Action::Save) {
             return self.save();
         }
+        // What the key means is decided before the document is borrowed: the table
+        // is the app's and the pane is the editor's, and a lookup while the pane is
+        // held is two borrows of one thing.
+        let visual = self.action(Context::Visual, key);
+        let editing = self.action(Context::Editor, key);
         let Some(editor) = self.editor.as_mut() else {
             self.notice("no file is open · pick one in the files pane");
             return None;
@@ -3999,21 +4012,21 @@ impl App {
         // copies it, `d`/`x` delete it, and `v`, `Esc` or a click leave it.
         if editor.mode() == Mode::Visual {
             let mut copied = None;
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('v') => editor.leave_visual(),
-                KeyCode::Up | KeyCode::Char('k') => editor.extend_caret(-1, 0),
-                KeyCode::Down | KeyCode::Char('j') => editor.extend_caret(1, 0),
-                KeyCode::Left | KeyCode::Char('h') => editor.extend_caret(0, -1),
-                KeyCode::Right | KeyCode::Char('l') => editor.extend_caret(0, 1),
-                KeyCode::Home | KeyCode::Char('0') => editor.extend_line_edge(false),
-                KeyCode::End | KeyCode::Char('$') => editor.extend_line_edge(true),
-                KeyCode::PageUp => editor.extend_page(false),
-                KeyCode::PageDown => editor.extend_page(true),
-                KeyCode::Char('y') => copied = editor.yank(),
-                KeyCode::Char('d' | 'x') => {
+            match visual {
+                Some(Action::Visual | Action::Cancel) => editor.leave_visual(),
+                Some(Action::MoveUp) => editor.extend_caret(-1, 0),
+                Some(Action::MoveDown) => editor.extend_caret(1, 0),
+                Some(Action::MoveLeft) => editor.extend_caret(0, -1),
+                Some(Action::MoveRight) => editor.extend_caret(0, 1),
+                Some(Action::LineStart) => editor.extend_line_edge(false),
+                Some(Action::LineEnd) => editor.extend_line_edge(true),
+                Some(Action::PageUp) => editor.extend_page(false),
+                Some(Action::PageDown) => editor.extend_page(true),
+                Some(Action::Yank) => copied = editor.yank(),
+                Some(Action::DeleteSelection) => {
                     editor.delete_selection(std::time::Instant::now());
                 }
-                KeyCode::Char(':') => editor.open_command(),
+                Some(Action::Command) => editor.open_command(),
                 _ => {}
             }
             let message = editor.message().to_owned();
@@ -4026,82 +4039,77 @@ impl App {
             return None;
         }
 
-        let mut planned: Option<(&'static str, &'static str)> = None;
         // A key that asks the daemon a question rather than moving the caret: the pane
         // is borrowed for the whole match, so the request is made after it ends.
         let mut asked = false;
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => editor.move_caret(-1, 0),
-            KeyCode::Down | KeyCode::Char('j') => editor.move_caret(1, 0),
-            KeyCode::Left | KeyCode::Char('h') => editor.move_caret(0, -1),
-            KeyCode::Right | KeyCode::Char('l') => editor.move_caret(0, 1),
-            KeyCode::Home | KeyCode::Char('0') => editor.line_edge(false),
-            KeyCode::End | KeyCode::Char('$') => editor.line_edge(true),
-            KeyCode::PageUp => editor.page(false),
-            KeyCode::PageDown => editor.page(true),
-            // `/` is the search a terminal editor has always had; `Ctrl-F` is the
-            // same box for the people who learned it somewhere else.
-            KeyCode::Char('/') => editor.search(),
-            KeyCode::Char('f') if control => editor.search(),
-            KeyCode::Char('g') if control => editor.go_to_line(),
-            KeyCode::Char('n') => editor.step_match(true),
-            KeyCode::Char('N') => editor.step_match(false),
+        let mut planned = false;
+        match editing {
+            Some(Action::MoveUp) => editor.move_caret(-1, 0),
+            Some(Action::MoveDown) => editor.move_caret(1, 0),
+            Some(Action::MoveLeft) => editor.move_caret(0, -1),
+            Some(Action::MoveRight) => editor.move_caret(0, 1),
+            Some(Action::LineStart) => editor.line_edge(false),
+            Some(Action::LineEnd) => editor.line_edge(true),
+            Some(Action::PageUp) => editor.page(false),
+            Some(Action::PageDown) => editor.page(true),
+            Some(Action::Find) => editor.search(),
+            Some(Action::GotoLine) => editor.go_to_line(),
+            Some(Action::NextMatch) => editor.step_match(true),
+            Some(Action::PrevMatch) => editor.step_match(false),
             // A selection is marked first and copied second, the same contract the
             // terminal's copy mode keeps: a gesture that only moved a pointer does not
             // put anything on a clipboard.
-            // The chord, before the plain key: `Ctrl-Y` is redo and `y` alone is
-            // the copy a drag's selection is waiting for, and a match arm without
-            // a modifier would swallow the first.
-            KeyCode::Char('y') if control => {
-                editor.redo();
-            }
-            KeyCode::Char('y') => {
+            Some(Action::Yank) => {
                 if let Some(text) = editor.yank() {
                     self.clipboard = Some(text);
                 }
             }
-            KeyCode::Char('v') => editor.toggle_visual(),
-            KeyCode::Char(':') => editor.open_command(),
-            KeyCode::Esc => editor.clear_selection(),
+            Some(Action::Visual) => editor.toggle_visual(),
+            Some(Action::Command) => editor.open_command(),
+            Some(Action::Cancel) => editor.clear_selection(),
             // The way into insert mode, and where the caret lands when it does:
             // `i` here, `a` after it, `I` and `A` at the ends of the line, `o` and
             // `O` on a line of their own. Six keys for one mode because a caret is
             // a position and a person has an opinion about which one to start at.
-            KeyCode::Char('i') => editor.set_mode(Mode::Insert),
-            KeyCode::Char('a') => {
+            Some(Action::Insert) => editor.set_mode(Mode::Insert),
+            Some(Action::Append) => {
                 editor.move_caret(0, 1);
                 editor.set_mode(Mode::Insert);
             }
-            KeyCode::Char('I') => {
+            Some(Action::InsertLineStart) => {
                 editor.line_edge(false);
                 editor.set_mode(Mode::Insert);
             }
-            KeyCode::Char('A') => {
+            Some(Action::InsertLineEnd) => {
                 editor.line_edge(true);
                 editor.set_mode(Mode::Insert);
             }
-            KeyCode::Char('o') => editor.open_line_below(std::time::Instant::now()),
-            KeyCode::Char('O') => editor.open_line_above(std::time::Instant::now()),
-            KeyCode::Char('x') => {
+            Some(Action::OpenBelow) => editor.open_line_below(std::time::Instant::now()),
+            Some(Action::OpenAbove) => editor.open_line_above(std::time::Instant::now()),
+            Some(Action::DeleteChar) => {
                 editor.delete_forward(std::time::Instant::now());
             }
             // `u` is vim's undo and `Ctrl-Z` is everyone else's; `Ctrl-Z` typed in
             // insert mode reaches the same place, so the hand that learned one
             // editor is not the hand that has to learn this one.
-            KeyCode::Char('u') => {
+            Some(Action::Undo) => {
                 editor.undo();
             }
-            KeyCode::Char('z') if control && shift => {
+            Some(Action::Redo) => {
                 editor.redo();
             }
-            KeyCode::Char('z') if control => {
-                editor.undo();
-            }
-            // `Shift-F12` is where a references list lives in the editors people came
-            // from, and it is free beside the planned go-to-definition.
-            KeyCode::F(12) if shift => asked = true,
-            KeyCode::F(12) => planned = Some(("P7-4", "go to definition")),
             _ => {}
+        }
+        // `Shift-F12` is where a references list lives in the editors people came
+        // from, and it is free beside the planned go-to-definition. Not in the table:
+        // one of the two raises a task marker, and a task marker is not a verb a
+        // person should be able to move onto a key that works.
+        if key.code == KeyCode::F(12) {
+            if shift {
+                asked = true;
+            } else {
+                planned = true;
+            }
         }
         let message = editor.message().to_owned();
         if !message.is_empty() {
@@ -4110,8 +4118,8 @@ impl App {
         if asked {
             return self.find_references();
         }
-        if let Some((task, feature)) = planned {
-            self.planned(task, feature);
+        if planned {
+            self.planned("P7-4", "go to definition");
         }
         None
     }
@@ -4667,6 +4675,28 @@ impl App {
     /// Only the clients that have somewhere to keep them call this: a width is
     /// remembered per machine and not per project, because the window is the same
     /// window whatever workspace is in it.
+    /// Read the keymap a previous launch left, or the default table.
+    ///
+    /// A file that does not parse is reported and the preset is used: refusing to
+    /// start over a key file would be worse than starting on the keys it describes
+    /// everywhere else. The caller says where the problem is, because the screen is
+    /// not up yet when this runs.
+    pub fn remember_keymap(&mut self, path: std::path::PathBuf) -> Option<String> {
+        match Keymap::load(&path) {
+            Ok(keymap) => {
+                self.keymap = keymap;
+                None
+            }
+            Err(error) => Some(error),
+        }
+    }
+
+    /// What a key means in one context, according to the table in force.
+    #[must_use]
+    pub fn action(&self, context: Context, key: KeyEvent) -> Option<Action> {
+        self.keymap.action(context, key)
+    }
+
     pub fn remember_layout(&mut self, path: std::path::PathBuf) {
         let layout = Layout::load(&path);
         self.files_width = layout.files;
@@ -7209,6 +7239,56 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Sessions, "and a pane away in normal mode");
+    }
+
+    #[test]
+    fn a_rebound_key_is_the_one_the_app_answers_to() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Files);
+        app.keymap = Keymap::from_toml("[keys]\npalette = [\"f1\"]\n").expect("a keymap");
+
+        app.handle_key(key(KeyCode::F(1)));
+        assert!(app.palette.is_some(), "F1 is the palette now");
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(
+            app.palette.is_none(),
+            "Ctrl-P was bound to it and is not any more"
+        );
+    }
+
+    #[test]
+    fn a_rebound_editor_key_leaves_the_old_one_unbound() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        app.keymap = Keymap::from_toml("[keys]\nvisual = [\"ctrl-v\"]\n").expect("a keymap");
+
+        let mode = |app: &App| app.editor.as_ref().expect("a buffer").mode();
+        app.handle_key(key(KeyCode::Char('v')));
+        assert_eq!(mode(&app), Mode::Normal, "`v` is not a verb any more");
+        app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(mode(&app), Mode::Visual);
+    }
+
+    #[test]
+    fn a_keymap_file_that_does_not_parse_is_reported_and_the_preset_is_kept() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("keymap.toml");
+        std::fs::write(&path, "[keys]\nflow-north = [\"j\"]\n").expect("a file");
+
+        let mut app = App::new("daemon");
+        let error = app
+            .remember_keymap(path)
+            .expect("a sentence about the file");
+        assert!(error.contains("flow-north"), "{error}");
+        assert_eq!(
+            app.action(
+                Context::App,
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            ),
+            Some(Action::Palette),
+            "the default table is still in force"
+        );
     }
 
     #[test]

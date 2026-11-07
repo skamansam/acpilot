@@ -19,6 +19,7 @@ pub mod app;
 pub mod backend;
 pub mod clipboard;
 pub mod editor;
+pub mod keymap;
 pub mod layout;
 pub mod theme;
 pub mod ui;
@@ -61,6 +62,13 @@ const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The file the divider widths are remembered in, under the data directory.
 const LAYOUT_FILE: &str = "tui-layout.toml";
+
+/// The file the keys are read from, under the config directory beside
+/// `config.toml`.
+///
+/// A setting rather than a memory of the client's own: a person writes it, and it
+/// belongs where the other settings are.
+const KEYMAP_FILE: &str = "keymap.toml";
 
 /// Run the TUI against the daemon at `daemon` until the user leaves.
 ///
@@ -122,6 +130,11 @@ pub fn run(
     // directory rather than in `config.toml`: it is the client's memory of itself,
     // not a setting a person writes.
     app.remember_layout(acpilot_profile::data_dir().join(LAYOUT_FILE));
+    // Before the screen is taken over: a key file that does not parse is a sentence
+    // for the shell, and the client starts on the preset it describes.
+    if let Some(error) = app.remember_keymap(acpilot_profile::config_dir().join(KEYMAP_FILE)) {
+        eprintln!("acpilot tui: {error} · starting on the default keys");
+    }
     app.set_theme(theme);
     drive(app, worker, inbox, mouse)
 }

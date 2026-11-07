@@ -98,7 +98,7 @@ the toast.
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which ranks a substring or initials and walks with the same ignore rules, so a find cannot see what the tree cannot. `Ctrl-Shift-F` (or the palette's **Search file contents**) opens a jump list fed by `GET /v1/files/grep`, each row carrying the line with the words that matched marked (folded the way the daemon folded them): `Enter` opens the file at that line. A row's letter is the daemon's, not the client's: the listing marks each path with what git says changed (`M`, `A`, `?`, `D`, `!`), a directory with the most urgent change beneath it, and a workspace that is not a repository, or a host without `git`, shows none rather than claiming everything is committed | P6.5-2 (the `/v1/git/*` routes and the source-control pane) |
-| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, the daemon's language-server problems as gutter letters refreshed once the buffer has been still for 480 ms, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. `v` enters visual mode, where motions extend the run and `y` copies it, `d`/`x` delete it, and `Esc` leaves; `:` opens a command line with `:w`, `:q`/`:q!`, `:N` and `:e path`. A run of Up/Down keeps the column it started from across a short line, and Shift-click extends a selection. The buffer is whatever the tree opened — or the seeded one in `--demo` — and a `+` on the tab says the text is not the file's | P6-5 (the remaining keymap layer: `keymap.toml`), P7-10 (saving) |
+| Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, the daemon's language-server problems as gutter letters refreshed once the buffer has been still for 480 ms, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. `v` enters visual mode, where motions extend the run and `y` copies it, `d`/`x` delete it, and `Esc` leaves; `:` opens a command line with `:w`, `:q`/`:q!`, `:N` and `:e path`. A run of Up/Down keeps the column it started from across a short line, and Shift-click extends a selection. The buffer is whatever the tree opened — or the seeded one in `--demo` — and a `+` on the tab says the text is not the file's. Its normal and visual keys are the keymap's, so `keymap.toml` can move them | P7-10 (saving) |
 | Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a roster, plus an estimated context for an agent with a conversation behind it and no window unless the agent names one, so a live bar before any session is rows that say so; the seeded rows in `--demo` exercise all four sources | P4.5-12 (provider rows and balances) |
 | Outline panel | real: `acpilot_text::outline` collects the open buffer's definitions from the parse tree, `Show outline` in the Panels menu puts it up, `j`/`k` choose and `Enter` puts the caret on the definition's line. It re-reads when the text has changed since the last read — `App::tick` compares `Document::revision`, so a burst of typing costs one parse a frame rather than one per keystroke | — |
 | Project map panel | real: the agent writes `.acpilot/project-map.toml` — `updated`, then one `[[areas]]` with a `name`, the `path` it owns, a `summary` and the `depends_on` it leans on — and `GET /v1/project/map` parses it where the workspace is. The panel lists the areas in the order the agent wrote them, marks the area the open file belongs to (deepest path wins, compared by segments so `crates/tui` is not the parent of `crates/tui-tools`) and opens its summary and edges; `j`/`k` choose, `Enter` puts a summary on the status line, `r` re-reads a map the agent has just rewritten, and a workspace with no map says so rather than showing an empty list | a regeneration prompt over the tree and the README (the map is a document a person can correct, so the panel reads it rather than writing it) |
@@ -122,6 +122,30 @@ the toast.
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
+
+Every key in the `anywhere` row and every key in the editor's two rows comes from
+`crates/acpilot-tui/src/keymap.rs`, not from a `match` arm — that is what makes the
+file below possible. `keymap.toml` beside `config.toml` chooses a preset and
+rebinds any of those verbs by name. `preset = "vim"` is the table above;
+`preset = "vscode"` moves with the arrows and `Home`/`End` instead of
+`h`/`j`/`k`/`l` and `0`/`$`, and puts the palette on `Ctrl-Shift-P` as well as
+`Ctrl-P`. Under `[keys]`, `palette = ["ctrl-p", "f1"]` replaces the keys for that
+verb, an empty list unbinds it, and `move-down = ["down", "j", "ctrl-n"]` is how a
+motion gains a third spelling. A name that is not a verb, a key that is not a key,
+and one key bound to two verbs in one context are refused with the word that was
+wrong; the table is checked after the whole file is applied, so swapping two keys
+is legal. A file that does not load leaves the client on the preset and says so on
+stderr before taking the screen, because starting on no keys at all is worse than
+starting on the ones the preset describes. `?` lists the bindings in force, client
+keys first, so the panel and the keys cannot disagree about what `Ctrl-P` does.
+
+Three things are deliberately outside the table. Insert mode is a text field,
+where every printable key is a character and `?` and `Tab` are text rather than the
+app's keys. The tree, session list, composer, permission card and copy mode keep
+their own arms: their letters are read in a pane and move a row, which is not a
+client verb, and their rows are still written in `ui.rs`. And `F12`/`Shift-F12` are
+not bound — one of them raises a task marker rather than doing something, and a
+marker is not a verb a person should be able to move onto a key that works.
 
 `Tab` never lands in the terminal: a shell wants the byte. The pane is entered and
 left with `Ctrl-T`, and the copy mode's own keys take over while it is up. The
@@ -278,9 +302,12 @@ events at 45 ms a chunk.
    from any pane with one key.
 5. **The stats bar's density.** Two rows of numbers in one line is already tight at
    110 columns.
-6. **The keymap file.** The Vim layer's motions, visual mode and `:` line are here,
-   but the bindings are still this crate's match arms: `keymap.toml` with a Vim or
-   VS Code default is the half of P6-5 that lets a person rebind without a build.
+6. **The keymap file.** Answered for the client's keys and the editor's: the table
+   is data, `keymap.toml` chooses a Vim or VS Code preset and rebinds any verb, and
+   `?` lists what is in force. What is still open is the rest of the panes — the
+   tree, the session list, the composer, the permission card and copy mode keep
+   their own arms — and a keymap layer shipped by an extension (P4.6-9), which
+   stacks above the built-ins and below the person's own file.
 7. **Palette, menus and which-key.** All three are here and all three run the same
    paths: the palette is the fast way, the bar is the discoverable one, `?` is the
    one that teaches. Whether three survive contact with users, or the palette is

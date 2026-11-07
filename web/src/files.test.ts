@@ -12,6 +12,7 @@ import {
   normalisePath,
   parentOf,
   saveFailure,
+  storedTabs,
   tabDirty,
 } from './files';
 
@@ -110,6 +111,31 @@ describe('tabDirty', () => {
     expect(tabDirty({ path: 'new.txt', file: null, draft: '' })).toBe(true);
     expect(tabDirty({ path: 'src/main.rs', file: content('one'), draft: 'one' })).toBe(false);
     expect(tabDirty({ path: 'src/main.rs', file: content('one'), draft: 'two' })).toBe(true);
+  });
+});
+
+describe('storedTabs', () => {
+  it('reads back the paths a visit left, normalised and deduplicated', () => {
+    expect(
+      storedTabs(
+        JSON.stringify({ paths: ['./src/main.rs', 'src/main.rs', ' README.md '], active: 'README.md' }),
+      ),
+    ).toEqual({ paths: ['src/main.rs', 'README.md'], active: 'README.md' });
+  });
+
+  it('falls back to the first tab when the active one is gone or absent', () => {
+    expect(storedTabs(JSON.stringify({ paths: ['a.txt'], active: 'gone.txt' }))?.active).toBe('a.txt');
+    expect(storedTabs(JSON.stringify({ paths: ['a.txt'] }))?.active).toBe('a.txt');
+  });
+
+  it('ignores anything that is not a stored tab list', () => {
+    expect(storedTabs(null)).toBeNull();
+    expect(storedTabs('not json')).toBeNull();
+    expect(storedTabs(JSON.stringify({ paths: 'src' }))).toBeNull();
+    // Nothing usable is the same answer as nothing stored: the page opens with
+    // no tabs rather than a tab whose path cannot be named.
+    expect(storedTabs(JSON.stringify({ paths: [] }))).toBeNull();
+    expect(storedTabs(JSON.stringify({ paths: ['  ', 7] }))).toBeNull();
   });
 });
 

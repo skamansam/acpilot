@@ -93,6 +93,7 @@ GET    /v1/permissions?status=pending     POST   /v1/permissions/{id}/resolve
 
 GET    /v1/files                          PUT    /v1/files
 DELETE /v1/files                          POST   /v1/files/directory
+POST   /v1/files/rename
 GET    /v1/files/list
 
 GET    /v1/terminals?session=             POST   /v1/terminals
@@ -619,6 +620,15 @@ about what happens to everything inside it, and a route that guesses has already
 discarded the answer. An editor's "delete folder" is a confirmation the client
 shows, and what it calls afterwards is a delete per entry. The same path rules as
 the write apply — `..` refused, a symlink out of the workspace `403`.
+
+`POST /v1/files/rename` takes `{ path, to }` and answers with the moved file's
+`FileContent { path, text, etag, marks? }`. It renames the entry rather than copying
+the bytes, so the text and its history stay attached to the file. `to` must be a new
+path: an existing destination is `409`, never a replace, and the destination's
+directory must exist (`404`) because this route does not build trees. The source must
+be a file (`409` for a directory) and the same path twice is `400`. A **remote**
+workspace is `409`: the host helper exposes read, write, list, remove and mkdir, and
+no rename operation, so write and delete work there and a move does not.
 
 `POST /v1/files/directory` takes `{ "path": string }` and answers `201`. Parents
 are created, because a new-folder dialog names the folder and not every level

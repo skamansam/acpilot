@@ -1067,7 +1067,8 @@ a:focus-visible {
 }
 
 .file-open input,
-.file-new-form input {
+.file-new-form input,
+.file-rename input {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -1079,7 +1080,8 @@ a:focus-visible {
   color: var(--text);
 }
 
-.file-new-form {
+.file-new-form,
+.file-rename {
   display: flex;
   gap: 0.5rem;
   margin-top: 0.45rem;

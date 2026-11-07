@@ -79,6 +79,7 @@ pub const API_PREFIX: &str = "/v1";
         file::FileEntry,
         file::FileContent,
         file::FileWriteRequest,
+        file::FileRenameRequest,
         file::GrepMatch,
         file::Diagnostic,
         file::DiagnosticSeverity,

@@ -77,7 +77,8 @@ export interface paths {
         /** Write a file */
         put: operations["write_doc"];
         post?: never;
-        delete?: never;
+        /** Delete a file */
+        delete: operations["delete_doc"];
         options?: never;
         head?: never;
         patch?: never;
@@ -146,6 +147,23 @@ export interface paths {
         put?: never;
         /** Find the code uses of an identifier in an open buffer */
         post: operations["references_in_buffer_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/files/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rename or move a file */
+        post: operations["rename_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -942,6 +960,21 @@ export interface components {
              */
             size: number;
             status?: components["schemas"]["FileChange"] | null;
+        };
+        /**
+         * @description Request body for `POST /v1/files/rename`.
+         *
+         *     A move is not a write: it changes the name of a file without touching its text,
+         *     which is why it carries no `if_match`. The destination is required to be new, so
+         *     a rename can never replace a file the caller did not name.
+         */
+        FileRenameRequest: {
+            /** @description The file to move, workspace-relative. */
+            path: string;
+            /** @description Its new path, workspace-relative. The destination must not exist. */
+            to: string;
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
         };
         /** @description Request body for `PUT /v1/files`. */
         FileWriteRequest: {
@@ -2040,6 +2073,65 @@ export interface operations {
             };
         };
     };
+    delete_doc: {
+        parameters: {
+            query: {
+                /** @description Workspace id; empty or absent means the one this daemon serves */
+                workspace?: string;
+                /** @description Path relative to the workspace root */
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file was removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A path that escapes */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A path that resolves outside the workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such file */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A directory, which this route does not remove */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     diagnostics_doc: {
         parameters: {
             query?: never;
@@ -2234,6 +2326,66 @@ export interface operations {
                 };
             };
             /** @description This daemon has no workspace to walk */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    rename_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description The file at its new path, with its token */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileContent"];
+                };
+            };
+            /** @description A path that escapes, or the same path twice */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A path that resolves outside the workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The file does not exist, or the destination's directory does not */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The destination exists, the source is a directory, or the workspace is remote */
             409: {
                 headers: {
                     [name: string]: unknown;

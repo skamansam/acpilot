@@ -997,6 +997,31 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "FileRenameRequest": {
+        "description": "Request body for `POST /v1/files/rename`.\n\nA move is not a write: it changes the name of a file without touching its text,\nwhich is why it carries no `if_match`. The destination is required to be new, so\na rename can never replace a file the caller did not name.",
+        "properties": {
+          "path": {
+            "description": "The file to move, workspace-relative.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Its new path, workspace-relative. The destination must not exist.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "to"
+        ],
+        "type": "object"
+      },
       "FileWriteRequest": {
         "description": "Request body for `PUT /v1/files`.",
         "properties": {

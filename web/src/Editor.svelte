@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { basicSetup } from 'codemirror';
-  import { EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
-  import { EditorView, GutterMarker, gutter } from '@codemirror/view';
+  import { EditorState, type Extension } from '@codemirror/state';
+  import { EditorView, gutter } from '@codemirror/view';
   import { MergeView } from '@codemirror/merge';
   import { javascript } from '@codemirror/lang-javascript';
   import { json } from '@codemirror/lang-json';
@@ -12,8 +12,10 @@
   import {
     ApiError,
     createFile,
+    deleteFile,
     listDirectory,
     readFile,
+    renameFile,
     writeFile,
     type FileEntry,
     type LineMark,
@@ -22,15 +24,15 @@
     basename,
     languageFor,
     listingRows,
-    markLabel,
-    markTitle,
     normalisePath,
     parentOf,
     saveFailure,
+    storedTabs,
     tabDirty,
     type EditorLanguage,
     type EditorTab,
   } from './files';
+  import { gitMarks, gitMarksFor, setGitMarks } from './git-gutter';
 
   let { token }: { token: string } = $props();
 
@@ -60,6 +62,13 @@
   let creating = $state(false);
   let newPath = $state('');
 
+  // Renaming and deleting the open file ask for a path or a confirmation; `moving`
+  // is one flag for both, because the pane must not start either while the other
+  // is in flight.
+  let renaming = $state(false);
+  let renamePath = $state('');
+  let moving = $state(false);
+
   let hostEl = $state<HTMLDivElement | null>(null);
   let diffEl = $state<HTMLDivElement | null>(null);
 
@@ -74,71 +83,19 @@
   // the new marks to this view; a tab switch builds a new one with its own marks.
   let view: EditorView | null = null;
 
-  /**
-   * The git mark in one gutter cell.
-   *
-   * The daemon already says which lines differ; this only decides how the letter
-   * is drawn. `eq` keeps a mark from being rebuilt on every update when its change
-   * did not move.
-   */
-  class GitMark extends GutterMarker {
-    private readonly change: LineMark['change'];
+  /** Where the open tabs survive a reload: their paths, never their buffers. */
+  const TABS_KEY = 'acpilot.editor.tabs';
 
-    constructor(change: LineMark['change']) {
-      super();
-      this.change = change;
-    }
-
-    eq(other: GutterMarker): boolean {
-      return other instanceof GitMark && other.change === this.change;
-    }
-
-    toDOM(): HTMLElement {
-      const element = document.createElement('span');
-      element.className = `cm-git-mark cm-git-${this.change}`;
-      element.dataset.change = this.change;
-      element.textContent = markLabel(this.change);
-      element.title = markTitle(this.change);
-      return element;
-    }
-  }
-
-  // The marks travel as a state effect rather than through the document: a save
-  // asks git again, and the answer is drawn without rebuilding the buffer.
-  const setGitMarks = StateEffect.define<LineMark[]>();
-
-  const gitMarks = StateField.define<LineMark[]>({
-    create: () => [],
-    update(value, transaction) {
-      for (const effect of transaction.effects) {
-        if (effect.is(setGitMarks)) {
-          return effect.value;
-        }
-      }
-      return value;
-    },
-  });
+  // True until the stored list has been read: the writing effect must not save an
+  // empty list over the tabs it is about to restore.
+  let restoring = $state(true);
 
   // One character beside the line number. A deletion names the line above the gap,
-  // which is where the daemon counts it and where the TUI draws it.
+  // which is where the daemon counts it and where the TUI draws it. The field holds
+  // positions, so an edit moves a mark with its line instead of leaving it behind.
   const gitGutter = gutter({
     class: 'cm-git-gutter',
-    markers: (view) => {
-      const doc = view.state.doc;
-      const marks = [...view.state.field(gitMarks)].sort((left, right) => left.line - right.line);
-      const ranges = [];
-      for (const mark of marks) {
-        // A mark past the end is a line count from before an edit removed lines;
-        // drawing it nowhere is better than throwing the pane away for it.
-        if (mark.line < 1 || mark.line > doc.lines) {
-          continue;
-        }
-        ranges.push(new GitMark(mark.change).range(doc.line(mark.line).from));
-      }
-      // `true`: the marks were sorted by line above, and a gutter asks for a set
-      // ordered by position rather than by the order git happened to report.
-      return RangeSet.of(ranges, true);
-    },
+    markers: (view) => view.state.field(gitMarks),
   });
 
   // The palette, not a second theme file: the daemon's colours arrive as custom
@@ -285,6 +242,17 @@
     newPath = dir ? `${dir}/` : '';
   }
 
+  /** Remove a tab row; the caller has already asked, if a question was needed. */
+  function dropTab(index: number): void {
+    tabs.splice(index, 1);
+    if (index < active) {
+      active -= 1;
+    } else if (active > tabs.length - 1) {
+      active = Math.max(0, tabs.length - 1);
+    }
+    renaming = false;
+  }
+
   function close(index: number): void {
     const target = tabs[index];
     if (!target) {
@@ -296,11 +264,74 @@
         return;
       }
     }
-    tabs.splice(index, 1);
-    if (index < active) {
-      active -= 1;
-    } else if (active > tabs.length - 1) {
-      active = Math.max(0, tabs.length - 1);
+    dropTab(index);
+  }
+
+  /** Ask for a new path for the open file, prefilled with the current one. */
+  function beginRename(): void {
+    if (!tab?.file) {
+      return;
+    }
+    renaming = true;
+    renamePath = tab.path;
+  }
+
+  async function confirmRename(event: Event): Promise<void> {
+    event.preventDefault();
+    const open = tab;
+    const to = normalisePath(renamePath);
+    renaming = false;
+    if (!open || !open.file || !to || to === open.path) {
+      return;
+    }
+    moving = true;
+    error = null;
+    note = null;
+    try {
+      // The daemon moves the file and answers with its new path and token. A dirty
+      // buffer stays dirty: the move did not change the text on screen.
+      const moved = await renameFile(open.path, to, token);
+      open.path = moved.path;
+      open.file = moved;
+      showMarks(moved.marks ?? []);
+      pathInput = moved.path;
+      note = `Renamed to ${moved.path}`;
+      void browse(parentOf(moved.path));
+    } catch (failure) {
+      error = describe(failure);
+    } finally {
+      moving = false;
+    }
+  }
+
+  /** Delete the open file, after asking, and drop the tab that pointed at it. */
+  async function remove(): Promise<void> {
+    const open = tab;
+    if (!open || !open.file) {
+      return;
+    }
+    const ask = globalThis.confirm;
+    const question = tabDirty(open)
+      ? `Delete ${open.path} and discard its unsaved changes?`
+      : `Delete ${open.path}?`;
+    if (typeof ask === 'function' && !ask(question)) {
+      return;
+    }
+    moving = true;
+    error = null;
+    note = null;
+    try {
+      await deleteFile(open.path, token);
+      const index = tabs.findIndex((candidate) => candidate === open);
+      if (index >= 0) {
+        dropTab(index);
+      }
+      note = `Deleted ${open.path}`;
+      void browse(dir);
+    } catch (failure) {
+      error = describe(failure);
+    } finally {
+      moving = false;
     }
   }
 
@@ -368,6 +399,54 @@
     }
   }
 
+  /**
+   * Reopen the tabs the last visit left open.
+   *
+   * Paths only: a draft that was never saved has no file to come back from, so it
+   * is not stored. A path that has since gone is skipped — a tab pointing at
+   * nothing would be a click that can never work.
+   */
+  async function restoreTabs(): Promise<void> {
+    let saved: ReturnType<typeof storedTabs> = null;
+    try {
+      saved = storedTabs(localStorage.getItem(TABS_KEY));
+    } catch {
+      // Storage can be denied; the page then starts with no tabs, as it did before.
+    }
+    if (saved) {
+      for (const path of saved.paths) {
+        try {
+          const read = await readFile(path, token);
+          tabs.push({ path: read.path, file: read, draft: read.text, mode: 'edit', generation: 1 });
+        } catch {
+          // Gone or refused: the rest of the tabs are still worth opening.
+        }
+      }
+      const index = tabs.findIndex((open) => open.path === saved.active);
+      if (index >= 0) {
+        active = index;
+        pathInput = tabs[index]?.path ?? '';
+      }
+    }
+    restoring = false;
+    void browse('');
+  }
+
+  // Written after every tab change rather than on unload: a browser may drop an
+  // unload handler, and the list is small enough that a write per change is free.
+  $effect(() => {
+    const paths = tabs.map((open) => open.path);
+    const front = tab?.path ?? null;
+    if (restoring) {
+      return;
+    }
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify({ paths, active: front }));
+    } catch {
+      // A full or denied store costs the restore, not the editing.
+    }
+  });
+
   // The editor is built once per loaded document. Reading `draft` and `file`
   // outside the effect's dependencies is deliberate: a keystroke must not rebuild
   // the view, and a save must not move the caret.
@@ -390,7 +469,7 @@
           basicSetup,
           theme,
           extensionFor(languageFor(path), path),
-          gitMarks.init(() => marks.map((mark) => ({ line: mark.line, change: mark.change }))),
+          gitMarksFor(marks),
           gitGutter,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
@@ -440,7 +519,7 @@
   });
 
   onMount(() => {
-    void browse('');
+    void restoreTabs();
   });
 </script>
 
@@ -511,6 +590,12 @@
       >
         Reload
       </button>
+      {#if tab.file}
+        <button type="button" onclick={beginRename} disabled={moving || saving}>Rename</button>
+        <button type="button" onclick={() => void remove()} disabled={moving || saving}>
+          Delete
+        </button>
+      {/if}
       <button
         type="button"
         class="primary"
@@ -521,6 +606,20 @@
       </button>
     {/if}
   </div>
+
+  {#if renaming && tab}
+    <form class="file-rename" onsubmit={confirmRename}>
+      <label for="rename-path" class="visually-hidden">New path</label>
+      <input
+        id="rename-path"
+        bind:value={renamePath}
+        spellcheck="false"
+        autocomplete="off"
+      />
+      <button type="submit" disabled={moving}>Rename</button>
+      <button type="button" onclick={() => (renaming = false)}>Cancel</button>
+    </form>
+  {/if}
 
   {#if browserOpen}
     <div class="file-browser">

@@ -498,6 +498,41 @@ export async function createFile(
   );
 }
 
+/**
+ * `DELETE /v1/files?path=` — remove a file.
+ *
+ * A directory is `409` rather than a recursive delete: the daemon will not guess
+ * what should happen to everything inside it. A renamed or deleted path keeps
+ * nothing of the buffer, so the caller drops its tab.
+ */
+export async function deleteFile(path: string, token: string): Promise<void> {
+  await client.DELETE('/v1/files', {
+    params: { query: { path } },
+    headers: auth(token),
+  });
+}
+
+/**
+ * `POST /v1/files/rename` — move a file and answer with its new version.
+ *
+ * The answer is the moved file's `FileContent`, so the tab can follow the path
+ * without a second read. The daemon refuses an existing destination; a rename is
+ * never a replace. On a remote workspace this is `409`: the host helper has no
+ * rename operation, so write and delete work there and a move does not.
+ */
+export async function renameFile(
+  path: string,
+  to: string,
+  token: string,
+): Promise<FileContent> {
+  return answered(
+    await client.POST('/v1/files/rename', {
+      body: { path, to },
+      headers: auth(token),
+    }),
+  );
+}
+
 /** A key for one prompt press, used again if the request is retried. */
 function newIdempotencyKey(): string {
   const source = globalThis.crypto;

@@ -40,6 +40,8 @@ let target: HTMLDivElement;
 let cleanups: (() => void)[];
 let calls: { route: string; authorization: string | undefined }[];
 let writes: { path: string; text: string; if_match?: string }[];
+let deletes: string[];
+let renames: { path: string; to: string }[];
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -48,6 +50,10 @@ beforeEach(() => {
   cleanups = [];
   calls = [];
   writes = [];
+  deletes = [];
+  renames = [];
+  localStorage.clear();
+  vi.stubGlobal('confirm', () => true);
   vi.stubGlobal(
     'fetch',
     plainFetch(
@@ -63,6 +69,16 @@ beforeEach(() => {
         }
         if (route.startsWith('/v1/files?path=src%2Fmain.rs')) {
           return json(MAIN);
+        }
+        if (route.startsWith('/v1/files?') && init?.method === 'DELETE') {
+          const path = new URL(route, 'http://daemon').searchParams.get('path') ?? '';
+          deletes.push(path);
+          return new Response(null, { status: 204 });
+        }
+        if (route === '/v1/files/rename' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { path: string; to: string };
+          renames.push(body);
+          return json({ path: body.to, text: '', etag: 'v10', marks: [] });
         }
         if (route.startsWith('/v1/files?path=README.md')) {
           return json(README);
@@ -259,5 +275,58 @@ describe('a file', () => {
     await vi.waitFor(() => expect(writes.length).toBe(1));
     // The absent token is the create: the daemon refuses a path that exists.
     expect(writes[0]).toEqual({ path: 'notes.txt', text: '' });
+  });
+
+  it('reopens the tabs a reload left behind', async () => {
+    localStorage.setItem(
+      'acpilot.editor.tabs',
+      JSON.stringify({ paths: ['README.md'], active: 'README.md' }),
+    );
+    render();
+
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(1));
+    expect(target.querySelector('.editor-path')?.textContent).toBe('README.md');
+  });
+
+  it('remembers the open tabs as paths for the next visit', async () => {
+    render();
+    await (await findButton('README.md')).click();
+
+    await vi.waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('acpilot.editor.tabs') ?? '{}');
+      expect(stored.paths).toEqual(['README.md']);
+      expect(stored.active).toBe('README.md');
+    });
+  });
+
+  it('renames the open file and follows it to the new path', async () => {
+    render();
+    await (await findButton('README.md')).click();
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(1));
+
+    (await findButton('Rename')).click();
+    const input = (await find('input#rename-path')) as HTMLInputElement;
+    input.value = 'docs/README.md';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    target
+      .querySelector('form.file-rename')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(target.querySelector('.editor-path')?.textContent).toBe('docs/README.md'),
+    );
+    expect(renames).toEqual([{ path: 'README.md', to: 'docs/README.md' }]);
+  });
+
+  it('deletes the open file after asking and drops its tab', async () => {
+    render();
+    await (await findButton('README.md')).click();
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(1));
+
+    (await findButton('Delete')).click();
+
+    await vi.waitFor(() => expect(deletes).toEqual(['README.md']));
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(0));
+    expect(target.textContent).toContain('Deleted README.md');
   });
 });

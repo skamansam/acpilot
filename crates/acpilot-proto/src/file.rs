@@ -152,6 +152,22 @@ pub struct FileContent {
     pub marks: Vec<LineMark>,
 }
 
+/// Request body for `POST /v1/files/rename`.
+///
+/// A move is not a write: it changes the name of a file without touching its text,
+/// which is why it carries no `if_match`. The destination is required to be new, so
+/// a rename can never replace a file the caller did not name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FileRenameRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The file to move, workspace-relative.
+    pub path: String,
+    /// Its new path, workspace-relative. The destination must not exist.
+    pub to: String,
+}
+
 /// Request body for `POST /v1/files/references`.
 ///
 /// The query-string form of the same question, plus the buffer the editor is holding.

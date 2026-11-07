@@ -33,7 +33,8 @@ use acpilot_lsp::position::{LineIndex, Position};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::file::{
     Diagnostic, DiagnosticSeverity, DiagnosticsRequest, FileChange, FileContent, FileDiagnostics,
-    FileEntry, FileWriteRequest, GrepMatch, LineChange, LineMark, Reference, ReferencesRequest,
+    FileEntry, FileRenameRequest, FileWriteRequest, GrepMatch, LineChange, LineMark, Reference,
+    ReferencesRequest,
 };
 use axum::Json;
 use axum::Router;
@@ -1383,6 +1384,111 @@ fn delete_local(root: &Path, requested: &str) -> Result<StatusCode, ApiError> {
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /v1/files/rename`.
+///
+/// A move keeps the file's bytes and its history: it renames the entry rather than
+/// reading and writing a copy, which is why it is a route of its own instead of a
+/// write followed by a delete. The destination must be new — a rename that replaced
+/// somebody's file would be the same silent overwrite the write route refuses — and
+/// its parent must exist, because the write route does not build trees either.
+///
+/// A remote workspace is `409`: the host helper exposes read, write, list, remove and
+/// mkdir, and no rename. Doing it as a write and a delete there would make a failed
+/// second step leave a copy, so the honest answer is that the move is not wired.
+///
+/// # Errors
+///
+/// No workspace (`409`), a path that escapes (`400`/`403`), no such file (`404`), a
+/// destination that exists (`409`), a directory (`409`), or a parent that is not
+/// there (`404`).
+async fn rename(
+    State(state): State<AppState>,
+    body: Result<Json<FileRenameRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<FileContent>, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a rename request: {rejection}"
+        )))
+    })?;
+    match source(&state, request.workspace.as_deref())? {
+        Source::Local(root) => rename_local(&root, &request.path, &request.to),
+        Source::Remote { host, .. } => Err(ApiError::new(AcpilotError::conflict(format!(
+            "renaming is not supported on {}; write and delete are",
+            host.id
+        )))),
+    }
+}
+
+/// [`rename`], through this daemon's own filesystem.
+fn rename_local(root: &Path, requested: &str, to: &str) -> Result<Json<FileContent>, ApiError> {
+    let from_relative = relative_path(requested)?;
+    let to_relative = relative_path(to)?;
+    let from = resolve_existing(root, &from_relative, requested)?;
+    let metadata = std::fs::metadata(&from).map_err(|source| io_error(&from, source))?;
+    if metadata.is_dir() {
+        return Err(ApiError::new(AcpilotError::conflict(format!(
+            "{requested} is a directory; this route moves files"
+        ))));
+    }
+    if from_relative == to_relative {
+        return Err(ApiError::new(AcpilotError::invalid(format!(
+            "{requested} is already there"
+        )))
+        .with_detail("to", "a rename names a different path"));
+    }
+    let target = root.join(&to_relative);
+    // The destination's parent has to exist and resolve inside the workspace: the
+    // move writes an entry there, and the write route's rule is that it does not
+    // build the tree.
+    let parent = target.parent().ok_or_else(|| outside(to, root))?;
+    let resolved_parent = std::fs::canonicalize(parent).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            ApiError::new(AcpilotError::not_found(format!(
+                "the directory for {to} does not exist"
+            )))
+        } else {
+            io_error(parent, source)
+        }
+    })?;
+    if !resolved_parent.starts_with(root) {
+        return Err(outside(to, root));
+    }
+    // `create_new` reserves the name atomically. A bare `rename` replaces whatever
+    // is at the destination on Unix, which would turn a race with another writer
+    // into the silent overwrite this API exists to prevent.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+    {
+        Ok(file) => drop(file),
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "{to} already exists"
+            ))));
+        }
+        Err(source) => return Err(io_error(&target, source)),
+    }
+    if let Err(source) = std::fs::rename(&from, &target) {
+        // The placeholder is ours; leaving an empty file behind after a failed move
+        // would be a file nobody asked for.
+        let _ = std::fs::remove_file(&target);
+        return Err(io_error(&target, source));
+    }
+    let metadata = std::fs::metadata(&target).map_err(|source| io_error(&target, source))?;
+    let bytes = std::fs::read(&target).map_err(|source| io_error(&target, source))?;
+    let etag = etag(&metadata, &bytes);
+    let text = text_of(bytes, to)?;
+    let path = display_path(root, &target);
+    let marks = line_marks(root, &path);
+    Ok(Json(FileContent {
+        path,
+        text,
+        etag,
+        marks,
+    }))
+}
+
 /// The body of `POST /v1/files/directory`.
 #[derive(Debug, Deserialize)]
 struct DirectoryRequest {
@@ -2309,6 +2415,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/files", get(read).put(write).delete(delete))
         .route("/v1/files/directory", post(create_directory))
+        .route("/v1/files/rename", post(rename))
         .route("/v1/files/list", get(list))
         .route("/v1/files/search", get(search))
         .route("/v1/files/grep", get(grep))
@@ -2338,6 +2445,26 @@ pub fn routes() -> Router<AppState> {
     )
 )]
 fn read_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    delete,
+    path = "/v1/files",
+    tag = "files",
+    summary = "Delete a file",
+    params(
+        ("workspace" = Option<String>, Query, description = "Workspace id; empty or absent means the one this daemon serves"),
+        ("path" = String, Query, description = "Path relative to the workspace root")
+    ),
+    responses(
+        (status = 204, description = "The file was removed"),
+        (status = 400, description = "A path that escapes", body = ErrorBody),
+        (status = 403, description = "A path that resolves outside the workspace", body = ErrorBody),
+        (status = 404, description = "No such file", body = ErrorBody),
+        (status = 409, description = "A directory, which this route does not remove", body = ErrorBody)
+    )
+)]
+fn delete_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
@@ -2457,6 +2584,23 @@ fn references_in_buffer_doc() {}
 )]
 fn write_doc() {}
 
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/files/rename",
+    tag = "files",
+    summary = "Rename or move a file",
+    request_body = FileRenameRequest,
+    responses(
+        (status = 200, description = "The file at its new path, with its token", body = FileContent),
+        (status = 400, description = "A path that escapes, or the same path twice", body = ErrorBody),
+        (status = 403, description = "A path that resolves outside the workspace", body = ErrorBody),
+        (status = 404, description = "The file does not exist, or the destination's directory does not", body = ErrorBody),
+        (status = 409, description = "The destination exists, the source is a directory, or the workspace is remote", body = ErrorBody)
+    )
+)]
+fn rename_doc() {}
+
 /// The OpenAPI operations this module adds.
 pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
     use utoipa::Path;
@@ -2470,6 +2614,16 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/files",
             HttpMethod::Put,
             <__path_write_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files",
+            HttpMethod::Delete,
+            <__path_delete_doc as Path>::operation(),
+        ),
+        (
+            "/v1/files/rename",
+            HttpMethod::Post,
+            <__path_rename_doc as Path>::operation(),
         ),
         (
             "/v1/files/list",

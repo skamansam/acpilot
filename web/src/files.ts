@@ -116,6 +116,58 @@ export function tabDirty(tab: EditorTab): boolean {
   return tab.file === null || tab.draft !== tab.file.text;
 }
 
+/** The tabs a previous visit left open: their paths, and which one was in front. */
+export interface StoredTabs {
+  paths: string[];
+  active: string | null;
+}
+
+/**
+ * Parse what the page stored about its tabs.
+ *
+ * Storage is not a contract: it can hold an older shape, a hand edit, or nothing
+ * at all, and none of those is a reason the editor refuses to open. A malformed
+ * value is `null`, paths are normalised the way the routes spell them, duplicates
+ * collapse, and an active path that is not one of the stored ones falls back to
+ * the first tab rather than selecting nothing.
+ */
+export function storedTabs(raw: string | null): StoredTabs | null {
+  if (!raw) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const record = parsed as { paths?: unknown; active?: unknown };
+  if (!Array.isArray(record.paths)) {
+    return null;
+  }
+  const paths: string[] = [];
+  for (const value of record.paths) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const path = normalisePath(value);
+    if (path && !paths.includes(path)) {
+      paths.push(path);
+    }
+  }
+  if (paths.length === 0) {
+    return null;
+  }
+  const wanted = typeof record.active === 'string' ? normalisePath(record.active) : '';
+  return {
+    paths,
+    active: wanted && paths.includes(wanted) ? wanted : paths[0] ?? null,
+  };
+}
+
 /** The one character a gutter draws for a change. */
 export function markLabel(change: LineChange): string {
   switch (change) {

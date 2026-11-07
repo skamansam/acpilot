@@ -993,6 +993,31 @@
         ],
         "type": "object"
       },
+      "FileRenameRequest": {
+        "description": "Request body for `POST /v1/files/rename`.\n\nA move is not a write: it changes the name of a file without touching its text,\nwhich is why it carries no `if_match`. The destination is required to be new, so\na rename can never replace a file the caller did not name.",
+        "properties": {
+          "path": {
+            "description": "The file to move, workspace-relative.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Its new path, workspace-relative. The destination must not exist.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "to"
+        ],
+        "type": "object"
+      },
       "FileWriteRequest": {
         "description": "Request body for `PUT /v1/files`.",
         "properties": {
@@ -2699,6 +2724,75 @@
       }
     },
     "/v1/files": {
+      "delete": {
+        "operationId": "delete_doc",
+        "parameters": [
+          {
+            "description": "Workspace id; empty or absent means the one this daemon serves",
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path relative to the workspace root",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The file was removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A path that escapes"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A path that resolves outside the workspace"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such file"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A directory, which this route does not remove"
+          }
+        },
+        "summary": "Delete a file"
+      },
       "get": {
         "operationId": "read_doc",
         "parameters": [
@@ -3110,6 +3204,74 @@
           }
         },
         "summary": "Find the code uses of an identifier in an open buffer"
+      }
+    },
+    "/v1/files/rename": {
+      "post": {
+        "operationId": "rename_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            },
+            "description": "The file at its new path, with its token"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A path that escapes, or the same path twice"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A path that resolves outside the workspace"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The file does not exist, or the destination's directory does not"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The destination exists, the source is a directory, or the workspace is remote"
+          }
+        },
+        "summary": "Rename or move a file"
       }
     },
     "/v1/files/search": {

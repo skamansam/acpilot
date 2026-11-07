@@ -45,6 +45,10 @@ fn directory(path: &str) -> Option<serde_json::Value> {
     Some(serde_json::json!({ "path": path }))
 }
 
+fn rename(path: &str, to: &str) -> Option<serde_json::Value> {
+    Some(serde_json::json!({ "path": path, "to": to }))
+}
+
 #[tokio::test]
 async fn a_directory_is_created_with_the_parents_it_needs() {
     let root = tempfile::tempdir().expect("workspace");
@@ -127,6 +131,94 @@ async fn deleting_outside_the_workspace_is_a_400() {
         "DELETE",
         "/v1/files?path=../notes.md",
         None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn renaming_a_file_moves_it_and_keeps_its_text() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::create_dir(root.path().join("docs")).expect("docs");
+    std::fs::write(root.path().join("notes.md"), "hello").expect("notes");
+    let status = send_status(
+        app(root.path()),
+        "POST",
+        "/v1/files/rename",
+        rename("notes.md", "docs/notes.md"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !root.path().join("notes.md").exists(),
+        "the old name is gone"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("docs/notes.md")).expect("moved file"),
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn renaming_onto_an_existing_file_is_refused() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::write(root.path().join("a.md"), "a").expect("a");
+    std::fs::write(root.path().join("b.md"), "b").expect("b");
+    let status = send_status(
+        app(root.path()),
+        "POST",
+        "/v1/files/rename",
+        rename("a.md", "b.md"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("b.md")).expect("b"),
+        "b",
+        "the file the caller did not name is untouched"
+    );
+    assert!(root.path().join("a.md").exists());
+}
+
+#[tokio::test]
+async fn renaming_needs_the_destination_directory() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::write(root.path().join("notes.md"), "hello").expect("notes");
+    let status = send_status(
+        app(root.path()),
+        "POST",
+        "/v1/files/rename",
+        rename("notes.md", "missing/notes.md"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(root.path().join("notes.md").exists());
+}
+
+#[tokio::test]
+async fn renaming_a_directory_is_refused() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::create_dir(root.path().join("src")).expect("src");
+    let status = send_status(
+        app(root.path()),
+        "POST",
+        "/v1/files/rename",
+        rename("src", "code"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(root.path().join("src").is_dir());
+}
+
+#[tokio::test]
+async fn renaming_outside_the_workspace_is_a_400() {
+    let root = tempfile::tempdir().expect("workspace");
+    std::fs::write(root.path().join("notes.md"), "hello").expect("notes");
+    let status = send_status(
+        app(root.path()),
+        "POST",
+        "/v1/files/rename",
+        rename("notes.md", "../escaped.md"),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

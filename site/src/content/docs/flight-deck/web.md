@@ -47,14 +47,24 @@ changed on disk while the buffer was open is therefore a `409` the page shows as
 "nothing was overwritten", never a silent save. The diff view is
 `@codemirror/merge` over the version on disk and the buffer, and the git marks the
 read route returns are drawn in a gutter beside the line numbers — `+` added, `~`
-changed, `-` removed — and asked again after a save or reload.
+changed, `-` removed. The marks are positions, not line numbers: typing above one
+moves it down with its line, and a save asks git again for the new text.
 
 Open files are tabs: each keeps its own buffer, so switching back to one does not
-re-read the disk and lose an edit, and a dot marks the tabs with unsaved text.
-**New file** takes a path and opens an empty buffer; its first **Save** sends
-`PUT /v1/files` without `if_match`, which the daemon reads as a create and refuses
-with `409` if something already exists there. Closing a tab with unsaved text asks
-first.
+re-read the disk and lose an edit, and a dot marks the tabs with unsaved text. The
+open paths survive a reload; unsaved drafts do not, because there is no file to
+restore them from. **New file** takes a path and opens an empty buffer; its first
+**Save** sends `PUT /v1/files` without `if_match`, which the daemon reads as a create
+and refuses with `409` if something already exists there. Closing a tab with
+unsaved text asks first.
+
+**Rename** asks for a new path and moves the file through
+`POST /v1/files/rename`; the tab follows the answer, and a dirty buffer stays
+dirty because the move did not change its text. **Delete** removes the file through
+`DELETE /v1/files` and drops the tab, asking first when the buffer has unsaved
+text. A rename is refused when the destination exists or when the workspace is on
+another host: the host helper has no rename operation, so a move is local-only
+while write and delete work everywhere.
 
 Highlighting is `@codemirror/lang-*`, the fallback the plan names: the page is one
 inlined HTML file, and a tree-sitter wasm grammar would be a second asset the

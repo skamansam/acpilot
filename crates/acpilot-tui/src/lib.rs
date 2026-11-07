@@ -21,6 +21,7 @@ pub mod clipboard;
 pub mod editor;
 pub mod keymap;
 pub mod layout;
+pub mod markdown;
 pub mod theme;
 pub mod ui;
 

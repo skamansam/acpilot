@@ -76,7 +76,12 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
   left are drawn, and their colours are the highlighter's tokens resolved through
   the theme.
 - **Agents** is the session list, the transcript and the composer, in that order:
-  what you can open, what it said, what you want to say.
+  what you can open, what it said, what you want to say. The transcript renders an
+  assistant reply's markdown — headings, lists, quotes, fenced code, inline code,
+  bold, italic, links — and folds every tool call to one row whose status moves in
+  place; `Enter` under the copy cursor opens the result. While the open session is
+  busy a cursor sits at the end of the last line and the title says `streaming`. The
+  composer is multiline, and `@` opens a path completion the daemon walks.
 - The **status line** is connection, profile, focused pane, cursor, last message,
   and the daemon address when there is room for it.
 - The **stats bar** is one row per integration: provider, model, tokens both ways,
@@ -91,7 +96,7 @@ the toast.
 | Pane | Today | Task |
 | --- | --- | --- |
 | Menu bar, About | real, and every row is an existing path | — |
-| Sessions, transcript, composer | real, over the daemon; the transcript is a pane (`Tab`, `F3`) with scroll, find and copy | P6-7 refines the composer |
+| Sessions, transcript, composer | real, over the daemon; the transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and a streaming cursor, and the composer is multiline with `@path` completion from the daemon's walk | — |
 | Permission card | real answer path, seeded diff preview | P6-8 |
 | Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
@@ -112,13 +117,13 @@ the toast.
 | anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal, or a new shell when the session has none · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | terminal picker | `j`/`k` choose · `Enter` attach · `n` start a shell in the session's workspace · `Esc`/`q` close |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
-| transcript | the copy keys below, because the keyboard being there is what reading it means |
+| transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call under the cursor |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |
 | editor | `h`/`j`/`k`/`l` cursor in a column that Up/Down remembers · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `v` visual selection · `y` copy the selection · `Esc` clear it · `Ctrl-S` or `:w` save · `:` command line (`:q` refuses unsaved text, `:q!` discards) · `i`/`a` insert at the caret or after it · `I`/`A` at the line's start or end · `o`/`O` a line below or above · `u`/`Ctrl-Z` undo · `Ctrl-Y` redo · `x` delete a character · `F12` definition · click puts the caret · Shift-click extends the selection · drag selects · wheel scrolls the view |
 | visual mode | motions (`h`/`j`/`k`/`l`, arrows, `0`/`$`, `PgUp`/`PgDn`) extend the run · `y` copy · `d`/`x` delete · `:` a command · `v`/`Esc`/click leave |
 | insert mode | any key is text · `Enter` a line · `Backspace`/`Delete` a character · `Tab`/`Shift-Tab` indent/outdent · arrows and `Home`/`End` move · `Ctrl-Z` undo · `Esc` normal mode |
-| sessions | `j`/`k` choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel · a click focuses the list on that session and opens it |
-| prompt | `Enter` send · `Esc` back to the list |
+| sessions | `j`/`k` or the arrows choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel · a click focuses the list on that session and opens it |
+| prompt | `Enter` send · `Alt-Enter`/`Shift-Enter`/`Ctrl-Enter` a line · `@` complete a path · arrows and `Home`/`End` move the caret · `Backspace`/`Delete` edit beside it · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
@@ -297,9 +302,13 @@ events at 45 ms a chunk.
    of its own is open, and so is how much diff a card should hold before it
    scrolls.
 4. **The transcript's scrollback.** Answered: `F3` gives it the terminal's copy
-   mode, including a yank over OSC 52. What is still open is whether a transcript
-   that can be read is a pane with a focus of its own, rather than a mode entered
-   from any pane with one key.
+   mode, including a yank over OSC 52, and it is a pane with a focus of its own
+   rather than a mode entered from any pane with one key. The rows are rendered
+   rather than the source text — markdown, a folded row per tool call — so a yank
+   copies what is on screen and a find searches it. What is still open is the cost
+   of that: every frame builds the rows for the whole transcript, which is free at
+   a session's length and is the thing to virtualise if a conversation ever grows
+   to a file's size.
 5. **The stats bar's density.** Two rows of numbers in one line is already tight at
    110 columns.
 6. **The keymap file.** Answered for the client's keys and the editor's: the table

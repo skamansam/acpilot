@@ -9,7 +9,7 @@ use acpilot_demo::{Command, CommandAction, Diff, FileNode, Run};
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
-use acpilot_proto::session::SessionSummary;
+use acpilot_proto::session::{SessionStatus, SessionSummary};
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use acpilot_stats::Row;
 use acpilot_text::highlight::Grammars;
@@ -526,6 +526,83 @@ pub struct Entry {
     pub kind: Kind,
     /// Its text, which may contain newlines.
     pub text: String,
+    /// A tool call's identity and result, when the entry is one.
+    ///
+    /// Apart from `text` because a second event about the same call — `pending`
+    /// then `completed` — is one row whose status moved, not two rows. The agent
+    /// names the call, so the name is what the second event is matched on.
+    pub tool: Option<ToolCall>,
+    /// Whether a tool call's detail is hidden.
+    ///
+    /// Folded by default: the header says which tool ran, and a transcript that
+    /// printed every result in full is a conversation nobody can find the reply
+    /// in. `Enter` in the transcript opens the one under the cursor.
+    pub folded: bool,
+}
+
+impl Default for Entry {
+    fn default() -> Self {
+        Self {
+            kind: Kind::Assistant,
+            text: String::new(),
+            tool: None,
+            folded: false,
+        }
+    }
+}
+
+/// What a tool call said, kept so its row can be updated and opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    /// The agent's id for the call, which is what a status update names.
+    pub id: String,
+    /// Where it is: `pending`, `completed`, or whatever the agent called it.
+    pub status: String,
+    /// What it did, in the agent's words.
+    pub title: String,
+    /// Its result, when the agent sent one. Shown only when the row is unfolded.
+    pub detail: String,
+}
+
+/// One drawn line of the transcript.
+///
+/// The pane, a yank and a find all read this list, so the cells a person
+/// highlights and the text they copy cannot disagree — and the markdown is
+/// rendered once, in the one place that owns the rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptRow {
+    /// How the entry it came from is styled.
+    pub kind: Kind,
+    /// Its runs, already marked up.
+    pub segments: Vec<crate::markdown::Segment>,
+    /// Which entry it came from, so a key can fold what the cursor is on.
+    pub entry: usize,
+}
+
+impl TranscriptRow {
+    /// The row as plain text, which is what a yank and a find read.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect()
+    }
+}
+
+/// The `@path` completion the composer is showing.
+///
+/// The rows are the daemon's answer to a walk, not a local listing: the files
+/// are where the workspace is, and an `@` that offered what this process could
+/// see would be a prompt about a different machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    /// What was typed after the `@`.
+    pub query: String,
+    /// Paths that match, best first, already capped.
+    pub rows: Vec<String>,
+    /// Which row `Enter` or `Tab` takes.
+    pub selected: usize,
 }
 
 /// How many lines of history a pane keeps behind its live screen.
@@ -1834,6 +1911,14 @@ pub struct App {
     pub permission_card: bool,
     /// The prompt being composed.
     pub input: String,
+    /// The caret in [`App::input`], counted in characters from the start.
+    ///
+    /// A character index rather than a byte offset: the composer is a text field
+    /// that takes whatever a person can type, and an offset that split a `日`
+    /// would be an edit nobody meant.
+    pub cursor: usize,
+    /// The `@path` completion, when one is open.
+    pub completion: Option<Completion>,
     /// Terminals a person may attach to, oldest first: the open session's, and the
     /// panes no session owns.
     ///
@@ -2026,6 +2111,8 @@ impl App {
             permissions: Vec::new(),
             permission_card: false,
             input: String::new(),
+            cursor: 0,
+            completion: None,
             terminals: Vec::new(),
             terminal: None,
             transcript: Reader::default(),
@@ -2175,22 +2262,294 @@ impl App {
     /// the text they copy cannot disagree — the same reason the terminal yanks from
     /// the screen at the offset it is drawn at.
     #[must_use]
-    pub fn transcript_lines(&self) -> Vec<(&str, Kind)> {
-        self.entries
-            .iter()
-            .flat_map(|entry| entry.text.split('\n').map(move |line| (line, entry.kind)))
-            .collect()
+    pub fn transcript_rows(&self) -> Vec<TranscriptRow> {
+        let mut rows = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.kind == Kind::Tool {
+                rows.push(TranscriptRow {
+                    kind: entry.kind,
+                    segments: vec![crate::markdown::Segment::plain(entry.text.clone())],
+                    entry: index,
+                });
+                if !entry.folded
+                    && let Some(call) = &entry.tool
+                {
+                    for line in call.detail.lines() {
+                        rows.push(TranscriptRow {
+                            kind: entry.kind,
+                            segments: vec![crate::markdown::Segment::plain(format!("  {line}"))],
+                            entry: index,
+                        });
+                    }
+                }
+                continue;
+            }
+            if entry.kind == Kind::Assistant {
+                for line in crate::markdown::render(&entry.text) {
+                    rows.push(TranscriptRow {
+                        kind: entry.kind,
+                        segments: line.segments,
+                        entry: index,
+                    });
+                }
+                continue;
+            }
+            rows.extend(entry.text.split('\n').map(|line| TranscriptRow {
+                kind: entry.kind,
+                segments: vec![crate::markdown::Segment::plain(line)],
+                entry: index,
+            }));
+        }
+        rows
     }
 
     /// How many screen lines the transcript holds, without building them.
     ///
     /// A key press needs the length to clamp a scroll, not the lines; counting
-    /// newlines is the same answer without the allocation.
+    /// newlines is the same answer without the allocation. A folded tool call is
+    /// one row whatever its result holds, which is what makes the fold a fold.
     fn transcript_len(&self) -> usize {
         self.entries
             .iter()
-            .map(|entry| entry.text.matches('\n').count() + 1)
+            .map(|entry| {
+                if entry.kind == Kind::Tool {
+                    let detail = if entry.folded {
+                        0
+                    } else {
+                        entry
+                            .tool
+                            .as_ref()
+                            .map_or(0, |call| call.detail.lines().count())
+                    };
+                    1 + detail
+                } else {
+                    entry.text.matches('\n').count() + 1
+                }
+            })
             .sum()
+    }
+
+    /// Whether the open session is in the middle of a turn.
+    ///
+    /// Read off the session list rather than kept as a flag: the daemon already
+    /// says `busy`, and a client that guessed from the last event it saw would
+    /// lose the end of a turn to a dropped connection.
+    #[must_use]
+    pub fn streaming(&self) -> bool {
+        let Some(id) = &self.open else {
+            return false;
+        };
+        self.sessions
+            .iter()
+            .any(|session| &session.id == id && session.status == SessionStatus::Busy)
+    }
+
+    /// How many rows the composer needs for its text.
+    ///
+    /// Grows with the lines a person wrote and stops at six: a prompt is not the
+    /// document, and a composer that took the window would hide the transcript it
+    /// is a reply to.
+    #[must_use]
+    pub fn composer_height(&self) -> u16 {
+        let lines = u16::try_from(self.input.matches('\n').count() + 1).unwrap_or(u16::MAX);
+        lines.clamp(1, 6) + 2
+    }
+
+    /// Where the caret sits in the composer: its row and its column.
+    #[must_use]
+    pub fn composer_position(&self) -> (u16, u16) {
+        let before: String = self.input.chars().take(self.cursor).collect();
+        let row = before.matches('\n').count();
+        let column = before
+            .rsplit('\n')
+            .next()
+            .map_or(0, |line| line.chars().count());
+        (
+            u16::try_from(row).unwrap_or(u16::MAX),
+            u16::try_from(column).unwrap_or(u16::MAX),
+        )
+    }
+
+    /// The `@path` being typed, as where its `@` starts and what follows it.
+    ///
+    /// Only the word the caret is in counts, and only when it began at the start
+    /// of a word: an email address is not a file, and a completion that opened
+    /// on one would be a popup nobody asked for.
+    fn mention(&self) -> Option<(usize, String)> {
+        let before: Vec<char> = self.input.chars().take(self.cursor).collect();
+        let start = before.iter().rposition(|character| *character == '@')?;
+        if before[start + 1..]
+            .iter()
+            .any(|character| character.is_whitespace())
+        {
+            return None;
+        }
+        if start > 0 && !before[start - 1].is_whitespace() {
+            return None;
+        }
+        Some((start, before[start + 1..].iter().collect()))
+    }
+
+    /// Ask the daemon about the `@path` being typed, when it has changed.
+    ///
+    /// The question is what the popup is showing, not what was typed most
+    /// recently: a query already answered is not asked twice, and a word that
+    /// stopped being a mention closes the popup.
+    fn refresh_completion(&mut self) -> Option<Request> {
+        let query = self
+            .mention()
+            .map(|(_, query)| query)
+            .filter(|query| !query.is_empty());
+        match query {
+            Some(query) => {
+                if self
+                    .completion
+                    .as_ref()
+                    .is_some_and(|completion| completion.query == query)
+                {
+                    return None;
+                }
+                self.completion = Some(Completion {
+                    query: query.clone(),
+                    rows: Vec::new(),
+                    selected: 0,
+                });
+                Some(Request::CompleteFiles(query))
+            }
+            None => {
+                self.completion = None;
+                None
+            }
+        }
+    }
+
+    /// The byte offset of a character index in the composer.
+    fn composer_byte(&self, chars: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(chars)
+            .map_or(self.input.len(), |(index, _)| index)
+    }
+
+    /// Put a character where the caret is.
+    fn insert_character(&mut self, character: char) {
+        let at = self.composer_byte(self.cursor);
+        self.input.insert(at, character);
+        self.cursor += 1;
+    }
+
+    /// Remove the character before the caret.
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let from = self.composer_byte(self.cursor - 1);
+        let to = self.composer_byte(self.cursor);
+        self.input.replace_range(from..to, "");
+        self.cursor -= 1;
+    }
+
+    /// Remove the character under the caret.
+    fn delete_character(&mut self) {
+        if self.cursor >= self.input.chars().count() {
+            return;
+        }
+        let from = self.composer_byte(self.cursor);
+        let to = self.composer_byte(self.cursor + 1);
+        self.input.replace_range(from..to, "");
+    }
+
+    /// Move the caret a row up or down, keeping its column where it fits.
+    fn composer_move(&mut self, delta: i32) {
+        let before: Vec<char> = self.input.chars().take(self.cursor).collect();
+        let row = before
+            .iter()
+            .filter(|character| **character == '\n')
+            .count();
+        let column = before
+            .iter()
+            .rev()
+            .take_while(|character| **character != '\n')
+            .count();
+        let lines: Vec<&str> = self.input.split('\n').collect();
+        let target = if delta < 0 {
+            if row == 0 {
+                return;
+            }
+            row - 1
+        } else {
+            if row + 1 >= lines.len() {
+                return;
+            }
+            row + 1
+        };
+        let mut index = 0usize;
+        for line in &lines[..target] {
+            index += line.chars().count() + 1;
+        }
+        index += column.min(lines[target].chars().count());
+        self.cursor = index;
+    }
+
+    /// Take the completion the popup is on, replacing the `@word` it matched.
+    fn accept_completion(&mut self) {
+        let Some(completion) = self.completion.take() else {
+            return;
+        };
+        let Some(row) = completion.rows.get(completion.selected).cloned() else {
+            return;
+        };
+        let Some((start, _)) = self.mention() else {
+            return;
+        };
+        let from = self.composer_byte(start);
+        let to = self.composer_byte(self.cursor);
+        self.input.replace_range(from..to, &format!("@{row}"));
+        self.cursor = start + 1 + row.chars().count();
+    }
+
+    /// Open or close the tool call under the transcript's cursor.
+    ///
+    /// A tool call is a row until it is asked about, and a result nobody can open
+    /// is a result a person scrolls past without knowing it is there.
+    fn toggle_tool(&mut self) {
+        let (height, _) = self.transcript_grid();
+        let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
+        self.transcript.view.clamp((height, u16::MAX), max_scroll);
+        let rows = self.transcript_rows();
+        let first = rows
+            .len()
+            .saturating_sub(usize::from(height))
+            .saturating_sub(self.transcript.view.scroll);
+        let Some(row) = rows.get(first + usize::from(self.transcript.view.cursor.0)) else {
+            return;
+        };
+        let entry = row.entry;
+        if !self
+            .entries
+            .get(entry)
+            .is_some_and(|entry| entry.tool.is_some())
+        {
+            self.status = "that row is not a tool call".to_owned();
+            return;
+        }
+        let folded = self
+            .entries
+            .get_mut(entry)
+            .map(|entry| {
+                entry.folded = !entry.folded;
+                entry.folded
+            })
+            .unwrap_or(false);
+        // The length changed under the cursor; putting the view back at the tail
+        // when it was live is what keeps a fold from scrolling the transcript.
+        let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
+        self.transcript.view.scroll = self.transcript.view.scroll.min(max_scroll);
+        self.status = if folded {
+            "tool call folded · Enter opens it".to_owned()
+        } else {
+            "tool call opened · Enter folds it".to_owned()
+        };
     }
 
     /// Whether the transcript is a pane that can be read right now.
@@ -2214,9 +2573,9 @@ impl App {
 
     /// The lines a search in the transcript reads, oldest first.
     fn transcript_text(&self) -> Vec<String> {
-        self.transcript_lines()
+        self.transcript_rows()
             .into_iter()
-            .map(|(line, _)| line.to_owned())
+            .map(|row| row.text())
             .collect()
     }
 
@@ -2262,6 +2621,13 @@ impl App {
     fn transcript_key(&mut self, key: KeyEvent) -> Option<Request> {
         if self.transcript.typing.is_some() {
             return self.transcript_search_key(key);
+        }
+        // `Enter` opens or folds the tool call under the cursor: a read-only pane
+        // has the key free, and a result a person can see is the difference between
+        // a call they can judge and a line they scroll past.
+        if key.code == KeyCode::Enter {
+            self.toggle_tool();
+            return None;
         }
         let grid = self.transcript_grid();
         let max_scroll = self.transcript_len().saturating_sub(usize::from(grid.0));
@@ -2362,7 +2728,7 @@ impl App {
     /// and trailing blanks are dropped because a yank is pasted into a prompt more
     /// often than into a file.
     fn transcript_yank(&self, view: &CopyView) -> String {
-        let lines = self.transcript_lines();
+        let lines = self.transcript_rows();
         let height = usize::from(self.transcript_size.map_or(24, |size| size.rows.max(1)));
         // The selection is in cells of the view, and the view is a window onto the
         // lines: the first row on screen is this far into them.
@@ -2379,10 +2745,10 @@ impl App {
         };
         let mut text = String::new();
         for row in start.0..=end.0 {
-            let Some((line, _)) = lines.get(first + usize::from(row)) else {
+            let Some(line) = lines.get(first + usize::from(row)) else {
                 break;
             };
-            let chars: Vec<char> = line.chars().collect();
+            let chars: Vec<char> = line.text().chars().collect();
             let from = usize::from(if row == start.0 { start.1 } else { 0 }).min(chars.len());
             let to = usize::from(if row == end.0 { end.1 } else { u16::MAX })
                 .saturating_add(1)
@@ -2495,6 +2861,17 @@ impl App {
                 {
                     pane.alive = false;
                     self.status = "terminal closed".to_owned();
+                }
+            }
+            Update::Completions { query, rows } => {
+                // An answer to the word before this one is an answer about a file
+                // the caret has left, the same rule the searches keep.
+                if self.mention().map(|(_, mention)| mention).as_deref() == Some(query.as_str()) {
+                    self.completion = Some(Completion {
+                        query,
+                        rows: rows.into_iter().take(8).collect(),
+                        selected: 0,
+                    });
                 }
             }
             Update::Event(event) => self.apply_event(event),
@@ -2750,11 +3127,12 @@ impl App {
             }
             SessionEventKind::ToolCall => {
                 let status = payload["status"].as_str().unwrap_or("pending");
+                let id = payload["tool_call_id"].as_str().unwrap_or_default();
                 let title = payload["title"]
                     .as_str()
                     .or_else(|| payload["tool_call_id"].as_str())
                     .unwrap_or("tool call");
-                self.push(Kind::Tool, &format!("[{status}] {title}"));
+                self.push_tool(id, status, title, &tool_detail(payload));
             }
             SessionEventKind::Plan => {
                 let steps = payload["entries"]
@@ -2794,14 +3172,58 @@ impl App {
     }
 
     /// Append text, continuing the paragraph before it when the kind matches.
+    ///
+    /// A tool call never continues the entry before it: two calls are two rows,
+    /// and a status update is matched by id in [`App::push_tool`] instead.
     pub fn push(&mut self, kind: Kind, text: &str) {
         match self.entries.last_mut() {
-            Some(last) if last.kind == kind => last.text.push_str(text),
+            Some(last) if last.kind == kind && last.tool.is_none() => last.text.push_str(text),
             _ => self.entries.push(Entry {
                 kind,
                 text: text.to_owned(),
+                ..Entry::default()
             }),
         }
+    }
+
+    /// Fold one tool-call event into its row, or start a row for it.
+    ///
+    /// The agent names the call, so `pending` and `completed` for the same id are
+    /// one row whose status moved rather than two rows saying the same thing —
+    /// and the result is kept for the fold rather than printed under every call.
+    fn push_tool(&mut self, id: &str, status: &str, title: &str, detail: &str) {
+        let header = format!("[{status}] {title}");
+        if !id.is_empty()
+            && let Some(entry) = self
+                .entries
+                .iter_mut()
+                .rev()
+                .find(|entry| entry.tool.as_ref().is_some_and(|call| call.id == id))
+        {
+            entry.text = header;
+            if let Some(call) = &mut entry.tool {
+                call.status = status.to_owned();
+                call.title = title.to_owned();
+                if !detail.is_empty() {
+                    if !call.detail.is_empty() {
+                        call.detail.push('\n');
+                    }
+                    call.detail.push_str(detail);
+                }
+            }
+            return;
+        }
+        self.entries.push(Entry {
+            kind: Kind::Tool,
+            text: header,
+            tool: Some(ToolCall {
+                id: id.to_owned(),
+                status: status.to_owned(),
+                title: title.to_owned(),
+                detail: detail.to_owned(),
+            }),
+            folded: true,
+        });
     }
 
     /// What a key press means.
@@ -4127,14 +4549,14 @@ impl App {
     /// The session list's keys.
     fn sessions_key(&mut self, key: KeyEvent) -> Option<Request> {
         match key.code {
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.chose = true;
                     return self.open_selected();
                 }
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 if self.selected + 1 < self.sessions.len() {
                     self.selected += 1;
                     self.chose = true;
@@ -4451,22 +4873,115 @@ impl App {
     }
 
     /// The composer's keys.
+    ///
+    /// A text field with more than one line: `Enter` sends and `Alt-Enter`, or
+    /// `Shift-Enter` where the terminal reports it, writes a newline. The popup's
+    /// keys come first because they are answers to a question that is on screen.
     fn prompt_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if self.completion.is_some() {
+            match key.code {
+                KeyCode::Up => {
+                    if let Some(completion) = &mut self.completion {
+                        completion.selected = completion.selected.saturating_sub(1);
+                    }
+                    return None;
+                }
+                KeyCode::Down => {
+                    if let Some(completion) = &mut self.completion {
+                        let last = completion.rows.len().saturating_sub(1);
+                        completion.selected = (completion.selected + 1).min(last);
+                    }
+                    return None;
+                }
+                KeyCode::Esc => {
+                    self.completion = None;
+                    return None;
+                }
+                KeyCode::Tab | KeyCode::Enter if !control && !alt && !shift => {
+                    self.accept_completion();
+                    return None;
+                }
+                _ => {}
+            }
+        }
         match key.code {
+            KeyCode::Enter if alt || shift || control => {
+                self.insert_character('\n');
+                self.refresh_completion()
+            }
             KeyCode::Enter => {
                 let text = self.input.trim().to_owned();
                 if text.is_empty() {
                     return None;
                 }
                 self.input.clear();
+                self.cursor = 0;
+                self.completion = None;
                 // A local echo: the daemon sends the user chunk too, and the
                 // de-duplication by sequence keeps this from doubling it.
                 self.push(Kind::User, &format!("{text}\n"));
                 Some(Request::Prompt(text))
             }
+            KeyCode::Tab => self.refresh_completion(),
             KeyCode::Backspace => {
-                self.input.pop();
+                self.backspace();
+                self.refresh_completion()
+            }
+            KeyCode::Delete => {
+                self.delete_character();
+                self.refresh_completion()
+            }
+            KeyCode::Left => {
+                self.cursor = self.cursor.saturating_sub(1);
+                self.completion = None;
+                None
+            }
+            KeyCode::Right => {
+                if self.cursor < self.input.chars().count() {
+                    self.cursor += 1;
+                }
+                self.completion = None;
+                None
+            }
+            KeyCode::Up => {
+                self.composer_move(-1);
+                None
+            }
+            KeyCode::Down => {
+                self.composer_move(1);
+                None
+            }
+            KeyCode::Home => {
+                let before: String = self.input.chars().take(self.cursor).collect();
+                let row = before.matches('\n').count();
+                self.cursor = self
+                    .input
+                    .split('\n')
+                    .take(row)
+                    .map(|line| line.chars().count() + 1)
+                    .sum();
+                self.completion = None;
+                None
+            }
+            KeyCode::End => {
+                let before: String = self.input.chars().take(self.cursor).collect();
+                let row = before.matches('\n').count();
+                let start: usize = self
+                    .input
+                    .split('\n')
+                    .take(row)
+                    .map(|line| line.chars().count() + 1)
+                    .sum();
+                self.cursor = start
+                    + self
+                        .input
+                        .split('\n')
+                        .nth(row)
+                        .map_or(0, |line| line.chars().count());
+                self.completion = None;
                 None
             }
             KeyCode::Esc => {
@@ -4474,8 +4989,8 @@ impl App {
                 None
             }
             KeyCode::Char(character) if !control => {
-                self.input.push(character);
-                None
+                self.insert_character(character);
+                self.refresh_completion()
             }
             _ => None,
         }
@@ -5670,6 +6185,21 @@ fn text_of(content: &serde_json::Value) -> Option<&str> {
     content
         .as_str()
         .or_else(|| content.get("text").and_then(serde_json::Value::as_str))
+}
+
+/// What a tool call's payload says its result was, in the agent's own words.
+///
+/// The adapters differ: ACP's tool call carries a content block, and a local
+/// agent may send raw output. The first non-empty one is the answer — a tool
+/// call with no result keeps its detail empty rather than inventing one.
+fn tool_detail(payload: &serde_json::Value) -> String {
+    ["content", "raw_output", "output"]
+        .iter()
+        .filter_map(|key| text_of(&payload[*key]))
+        .find(|text| !text.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -8946,6 +9476,7 @@ mod tests {
             .map(|index| Entry {
                 kind: Kind::Assistant,
                 text: format!("line {index}"),
+                ..Entry::default()
             })
             .collect();
         app.set_viewports(Viewports {
@@ -9045,6 +9576,191 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_call_is_one_row_whose_status_moves() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.apply_event(event(
+            1,
+            SessionEventKind::ToolCall,
+            serde_json::json!({
+                "tool_call_id": "call-1",
+                "status": "pending",
+                "title": "Edit app.rs"
+            }),
+        ));
+        app.apply_event(event(
+            2,
+            SessionEventKind::ToolCall,
+            serde_json::json!({
+                "tool_call_id": "call-1",
+                "status": "completed",
+                "title": "Edit app.rs",
+                "content": "wrote 12 lines"
+            }),
+        ));
+        assert_eq!(app.entries.len(), 1, "one call, not one row per update");
+        assert_eq!(app.entries[0].text, "[completed] Edit app.rs");
+        assert_eq!(
+            app.entries[0]
+                .tool
+                .as_ref()
+                .map(|call| call.detail.as_str()),
+            Some("wrote 12 lines")
+        );
+        assert_eq!(app.transcript_rows().len(), 1, "folded by default");
+        assert_eq!(
+            app.transcript_len(),
+            app.transcript_rows().len(),
+            "the count is the rows, without building them"
+        );
+    }
+
+    #[test]
+    fn enter_opens_the_tool_call_under_the_transcript_cursor() {
+        let mut app = transcript_app();
+        app.entries = vec![Entry {
+            kind: Kind::Tool,
+            text: "[completed] Edit app.rs".to_owned(),
+            tool: Some(ToolCall {
+                id: "call-1".to_owned(),
+                status: "completed".to_owned(),
+                title: "Edit app.rs".to_owned(),
+                detail: "line one\nline two".to_owned(),
+            }),
+            folded: true,
+        }];
+        app.handle_key(key(KeyCode::F(3)));
+        assert_eq!(app.transcript.view.cursor, (0, 0));
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.entries[0].folded, "the fold opened");
+        assert_eq!(app.transcript_len(), 3, "the header and two result lines");
+        assert!(app.status.contains("opened"), "{}", app.status);
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.entries[0].folded, "and it closes again");
+        assert_eq!(app.transcript_len(), 1);
+    }
+
+    #[test]
+    fn assistant_text_is_markdown_in_the_rows_a_person_reads() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.push(Kind::Assistant, "## What changed\n**bold** and `code`");
+        let rows = app.transcript_rows();
+        assert_eq!(rows.len(), 2, "the markdown keeps its rows");
+        assert_eq!(rows[0].text(), "What changed");
+        assert_eq!(rows[1].text(), "bold and code");
+        assert!(
+            rows[1]
+                .segments
+                .iter()
+                .any(|segment| segment.emphasis == crate::markdown::Emphasis::Bold),
+            "the emphasis is in the row, not added when it is painted"
+        );
+    }
+
+    #[test]
+    fn the_composer_takes_more_than_one_line_and_enter_sends_them_together() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.focus = Focus::Prompt;
+        for character in "one".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        for character in "two".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.input, "one\ntwo");
+        assert_eq!(app.cursor, 7);
+        assert!(app.composer_height() > 3, "the box grew with the text");
+        assert_eq!(app.composer_position(), (1, 3));
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::Prompt("one\ntwo".to_owned()))
+        );
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn the_caret_edits_where_it_is_rather_than_at_the_end() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.focus = Focus::Prompt;
+        for character in "abc".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Left));
+        app.handle_key(key(KeyCode::Left));
+        app.handle_key(key(KeyCode::Char('X')));
+        assert_eq!(app.input, "aXbc");
+        assert_eq!(app.cursor, 2);
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.input, "abc");
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(
+            app.input, "ac",
+            "delete takes the character under the caret"
+        );
+    }
+
+    #[test]
+    fn an_at_sign_asks_the_daemon_and_enter_takes_the_file() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.focus = Focus::Prompt;
+        app.handle_key(key(KeyCode::Char('@')));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('a'))),
+            Some(Request::CompleteFiles("a".to_owned())),
+            "the walk is the daemon's, like the tree's"
+        );
+        app.apply(Update::Completions {
+            query: "a".to_owned(),
+            rows: vec!["src/app.rs".to_owned()],
+        });
+        assert!(app.completion.is_some());
+
+        // Enter takes the file rather than sending a one-word prompt.
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.input, "@src/app.rs");
+        assert_eq!(app.cursor, "@src/app.rs".chars().count());
+        assert!(app.completion.is_none());
+        assert!(app.entries.is_empty(), "nothing was sent");
+    }
+
+    #[test]
+    fn a_completion_for_a_word_the_caret_has_left_is_dropped() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.focus = Focus::Prompt;
+        for character in "@ap".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.apply(Update::Completions {
+            query: "a".to_owned(),
+            rows: vec!["stale.rs".to_owned()],
+        });
+        assert!(
+            app.completion.as_ref().is_some_and(|c| c.rows.is_empty()),
+            "the answer was about `a`, and the word is `ap`"
+        );
+    }
+
+    #[test]
+    fn streaming_is_read_off_the_session_the_daemon_reports() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.sessions = vec![session("s1", "one")];
+        open(&mut app);
+        assert!(!app.streaming(), "an idle session has no cursor");
+        app.sessions[0].status = SessionStatus::Busy;
+        assert!(app.streaming());
+    }
+
+    #[test]
     fn a_slash_finds_what_the_agent_said_and_n_walks_back() {
         let mut app = transcript_app();
         app.handle_key(key(KeyCode::F(3)));
@@ -9100,10 +9816,12 @@ mod tests {
             Entry {
                 kind: Kind::Assistant,
                 text: "error: one".to_owned(),
+                ..Entry::default()
             },
             Entry {
                 kind: Kind::Assistant,
                 text: "Error: two".to_owned(),
+                ..Entry::default()
             },
         ];
         app.handle_key(key(KeyCode::F(3)));

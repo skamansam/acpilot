@@ -73,6 +73,13 @@ pub enum Request {
     },
     /// Walk the workspace for paths containing a query, for the files pane's find.
     SearchFiles(String),
+    /// Walk the workspace for the `@path` the composer is typing.
+    ///
+    /// The same walk as [`Request::SearchFiles`], under a different name: one asks
+    /// for a list a person reads and the other for a popup beside the caret, and an
+    /// answer that landed in whichever pane asked last would be a completion in the
+    /// file tree.
+    CompleteFiles(String),
     /// Search the workspace's file contents for a query, for the jump list.
     Grep(String),
     /// Find the code uses of an identifier, for the references panel.
@@ -196,6 +203,14 @@ pub enum Update {
         query: String,
         /// The lines that contain it, sorted by path and line.
         matches: Vec<acpilot_proto::file::GrepMatch>,
+    },
+    /// The files an `@path` in the composer could mean.
+    Completions {
+        /// The query that was asked, so an answer about a word the caret has left
+        /// can be dropped.
+        query: String,
+        /// Paths that match, best first.
+        rows: Vec<String>,
     },
     /// A references answer, tagged with the name that asked for the same reason the
     /// searches are tagged with their queries.
@@ -543,6 +558,21 @@ async fn run(
                     match client.search_files(&query).await {
                         Ok(entries) => {
                             let _ = updates.send(Update::Found { query, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::CompleteFiles(query)) => {
+                    match client.search_files(&query).await {
+                        Ok(entries) => {
+                            let rows = entries
+                                .into_iter()
+                                .take(8)
+                                .map(|entry| entry.path)
+                                .collect();
+                            let _ = updates.send(Update::Completions { query, rows });
                         }
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
@@ -1220,6 +1250,21 @@ async fn run_demo(
                     let _ = updates.send(Update::Event(event.clone()));
                     tokio::time::sleep(REPLAY).await;
                 }
+            }
+            Request::CompleteFiles(query) => {
+                // The fixture's tree is the only workspace the design pass has, so
+                // the popup offers what the tree would open.
+                let rows = demo
+                    .files
+                    .iter()
+                    .filter(|node| !node.dir && node.path.contains(query.as_str()))
+                    .take(8)
+                    .map(|node| node.path.clone())
+                    .collect();
+                let _ = updates.send(Update::Completions {
+                    query: query.clone(),
+                    rows,
+                });
             }
             Request::Prompt(_) => {
                 // The composer works, the turn does not: the reply is a script, so

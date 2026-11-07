@@ -1065,12 +1065,13 @@ fn draw_agents(frame: &mut Frame, app: &App, area: Rect) -> (TerminalSize, PaneA
     let [sessions, transcript, composer] = Layout::vertical([
         Constraint::Length(list),
         Constraint::Min(3),
-        Constraint::Length(3),
+        Constraint::Length(app.composer_height()),
     ])
     .areas(area);
     let sessions = draw_sessions(frame, app, sessions);
     let size = draw_transcript(frame, app, transcript);
     draw_composer(frame, app, composer);
+    draw_completion(frame, app, area, composer);
     (size, sessions)
 }
 
@@ -1284,7 +1285,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
 /// cannot measure itself, and this is the only place that knows how many lines fit
 /// above the composer.
 fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
-    let lines = app.transcript_lines();
+    let lines = app.transcript_rows();
     let inner = inner_size(area);
     let height = usize::from(inner.rows);
     let max_scroll = lines.len().saturating_sub(height);
@@ -1306,6 +1307,9 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
             "copy {}/{max_scroll}",
             app.transcript.view.scroll.min(max_scroll)
         ),
+        // A turn in flight has a cursor at the end of the last line and says so:
+        // a reply that is still arriving looks exactly like one that stopped.
+        (false, true) if app.streaming() => "streaming · tab · f3".to_owned(),
         (false, true) => "tab · f3".to_owned(),
         // A transcript with the keyboard and no session is not a state the app can
         // reach, but it still has to say something.
@@ -1334,20 +1338,26 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
             0
         };
         let start = max_scroll - scroll;
-        let rows: Vec<Line> = lines
+        let mut rows: Vec<Line> = lines
             .iter()
             .enumerate()
             .skip(start)
             .take(height)
-            .map(|(index, (text, kind))| {
-                transcript_line(
-                    app,
-                    *kind,
-                    text,
-                    u16::try_from(index - start).unwrap_or(u16::MAX),
-                )
+            .map(|(index, row)| {
+                transcript_line(app, row, u16::try_from(index - start).unwrap_or(u16::MAX))
             })
             .collect();
+        // The cursor sits after the newest text and only while the tail is on
+        // screen: a scrolled transcript with a cursor would point at a line the
+        // turn has not reached yet.
+        if app.streaming()
+            && !reading
+            && start + height >= lines.len()
+            && let Some(last) = rows.last_mut()
+        {
+            last.spans
+                .push(Span::styled("▏", Style::default().fg(app.theme.accent())));
+        }
         let paragraph = Paragraph::new(rows);
         // Wrapped for reading, unwrapped while it is being read back: in copy mode
         // one line of text is one row of the view, so a cell means one character.
@@ -1368,46 +1378,84 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
 ///
 /// A cell at a time only in copy mode: outside it a line is one span, because a
 /// style run per character is a cost a view pays only while someone points at it.
-fn transcript_line(app: &App, kind: Kind, text: &str, row: u16) -> Line<'static> {
-    let style = entry_style(kind, &app.theme);
-    let Some(view) = (app.focus == Focus::Transcript).then_some(&app.transcript.view) else {
-        return Line::from(Span::styled(text.to_owned(), style));
-    };
-    let mut spans: Vec<Span> = text
-        .chars()
-        .enumerate()
-        .map(|(col, character)| {
-            let col = u16::try_from(col).unwrap_or(u16::MAX);
-            let mut style = style;
-            if view.selected(row, col) {
-                style = style.add_modifier(Modifier::REVERSED);
+fn transcript_line(app: &App, line: &crate::app::TranscriptRow, row: u16) -> Line<'static> {
+    let base = entry_style(line.kind, &app.theme);
+    let reading = app.focus == Focus::Transcript;
+    let mut spans: Vec<Span> = Vec::new();
+    let mut col = 0u16;
+    for segment in &line.segments {
+        let emphasis = emphasis_style(segment.emphasis, &app.theme);
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
+        for character in segment.text.chars() {
+            let mut style = base.patch(emphasis);
+            if reading {
+                if app.transcript.view.selected(row, col) {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                if app.matched_transcript(row, col) {
+                    style = style
+                        .add_modifier(Modifier::UNDERLINED)
+                        .fg(app.theme.warning());
+                }
+                if app.transcript.view.cursor == (row, col) {
+                    style = style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED);
+                }
             }
-            if app.matched_transcript(row, col) {
-                style = style
-                    .add_modifier(Modifier::UNDERLINED)
-                    .fg(app.theme.warning());
+            if run_style == Some(style) {
+                run.push(character);
+            } else {
+                if let Some(style) = run_style.take() {
+                    spans.push(Span::styled(std::mem::take(&mut run), style));
+                }
+                run_style = Some(style);
+                run.push(character);
             }
-            if view.cursor == (row, col) {
-                style = style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED);
-            }
-            Span::styled(character.to_string(), style)
-        })
-        .collect();
+            col = col.saturating_add(1);
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
+        }
+    }
     // The cursor sits after the last character as well as on one, and a cursor on
     // a cell that does not exist would be a pane with no visible cursor at all.
-    if view.cursor == (row, u16::try_from(text.chars().count()).unwrap_or(u16::MAX)) {
+    if reading
+        && app.transcript.view.cursor
+            == (
+                row,
+                u16::try_from(line.text().chars().count()).unwrap_or(u16::MAX),
+            )
+    {
         spans.push(Span::styled(
             " ",
-            style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
+            base.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
         ));
     }
     Line::from(spans)
 }
 
+/// How a markdown run is set, on top of whatever its kind already asked for.
+fn emphasis_style(emphasis: crate::markdown::Emphasis, theme: &Theme) -> Style {
+    use crate::markdown::Emphasis;
+    match emphasis {
+        Emphasis::Plain => Style::default(),
+        Emphasis::Bold => Style::default().add_modifier(Modifier::BOLD),
+        Emphasis::Italic => Style::default().add_modifier(Modifier::ITALIC),
+        Emphasis::Code => Style::default().fg(theme.accent_high()),
+        Emphasis::Link => Style::default()
+            .fg(theme.accent())
+            .add_modifier(Modifier::UNDERLINED),
+        Emphasis::Heading => Style::default()
+            .fg(theme.accent_high())
+            .add_modifier(Modifier::BOLD),
+        Emphasis::Quote => Style::default().fg(theme.text_muted()),
+    }
+}
+
 fn draw_composer(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Prompt · Enter sends ")
+        .title(" Prompt · Enter sends · Alt-Enter a line · @ a file ")
         .border_style(border_style(app.focus == Focus::Prompt, &app.theme));
     let text = if app.input.is_empty() {
         Paragraph::new("ask the agent…").style(Style::default().fg(app.theme.text_muted()))
@@ -1416,11 +1464,77 @@ fn draw_composer(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(text.block(block), area);
 
-    if app.focus == Focus::Prompt && !app.input.contains('\n') {
-        // One line, so the cursor is a column count rather than a layout pass.
-        let width = u16::try_from(app.input.chars().count()).unwrap_or(u16::MAX);
-        frame.set_cursor_position((area.x + 1 + width, area.y + 1));
+    if app.focus == Focus::Prompt {
+        let (row, col) = app.composer_position();
+        // The box has borders, and a caret past the last row of a box that stopped
+        // growing would be drawn outside the pane that owns it.
+        frame.set_cursor_position((
+            (area.x + 1 + col).min(area.x + area.width.saturating_sub(2)),
+            (area.y + 1 + row).min(area.y + area.height.saturating_sub(2)),
+        ));
     }
+}
+
+/// The `@path` popup, drawn over the transcript just above the composer.
+///
+/// Above rather than inside: the composer is where the caret is, and a list that
+/// covered the thing being typed would be a list a person could not type past.
+fn draw_completion(frame: &mut Frame, app: &App, panel: Rect, composer: Rect) {
+    let Some(completion) = &app.completion else {
+        return;
+    };
+    if app.focus != Focus::Prompt {
+        return;
+    }
+    let rows = u16::try_from(completion.rows.len().max(1)).unwrap_or(u16::MAX);
+    let height = rows.min(6).saturating_add(2);
+    if composer.y < height + panel.y {
+        return;
+    }
+    let width = panel.width.saturating_sub(2).max(12);
+    let area = Rect {
+        x: panel.x + 1,
+        y: composer.y - height,
+        width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" @{} ", completion.query))
+        .border_style(Style::default().fg(app.theme.accent()))
+        .style(Style::default().bg(app.theme.bg_panel()));
+    let inner = block.inner(area);
+    let visible = usize::from(inner.height).max(1);
+    let first = completion
+        .selected
+        .saturating_sub(visible.saturating_sub(1));
+    let lines: Vec<Line> = if completion.rows.is_empty() {
+        vec![Line::from(Span::styled(
+            "no file matches",
+            Style::default().fg(app.theme.text_muted()),
+        ))]
+    } else {
+        completion
+            .rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible)
+            .map(|(index, path)| {
+                let style = if index == completion.selected {
+                    Style::default()
+                        .bg(app.theme.accent())
+                        .fg(app.theme.bg())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(path.clone(), style))
+            })
+            .collect()
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Where a pane runs, when it is not in this window's own workspace and host.
@@ -2551,6 +2665,7 @@ mod tests {
         app.entries.push(Entry {
             kind: Kind::Assistant,
             text: "the daemon has the turn".to_owned(),
+            ..Entry::default()
         });
         app.status = "connected · acpilotd 0.1.0".to_owned();
         app
@@ -3604,6 +3719,49 @@ mod tests {
     }
 
     #[test]
+    fn a_streaming_turn_has_a_cursor_and_says_so() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::Busy;
+        let text = render(&mut app);
+        assert!(text.contains("streaming"), "{text}");
+        assert!(text.contains('▏'), "the cursor is at the end: {text}");
+    }
+
+    #[test]
+    fn assistant_markdown_is_drawn_without_its_markers() {
+        let mut app = app_with_session();
+        app.entries = vec![Entry {
+            kind: Kind::Assistant,
+            text: "## What changed\n**bold** and `code`".to_owned(),
+            ..Entry::default()
+        }];
+        let text = render(&mut app);
+        assert!(text.contains("What changed"), "{text}");
+        assert!(
+            !text.contains("##"),
+            "the hashes are a marker, not text: {text}"
+        );
+        assert!(text.contains("bold and code"), "{text}");
+        assert!(!text.contains('`'), "{text}");
+    }
+
+    #[test]
+    fn the_at_completion_is_drawn_over_the_transcript() {
+        let mut app = app_with_session();
+        app.focus = Focus::Prompt;
+        app.input = "@app".to_owned();
+        app.cursor = 4;
+        app.completion = Some(crate::app::Completion {
+            query: "app".to_owned(),
+            rows: vec!["crates/acpilot-tui/src/app.rs".to_owned()],
+            selected: 0,
+        });
+        let text = render(&mut app);
+        assert!(text.contains("@app"), "{text}");
+        assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
+    }
+
+    #[test]
     fn a_tall_transcript_shows_its_end_not_its_start() {
         let mut app = app_with_session();
         app.entries.clear();
@@ -3611,6 +3769,7 @@ mod tests {
             app.entries.push(Entry {
                 kind: Kind::Assistant,
                 text: format!("line {index}"),
+                ..Entry::default()
             });
         }
         let text = render(&mut app);

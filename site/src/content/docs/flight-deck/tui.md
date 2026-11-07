@@ -176,7 +176,20 @@ newest match before the cursor, with `n` and `N` to walk older and newer — and
 which is what makes a copy work over SSH. The transcript is a pane like the others —
 `Tab` reaches it, or `F3` from anywhere — and answers to the same copy keys, so a
 long answer is scrolled, searched and yanked with what the terminal already taught;
-`?` lists those keys rather than the editor's while a pane is being read.
+`?` lists those keys rather than the editor's while a pane is being read. The
+answer is rendered rather than dumped: headings, lists, quotes, fenced code and
+inline emphasis become styled lines, and every tool call is one row —
+`[completed] Edit src/app.rs` — whose result is folded away until `Enter` opens it
+under the copy cursor. While the session is busy a cursor sits at the end of the
+newest line and the title says `streaming`, so a reply still arriving does not read
+as one that stopped.
+
+The composer under the transcript is a text field with more than one line: `Enter`
+sends, `Alt-Enter` or `Shift-Enter` writes a line, and the caret edits anywhere in
+the text rather than only at its end. `@` opens a completion of workspace paths —
+the daemon's walk, under the same ignore rules as the tree — with the arrows to
+choose and `Enter` or `Tab` to take one; an answer about a word the caret has left
+is dropped. `j`/`k` choose in the session list, and `c` cancels the turn in flight.
 
 A menu bar across the top (`F9`) names every pane and the client's own commands as
 rows, each row drawn with the chord that runs it from anywhere — a pane's own keys

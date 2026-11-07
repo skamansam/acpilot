@@ -40,6 +40,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use acpilot_agent::session::{Session, SessionOptions};
 use acpilot_agent::supervisor::AgentProcess;
@@ -76,6 +77,13 @@ use crate::{ApiError, AppState, HEARTBEAT};
 /// sessions are still measured in megabytes. A client that falls further behind
 /// than this is told to start again rather than handed a partial log.
 pub const REPLAY_CAPACITY: usize = 4096;
+
+/// How long [`Sessions::ask`] waits for an agent's answer.
+///
+/// Longer than a turn usually takes and shorter than a client's patience: a model
+/// writing one commit message is seconds, not minutes, and a hung agent should end
+/// the request with a cancel rather than hold the connection forever.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long a session title may be before it is cut at a word boundary.
 const TITLE_LIMIT: usize = 60;
@@ -130,6 +138,108 @@ impl Sessions {
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
             .cloned()
+    }
+
+    /// Send one prompt and wait for the agent's answer.
+    ///
+    /// The prompt route returns as soon as the turn is accepted because a client
+    /// watches the transcript. Commit-message generation is the one caller that
+    /// needs the text of the answer, not a subscription: it renders the staged
+    /// diff into the prompt, sends it to the agent the person is already talking
+    /// to, and returns what the agent said for validation. The events are still
+    /// recorded and streamed to every other client; this only also collects them.
+    ///
+    /// A session that is busy is refused rather than queued: the answer would be
+    /// to a question the client did not ask, and the ticket's rule is to reject
+    /// rather than repair.
+    pub async fn ask(&self, id: &str, text: String) -> Result<String, ApiError> {
+        let record = self.handle(id).ok_or_else(|| unknown(id))?;
+        match record.status() {
+            SessionStatus::Busy | SessionStatus::AwaitingPermission => {
+                return Err(ApiError::new(AcpilotError::conflict(format!(
+                    "session {id} is still answering a turn"
+                ))));
+            }
+            SessionStatus::Closed => {
+                return Err(ApiError::new(AcpilotError::conflict(format!(
+                    "session {id} is closed"
+                ))));
+            }
+            SessionStatus::Idle | SessionStatus::Failed => {}
+        }
+
+        let mut events = record.subscribe();
+        record.set_status(SessionStatus::Busy);
+        record.set_turn(Some(format!("{id}:assistant-managed")));
+        if record.commands.try_send(Command::Prompt(text)).is_err() {
+            record.set_turn(None);
+            record.set_status(SessionStatus::Idle);
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "session {id} could not accept another turn"
+            ))));
+        }
+
+        let deadline = tokio::time::Instant::now() + ANSWER_TIMEOUT;
+        let mut answer = String::new();
+        let outcome = loop {
+            let status = record.status();
+            if !matches!(
+                status,
+                SessionStatus::Busy | SessionStatus::AwaitingPermission
+            ) {
+                break status;
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                let _ = record.commands.try_send(Command::Cancel);
+                return Err(ApiError::new(AcpilotError::AgentFailed {
+                    message: format!(
+                        "the agent did not answer within {} seconds",
+                        ANSWER_TIMEOUT.as_secs()
+                    ),
+                }));
+            }
+            tokio::select! {
+                event = events.recv() => match event {
+                    Ok(event) => {
+                        if event.kind == SessionEventKind::MessageChunk
+                            && event.payload.get("role").and_then(serde_json::Value::as_str)
+                                == Some("assistant")
+                            && let Some(text) = event
+                                .payload
+                                .get("content")
+                                .and_then(|content| content.get("text"))
+                                .and_then(serde_json::Value::as_str)
+                        {
+                            answer.push_str(text);
+                        }
+                    }
+                    // The ring is smaller than a chatty turn can be. The status
+                    // still settles, and the answer this returns is the text that
+                    // was not lost; a hole is a failed generation, not a reason to
+                    // hold the request open.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break SessionStatus::Closed;
+                    }
+                },
+                // A turn that finished between two events has no further event to
+                // wake this on, so the status is also read on a short timer.
+                () = tokio::time::sleep(remaining.min(Duration::from_millis(50))) => {}
+            }
+        };
+
+        match outcome {
+            SessionStatus::Failed | SessionStatus::Closed => {
+                Err(ApiError::new(AcpilotError::AgentFailed {
+                    message: format!("session {id} failed before it wrote a message"),
+                }))
+            }
+            _ if answer.trim().is_empty() => Err(ApiError::new(AcpilotError::AgentFailed {
+                message: format!("session {id} answered with no text"),
+            })),
+            _ => Ok(answer),
+        }
     }
 
     /// The id a client holds for the conversation the agent calls `acp_id`.

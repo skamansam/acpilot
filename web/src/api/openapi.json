@@ -253,6 +253,111 @@
         ],
         "type": "object"
       },
+      "CommitDraft": {
+        "description": "A generated message the person can edit before anything is committed.\n\nThis is a draft: the daemon neither stages nor commits, and the message is not\nstored. The transcript of the session that wrote it is the record of how it was\nproduced.",
+        "properties": {
+          "body": {
+            "description": "Everything after the blank line, empty when there is no body.",
+            "type": "string"
+          },
+          "breaking": {
+            "description": "Whether the subject marks a breaking change.",
+            "type": "boolean"
+          },
+          "emoji": {
+            "description": "The leading gitmoji, when the description starts with one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generator": {
+            "description": "What wrote it, for example `session:<id>`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The Conventional Commit type.",
+            "type": "string"
+          },
+          "message": {
+            "description": "The whole message: subject, a blank line, then the body when there is one.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The scope, when the subject names one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "The first line, after validation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "subject",
+          "body",
+          "kind",
+          "breaking",
+          "generator"
+        ],
+        "type": "object"
+      },
+      "CommitMessageRequest": {
+        "description": "A request to draft a commit message from what is staged.",
+        "properties": {
+          "prompt": {
+            "description": "A template for this request only, instead of the profile's or the default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "The active session whose agent writes the message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "CommitPrompt": {
+        "description": "The effective commit-message prompt, as a client should show it.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/CommitPromptSource",
+            "description": "Where the template came from."
+          },
+          "template": {
+            "description": "The template before its placeholders are filled.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "source"
+        ],
+        "type": "object"
+      },
+      "CommitPromptSource": {
+        "description": "Which prompt a draft would be generated from.",
+        "enum": [
+          "default",
+          "profile"
+        ],
+        "type": "string"
+      },
       "ContextBudget": {
         "description": "The budget for one run, in tokens except where stated.",
         "properties": {
@@ -3525,6 +3630,102 @@
           }
         },
         "summary": "Find files by path"
+      }
+    },
+    "/v1/git/commit-message": {
+      "post": {
+        "operationId": "commit_message_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitDraft"
+                }
+              }
+            },
+            "description": "A validated draft; nothing has been committed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An empty session id or prompt, or an answer that is not a Conventional Commit"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The session is unknown, or the workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, a workspace on another host, a busy session, or nothing staged"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is missing, or the agent failed to answer"
+          }
+        },
+        "summary": "Draft a commit message from the staged diff"
+      }
+    },
+    "/v1/git/commit/prompt": {
+      "get": {
+        "operationId": "commit_prompt_doc",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitPrompt"
+                }
+              }
+            },
+            "description": "The template, unrendered, and whether it is the profile's or the default"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The profile's prompt file is empty"
+          }
+        },
+        "summary": "The commit-message prompt this profile would use"
       }
     },
     "/v1/git/diff": {

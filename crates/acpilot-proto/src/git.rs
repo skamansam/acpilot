@@ -128,6 +128,65 @@ pub struct GitCommit {
     pub subject: String,
 }
 
+/// The effective commit-message prompt, as a client should show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CommitPrompt {
+    /// The template before its placeholders are filled.
+    pub template: String,
+    /// Where the template came from.
+    pub source: CommitPromptSource,
+}
+
+/// Which prompt a draft would be generated from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitPromptSource {
+    /// The template in `acpilot-core`.
+    Default,
+    /// The profile's `commit-prompt.txt`.
+    Profile,
+}
+
+/// A request to draft a commit message from what is staged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CommitMessageRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The active session whose agent writes the message.
+    pub session_id: String,
+    /// A template for this request only, instead of the profile's or the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// A generated message the person can edit before anything is committed.
+///
+/// This is a draft: the daemon neither stages nor commits, and the message is not
+/// stored. The transcript of the session that wrote it is the record of how it was
+/// produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CommitDraft {
+    /// The whole message: subject, a blank line, then the body when there is one.
+    pub message: String,
+    /// The first line, after validation.
+    pub subject: String,
+    /// Everything after the blank line, empty when there is no body.
+    pub body: String,
+    /// The Conventional Commit type.
+    pub kind: String,
+    /// The scope, when the subject names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Whether the subject marks a breaking change.
+    pub breaking: bool,
+    /// The leading gitmoji, when the description starts with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    /// What wrote it, for example `session:<id>`.
+    pub generator: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +228,44 @@ mod tests {
             json.get("branch").is_none(),
             "a detached HEAD has no branch to name"
         );
+    }
+
+    #[test]
+    fn a_prompt_names_whether_it_is_the_profile_s_own() {
+        let prompt = CommitPrompt {
+            template: "write it".to_owned(),
+            source: CommitPromptSource::Profile,
+        };
+        let json = serde_json::to_value(&prompt).expect("a prompt is JSON");
+        assert_eq!(json["source"], "profile");
+    }
+
+    #[test]
+    fn a_draft_round_trips_without_claiming_a_scope_it_does_not_have() {
+        let draft = CommitDraft {
+            message: "fix: 🐛 keep the exit code".to_owned(),
+            subject: "fix: 🐛 keep the exit code".to_owned(),
+            body: String::new(),
+            kind: "fix".to_owned(),
+            scope: None,
+            breaking: false,
+            emoji: Some("🐛".to_owned()),
+            generator: "session:s1".to_owned(),
+        };
+        let json = serde_json::to_value(&draft).expect("a draft is JSON");
+        assert!(json.get("scope").is_none());
+        let again: CommitDraft = serde_json::from_value(json).expect("it comes back");
+        assert_eq!(again, draft);
+    }
+
+    #[test]
+    fn a_request_may_omit_the_workspace_and_the_override() {
+        let request: CommitMessageRequest =
+            serde_json::from_value(serde_json::json!({ "session_id": "s1" }))
+                .expect("only the session is required");
+        assert_eq!(request.session_id, "s1");
+        assert!(request.workspace.is_none());
+        assert!(request.prompt.is_none());
     }
 
     #[test]

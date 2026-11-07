@@ -257,6 +257,111 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CommitDraft": {
+        "description": "A generated message the person can edit before anything is committed.\n\nThis is a draft: the daemon neither stages nor commits, and the message is not\nstored. The transcript of the session that wrote it is the record of how it was\nproduced.",
+        "properties": {
+          "body": {
+            "description": "Everything after the blank line, empty when there is no body.",
+            "type": "string"
+          },
+          "breaking": {
+            "description": "Whether the subject marks a breaking change.",
+            "type": "boolean"
+          },
+          "emoji": {
+            "description": "The leading gitmoji, when the description starts with one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generator": {
+            "description": "What wrote it, for example `session:<id>`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The Conventional Commit type.",
+            "type": "string"
+          },
+          "message": {
+            "description": "The whole message: subject, a blank line, then the body when there is one.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The scope, when the subject names one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "The first line, after validation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "subject",
+          "body",
+          "kind",
+          "breaking",
+          "generator"
+        ],
+        "type": "object"
+      },
+      "CommitMessageRequest": {
+        "description": "A request to draft a commit message from what is staged.",
+        "properties": {
+          "prompt": {
+            "description": "A template for this request only, instead of the profile's or the default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "The active session whose agent writes the message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "CommitPrompt": {
+        "description": "The effective commit-message prompt, as a client should show it.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/CommitPromptSource",
+            "description": "Where the template came from."
+          },
+          "template": {
+            "description": "The template before its placeholders are filled.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "source"
+        ],
+        "type": "object"
+      },
+      "CommitPromptSource": {
+        "description": "Which prompt a draft would be generated from.",
+        "enum": [
+          "default",
+          "profile"
+        ],
+        "type": "string"
+      },
       "ContextBudget": {
         "description": "The budget for one run, in tokens except where stated.",
         "properties": {

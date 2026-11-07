@@ -1287,16 +1287,38 @@ what needs an editor shell waits for the editor shell.
     then. A patch is not capped by bytes — a repository-wide diff of a generated tree is
     as large as git makes it — and neither `diff` nor `status` is pushed to a client, so a
     pane refreshes by asking again.
-- [ ] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
+- [x] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
   prompt (Conventional Commits with the gitmoji inside the description), the gitmoji table, and
   strict validation of the model's answer. Still open: per-profile prompt storage, a route that
   runs either a model-lab recipe or an active agent session, and a draft the editor can change
-  before committing.
+  before committing. — **done 2026-11-07**
   - The generator is selectable per request; the staged diff is what it sees, and nothing is
     committed until the user confirms.
   - Reject rather than repair: an unknown type, a missing description, a subject over 72
     characters, or a body without a blank line is a validation error, not something the daemon
     silently rewrites.
+  - **Result:** the prompt now lives as `<profile>/commit-prompt.txt`, read per request, with the
+    core default as its fallback; `GET /v1/git/commit/prompt` serves the effective template and
+    says whether it is `default` or `profile`. `POST /v1/git/commit-message` renders the staged
+    patch, its file list and the recent subjects into that template and asks the **active session**
+    named in the request. The session engine gained the one synchronous call it lacked
+    (`Sessions::ask`): it sends the prompt through the same owner task as a normal turn, records
+    and streams every event, collects the assistant chunks, and returns the text. The response is
+    a validated `CommitDraft` whose `generator` is `session:<id>`; `prompt` overrides the template
+    for one request only. Nothing is staged, committed or stored. The format rules are the core
+    validator's, surfaced as `400 invalid_request` with `details.field: "message"`; an empty index
+    is `409` before the agent is asked, and a busy session, unknown session, missing repository or
+    failed answer keeps the meanings P6.5-2 gave those errors. **Tests:** seven route tests against
+    a real temporary repository and the fixture agent (a valid draft, default-then-profile prompt,
+    empty index, unknown session, an override whose prose answer is rejected, an empty session id,
+    and both paths plus four schemas in OpenAPI), six unit tests in the commit module, and three on
+    the wire types' JSON shape.
+  - **Open:** the model-lab recipe generator is blocked on P4.5 — there are no providers,
+    recipes or model-lab routes in this build, so a `recipe` request shape would be a promise the
+    daemon cannot keep. Only an active session can generate. The prompt is edited as a file, like
+    `agents.toml`; there is no save route. A draft is not persisted, and committing it is P6.5-4.
+    The generating prompt and answer stay in that session's transcript, which is the record of how
+    the draft was produced.
 - [ ] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
   composer whose message can be generated then edited. `git` writes stay a separate, confirmed
   action; the pane never stages or commits on its own.

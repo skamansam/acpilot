@@ -108,6 +108,13 @@ async fn main() {
                         }
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
+                    Directive::Commit => {
+                        connection.send_notification(chunk(
+                            &session,
+                            "feat(mock): ✨ describe the staged change".to_owned(),
+                        ))?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    }
                     Directive::Hang => {
                         // Dropping the responder leaves the request pending,
                         // which is what a hung agent looks like.
@@ -125,7 +132,9 @@ async fn main() {
                                 Directive::Write(path) => write_file(&task, &session, path).await,
                                 Directive::Terminal => exercise_terminal(&task, &session).await,
                                 // `spawn` is only reached for the four above.
-                                Directive::Stream(_) | Directive::Hang => Vec::new(),
+                                Directive::Stream(_) | Directive::Hang | Directive::Commit => {
+                                    Vec::new()
+                                }
                             };
                             for line in report {
                                 task.send_notification(notice(&session, line))?;
@@ -154,10 +163,18 @@ enum Directive {
     Fs,
     Write(PathBuf),
     Terminal,
+    Commit,
     Hang,
 }
 
 fn directive(text: &str) -> Directive {
+    // The daemon's commit route sends the rendered template, so the fixture looks
+    // for the default prompt's own words rather than for the whole message it
+    // cannot know. A commit prompt gets a valid message back; every other prose
+    // prompt keeps the old `stream 1` answer.
+    if text.contains("You write exactly one git commit message for the staged diff below.") {
+        return Directive::Commit;
+    }
     match text.trim() {
         "permission" => Directive::Permission,
         "fs" => Directive::Fs,

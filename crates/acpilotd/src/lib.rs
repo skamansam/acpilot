@@ -48,6 +48,8 @@ mod files;
 // Status, diff, tree and log over the workspace's repository, from the host's
 // own `git`: the source-control pane's read half (P6.5-2).
 mod git;
+// Commit-message prompts and the draft a session writes from the index (P6.5-3).
+mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
@@ -270,6 +272,13 @@ pub struct AppState {
     /// segment, and a page that guessed the name would be addressing a profile
     /// nobody started.
     profile: Option<String>,
+    /// The profile directory, when this daemon was started with one.
+    ///
+    /// Kept apart from the name because a name is an address and a directory is
+    /// where the daemon reads the files the profile owns, such as the commit
+    /// prompt. A path in `GET /v1/health` would be a filesystem fact a browser has
+    /// no business knowing, so the two are not the same field.
+    profile_root: Option<std::path::PathBuf>,
     /// The hosts this daemon knows, the one it runs on first.
     ///
     /// A registry rather than a table read per request: the local host's
@@ -397,6 +406,7 @@ impl Default for AppState {
             broker: None,
             workspace: None,
             profile: None,
+            profile_root: None,
             hosts: Arc::new(hosts::Hosts::default()),
             workspaces: Arc::default(),
             sessions: Sessions::default(),
@@ -430,6 +440,18 @@ impl AppState {
     /// The profile directory's name, when this daemon was started with one.
     pub fn profile_name(&self) -> Option<&str> {
         self.profile.as_deref()
+    }
+
+    /// Read this profile's own files from this directory.
+    #[must_use]
+    pub fn with_profile_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.profile_root = root;
+        self
+    }
+
+    /// The profile directory, when this daemon was started with one.
+    pub fn profile_root(&self) -> Option<&std::path::Path> {
+        self.profile_root.as_deref()
     }
 
     /// Serve this profile's agents.
@@ -952,6 +974,7 @@ pub fn state_for_profile(
     let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
     let state = AppState::new()
         .with_profile_name(name)
+        .with_profile_root(Some(directory.to_path_buf()))
         .with_broker(broker)
         .with_workspace(workspace);
     Ok(match load_agents(&profile)? {
@@ -1586,6 +1609,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(terminals::operations())
         .chain(files::operations())
         .chain(git::operations())
+        .chain(commit::operations())
         .chain(project::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
@@ -1980,6 +2004,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
         .merge(git::routes())
+        .merge(commit::routes())
         .merge(hosts::routes())
         .merge(sessions::routes())
         .merge(stats::routes())

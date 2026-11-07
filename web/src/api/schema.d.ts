@@ -187,6 +187,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/commit-message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Draft a commit message from the staged diff */
+        post: operations["commit_message_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/commit/prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The commit-message prompt this profile would use */
+        get: operations["commit_prompt_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/git/diff": {
         parameters: {
             query?: never;
@@ -631,6 +665,52 @@ export interface components {
             /** @description The turn that was running, when one was. */
             turn_id?: string | null;
         };
+        /**
+         * @description A generated message the person can edit before anything is committed.
+         *
+         *     This is a draft: the daemon neither stages nor commits, and the message is not
+         *     stored. The transcript of the session that wrote it is the record of how it was
+         *     produced.
+         */
+        CommitDraft: {
+            /** @description Everything after the blank line, empty when there is no body. */
+            body: string;
+            /** @description Whether the subject marks a breaking change. */
+            breaking: boolean;
+            /** @description The leading gitmoji, when the description starts with one. */
+            emoji?: string | null;
+            /** @description What wrote it, for example `session:<id>`. */
+            generator: string;
+            /** @description The Conventional Commit type. */
+            kind: string;
+            /** @description The whole message: subject, a blank line, then the body when there is one. */
+            message: string;
+            /** @description The scope, when the subject names one. */
+            scope?: string | null;
+            /** @description The first line, after validation. */
+            subject: string;
+        };
+        /** @description A request to draft a commit message from what is staged. */
+        CommitMessageRequest: {
+            /** @description A template for this request only, instead of the profile's or the default. */
+            prompt?: string | null;
+            /** @description The active session whose agent writes the message. */
+            session_id: string;
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
+        };
+        /** @description The effective commit-message prompt, as a client should show it. */
+        CommitPrompt: {
+            /** @description Where the template came from. */
+            source: components["schemas"]["CommitPromptSource"];
+            /** @description The template before its placeholders are filled. */
+            template: string;
+        };
+        /**
+         * @description Which prompt a draft would be generated from.
+         * @enum {string}
+         */
+        CommitPromptSource: "default" | "profile";
         /** @description The budget for one run, in tokens except where stated. */
         ContextBudget: {
             /**
@@ -2570,6 +2650,95 @@ export interface operations {
             };
             /** @description This daemon has no workspace to walk */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_message_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommitMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description A validated draft; nothing has been committed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitDraft"];
+                };
+            };
+            /** @description An empty session id or prompt, or an answer that is not a Conventional Commit */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The session is unknown, or the workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, a workspace on another host, a busy session, or nothing staged */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is missing, or the agent failed to answer */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_prompt_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template, unrendered, and whether it is the profile's or the default */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitPrompt"];
+                };
+            };
+            /** @description The profile's prompt file is empty */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

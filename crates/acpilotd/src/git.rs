@@ -244,7 +244,7 @@ fn change_kind(kind: ChangeKind) -> GitChangeKind {
 /// on the host is `502 host_unavailable` with the missing tool in `details`, because
 /// installing it is the fix. Everything else is the host's own failure and travels
 /// with git's words rather than being flattened into "git failed".
-fn git_error(error: GitError) -> ApiError {
+pub(crate) fn git_error(error: GitError) -> ApiError {
     match error {
         GitError::GitMissing(source) => ApiError::new(AcpilotError::HostUnavailable {
             host: crate::hosts::LOCAL_HOST.to_owned(),

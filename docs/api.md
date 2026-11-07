@@ -97,6 +97,7 @@ POST   /v1/files/rename
 GET    /v1/files/list
 GET    /v1/git/status?workspace=          GET    /v1/git/diff?workspace=&scope=
 GET    /v1/git/tree?workspace=            GET    /v1/git/log?workspace=&limit=
+GET    /v1/git/commit/prompt              POST   /v1/git/commit-message
 
 GET    /v1/terminals?session=             POST   /v1/terminals
 DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
@@ -690,8 +691,33 @@ that walks this machine's filesystem: its tree still gets letters through
 `/v1/files/list` (which asks the host), but a diff over there needs a helper
 method that does not exist yet.
 
-Nothing here writes. Staging, committing, checking out and config are separate,
-confirmed actions with their own permission path (P6.5-3, P6.5-4).
+The generation half is two more routes. `GET /v1/git/commit/prompt` returns
+`CommitPrompt { template, source }`, where `source` is `default` or `profile`:
+the effective template before its placeholders are filled, so an editor can show
+what it is about to send. A profile's template lives in
+`<profile>/commit-prompt.txt` and is read per request; without that file the
+template is `acpilot_core::commit::DEFAULT_PROMPT`. An empty file is a `400`
+naming its path rather than a silent fall back to the default.
+
+`POST /v1/git/commit-message` takes `CommitMessageRequest { workspace?,
+session_id, prompt? }` and returns a `CommitDraft { message, subject, body, kind,
+scope?, breaking, emoji?, generator }`. It renders the **staged** diff, its files
+and the recent subjects into the prompt, sends that prompt to the named active
+session, and validates the answer with `acpilot_core::commit`. The staged diff is
+the only change it sees; nothing is committed, and the draft is not stored, so the
+editor can change it before the commit action of P6.5-4. `prompt` replaces the
+template for this request only. `generator` is `session:<id>`: the model-lab recipe
+half of the ticket waits on P4.5, which has no providers or recipes yet.
+
+The format is enforced rather than repaired. An unknown type, a missing
+description, a subject over 72 characters, or a body without a blank line is a
+`400 invalid_request` with the rule in `details.field: "message"`. Nothing staged
+is a `409` before the agent is asked. A busy or unknown session is `409`/`404`;
+a session that fails or does not answer inside two minutes is
+`502 agent_failed`.
+
+Nothing here writes to the repository. Staging, committing, checking out and
+config are separate, confirmed actions with their own permission path (P6.5-4).
 
 ## Project map
 

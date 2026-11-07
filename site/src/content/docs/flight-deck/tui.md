@@ -236,8 +236,10 @@ selection without moving the caret. A click on a row of the tree, or of the sess
 list, focuses that pane on the row it hit — and the session list opens that session,
 because a list is a column of targets. The wheel does the same to a terminal: it
 reads back through the scrollback, the title says `behind n/history` while it is
-scrolled, and the next keystroke returns it to the newest line, because the answer
-to a command belongs below the fold you were reading. Dragging across the output
+scrolled, and output that arrives meanwhile joins the history behind the reader
+instead of pushing the line they were on down; the next keystroke returns it to
+the newest line, because the answer to a command belongs below the fold you were
+reading. Dragging across the output
 selects the run it covered and leaves the pane in copy mode with the selection
 marked, so `y` takes it over OSC 52 and `Esc` gives the keys back; `V` marks whole
 lines rather than the cells between two ends, which is what a path or a stack

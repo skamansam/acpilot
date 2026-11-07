@@ -170,10 +170,13 @@ borders between files, text and agents are where a person reaches for one; it us
 the menu bar, because a row of labels is a target a pointer can see and hit; and in
 the editor it puts the caret where a click landed and scrolls the buffer under the
 wheel, because a click is the fastest way to a caret and a wheel is a motion no key
-has. The terminal answers the same wheel by reading back through its scrollback, and
-a keystroke returns it to the newest line — a command typed into a pane showing the
-old output would print its answer out of sight, and a title that says how far back
-the view is keeps a scrolled pane from looking like a program that stopped printing. A click on the numbers is furniture, not text: it falls through to the divider
+has. The terminal answers the same wheel by reading back through its scrollback; output
+that arrives meanwhile joins the history behind the reader rather than pushing the
+line they were on down, so a build's error stays under the cursor while the build is
+still printing, and a keystroke returns the pane to the newest line — a command typed
+into a pane showing the old output would print its answer out of sight, and a title
+that says how far back the view is keeps a scrolled pane from looking like a program
+that stopped printing. A click on the numbers is furniture, not text: it falls through to the divider
 drag it looks like. The wheel is pointed rather than aimed — it scrolls the pane
 under the pointer without taking the keyboard, and without moving the caret, which
 is what makes reading a file with a trackpad the same file when you let go.

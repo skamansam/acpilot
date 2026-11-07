@@ -2944,7 +2944,19 @@ impl App {
             }
             Update::TerminalData(bytes) => {
                 if let Some(pane) = &mut self.terminal {
+                    let before = pane.history();
                     pane.parser.process(&bytes);
+                    // A reader keeps the line they were on. Lines that scroll off
+                    // the screen join the history behind them, so the offset grows
+                    // by as many as left; otherwise the text under the cursor — and
+                    // the cells a selection was put on — would slide by one line per
+                    // line of output. Live output follows the program, or a command's
+                    // answer would print above the fold.
+                    let delta = pane.history().saturating_sub(before);
+                    if delta > 0 && (pane.mode == PaneMode::Copy || pane.reader.view.scroll > 0) {
+                        pane.reader.view.scroll = pane.reader.view.scroll.saturating_add(delta);
+                        pane.apply_scroll();
+                    }
                 }
             }
             Update::TerminalExited { code } => {
@@ -9629,6 +9641,37 @@ mod tests {
             "a copy ends copy mode, so the shell has the keyboard again"
         );
         assert!(app.status.contains("copied"), "{}", app.status);
+    }
+
+    #[test]
+    fn output_while_reading_keeps_the_line_the_reader_was_on() {
+        let mut app = with_terminal();
+        let printed: String = (0..40).map(|index| format!("line {index}\r\n")).collect();
+        app.apply(Update::TerminalData(printed.into_bytes()));
+        app.handle_key(key(KeyCode::F(2)));
+        app.handle_key(key(KeyCode::Char('k')));
+        let before = app
+            .terminal
+            .as_ref()
+            .expect("the pane is open")
+            .reader
+            .view
+            .scroll;
+        let text = app.terminal.as_ref().expect("the pane is open").yank();
+
+        app.apply(Update::TerminalData(b"more\r\nmore\r\n".to_vec()));
+
+        let pane = app.terminal.as_ref().expect("the pane is open");
+        assert_eq!(
+            pane.reader.view.scroll,
+            before + 2,
+            "the two lines that scrolled off joined the history behind the reader"
+        );
+        assert_eq!(
+            pane.yank(),
+            text,
+            "the line under the cursor is still the line it was"
+        );
     }
 
     #[test]

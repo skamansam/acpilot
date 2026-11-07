@@ -116,10 +116,45 @@ export function tabDirty(tab: EditorTab): boolean {
   return tab.file === null || tab.draft !== tab.file.text;
 }
 
-/** The tabs a previous visit left open: their paths, and which one was in front. */
+/** An unsaved buffer as the page keeps it: the text, and the version it was typed over. */
+export interface StoredDraft {
+  text: string;
+  /** The `etag` of the text the draft was typed over; `null` when the file did not exist. */
+  etag: string | null;
+}
+
+/** The tabs a previous visit left open: their paths, which was in front, and drafts. */
 export interface StoredTabs {
   paths: string[];
   active: string | null;
+  drafts: Record<string, StoredDraft>;
+}
+
+/**
+ * What the page stores for the next visit.
+ *
+ * A tab is stored by path. Its buffer travels only while it differs from the file
+ * it was read at: a clean tab has nothing to recover, and copying every open file's
+ * whole text into the store would duplicate what is already on disk. The etag is
+ * kept beside the text so a restored draft is saved against the version it was
+ * written over — if the file changed while the page was closed, the save is refused
+ * rather than replacing a version the person never saw.
+ */
+export function tabStorage(tabs: EditorTab[], active: string | null): StoredTabs {
+  const paths: string[] = [];
+  const drafts: Record<string, StoredDraft> = {};
+  for (const tab of tabs) {
+    paths.push(tab.path);
+    if (!tabDirty(tab)) {
+      continue;
+    }
+    // A tab somebody opened as a new file and never typed in has nothing to recover.
+    if (tab.file === null && tab.draft === '') {
+      continue;
+    }
+    drafts[tab.path] = { text: tab.draft, etag: tab.file?.etag ?? null };
+  }
+  return { paths, active, drafts };
 }
 
 /**
@@ -144,7 +179,7 @@ export function storedTabs(raw: string | null): StoredTabs | null {
   if (typeof parsed !== 'object' || parsed === null) {
     return null;
   }
-  const record = parsed as { paths?: unknown; active?: unknown };
+  const record = parsed as { paths?: unknown; active?: unknown; drafts?: unknown };
   if (!Array.isArray(record.paths)) {
     return null;
   }
@@ -161,10 +196,30 @@ export function storedTabs(raw: string | null): StoredTabs | null {
   if (paths.length === 0) {
     return null;
   }
+  // A draft is only useful for a tab that is coming back; one for a path that is not
+  // in `paths` has no tab to land in, and is dropped rather than restored alone.
+  const drafts: Record<string, StoredDraft> = {};
+  if (typeof record.drafts === 'object' && record.drafts !== null) {
+    for (const [rawPath, value] of Object.entries(record.drafts)) {
+      if (typeof value !== 'object' || value === null) {
+        continue;
+      }
+      const draft = value as { text?: unknown; etag?: unknown };
+      const path = normalisePath(rawPath);
+      if (!path || !paths.includes(path) || path in drafts || typeof draft.text !== 'string') {
+        continue;
+      }
+      drafts[path] = {
+        text: draft.text,
+        etag: typeof draft.etag === 'string' ? draft.etag : null,
+      };
+    }
+  }
   const wanted = typeof record.active === 'string' ? normalisePath(record.active) : '';
   return {
     paths,
     active: wanted && paths.includes(wanted) ? wanted : paths[0] ?? null,
+    drafts,
   };
 }
 

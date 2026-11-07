@@ -29,6 +29,7 @@
     saveFailure,
     storedTabs,
     tabDirty,
+    tabStorage,
     type EditorLanguage,
     type EditorTab,
   } from './files';
@@ -66,6 +67,7 @@
   // is one flag for both, because the pane must not start either while the other
   // is in flight.
   let renaming = $state(false);
+  let renameFrom = $state<string | null>(null);
   let renamePath = $state('');
   let moving = $state(false);
 
@@ -75,6 +77,7 @@
   let opening = $state(false);
   let saving = $state(false);
   let note = $state<string | null>(null);
+  let storageNote = $state<string | null>(null);
   let error = $state<string | null>(null);
   let pathInput = $state('');
   let browserOpen = $state(true);
@@ -83,8 +86,14 @@
   // the new marks to this view; a tab switch builds a new one with its own marks.
   let view: EditorView | null = null;
 
-  /** Where the open tabs survive a reload: their paths, never their buffers. */
+  /** Where the open tabs and their unsaved buffers survive a reload. */
   const TABS_KEY = 'acpilot.editor.tabs';
+
+  // A draft is written a moment after the last keystroke, not on every one: a large
+  // buffer serialised per key is a tax on typing, and a browser may drop an unload
+  // handler, which is why the timer also carries the last change.
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingStore: ReturnType<typeof tabStorage> | null = null;
 
   // True until the stored list has been read: the writing effect must not save an
   // empty list over the tabs it is about to restore.
@@ -267,21 +276,23 @@
     dropTab(index);
   }
 
-  /** Ask for a new path for the open file, prefilled with the current one. */
-  function beginRename(): void {
-    if (!tab?.file) {
+  /** Ask for a new path, for the open file or a file in the listing. */
+  function beginRename(path = tab?.path): void {
+    if (!path) {
       return;
     }
     renaming = true;
-    renamePath = tab.path;
+    renameFrom = path;
+    renamePath = path;
   }
 
   async function confirmRename(event: Event): Promise<void> {
     event.preventDefault();
-    const open = tab;
+    const from = renameFrom;
     const to = normalisePath(renamePath);
     renaming = false;
-    if (!open || !open.file || !to || to === open.path) {
+    renameFrom = null;
+    if (!from || !to || to === from) {
       return;
     }
     moving = true;
@@ -290,12 +301,19 @@
     try {
       // The daemon moves the file and answers with its new path and token. A dirty
       // buffer stays dirty: the move did not change the text on screen.
-      const moved = await renameFile(open.path, to, token);
-      open.path = moved.path;
-      open.file = moved;
-      showMarks(moved.marks ?? []);
-      pathInput = moved.path;
-      note = `Renamed to ${moved.path}`;
+      const moved = await renameFile(from, to, token);
+      const followed = tabs.find((open) => open.path === from);
+      if (followed) {
+        followed.path = moved.path;
+        followed.file = moved;
+        // Only the visible view can take new gutter marks; another tab's marks are
+        // read when its own view is built.
+        if (followed === tab) {
+          showMarks(moved.marks ?? []);
+          pathInput = moved.path;
+        }
+      }
+      note = `Renamed ${from} to ${moved.path}`;
       void browse(parentOf(moved.path));
     } catch (failure) {
       error = describe(failure);
@@ -304,16 +322,18 @@
     }
   }
 
-  /** Delete the open file, after asking, and drop the tab that pointed at it. */
-  async function remove(): Promise<void> {
-    const open = tab;
-    if (!open || !open.file) {
+  /** Delete a file, after asking, and drop the tab that pointed at it. */
+  async function remove(path = tab?.path): Promise<void> {
+    if (!path) {
       return;
     }
+    const index = tabs.findIndex((candidate) => candidate.path === path);
+    const open = index >= 0 ? tabs[index] : null;
     const ask = globalThis.confirm;
-    const question = tabDirty(open)
-      ? `Delete ${open.path} and discard its unsaved changes?`
-      : `Delete ${open.path}?`;
+    const question =
+      open && tabDirty(open)
+        ? `Delete ${path} and discard its unsaved changes?`
+        : `Delete ${path}?`;
     if (typeof ask === 'function' && !ask(question)) {
       return;
     }
@@ -321,12 +341,12 @@
     error = null;
     note = null;
     try {
-      await deleteFile(open.path, token);
-      const index = tabs.findIndex((candidate) => candidate === open);
-      if (index >= 0) {
-        dropTab(index);
+      await deleteFile(path, token);
+      const current = tabs.findIndex((candidate) => candidate.path === path);
+      if (current >= 0) {
+        dropTab(current);
       }
-      note = `Deleted ${open.path}`;
+      note = `Deleted ${path}`;
       void browse(dir);
     } catch (failure) {
       error = describe(failure);
@@ -400,11 +420,12 @@
   }
 
   /**
-   * Reopen the tabs the last visit left open.
+   * Reopen the tabs the last visit left open, with the buffers it kept for them.
    *
-   * Paths only: a draft that was never saved has no file to come back from, so it
-   * is not stored. A path that has since gone is skipped — a tab pointing at
-   * nothing would be a click that can never work.
+   * A path that has since gone is still worth a tab when it has a draft: the draft
+   * is the only copy of text that was never saved, so it comes back as a file to
+   * create. Without one, a path pointing at nothing would be a click that can never
+   * work.
    */
   async function restoreTabs(): Promise<void> {
     let saved: ReturnType<typeof storedTabs> = null;
@@ -413,13 +434,31 @@
     } catch {
       // Storage can be denied; the page then starts with no tabs, as it did before.
     }
+    let restored = 0;
     if (saved) {
       for (const path of saved.paths) {
+        const kept = saved.drafts[path];
+        // No etag is a tab whose first save was never made: it comes back as the
+        // create it was, so a file that appeared there meanwhile is a `409` rather
+        // than a save over somebody's text.
+        if (kept && kept.etag === null) {
+          tabs.push({ path, file: null, draft: kept.text, mode: 'edit', generation: 1 });
+          restored += 1;
+          continue;
+        }
         try {
           const read = await readFile(path, token);
-          tabs.push({ path: read.path, file: read, draft: read.text, mode: 'edit', generation: 1 });
+          // The stored token, not the fresh one: if the file changed while the page
+          // was closed, the save must be refused so the newer text is not replaced
+          // unseen.
+          const file = kept?.etag ? { ...read, etag: kept.etag } : read;
+          const draft = kept ? kept.text : read.text;
+          tabs.push({ path: read.path, file, draft, mode: 'edit', generation: 1 });
+          if (kept && draft !== read.text) {
+            restored += 1;
+          }
         } catch {
-          // Gone or refused: the rest of the tabs are still worth opening.
+          // Gone or refused with no draft: the rest of the tabs are still worth it.
         }
       }
       const index = tabs.findIndex((open) => open.path === saved.active);
@@ -429,22 +468,68 @@
       }
     }
     restoring = false;
+    if (restored > 0) {
+      note = `${restored} unsaved ${restored === 1 ? 'draft was' : 'drafts were'} restored; nothing was saved.`;
+    }
     void browse('');
   }
 
-  // Written after every tab change rather than on unload: a browser may drop an
-  // unload handler, and the list is small enough that a write per change is free.
+  function storeTabs(value: ReturnType<typeof tabStorage>): void {
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify(value));
+      storageNote = null;
+    } catch {
+      // A full or denied store costs the drafts, not the tabs: paths are a fraction
+      // of the size, and losing the list because one buffer was large would be worse.
+      try {
+        localStorage.setItem(
+          TABS_KEY,
+          JSON.stringify({ paths: value.paths, active: value.active }),
+        );
+        storageNote =
+          'Drafts are too large to keep for the next visit; the open paths are still remembered.';
+      } catch {
+        storageNote = 'The browser refused to remember the open tabs.';
+      }
+    }
+  }
+
+  // A write per keystroke would serialise the whole buffer on the typing path; one
+  // shortly after the last change is enough for a reload to find the text.
+  function scheduleStore(value: ReturnType<typeof tabStorage>): void {
+    pendingStore = value;
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+    }
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      const next = pendingStore;
+      pendingStore = null;
+      if (next) {
+        storeTabs(next);
+      }
+    }, 250);
+  }
+
+  /** Write the last change now: the page is going away and the timer with it. */
+  function flushStore(): void {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    const next = pendingStore;
+    pendingStore = null;
+    if (next) {
+      storeTabs(next);
+    }
+  }
+
   $effect(() => {
-    const paths = tabs.map((open) => open.path);
-    const front = tab?.path ?? null;
+    const value = tabStorage(tabs, tab?.path ?? null);
     if (restoring) {
       return;
     }
-    try {
-      localStorage.setItem(TABS_KEY, JSON.stringify({ paths, active: front }));
-    } catch {
-      // A full or denied store costs the restore, not the editing.
-    }
+    scheduleStore(value);
   });
 
   // The editor is built once per loaded document. Reading `draft` and `file`
@@ -520,6 +605,8 @@
 
   onMount(() => {
     void restoreTabs();
+    // The debounce is short, but a person can reload inside it; unmounting flushes.
+    return () => flushStore();
   });
 </script>
 
@@ -591,7 +678,7 @@
         Reload
       </button>
       {#if tab.file}
-        <button type="button" onclick={beginRename} disabled={moving || saving}>Rename</button>
+        <button type="button" onclick={() => beginRename()} disabled={moving || saving}>Rename</button>
         <button type="button" onclick={() => void remove()} disabled={moving || saving}>
           Delete
         </button>
@@ -607,7 +694,7 @@
     {/if}
   </div>
 
-  {#if renaming && tab}
+  {#if renaming}
     <form class="file-rename" onsubmit={confirmRename}>
       <label for="rename-path" class="visually-hidden">New path</label>
       <input
@@ -679,6 +766,28 @@
               {#if row.status}
                 <span class="file-status" data-change={row.status}>{row.status}</span>
               {/if}
+              {#if !row.is_dir}
+                <span class="file-row-actions">
+                  <button
+                    type="button"
+                    aria-label={`Rename ${row.path}`}
+                    title={`Rename ${row.path}`}
+                    onclick={() => beginRename(row.path)}
+                    disabled={moving || saving}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${row.path}`}
+                    title={`Delete ${row.path}`}
+                    onclick={() => void remove(row.path)}
+                    disabled={moving || saving}
+                  >
+                    Delete
+                  </button>
+                </span>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -690,6 +799,7 @@
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if note}<p class="note" role="status">{note}</p>{/if}
+  {#if storageNote}<p class="note" role="status">{storageNote}</p>{/if}
 
   {#if tab}
     {#if tab.mode === 'diff' && tab.file}

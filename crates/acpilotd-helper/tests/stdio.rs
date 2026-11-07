@@ -508,6 +508,54 @@ fn a_file_is_removed_and_a_directory_is_answered_rather_than_removed() {
 }
 
 #[test]
+fn a_file_is_renamed_and_a_directory_or_an_existing_name_is_refused() {
+    let directory = tempfile::tempdir().expect("directory");
+    std::fs::write(directory.path().join("note.txt"), "hello").expect("note");
+    std::fs::create_dir(directory.path().join("docs")).expect("docs");
+    let from = directory
+        .path()
+        .join("note.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let to = directory
+        .path()
+        .join("docs/note.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let mut helper = Helper::start();
+    let renamed = helper.call("fs.rename", json!({ "path": from, "to": to.clone() }));
+    assert_eq!(renamed["renamed"], true, "{renamed}");
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("docs/note.txt")).expect("moved"),
+        "hello",
+        "the move keeps the bytes"
+    );
+    assert!(!directory.path().join("note.txt").exists());
+
+    // A name that is already there is a refusal with a reason, never a replacement.
+    std::fs::write(directory.path().join("other.txt"), "other").expect("other");
+    let other = directory
+        .path()
+        .join("other.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let taken = helper.call("fs.rename", json!({ "path": to, "to": other.clone() }));
+    assert_eq!(taken["renamed"], false, "{taken}");
+    assert_eq!(taken["reason"], "exists");
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("other.txt")).expect("other"),
+        "other",
+        "the file the caller did not name is untouched"
+    );
+
+    let folder = directory.path().to_string_lossy().replace('\\', "/");
+    let refused = helper.call("fs.rename", json!({ "path": folder, "to": other }));
+    assert_eq!(refused["renamed"], false, "{refused}");
+    assert_eq!(refused["reason"], "directory");
+}
+
+#[test]
 fn a_missing_path_is_an_error_and_an_existing_directory_is_not_created() {
     let directory = tempfile::tempdir().expect("directory");
     let missing = directory.path().join("nothing-here");

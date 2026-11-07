@@ -627,8 +627,10 @@ the bytes, so the text and its history stay attached to the file. `to` must be a
 path: an existing destination is `409`, never a replace, and the destination's
 directory must exist (`404`) because this route does not build trees. The source must
 be a file (`409` for a directory) and the same path twice is `400`. A **remote**
-workspace is `409`: the host helper exposes read, write, list, remove and mkdir, and
-no rename operation, so write and delete work there and a move does not.
+workspace moves the entry on its host through the helper's `fs.rename`, so the text
+travels between hosts in neither direction on the way. An older helper that does not
+answer that method is a `409` naming the stale upload; the destination rules are the
+same there.
 
 `POST /v1/files/directory` takes `{ "path": string }` and answers `201`. Parents
 are created, because a new-folder dialog names the folder and not every level

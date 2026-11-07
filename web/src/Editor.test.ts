@@ -299,6 +299,34 @@ describe('a file', () => {
     });
   });
 
+  it('restores an unsaved draft and saves it against the version it was typed over', async () => {
+    localStorage.setItem(
+      'acpilot.editor.tabs',
+      JSON.stringify({
+        paths: ['README.md'],
+        active: 'README.md',
+        drafts: { 'README.md': { text: '# mine\n', etag: 'v1' } },
+      }),
+    );
+    render();
+
+    await vi.waitFor(() =>
+      expect(target.querySelector('.editor-path')?.textContent).toBe('README.md'),
+    );
+    expect(target.querySelector('.editor-bar .dirty'), 'the draft came back dirty').not.toBeNull();
+
+    // The effect keeps a still-dirty restored tab for the next visit too, with the
+    // token it was typed over rather than the one just read.
+    await vi.waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('acpilot.editor.tabs') ?? '{}');
+      expect(stored.drafts?.['README.md']).toEqual({ text: '# mine\n', etag: 'v1' });
+    });
+
+    (await findButton('Save')).click();
+    await vi.waitFor(() => expect(writes.length).toBe(1));
+    expect(writes[0]).toEqual({ path: 'README.md', text: '# mine\n', if_match: 'v1' });
+  });
+
   it('renames the open file and follows it to the new path', async () => {
     render();
     await (await findButton('README.md')).click();
@@ -316,6 +344,37 @@ describe('a file', () => {
       expect(target.querySelector('.editor-path')?.textContent).toBe('docs/README.md'),
     );
     expect(renames).toEqual([{ path: 'README.md', to: 'docs/README.md' }]);
+  });
+
+  it('renames a file from its row without opening it', async () => {
+    render();
+    await find('ul.file-rows');
+
+    (await find('[aria-label="Rename README.md"]') as HTMLButtonElement).click();
+    const input = (await find('input#rename-path')) as HTMLInputElement;
+    expect(input.value).toBe('README.md');
+    input.value = 'docs/README.md';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    target
+      .querySelector('form.file-rename')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => expect(renames).toEqual([{ path: 'README.md', to: 'docs/README.md' }]));
+    expect(target.querySelectorAll('[role="tab"]').length).toBe(0);
+    await vi.waitFor(() =>
+      expect(target.textContent).toContain('Renamed README.md to docs/README.md'),
+    );
+  });
+
+  it('deletes a file from its row without opening it', async () => {
+    render();
+    await find('ul.file-rows');
+
+    (await find('[aria-label="Delete README.md"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(deletes).toEqual(['README.md']));
+    expect(target.querySelectorAll('[role="tab"]').length).toBe(0);
+    await vi.waitFor(() => expect(target.textContent).toContain('Deleted README.md'));
   });
 
   it('deletes the open file after asking and drops its tab', async () => {

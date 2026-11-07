@@ -1392,9 +1392,11 @@ fn delete_local(root: &Path, requested: &str) -> Result<StatusCode, ApiError> {
 /// somebody's file would be the same silent overwrite the write route refuses — and
 /// its parent must exist, because the write route does not build trees either.
 ///
-/// A remote workspace is `409`: the host helper exposes read, write, list, remove and
-/// mkdir, and no rename. Doing it as a write and a delete there would make a failed
-/// second step leave a copy, so the honest answer is that the move is not wired.
+/// A remote workspace moves the entry on its host through the helper's `fs.rename`:
+/// writing and then deleting would leave a copy behind when the second step failed,
+/// which is why the move is one operation on both sides. An older helper does not
+/// answer that method, and that is a `409` naming the stale upload rather than a
+/// missing file.
 ///
 /// # Errors
 ///
@@ -1412,10 +1414,9 @@ async fn rename(
     })?;
     match source(&state, request.workspace.as_deref())? {
         Source::Local(root) => rename_local(&root, &request.path, &request.to),
-        Source::Remote { host, .. } => Err(ApiError::new(AcpilotError::conflict(format!(
-            "renaming is not supported on {}; write and delete are",
-            host.id
-        )))),
+        Source::Remote { host, root } => {
+            rename_remote(&state, &host, &root, &request.path, &request.to).await
+        }
     }
 }
 
@@ -1487,6 +1488,83 @@ fn rename_local(root: &Path, requested: &str, to: &str) -> Result<Json<FileConte
         etag,
         marks,
     }))
+}
+
+/// [`rename`], through a host this daemon reaches with its helper.
+///
+/// The helper moves the entry on the host; this daemon then reads it back, because
+/// the answer to the route is a `FileContent` and only the host can say what the
+/// moved file now holds. Both paths are workspace-relative and validated here, so
+/// the move is composed from the same root as every other file route.
+async fn rename_remote(
+    state: &AppState,
+    host: &acpilot_proto::host::HostSummary,
+    root: &str,
+    requested: &str,
+    to: &str,
+) -> Result<Json<FileContent>, ApiError> {
+    let from_relative = relative_path(requested)?;
+    let to_relative = relative_path(to)?;
+    if from_relative == to_relative {
+        return Err(ApiError::new(AcpilotError::invalid(format!(
+            "{requested} is already there"
+        )))
+        .with_detail("to", "a rename names a different path"));
+    }
+    let from = from_relative.to_string_lossy().replace('\\', "/");
+    let target = to_relative.to_string_lossy().replace('\\', "/");
+    let answer = ask(
+        state,
+        host,
+        "fs.rename",
+        serde_json::json!({
+            "path": remote_path(root, &from),
+            "to": remote_path(root, &target),
+        }),
+    )
+    .await?;
+    let moved = answer.map_err(|detail| {
+        // A helper from before this method has no `fs.rename`; saying "not found"
+        // would blame the file for a stale upload.
+        if detail.contains("is not a method this helper has") {
+            return ApiError::new(AcpilotError::conflict(format!(
+                "the helper on {} cannot rename files; update it, or write and delete there",
+                host.id
+            )))
+            .with_detail("transport", detail);
+        }
+        ApiError::new(AcpilotError::not_found(format!(
+            "path {requested} on {}",
+            host.id
+        )))
+        .with_detail("transport", detail)
+    })?;
+    match moved.get("renamed").and_then(serde_json::Value::as_bool) {
+        Some(true) => {}
+        Some(false)
+            if moved.get("reason").and_then(serde_json::Value::as_str) == Some("exists") =>
+        {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "{to} already exists"
+            ))));
+        }
+        _ => {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "{requested} is a directory; this route moves files"
+            ))));
+        }
+    }
+    read_remote(
+        state,
+        host,
+        root,
+        &FileQuery {
+            workspace: None,
+            path: Some(to.to_owned()),
+            include_ignored: None,
+        },
+    )
+    .await
 }
 
 /// The body of `POST /v1/files/directory`.

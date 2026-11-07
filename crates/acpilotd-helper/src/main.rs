@@ -15,7 +15,7 @@
 //!
 //! # What it exposes
 //!
-//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.mkdir`, `fs.ignored`, `exec`, the
+//! `fs.read`, `fs.write`, `fs.list`, `fs.remove`, `fs.rename`, `fs.mkdir`, `fs.ignored`, `exec`, the
 //! `pty.*` family and the `lsp.*` family — the operations `acpilot-host`'s `Host` trait
 //! asks for, plus the one question a tree asks about a directory, the one thing a pane
 //! cannot do without, and the one thing a language server cannot: a pipe that stays open.
@@ -160,12 +160,13 @@ fn error_line(id: Value, failure: &Failure) -> Value {
 /// [`call`] does not answer is a promise that fails on first use. A test calls each
 /// name to keep the list true, and the list is in the handshake so a daemon does not
 /// have to assume what the helper it reached can do.
-const METHODS: [&str; 16] = [
+const METHODS: [&str; 17] = [
     "hello",
     "fs.read",
     "fs.write",
     "fs.list",
     "fs.remove",
+    "fs.rename",
     "fs.mkdir",
     "fs.ignored",
     "exec",
@@ -191,6 +192,7 @@ fn call(
         "fs.write" => write(params),
         "fs.list" => list(params),
         "fs.remove" => remove(params),
+        "fs.rename" => rename(params),
         "fs.mkdir" => mkdir(params),
         "fs.ignored" => ignored(params),
         "exec" => exec(params),
@@ -297,6 +299,55 @@ fn remove(params: &Value) -> Result<Value, Failure> {
     }
     std::fs::remove_file(&path).map_err(|error| refused(&path, &error))?;
     Ok(json!({ "path": display(&path), "removed": true }))
+}
+
+/// Move one file to a new name, never replacing what is there.
+///
+/// The destination is reserved with `create_new` before the move: a bare rename replaces
+/// whatever is at the name on Unix, which is the silent overwrite the daemon's whole files
+/// API refuses. A directory and an existing destination are answered — `renamed: false`
+/// with a `reason` — because both are refusals the caller can explain, and the daemon has
+/// a different sentence for each. A missing source, or a destination whose directory does
+/// not exist, is an error: nothing was reached that could be moved.
+fn rename(params: &Value) -> Result<Value, Failure> {
+    let from = path_param(params)?;
+    let to = params
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|to| !to.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| Failure::params("`to` is required"))?;
+    let metadata = std::fs::symlink_metadata(&from).map_err(|error| refused(&from, &error))?;
+    if metadata.is_dir() {
+        return Ok(json!({ "renamed": false, "reason": "directory" }));
+    }
+    let parent = to
+        .parent()
+        .ok_or_else(|| Failure::params("`to` needs a directory"))?;
+    if !parent.is_dir() {
+        return Err(Failure::host(format!(
+            "{}: no such directory",
+            parent.display()
+        )));
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&to)
+    {
+        Ok(file) => drop(file),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Ok(json!({ "renamed": false, "reason": "exists" }));
+        }
+        Err(error) => return Err(refused(&to, &error)),
+    }
+    if let Err(error) = std::fs::rename(&from, &to) {
+        // The placeholder is ours; an empty file after a failed move is a file nobody
+        // asked for.
+        let _ = std::fs::remove_file(&to);
+        return Err(refused(&to, &error));
+    }
+    Ok(json!({ "renamed": true, "path": display(&from), "to": display(&to) }))
 }
 
 /// Make a directory and any parents it needs.

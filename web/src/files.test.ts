@@ -14,6 +14,7 @@ import {
   saveFailure,
   storedTabs,
   tabDirty,
+  tabStorage,
 } from './files';
 
 function entry(path: string, isDir = false): FileEntry {
@@ -120,7 +121,7 @@ describe('storedTabs', () => {
       storedTabs(
         JSON.stringify({ paths: ['./src/main.rs', 'src/main.rs', ' README.md '], active: 'README.md' }),
       ),
-    ).toEqual({ paths: ['src/main.rs', 'README.md'], active: 'README.md' });
+    ).toEqual({ paths: ['src/main.rs', 'README.md'], active: 'README.md', drafts: {} });
   });
 
   it('falls back to the first tab when the active one is gone or absent', () => {
@@ -136,6 +137,56 @@ describe('storedTabs', () => {
     // no tabs rather than a tab whose path cannot be named.
     expect(storedTabs(JSON.stringify({ paths: [] }))).toBeNull();
     expect(storedTabs(JSON.stringify({ paths: ['  ', 7] }))).toBeNull();
+  });
+
+  it('reads a draft back only for a path it also opens', () => {
+    const parsed = storedTabs(
+      JSON.stringify({
+        paths: ['src/main.rs'],
+        active: 'src/main.rs',
+        drafts: {
+          'src/main.rs': { text: 'draft', etag: 'v2' },
+          'gone.rs': { text: 'orphan', etag: null },
+          'src/main.rs ': { text: 'shadowed', etag: 'v3' },
+          broken: 7,
+        },
+      }),
+    );
+    expect(parsed?.drafts).toEqual({ 'src/main.rs': { text: 'draft', etag: 'v2' } });
+  });
+
+  it('treats a draft without a version as one whose file was never created', () => {
+    const parsed = storedTabs(
+      JSON.stringify({ paths: ['new.txt'], drafts: { 'new.txt': { text: 'typed' } } }),
+    );
+    expect(parsed?.drafts['new.txt']).toEqual({ text: 'typed', etag: null });
+  });
+
+  it('ignores a drafts value that is not a map of drafts', () => {
+    expect(storedTabs(JSON.stringify({ paths: ['a.txt'], drafts: 'nope' }))?.drafts).toEqual({});
+    expect(
+      storedTabs(JSON.stringify({ paths: ['a.txt'], drafts: { 'a.txt': 'nope' } }))?.drafts,
+    ).toEqual({});
+  });
+});
+
+describe('tabStorage', () => {
+  it('keeps only the buffers that differ from disk, with the version they were typed over', () => {
+    const stored = tabStorage(
+      [
+        { path: 'clean.txt', file: content('one', 'clean.txt'), draft: 'one' },
+        { path: 'dirty.txt', file: content('two', 'dirty.txt'), draft: 'changed' },
+        { path: 'new.txt', file: null, draft: '' },
+        { path: 'draft.txt', file: null, draft: 'typed' },
+      ],
+      'dirty.txt',
+    );
+    expect(stored.paths).toEqual(['clean.txt', 'dirty.txt', 'new.txt', 'draft.txt']);
+    expect(stored.active).toBe('dirty.txt');
+    expect(stored.drafts).toEqual({
+      'dirty.txt': { text: 'changed', etag: 'v1' },
+      'draft.txt': { text: 'typed', etag: null },
+    });
   });
 });
 

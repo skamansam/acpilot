@@ -1112,6 +1112,21 @@ a:focus-visible {
   gap: 0.5rem;
 }
 
+.file-row-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.file-rows .file-row-actions button {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.file-rows .file-row-actions button:hover {
+  color: var(--text);
+}
+
 .file-rows button {
   font: inherit;
   font-size: 0.85rem;

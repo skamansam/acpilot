@@ -88,8 +88,11 @@ avoidable from this workspace — gpui 0.2.2 asks its `xkbcommon` dependency for
 
 The web UI's half is a task of its own, `cargo xtask web-check`: `npm ci` when
 `web/node_modules` is missing, `npm run check`, `npm test`, a `cargo build -p
-acpilotd` for the live test, `npm run test:live`, then `npm run build` and a
-comparison of the result with the committed page. `cargo xtask check` calls it and
+acpilotd` for the live test, `npm run test:live`, a build of `acpilot` and the mock
+agent, `npm run test:e2e` in Chromium against `acpilot serve`, then `npm run build`
+and a comparison of the result with the committed page. The e2e test needs the
+browser once: `cd web && npx playwright install chromium` (CI installs it with
+`--with-deps`). `cargo xtask check` calls it and
 CI's `web` job calls it, so that list exists once rather than in a workflow and a
 local habit that agree until somebody edits one. A `.svelte` edit that was never
 rebuilt, or a type error only `svelte-check` sees, therefore fails locally instead

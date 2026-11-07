@@ -16,6 +16,10 @@
 # web (P11)
 web/node_modules
 web/dist
+# Playwright's failure traces, screenshots and report: artifacts of a run, not
+# files the repository keeps.
+web/test-results
+web/playwright-report
 
 # docs site
 site/node_modules

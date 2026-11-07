@@ -586,6 +586,23 @@ fn check_web() -> bool {
         return false;
     }
 
+    // The e2e test drives a real browser against `acpilot serve`, so both binaries
+    // it starts have to exist: the CLI that hosts the daemon and the fixture agent
+    // the profile names. Built here for the same reason as the daemon above — a
+    // test that runs `cargo` turns a failure into a build error.
+    let mut binaries = Command::new(env!("CARGO"));
+    binaries.args(WEB_E2E_BINARIES);
+    if !run_step("build (binaries, for the web e2e test)", binaries) {
+        return false;
+    }
+
+    let (label, args) = WEB_E2E_STEP;
+    let mut e2e = Command::new(npm());
+    e2e.args(args).current_dir(web_dir());
+    if !run_step(label, e2e) {
+        return false;
+    }
+
     let mut build = Command::new(npm());
     build.args(WEB_PAGE_BUILD).current_dir(web_dir());
     if !run_step("build (web, for the embedded page)", build) {
@@ -619,6 +636,13 @@ const WEB_LIVE_STEP: (&str, &[&str]) = ("test (web, live)", &["run", "test:live"
 
 /// What the live web test needs beside it: the daemon, from this checkout.
 const WEB_LIVE_DAEMON_BUILD: [&str; 3] = ["build", "-p", "acpilotd"];
+
+/// The e2e test, after the two processes it spawns have been built.
+const WEB_E2E_STEP: (&str, &[&str]) = ("test (web, e2e)", &["run", "test:e2e"]);
+
+/// The binary `acpilot serve` lives in, and the crate whose default build includes
+/// `acpilot-mock-agent`.
+const WEB_E2E_BINARIES: [&str; 5] = ["build", "-p", "acpilot-cli", "-p", "acpilot-agent"];
 
 /// The build that writes the page the daemon embeds.
 const WEB_PAGE_BUILD: [&str; 2] = ["run", "build"];
@@ -1656,7 +1680,10 @@ mod tests {
         // reads like a broken checkout rather than a stale command name.
         let manifest = fs::read_to_string(web_dir().join("package.json"))
             .expect("web/package.json lists the scripts");
-        for (_, args) in WEB_UNIT_STEPS.into_iter().chain([WEB_LIVE_STEP]) {
+        for (_, args) in WEB_UNIT_STEPS
+            .into_iter()
+            .chain([WEB_LIVE_STEP, WEB_E2E_STEP])
+        {
             // `npm test` is the bare script; `npm run <name>` names one.
             let script = if args[0] == "run" { args[1] } else { "test" };
             assert!(

@@ -79,8 +79,9 @@ jobs:
   # repaint against the same mock the unit test already uses.
   #
   # The checks themselves are `cargo xtask web-check` — install, `svelte-check`,
-  # the token-flow tests, the daemon build, the live shell test, the page build
-  # and the drift comparison, in that order. They live in the task because a
+  # the token-flow tests, the daemon build, the live shell test, the binaries and
+  # Chromium run that edit a file and approve a permission, the page build and the
+  # drift comparison, in that order. They live in the task because a
   # developer's `cargo xtask check` runs the same list: written here instead, the
   # runner could keep checking five commands while the local gate grew a sixth.
   web:
@@ -100,6 +101,18 @@ jobs:
           cache: false
 
       - uses: Swatinem/rust-cache@v2
+
+      # `web-check` installs when `node_modules` is missing, but the browser has to
+      # be installed after the package is there and before the run that uses it:
+      # `playwright` is a devDependency, and its Chromium revision is the one that
+      # package expects rather than an `npx` download that may be newer.
+      - name: Web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
 
       # Install, types, both test runs and the embedded page, in the task's order.
       # A drift failure names the page to commit and exits non-zero; the rebuilt

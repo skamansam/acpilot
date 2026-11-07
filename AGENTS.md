@@ -45,8 +45,9 @@ to run, not about which documents describe this codebase.
 
 - `cargo xtask web-check` is the whole list: `npm ci` when `web/node_modules` is
   missing, `npm run check` (svelte-check: types and accessibility), `npm test`,
-  the live test against a built `acpilotd`, `npm run build`, and a comparison of
-  the rebuilt page with the committed one.
+  the live test against a built `acpilotd`, the e2e test in Chromium against
+  `acpilot serve` and the mock agent (`npx playwright install chromium` once),
+  `npm run build`, and a comparison of the rebuilt page with the committed one.
 - Never `npm install` unless the task is changing dependencies.
 
 ## Read these first

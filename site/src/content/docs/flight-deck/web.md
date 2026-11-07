@@ -93,6 +93,13 @@ page's own subpaths use. The built file is committed, so building the
 daemon needs no Node; CI rebuilds it and fails if the committed page drifted from
 its source.
 
+The page is checked at three depths: `npm test` in happy-dom for the token flow
+and the transcript's folding, `npm run test:live` against a spawned daemon for the
+palette stream, and `npm run test:e2e` — Playwright, Chromium — for what only a
+layout engine can settle: a keystroke reaching CodeMirror, the diff, a save
+carrying `if_match`, and a permission card whose Allow click writes the file.
+`cargo xtask web-check` runs all three, so CI's web job does too.
+
 The page asks for the daemon's token, then shows what that token can see: the
 health answer (service, API version, workspace), the stats bar — a track per
 integration, with **Show sources** naming where each figure came from, which is the

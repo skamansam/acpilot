@@ -235,6 +235,13 @@ nobody has touched says there is nothing to save, and the seeded one in `--demo`
 says it has no file behind it, because a save is a write to a workspace and the
 design pass has none.
 
+The buffer has Vim's visual mode as well: `v` starts a run, the motions extend it,
+`y` copies it and `d`/`x` delete it in one undo step, and `Esc` or another `v`
+leaves it. `:` opens a command line — `:w` is the same daemon write as `Ctrl-S`,
+`:q` refuses while the buffer has unsaved text and `:q!` discards it, `:N` goes to a
+line and `:e path` opens a file — and a run of Up/Down keeps the column it started
+from across a short line. Shift-click extends the selection from its start.
+
 `acpilot tui --demo` draws the whole shell on a seeded world — files, editor, agent
 sidebar, command palette, which-key hints and the stats bar — with no daemon and
 nothing read from disk. Every command that is not built yet is tagged with the task

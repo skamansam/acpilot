@@ -3816,6 +3816,58 @@ impl App {
     /// would be the second writer that token exists to prevent. A buffer with nothing
     /// to save says so rather than sending a write that would replace a file with what
     /// it already contains.
+    /// Run a `:` command the editor handed back.
+    ///
+    /// Deliberately short: `:w` and `:q` are the two a person reaches for while
+    /// editing, `:N` is the go-to-line box without opening it, and `:e path` is the
+    /// tree's open without leaving the keyboard. Anything else is refused by name
+    /// rather than silently doing nothing, because a command line that swallows a
+    /// typo is a command line that looks broken.
+    fn ex_command(&mut self, command: &str) -> Option<Request> {
+        let command = command.trim();
+        match command {
+            "w" | "write" => self.save(),
+            "q" | "quit" => {
+                if self.editor.as_ref().is_some_and(|editor| editor.dirty()) {
+                    self.notice("unsaved changes · :q! discards them");
+                    None
+                } else {
+                    self.should_quit = true;
+                    Some(Request::Quit)
+                }
+            }
+            "q!" | "quit!" => {
+                self.should_quit = true;
+                Some(Request::Quit)
+            }
+            _ if !command.is_empty() && command.chars().all(|c| c.is_ascii_digit()) => {
+                if let Ok(line) = command.parse::<u32>() {
+                    if let Some(editor) = self.editor.as_mut() {
+                        editor.goto_line(line);
+                    }
+                    self.status = format!("line {line}");
+                }
+                None
+            }
+            _ if command.starts_with("e ") || command.starts_with("edit ") => {
+                let path = command
+                    .split_once(' ')
+                    .map(|(_, rest)| rest.trim())
+                    .unwrap_or_default();
+                if path.is_empty() {
+                    self.notice(":e needs a path");
+                    None
+                } else {
+                    Some(Request::OpenFile(path.to_owned()))
+                }
+            }
+            _ => {
+                self.notice(&format!("not a command: :{command}"));
+                None
+            }
+        }
+    }
+
     fn save(&mut self) -> Option<Request> {
         let Some(editor) = &self.editor else {
             self.notice("no file is open · nothing to save");
@@ -3873,8 +3925,14 @@ impl App {
                 KeyCode::Char(character) if !control => editor.prompt_insert(character),
                 _ => {}
             }
+            // `:` is a mode of the box, not of the pane: the pane hands the parsed
+            // line back and the app is the end that knows how to save or leave.
+            let command = editor.take_command();
             let message = editor.message().to_owned();
             self.status = message;
+            if let Some(command) = command {
+                return self.ex_command(&command);
+            }
             return None;
         }
 
@@ -3936,6 +3994,38 @@ impl App {
             return None;
         }
 
+        // Visual mode: the motions extend the run instead of moving a bare caret,
+        // and only the three commands that are about the run are offered. `y`
+        // copies it, `d`/`x` delete it, and `v`, `Esc` or a click leave it.
+        if editor.mode() == Mode::Visual {
+            let mut copied = None;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('v') => editor.leave_visual(),
+                KeyCode::Up | KeyCode::Char('k') => editor.extend_caret(-1, 0),
+                KeyCode::Down | KeyCode::Char('j') => editor.extend_caret(1, 0),
+                KeyCode::Left | KeyCode::Char('h') => editor.extend_caret(0, -1),
+                KeyCode::Right | KeyCode::Char('l') => editor.extend_caret(0, 1),
+                KeyCode::Home | KeyCode::Char('0') => editor.extend_line_edge(false),
+                KeyCode::End | KeyCode::Char('$') => editor.extend_line_edge(true),
+                KeyCode::PageUp => editor.extend_page(false),
+                KeyCode::PageDown => editor.extend_page(true),
+                KeyCode::Char('y') => copied = editor.yank(),
+                KeyCode::Char('d' | 'x') => {
+                    editor.delete_selection(std::time::Instant::now());
+                }
+                KeyCode::Char(':') => editor.open_command(),
+                _ => {}
+            }
+            let message = editor.message().to_owned();
+            if !message.is_empty() {
+                self.status = message;
+            }
+            if let Some(text) = copied {
+                self.clipboard = Some(text);
+            }
+            return None;
+        }
+
         let mut planned: Option<(&'static str, &'static str)> = None;
         // A key that asks the daemon a question rather than moving the caret: the pane
         // is borrowed for the whole match, so the request is made after it ends.
@@ -3970,6 +4060,8 @@ impl App {
                     self.clipboard = Some(text);
                 }
             }
+            KeyCode::Char('v') => editor.toggle_visual(),
+            KeyCode::Char(':') => editor.open_command(),
             KeyCode::Esc => editor.clear_selection(),
             // The way into insert mode, and where the caret lands when it does:
             // `i` here, `a` after it, `I` and `A` at the ends of the line, `o` and
@@ -4070,7 +4162,7 @@ impl App {
     /// you expect to be typing in. The numbers and the frame are not text, so a
     /// click on them is not a caret — it falls through to the divider drag, which
     /// is what a click on a pane's edge is for.
-    fn press_editor(&mut self, column: u16, row: u16) -> bool {
+    fn press_editor(&mut self, column: u16, row: u16, shift: bool) -> bool {
         let Some(area) = self.editor_area else {
             return false;
         };
@@ -4079,10 +4171,13 @@ impl App {
         }
         self.set_focus(Focus::Editor);
         if let Some(editor) = self.editor.as_mut() {
-            editor.click(
-                usize::from(row - area.pane.y),
-                usize::from(column - area.pane.x - area.gutter),
-            );
+            let row = usize::from(row - area.pane.y);
+            let cell = usize::from(column - area.pane.x - area.gutter);
+            if shift {
+                editor.extend_click(row, cell);
+            } else {
+                editor.click(row, cell);
+            }
         }
         true
     }
@@ -4623,7 +4718,11 @@ impl App {
                 if let Some(request) = self.click_menu(event.column, event.row) {
                     return request;
                 }
-                if self.press_editor(event.column, event.row) {
+                if self.press_editor(
+                    event.column,
+                    event.row,
+                    event.modifiers.contains(KeyModifiers::SHIFT),
+                ) {
                     self.drag = Some(Drag::Editor);
                     self.drag_at = Some((event.column, event.row));
                     return None;
@@ -7142,6 +7241,101 @@ mod tests {
             app.editor.as_ref().expect("a buffer").dirty(),
             "redo put the word back"
         );
+    }
+
+    #[test]
+    fn visual_mode_copies_the_run_the_motions_marked() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        if let Some(editor) = app.editor.as_mut() {
+            editor.goto_line(1);
+        }
+        let first = app
+            .editor
+            .as_ref()
+            .expect("a buffer")
+            .document()
+            .text()
+            .chars()
+            .next()
+            .expect("seeded text")
+            .to_string();
+
+        app.handle_key(key(KeyCode::Char('v')));
+        assert_eq!(app.editor.as_ref().expect("a buffer").mode(), Mode::Visual);
+        app.handle_key(key(KeyCode::Char('l')));
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(app.clipboard.as_deref(), Some(first.as_str()));
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").mode(),
+            Mode::Normal,
+            "y leaves the run"
+        );
+    }
+
+    #[test]
+    fn a_colon_write_asks_for_the_same_save_as_ctrl_s() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src/main.rs", false)],
+        });
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Char('w')));
+        let request = app.handle_key(key(KeyCode::Enter));
+        let Some(Request::SaveFile { path, etag, .. }) = request else {
+            panic!("expected a save, got {request:?}");
+        };
+        assert_eq!(path, "src/main.rs");
+        assert_eq!(etag, "\"v1\"", "the write names the version it replaces");
+    }
+
+    #[test]
+    fn a_colon_quit_refuses_a_dirty_buffer_and_a_bang_discards_it() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src/main.rs", false)],
+        });
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_focus(Focus::Editor);
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Char('q')));
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert!(!app.should_quit, "a dirty buffer keeps the window open");
+        assert!(app.status.contains("unsaved"), "{}", app.status);
+
+        app.handle_key(key(KeyCode::Char(':')));
+        app.handle_key(key(KeyCode::Char('q')));
+        app.handle_key(key(KeyCode::Char('!')));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::Quit),
+            ":q! is the way out"
+        );
+        assert!(app.should_quit);
     }
 
     #[test]

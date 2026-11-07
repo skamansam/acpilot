@@ -583,6 +583,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
             let (sigil, rest) = match prompt.kind {
                 PromptKind::Find => ('/', ""),
                 PromptKind::Line => (':', "line"),
+                PromptKind::Command => (':', ""),
             };
             let hint = if rest.is_empty() {
                 String::new()
@@ -2064,6 +2065,8 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
             ("ctrl-←/→", "narrower / wider"),
             ("i a I A", "insert here / after / line ends"),
             ("o / O", "a line below / above"),
+            ("v", "visual selection"),
+            (":w / :q", "write / quit"),
             ("u / ctrl-z", "undo"),
             ("ctrl-y", "redo"),
             ("x", "delete a character"),

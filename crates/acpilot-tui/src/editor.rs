@@ -45,11 +45,12 @@ use std::time::Instant;
 
 /// Which mode the pane's keys are in.
 ///
-/// Two, because one is not enough: a pane that is always insert cannot move with
-/// `hjkl`, and a pane that is always normal cannot be typed into. Which spelling
-/// the commands take — Vim's, or a modeless editor's — is the keymap layer's
-/// question, which is the half of P6-5 still open; what the pane knows is only
-/// that one mode's keys are text and the other's are commands.
+/// Three, because one is not enough: a pane that is always insert cannot move with
+/// `hjkl`, a pane that is always normal cannot be typed into, and a pane with no
+/// visual mode cannot say which run a command is about. Which spelling the
+/// commands take — Vim's, or a modeless editor's — is the keymap layer's question,
+/// which is the half of P6-5 still open; what the pane knows is only that one
+/// mode's keys are text and the others' are commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     /// Keys are commands: motion, search, and the way into the others.
@@ -57,6 +58,8 @@ pub enum Mode {
     Normal,
     /// Keys are text.
     Insert,
+    /// Motions extend a selection instead of moving a bare caret.
+    Visual,
 }
 
 impl Mode {
@@ -66,6 +69,7 @@ impl Mode {
         match self {
             Self::Normal => "normal",
             Self::Insert => "insert",
+            Self::Visual => "visual",
         }
     }
 }
@@ -77,6 +81,8 @@ pub enum PromptKind {
     Find,
     /// `Ctrl-G` — a line and column, applied on Enter.
     Line,
+    /// `:` — an ex command, run by the app once Enter is pressed.
+    Command,
 }
 
 /// The one-line box the editor takes its next question in.
@@ -155,6 +161,19 @@ pub struct EditorPane {
     anchor: Option<usize>,
     /// Which mode the keys are in.
     mode: Mode,
+    /// The column a run of Up and Down keeps trying to reach.
+    ///
+    /// A property of the key sequence rather than of the caret: Vim and every
+    /// pointer editor remember the column you were on so that a walk through a
+    /// short line does not put you at its end and leave you there. Cleared by any
+    /// horizontal motion or non-motion command, because the next vertical walk
+    /// starts from wherever that put the caret.
+    goal: Option<usize>,
+    /// A `:` command Enter accepted, waiting for the app to run it.
+    ///
+    /// The pane parses no commands and sends no requests: `:w` and `:q` are the
+    /// app's, because a save goes through the daemon and leaving is the loop's.
+    command: Option<String>,
     /// The token the file was read with, so a save can say which version it replaces.
     ///
     /// Absent for a buffer that did not come from the daemon — the design pass's seed,
@@ -223,6 +242,8 @@ impl EditorPane {
             bracket: None,
             anchor: None,
             mode: Mode::Normal,
+            goal: None,
+            command: None,
             etag: None,
         };
         pane.document.set_caret(0);
@@ -453,16 +474,41 @@ impl EditorPane {
     /// Move the caret, clamped to the text, and scroll the least that shows it.
     ///
     /// A column past the end of the line lands at the line's end: arrows in a
-    /// terminal editor move the caret, they do not add spaces. There is no goal
-    /// column here either — remembering one across a run of Up and Down is a
-    /// property of the key sequence (P6-5), not of the caret.
+    /// terminal editor move the caret, they do not add spaces. A vertical move
+    /// remembers the column it started from, so walking through a short line and
+    /// back out returns to the column the walk began on instead of the short
+    /// line's end; a horizontal move forgets it.
     pub fn move_caret(&mut self, rows: i32, cols: i32) {
+        let goal = self.goal_for(rows, cols);
+        let at = self.moved(rows, cols, goal);
+        self.place(at);
+    }
+
+    /// The column a vertical move is trying to keep, and whether it is a vertical
+    /// move at all.
+    fn goal_for(&mut self, rows: i32, cols: i32) -> Option<usize> {
+        if rows != 0 && cols == 0 {
+            let column = self.caret().column;
+            Some(*self.goal.get_or_insert(column))
+        } else {
+            self.goal = None;
+            None
+        }
+    }
+
+    /// Where a motion lands, with a vertical move clamped to the target line.
+    fn moved(&self, rows: i32, cols: i32, goal: Option<usize>) -> LineColumn {
         let caret = self.caret();
         let lines = self.document.buffer().line_count();
         let line = step(caret.line, rows).min(lines.saturating_sub(1));
         let width = self.document.buffer().line_range(line).len();
-        let column = step(caret.column, cols).min(width);
-        self.place(LineColumn::new(line, column));
+        let column = if rows != 0 && cols == 0 {
+            goal.unwrap_or(caret.column)
+        } else {
+            step(caret.column, cols)
+        }
+        .min(width);
+        LineColumn::new(line, column)
     }
 
     /// Move a page at a time, keeping the caret's row on screen.
@@ -502,10 +548,36 @@ impl EditorPane {
         if self.prompt.is_some() {
             return;
         }
+        if self.mode == Mode::Visual {
+            self.mode = Mode::Normal;
+        }
+        self.goal = None;
         let at = self.offset_at(row, cell);
         self.anchor = Some(at);
         self.document
             .set_selections(Selections::new(vec![Selection::new(at, at)], 0));
+        self.rebuild();
+        self.message.clear();
+    }
+
+    /// Extend a selection to a Shift-click, anchoring it at the caret when there is
+    /// no selection yet.
+    ///
+    /// The anchor is the existing selection's start rather than its moving end, so
+    /// several Shift-clicks grow one run instead of restarting from where the last
+    /// one stopped.
+    pub fn extend_click(&mut self, row: usize, cell: usize) {
+        if self.prompt.is_some() {
+            return;
+        }
+        let anchor = self
+            .anchor
+            .or_else(|| self.selection().map(|range| range.start))
+            .unwrap_or_else(|| self.caret_offset());
+        let at = self.offset_at(row, cell);
+        self.anchor = Some(anchor);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, at)], 0));
         self.rebuild();
         self.message.clear();
     }
@@ -579,11 +651,90 @@ impl EditorPane {
         let text = self.document.buffer().slice(range);
         let lines = self.selected_lines();
         self.anchor = None;
+        self.goal = None;
+        if self.mode == Mode::Visual {
+            self.mode = Mode::Normal;
+        }
         let head = self.caret_offset();
         self.document.set_caret(head);
         self.rebuild();
         self.message = format!("copied {lines} line(s)");
         Some(text)
+    }
+
+    /// Enter visual mode, or leave it when it is already on.
+    ///
+    /// The anchor is the caret, so the first motion selects from where the person
+    /// was standing rather than from the start of the line.
+    pub fn toggle_visual(&mut self) {
+        if self.mode == Mode::Visual {
+            self.leave_visual();
+            return;
+        }
+        self.anchor = Some(self.caret_offset());
+        self.mode = Mode::Visual;
+        self.message = "visual · motions extend · y copies · d deletes".to_owned();
+    }
+
+    /// Leave visual mode, collapsing the selection at its moving end.
+    pub fn leave_visual(&mut self) {
+        self.anchor = None;
+        self.goal = None;
+        let head = self.caret_offset();
+        self.document.set_caret(head);
+        self.mode = Mode::Normal;
+        self.rebuild();
+        self.message = "normal".to_owned();
+    }
+
+    /// Move the caret in visual mode, growing the selection from the anchor.
+    pub fn extend_caret(&mut self, rows: i32, cols: i32) {
+        let anchor = self.anchor.unwrap_or_else(|| self.caret_offset());
+        let goal = self.goal_for(rows, cols);
+        let head = self.offset(self.moved(rows, cols, goal));
+        self.anchor = Some(anchor);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, head)], 0));
+        self.rebuild();
+        self.message = format!("{} line(s) selected", self.selected_lines());
+    }
+
+    /// Extend the selection a page at a time.
+    pub fn extend_page(&mut self, down: bool) {
+        let rows = i32::try_from(self.viewport.rows().saturating_sub(1)).unwrap_or(i32::MAX);
+        self.extend_caret(if down { rows } else { -rows }, 0);
+    }
+
+    /// Extend the selection to the start or end of the caret's line.
+    pub fn extend_line_edge(&mut self, end: bool) {
+        let anchor = self.anchor.unwrap_or_else(|| self.caret_offset());
+        let caret = self.caret();
+        let width = self.document.buffer().line_range(caret.line).len();
+        let head = self.offset(LineColumn::new(caret.line, if end { width } else { 0 }));
+        self.anchor = Some(anchor);
+        self.goal = None;
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, head)], 0));
+        self.rebuild();
+        self.message = format!("{} line(s) selected", self.selected_lines());
+    }
+
+    /// Delete what visual mode selected, in one undo step.
+    pub fn delete_selection(&mut self, now: Instant) -> bool {
+        if !self.has_selection() {
+            self.message = "nothing selected".to_owned();
+            return false;
+        }
+        let lines = self.selected_lines();
+        let edited = self.document.delete_forward(now);
+        if edited {
+            self.anchor = None;
+            self.goal = None;
+            self.mode = Mode::Normal;
+            self.settle();
+            self.message = format!("deleted {lines} line(s)");
+        }
+        edited
     }
 
     /// The character offset a pane cell names.
@@ -623,6 +774,7 @@ impl EditorPane {
         self.message = match mode {
             Mode::Insert => "insert · Esc leaves".to_owned(),
             Mode::Normal => "normal".to_owned(),
+            Mode::Visual => "visual · motions extend".to_owned(),
         };
     }
 
@@ -736,13 +888,16 @@ impl EditorPane {
     pub fn line_edge(&mut self, end: bool) {
         let caret = self.caret();
         let width = self.document.buffer().line_range(caret.line).len();
+        self.goal = None;
         self.place(LineColumn::new(caret.line, if end { width } else { 0 }));
     }
 
     /// Put the caret somewhere and show it.
     ///
-    /// A motion collapses a selection rather than extending it: dragging is how this
-    /// pane selects, and Shift-extension is the keymap layer's to add (P6-5).
+    /// A motion collapses a selection rather than extending it: a drag and visual
+    /// mode are how this pane selects, and a bare motion is how a selection is
+    /// abandoned. The goal column is the caller's, because a vertical move keeps it
+    /// across the `place` calls in a walk.
     fn place(&mut self, at: LineColumn) {
         let offset = self.offset(at);
         self.anchor = None;
@@ -778,6 +933,17 @@ impl EditorPane {
     pub fn go_to_line(&mut self) {
         self.open(PromptKind::Line, String::new());
         self.message = "line[:column]".to_owned();
+    }
+
+    /// Open the ex command box.
+    pub fn open_command(&mut self) {
+        self.open(PromptKind::Command, String::new());
+        self.message = ":".to_owned();
+    }
+
+    /// Take the command Enter accepted, if one is waiting for the app.
+    pub fn take_command(&mut self) -> Option<String> {
+        self.command.take()
     }
 
     /// Open a prompt, remembering where the caret was.
@@ -854,6 +1020,16 @@ impl EditorPane {
                     false
                 }
             },
+            PromptKind::Command => {
+                let text = prompt.text.trim().to_owned();
+                if text.is_empty() {
+                    self.message.clear();
+                } else {
+                    self.message = format!(":{text}");
+                    self.command = Some(text);
+                }
+                true
+            }
         }
     }
 
@@ -1489,6 +1665,68 @@ mod tests {
             .collect();
         assert!(states.contains(&State::CurrentMatch), "{states:?}");
         assert!(states.contains(&State::Match), "{states:?}");
+    }
+
+    #[test]
+    fn visual_mode_extends_with_the_motions_and_the_commands_are_about_the_run() {
+        let mut copying = pane(&["one", "two", "three"], (0, 0));
+        copying.toggle_visual();
+        assert_eq!(copying.mode(), Mode::Visual);
+        copying.extend_caret(1, 0);
+        assert_eq!(copying.selection(), Some(0..4), "the line and its newline");
+        assert_eq!(copying.yank().as_deref(), Some("one\n"));
+        assert_eq!(copying.mode(), Mode::Normal, "y ends the run");
+        assert!(!copying.has_selection());
+
+        let mut deleting = pane(&["one", "two", "three"], (0, 0));
+        deleting.toggle_visual();
+        deleting.extend_caret(1, 0);
+        assert!(deleting.delete_selection(Instant::now()));
+        assert_eq!(text(&deleting), "two\nthree");
+        assert_eq!(deleting.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn the_goal_column_survives_a_short_line_and_a_horizontal_motion_clears_it() {
+        let mut pane = pane(&["abcdef", "x", "abcdef"], (0, 4));
+        pane.move_caret(1, 0);
+        assert_eq!(
+            pane.caret(),
+            LineColumn::new(1, 1),
+            "clamped to the short line"
+        );
+        pane.move_caret(1, 0);
+        assert_eq!(pane.caret(), LineColumn::new(2, 4), "the column came back");
+
+        pane.move_caret(0, 1);
+        pane.move_caret(-1, 0);
+        pane.move_caret(-1, 0);
+        assert_eq!(
+            pane.caret(),
+            LineColumn::new(0, 5),
+            "a horizontal motion made the new column the goal"
+        );
+    }
+
+    #[test]
+    fn a_shift_click_grows_one_selection_from_its_start() {
+        let mut pane = pane(&["abcdef", "ghij"], (0, 1));
+        pane.extend_click(1, 2);
+        assert_eq!(pane.selection(), Some(1..9));
+        pane.extend_click(0, 3);
+        assert_eq!(pane.selection(), Some(1..3), "the anchor stayed put");
+    }
+
+    #[test]
+    fn the_command_box_hands_the_text_to_the_app() {
+        let mut pane = pane(&["one"], (0, 0));
+        pane.open_command();
+        for character in "wq".chars() {
+            pane.prompt_insert(character);
+        }
+        assert!(pane.prompt_apply());
+        assert_eq!(pane.take_command().as_deref(), Some("wq"));
+        assert!(pane.take_command().is_none(), "one command per Enter");
     }
 
     #[test]

@@ -36,6 +36,23 @@ binds its profile at connect. Switching profiles needs `GET /v1/profiles`, which
 a single-profile daemon does not serve yet (P4-8), so the picker shows the one the
 address names and says why it is a label rather than a choice.
 
+## Editing
+
+The editor pane edits the daemon's files, not a browser filesystem. It lists a
+directory with `GET /v1/files/list`, opens a file with `GET /v1/files`, and writes
+it back with `PUT /v1/files` carrying the `etag` it read as `if_match`. A file that
+changed on disk while the buffer was open is therefore a `409` the page shows as
+"nothing was overwritten", never a silent save. The diff view is
+`@codemirror/merge` over the version on disk and the buffer, and the git marks the
+read route returns are reported under the pane.
+
+Highlighting is `@codemirror/lang-*`, the fallback the plan names: the page is one
+inlined HTML file, and a tree-sitter wasm grammar would be a second asset the
+daemon does not serve. The TUI draws tree-sitter's spans; the web pane draws
+Lezer's, for JavaScript/TypeScript, JSON, Markdown, Rust and Python, and plain
+text for anything else. Language servers are still the daemon's job: the browser
+has no bridge to attach `@codemirror/lsp-client` to yet (P7).
+
 ## Pieces
 
 | Need | Choice | Why |
@@ -68,7 +85,7 @@ and `Referrer-Policy: no-referrer` so a link out cannot name the daemon.
 
 ## Status
 
-The Svelte app exists and is what ships, with the editor still to come.
+The Svelte app exists and is what ships, editor included: it reads and writes a file through the daemon's files routes and diffs the buffer against the version on disk.
 `web/` is Svelte 5 + Vite + TypeScript; `npm run build` emits **one HTML file**
 into `crates/acpilot-web/assets/`, with its script and stylesheet inlined, and
 `acpilotd` serves that at `/` — and at `/app`, the spelling existing links and the
@@ -179,8 +196,8 @@ Between the command and the page there is one step people miss: this daemon is t
 same one the CLI and the TUI talk to, so `/` shows the build that is running right
 now rather than a version baked into a bundle weeks ago.
 
-Still open from the web phase: the CodeMirror editor, and
-creating a pane from the page (it attaches to panes, and with
-a session open it now holds the id `POST /v1/terminals` wants, but it makes no such
+Still open from the web phase: attaching a language server (the daemon's WS
+bridge is P7), and creating a pane from the page (it attaches to panes, and with a
+session open it now holds the id `POST /v1/terminals` wants, but it makes no such
 request). What exists now is the shape they hang on — embedded, self-serving, one
 file, no asset directory to lose.

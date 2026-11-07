@@ -68,6 +68,12 @@ export type PromptAccepted = components['schemas']['PromptAccepted'];
 /** One row of `GET /v1/terminals`: a pane a client may attach to. */
 export type TerminalSummary = components['schemas']['TerminalSummary'];
 
+/** One file, as `GET /v1/files` and `PUT /v1/files` answer it. */
+export type FileContent = components['schemas']['FileContent'];
+
+/** One row of `GET /v1/files/list`: a file or a directory. */
+export type FileEntry = components['schemas']['FileEntry'];
+
 /** One row of `GET /v1/workspaces`: a directory this daemon may serve. */
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 
@@ -387,6 +393,64 @@ export async function promptSession(
     await client.POST('/v1/sessions/{id}/prompt', {
       params: { path: { id } },
       body: { text, idempotency_key: newIdempotencyKey() },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `GET /v1/files?path=` — read one UTF-8 file.
+ *
+ * A directory is a `409` naming the list route rather than an empty text: the
+ * page has a browser, and drawing a directory as a zero-byte file would hide
+ * every name inside it.
+ */
+export async function readFile(
+  path: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<FileContent> {
+  return answered(
+    await client.GET('/v1/files', {
+      params: { query: { path } },
+      headers: auth(token),
+      signal,
+    }),
+  );
+}
+
+/** `GET /v1/files/list?path=` — one directory's rows, workspace-relative. */
+export async function listDirectory(
+  path: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<FileEntry[]> {
+  return answered(
+    await client.GET('/v1/files/list', {
+      params: { query: { path } },
+      headers: auth(token),
+      signal,
+    }),
+  );
+}
+
+/**
+ * `PUT /v1/files` — write a buffer back.
+ *
+ * `ifMatch` is the `etag` the buffer was read at, and it is the whole concurrency
+ * story: the daemon answers `409` rather than overwriting text somebody else
+ * wrote while this buffer was open. There is no "force" here on purpose — a
+ * forced write is the silent overwrite the route exists to prevent.
+ */
+export async function writeFile(
+  path: string,
+  text: string,
+  ifMatch: string,
+  token: string,
+): Promise<FileContent> {
+  return answered(
+    await client.PUT('/v1/files', {
+      body: { path, text, if_match: ifMatch },
       headers: auth(token),
     }),
   );

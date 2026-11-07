@@ -932,3 +932,154 @@ a:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/*
+ * The editor pane. The CodeMirror surface takes its height from this box rather
+ * than from its content, so a long file scrolls inside the pane instead of
+ * pushing the terminals off the page. The browser is a list of names, not a
+ * tree: the daemon's listing route answers one directory at a time, and a tree
+ * that kept its own expanded set would be state the address does not carry.
+ */
+.editor-panel {
+  margin-top: 1.5rem;
+}
+
+.editor-panel > h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.editor {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.editor-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-bar button {
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.editor-bar button:disabled {
+  opacity: 0.55;
+}
+
+.editor-bar button.primary {
+  border-color: var(--accent);
+  color: var(--accent-high);
+}
+
+.editor-path {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-spacer {
+  flex: 1;
+}
+
+.dirty {
+  color: var(--warning);
+  font-size: 0.7rem;
+}
+
+.file-browser {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.file-open {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.file-open input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.file-where {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.file-rows {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.file-rows li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.file-rows button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.1rem 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.file-rows button[data-dir='true'] {
+  color: var(--accent-high);
+}
+
+.file-status {
+  font-size: 0.7rem;
+  color: var(--warning);
+}
+
+.editor-host,
+.diff-host {
+  height: 26rem;
+  overflow: auto;
+}
+
+.editor-host .cm-editor,
+.diff-host .cm-mergeView {
+  height: 100%;
+}
+
+@media (max-width: 60rem) {
+  .editor-host,
+  .diff-host {
+    height: 20rem;
+  }
+}

@@ -24,6 +24,7 @@
     type WorkspaceSummary,
   } from './api';
   import { DEFAULT_PROFILE, parseRoute, routePath, scopeSessions, type Route } from './routes';
+  import Editor from './Editor.svelte';
   import Session from './Session.svelte';
   import Terminal from './Terminal.svelte';
   import { paneWhere, panesFor } from './terminals';
@@ -655,6 +656,11 @@
         </section>
       </div>
 
+      <section class="editor-panel" aria-labelledby="editor-title">
+        <h3 id="editor-title">Editor</h3>
+        <Editor {token} />
+      </section>
+
       <section class="terminals" aria-labelledby="terminals-title">
         <div class="stats-head">
           <h3 id="terminals-title">Terminals</h3>
@@ -738,10 +744,6 @@
         {/if}
       </form>
 
-      <p class="note">
-        The editor arrives with the rest of the web phase (P11-3) — until then the
-        TUI and the desktop app are the cockpit for editing.
-      </p>
     {/if}
 
     {#if quitNote}

@@ -213,6 +213,11 @@ beforeEach(() => {
     if (route === '/v1/terminals') {
       return json([PANE, ORPHAN]);
     }
+    // The editor lists the workspace root when it mounts. A test that opens a
+    // file answers the read route itself; an empty root is enough here.
+    if (route === '/v1/files/list') {
+      return json([]);
+    }
     return new Response('not found', { status: 404 });
   });
   vi.stubGlobal('fetch', plainFetch(fetchMock as unknown as PlainFetch));
@@ -248,7 +253,10 @@ describe('a remembered token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(target.textContent).toContain('a session that exists');
     expect(target.textContent).toContain('v1');
+    // The load's seven calls plus the editor's listing, which is a call the page
+    // makes on its own because the pane is part of the page rather than a route.
     expect(sentTokens()).toEqual([
+      'Bearer stored',
       'Bearer stored',
       'Bearer stored',
       'Bearer stored',
@@ -642,6 +650,7 @@ describe('no token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
     expect(sentTokens()).toEqual([
+      'Bearer typed',
       'Bearer typed',
       'Bearer typed',
       'Bearer typed',

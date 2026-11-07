@@ -93,9 +93,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
         draw_grep(frame, app, body);
     }
     if app.permission_card
-        && let Some(request) = app.permissions.first()
+        && let Some(request) = app.permissions.get(app.permission_at)
     {
-        draw_permission(frame, request, app.diff.as_ref(), body, &app.theme);
+        draw_permission(
+            frame,
+            request,
+            app.permission_at + 1,
+            app.permissions.len(),
+            app.diff.as_ref(),
+            body,
+            &app.theme,
+        );
     }
     if app.review.is_some() {
         draw_review(frame, app, body);
@@ -2276,25 +2284,50 @@ fn git_colour(status: Option<acpilot_proto::file::FileChange>, theme: &Theme) ->
 fn draw_permission(
     frame: &mut Frame,
     request: &PermissionRequest,
+    at: usize,
+    total: usize,
     diff: Option<&Diff>,
     area: Rect,
     theme: &Theme,
 ) {
+    // The preview is the write's own: a read or a terminal has a detail, not a
+    // diff, and showing the seeded write beside a shell's question would be a
+    // preview of an edit nobody asked about.
+    let diff =
+        diff.filter(|_| request.kind == acpilot_proto::permission::PermissionKind::FileWrite);
     let card = if diff.is_some() {
         middle(area, 84, 76)
     } else {
         centred(area)
     };
     frame.render_widget(Clear, card);
+    let title = if total > 1 {
+        format!(" Permission · {at}/{total} ")
+    } else {
+        " Permission needed ".to_owned()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Permission needed ")
+        .title(title)
         .border_style(Style::default().fg(theme.warning()));
     let room = usize::from(card.height.saturating_sub(2)).saturating_sub(3);
-    let mut lines = vec![Line::from(Span::styled(
-        format!("{} · {}", request.session_id, request.title),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "{} · {} · {}",
+                permission_kind_label(request.kind),
+                request.session_id,
+                request.title
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        // Each question in a queue names its place, so `Tab` has something to
+        // count and an answer says which of them it was.
+        Line::from(Span::styled(
+            format!("request {at} of {total}"),
+            Style::default().fg(theme.text_muted()),
+        )),
+    ];
     // The detail is prose with newlines in it, not one long line: a request that
     // describes three changes describes them on three rows.
     lines.extend(
@@ -2331,7 +2364,7 @@ fn draw_permission(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "y allow once · a allow always · n deny · Esc later",
+        permission_hint(request, at, total),
         Style::default().fg(theme.warning()),
     )));
     frame.render_widget(
@@ -2340,6 +2373,46 @@ fn draw_permission(
             .wrap(Wrap { trim: false }),
         card,
     );
+}
+
+/// What the card calls the tool the request is about.
+fn permission_kind_label(kind: acpilot_proto::permission::PermissionKind) -> &'static str {
+    use acpilot_proto::permission::PermissionKind;
+    match kind {
+        PermissionKind::FileWrite => "file write",
+        PermissionKind::FileRead => "file read",
+        PermissionKind::Terminal => "terminal",
+        PermissionKind::ToolCall => "tool call",
+        PermissionKind::Other => "request",
+    }
+}
+
+/// The keys the card is actually offering, built from the request's own options.
+///
+/// A card that printed a fixed line would advertise `a allow always` on a request
+/// the wire sent with no always option, and a key that is drawn but does nothing
+/// is worse than one that is not drawn.
+fn permission_hint(request: &PermissionRequest, at: usize, total: usize) -> String {
+    if request.options.is_empty() {
+        return "no answer this build can give · Esc later".to_owned();
+    }
+    let mut parts: Vec<String> = request
+        .options
+        .iter()
+        .map(|option| {
+            format!(
+                "{} {}",
+                crate::app::option_key(*option),
+                crate::app::option_label(*option)
+            )
+        })
+        .collect();
+    if total > 1 {
+        parts.push(format!("Tab next · {at}/{total}"));
+    }
+    parts.push("Esc later".to_owned());
+    parts.push("every answer is audited".to_owned());
+    parts.join(" · ")
 }
 
 /// The diff review: the agent's edit, hunk by hunk, with a decision on each.
@@ -2649,6 +2722,23 @@ mod tests {
         text
     }
 
+    fn permission(
+        id: &str,
+        kind: PermissionKind,
+        options: Vec<PermissionOption>,
+        title: &str,
+    ) -> PermissionRequest {
+        PermissionRequest {
+            id: id.to_owned(),
+            session_id: "s1".to_owned(),
+            kind,
+            title: title.to_owned(),
+            detail: "detail".to_owned(),
+            options,
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }
+    }
+
     fn app_with_session() -> App {
         let mut app = App::new("http://127.0.0.1:7777");
         app.connected = true;
@@ -2686,6 +2776,64 @@ mod tests {
         let mut app = app_with_session();
         app.entries.clear();
         assert!(render(&mut app).contains("no transcript yet"));
+    }
+
+    #[test]
+    fn the_permission_card_names_the_tool_and_the_queue() {
+        let mut app = app_with_session();
+        app.permissions.push(permission(
+            "p1",
+            PermissionKind::Terminal,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Run make",
+        ));
+        app.permissions.push(permission(
+            "p2",
+            PermissionKind::FileWrite,
+            vec![PermissionOption::AllowAlways, PermissionOption::Deny],
+            "Write src/main.rs",
+        ));
+        app.permission_card = true;
+        app.permission_at = 1;
+        let text = render(&mut app);
+        assert!(text.contains("Permission · 2/2"), "{text}");
+        assert!(text.contains("request 2 of 2"), "{text}");
+        assert!(text.contains("file write"), "{text}");
+        assert!(text.contains("a allow always · this session"), "{text}");
+        assert!(
+            !text.contains("y allow once"),
+            "the request does not offer it: {text}"
+        );
+        // The card is narrow enough to wrap its footer, so the sentence is read
+        // as its two words rather than as one line the buffer split.
+        assert!(text.contains("every answer"), "{text}");
+        assert!(text.contains("audited"), "{text}");
+    }
+
+    #[test]
+    fn the_card_is_drawn_over_a_streaming_transcript() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::Busy;
+        app.permissions.push(permission(
+            "p1",
+            PermissionKind::FileWrite,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Write src/main.rs",
+        ));
+        app.permission_card = true;
+        app.apply(crate::backend::Update::Event(
+            acpilot_proto::event::SessionEvent {
+                seq: 1,
+                session_id: "s1".to_owned(),
+                kind: acpilot_proto::event::SessionEventKind::MessageChunk,
+                at: "2026-10-24T00:00:00Z".to_owned(),
+                payload: serde_json::json!({ "role": "assistant", "content": "still arriving" }),
+            },
+        ));
+        let text = render(&mut app);
+        assert!(text.contains("Permission needed"), "{text}");
+        assert!(text.contains("Write src/main.rs"), "{text}");
+        assert!(text.contains("y allow once"), "{text}");
     }
 
     #[test]

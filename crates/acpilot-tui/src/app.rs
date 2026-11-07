@@ -247,6 +247,8 @@ pub enum MenuAction {
     NewSession,
     /// Cancel the turn in flight.
     Cancel,
+    /// Show a permission request that was put aside with `Esc`.
+    AnswerPermission,
     /// Put a panel on a side of the editor.
     ///
     /// One row per panel per side rather than a toggle, because the row is a place: a
@@ -441,6 +443,13 @@ pub const MENUS: &[MenuDef] = &[
                 label: "Cancel Turn",
                 keys: "",
                 action: MenuAction::Cancel,
+            },
+            // `Esc` puts the card away, and a question put away has to be
+            // reachable again: this row is where a person finds it.
+            MenuRow {
+                label: "Answer Permission…",
+                keys: "",
+                action: MenuAction::AnswerPermission,
             },
         ],
     },
@@ -1909,6 +1918,12 @@ pub struct App {
     pub permissions: Vec<PermissionRequest>,
     /// Whether the permission card is up.
     pub permission_card: bool,
+    /// Which pending request the card is showing.
+    ///
+    /// An index rather than always the first: an agent can have two questions
+    /// waiting, and a card that only ever answered the oldest would be a queue
+    /// nobody could see the end of.
+    pub permission_at: usize,
     /// The prompt being composed.
     pub input: String,
     /// The caret in [`App::input`], counted in characters from the start.
@@ -2110,6 +2125,7 @@ impl App {
             last_seq: 0,
             permissions: Vec::new(),
             permission_card: false,
+            permission_at: 0,
             input: String::new(),
             cursor: 0,
             completion: None,
@@ -2877,14 +2893,27 @@ impl App {
             Update::Event(event) => self.apply_event(event),
             Update::Permissions(pending) => {
                 let was_empty = self.permissions.is_empty();
+                // Point at the same request when the list is re-polled under it: a
+                // refresh must not move the card to a stranger while it is being
+                // read. The one that was answered is gone, so the next takes its
+                // place.
+                let current = self
+                    .permissions
+                    .get(self.permission_at)
+                    .map(|request| request.id.clone());
                 self.permissions = pending;
+                self.permission_at = current
+                    .and_then(|id| self.permissions.iter().position(|request| request.id == id))
+                    .unwrap_or(0);
                 // A card appears when work arrives, not when the list is merely
                 // refreshed under one that is already up.
                 if was_empty && !self.permissions.is_empty() {
                     self.permission_card = true;
+                    self.permission_at = 0;
                 }
                 if self.permissions.is_empty() {
                     self.permission_card = false;
+                    self.permission_at = 0;
                 }
             }
             Update::Prompted {
@@ -3417,19 +3446,51 @@ impl App {
         }
 
         if self.permission_card && !self.permissions.is_empty() {
-            let option = match key.code {
-                KeyCode::Char('y') => Some(PermissionOption::AllowOnce),
-                KeyCode::Char('a') => Some(PermissionOption::AllowAlways),
-                KeyCode::Char('n') => Some(PermissionOption::Deny),
-                KeyCode::Esc => {
-                    self.permission_card = false;
+            let Some(request) = self.permissions.get(self.permission_at).cloned() else {
+                self.permission_card = false;
+                return None;
+            };
+            match key.code {
+                // Tab walks the requests that are waiting, because a question does
+                // not stop the world: an agent can ask about two files at once.
+                KeyCode::Tab => {
+                    self.permission_at = (self.permission_at + 1) % self.permissions.len();
+                    self.status = format!(
+                        "request {} of {}",
+                        self.permission_at + 1,
+                        self.permissions.len()
+                    );
                     return None;
                 }
-                _ => None,
-            };
-            if let Some(option) = option {
-                let id = self.permissions[0].id.clone();
-                return Some(Request::Resolve { id, option });
+                KeyCode::BackTab => {
+                    self.permission_at =
+                        (self.permission_at + self.permissions.len() - 1) % self.permissions.len();
+                    self.status = format!(
+                        "request {} of {}",
+                        self.permission_at + 1,
+                        self.permissions.len()
+                    );
+                    return None;
+                }
+                KeyCode::Esc => {
+                    self.permission_card = false;
+                    self.status = format!(
+                        "permission put aside · {} waiting · Session → Answer Permission",
+                        self.permissions.len()
+                    );
+                    return None;
+                }
+                KeyCode::Char(character) => {
+                    // Only the answers this request actually offers, with the key
+                    // the card draws: a card that advertised an option the wire did
+                    // not send would answer with something nobody could choose.
+                    if let Some(option) = option_for_key(character, &request.options) {
+                        let message =
+                            format!("{} · {} · recorded", option_label(option), request.title);
+                        return self.answer_permission(option, message);
+                    }
+                }
+                _ => {}
             }
             // The card is modal: everything else waits until it is answered.
             return None;
@@ -5135,6 +5196,7 @@ impl App {
                     .map(|agent| Request::New(agent.id.clone()));
             }
             MenuAction::Cancel => return Some(Request::Cancel),
+            MenuAction::AnswerPermission => self.reopen_permission(),
             MenuAction::Quit => {
                 self.should_quit = true;
                 return Some(Request::Quit);
@@ -5829,13 +5891,44 @@ impl App {
     /// was answered on another client, or before the daemon has polled, and saying
     /// so is better than an answer nobody asked for.
     fn resolve_review(&mut self, option: PermissionOption, message: String) -> Option<Request> {
-        let Some(id) = self.permissions.first().map(|request| request.id.clone()) else {
+        self.answer_permission(option, message)
+    }
+
+    /// Bring back a permission request put aside with `Esc`.
+    ///
+    /// The card is dismissible because a question can arrive while a person is
+    /// reading something else, and a modal that could not be put down would be an
+    /// interruption with no way out. Put down is not answered, though: the queue is
+    /// still there, and this is the way back to it.
+    fn reopen_permission(&mut self) {
+        if self.permissions.is_empty() {
+            self.notice("no permission is waiting for an answer");
+            return;
+        }
+        self.permission_card = true;
+        self.status = format!("{} permission question(s) waiting", self.permissions.len());
+    }
+
+    /// Answer the request the card is showing, and move the card to the next one.
+    ///
+    /// The answer leaves the list here rather than waiting for the next poll: a
+    /// question that was just answered should not be drawn again while the daemon
+    /// is being told, and the card belongs to the next one if there is one.
+    fn answer_permission(&mut self, option: PermissionOption, message: String) -> Option<Request> {
+        let Some(request) = self.permissions.get(self.permission_at).cloned() else {
             self.notice(&format!("{message} · nothing was waiting for an answer"));
             return None;
         };
-        self.permission_card = false;
+        self.permissions.remove(self.permission_at);
+        if self.permission_at >= self.permissions.len() {
+            self.permission_at = self.permissions.len().saturating_sub(1);
+        }
+        self.permission_card = !self.permissions.is_empty();
         self.status = message;
-        Some(Request::Resolve { id, option })
+        Some(Request::Resolve {
+            id: request.id,
+            option,
+        })
     }
 
     /// Open a terminal for the open session, or leave the one that is open.
@@ -6181,6 +6274,45 @@ fn control_byte(code: KeyCode) -> Option<Vec<u8>> {
 /// The daemon sends ACP's `ContentBlock`, which is an object with a `type` and a
 /// `text` field, not a bare string. Reading only the string form is how a
 /// transcript renders empty while the wire looks correct.
+/// The key the permission card offers for an answer.
+///
+/// `y` and `n` are the yes and no the card has always used; `a` is the one that
+/// lasts, because "allow once" and "allow always" cannot share a letter.
+#[must_use]
+pub const fn option_key(option: PermissionOption) -> char {
+    match option {
+        PermissionOption::AllowOnce => 'y',
+        PermissionOption::AllowAlways => 'a',
+        PermissionOption::Deny => 'n',
+    }
+}
+
+/// What the card calls an answer.
+///
+/// `AllowAlways` says "this session" because that is what the wire's variant
+/// means: the broker applies it to matching requests for the rest of the session,
+/// not to every future one.
+#[must_use]
+pub const fn option_label(option: PermissionOption) -> &'static str {
+    match option {
+        PermissionOption::AllowOnce => "allow once",
+        PermissionOption::AllowAlways => "allow always · this session",
+        PermissionOption::Deny => "deny",
+    }
+}
+
+/// The answer a key names, when the request offers it.
+///
+/// The request's own list is the gate: a request with no always option has no `a`,
+/// and pressing one is not an answer the daemon could apply.
+#[must_use]
+pub fn option_for_key(key: char, options: &[PermissionOption]) -> Option<PermissionOption> {
+    options
+        .iter()
+        .copied()
+        .find(|option| option_key(*option) == key)
+}
+
 fn text_of(content: &serde_json::Value) -> Option<&str> {
     content
         .as_str()
@@ -6424,6 +6556,105 @@ mod tests {
             .expect("a context track");
         assert_eq!(track.fill, Some(0.5), "the ratio is computed once, here");
         assert_eq!(track.text, "16.4k / 32.8k");
+    }
+
+    #[test]
+    fn escape_puts_the_card_away_and_the_menu_brings_it_back() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Permissions(vec![PermissionRequest {
+            id: "p1".to_owned(),
+            session_id: "s1".to_owned(),
+            kind: acpilot_proto::permission::PermissionKind::Terminal,
+            title: "Run make".to_owned(),
+            detail: "make check".to_owned(),
+            options: vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }]));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.permission_card, "the card is down");
+        assert_eq!(app.permissions.len(), 1, "and the question is not answered");
+        assert!(app.status.contains("Answer Permission"), "{}", app.status);
+
+        app.run_menu(MenuAction::AnswerPermission);
+        assert!(app.permission_card, "the way back");
+    }
+
+    #[test]
+    fn the_card_offers_only_the_answers_the_request_sent() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.apply(Update::Permissions(vec![PermissionRequest {
+            id: "p1".to_owned(),
+            session_id: "s1".to_owned(),
+            kind: acpilot_proto::permission::PermissionKind::FileWrite,
+            title: "Write a file".to_owned(),
+            detail: String::new(),
+            options: vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }]));
+        app.focus = Focus::Prompt;
+
+        // The request has no always option, so `a` is not an answer either.
+        assert_eq!(app.handle_key(key(KeyCode::Char('a'))), None);
+        assert_eq!(app.permissions.len(), 1, "nothing was answered");
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('n'))),
+            Some(Request::Resolve {
+                id: "p1".to_owned(),
+                option: PermissionOption::Deny,
+            })
+        );
+    }
+
+    #[test]
+    fn tab_walks_the_questions_and_answers_the_one_it_shows() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        let request = |id: &str| PermissionRequest {
+            id: id.to_owned(),
+            session_id: "s1".to_owned(),
+            kind: acpilot_proto::permission::PermissionKind::FileWrite,
+            title: format!("write {id}"),
+            detail: String::new(),
+            options: vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        };
+        app.apply(Update::Permissions(vec![request("p1"), request("p2")]));
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.permission_at, 1, "the second question is on show");
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::Resolve {
+                id: "p2".to_owned(),
+                option: PermissionOption::AllowOnce,
+            }),
+            "the answer is about the request the card is showing"
+        );
+        assert_eq!(app.permissions.len(), 1);
+        assert!(app.permission_card, "one question is still waiting");
+        assert_eq!(app.permission_at, 0);
+    }
+
+    #[test]
+    fn a_streamed_chunk_does_not_take_the_question_away() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.apply(Update::Permissions(vec![PermissionRequest {
+            id: "p1".to_owned(),
+            session_id: "s1".to_owned(),
+            kind: acpilot_proto::permission::PermissionKind::Terminal,
+            title: "Run make".to_owned(),
+            detail: "make check".to_owned(),
+            options: vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }]));
+        app.apply_event(event(
+            1,
+            SessionEventKind::MessageChunk,
+            serde_json::json!({ "role": "assistant", "content": "still thinking" }),
+        ));
+        assert!(app.permission_card, "a turn in flight does not dismiss it");
+        assert_eq!(app.permissions.len(), 1);
+        assert_eq!(app.entries[0].text, "still thinking");
     }
 
     #[test]

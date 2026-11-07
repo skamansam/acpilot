@@ -191,6 +191,17 @@ the daemon's walk, under the same ignore rules as the tree — with the arrows t
 choose and `Enter` or `Tab` to take one; an answer about a word the caret has left
 is dropped. `j`/`k` choose in the session list, and `c` cancels the turn in flight.
 
+A permission request is a card over the panes, because it is a question that stops
+the agent until it is answered. It names the tool (`file write`, `terminal`, …),
+the session and the one-line title, lists only the answers the request actually
+sent — `y` allow once, `a` always for this session, `n` deny — and previews the
+edit when the question is a write. Two agents can ask at once: the title says
+`2/3` and `Tab`/`Shift-Tab` walk the queue, answering the one on show and leaving
+the card up while another waits. `Esc` answers later without dropping the
+question, and every answer is recorded by the broker's audit log with who decided
+it. The card is drawn over a streaming transcript as well, because a turn in
+flight is exactly when an agent asks.
+
 A menu bar across the top (`F9`) names every pane and the client's own commands as
 rows, each row drawn with the chord that runs it from anywhere — a pane's own keys
 are named in the pane, not in the bar — with **About** under Help: version, licence,

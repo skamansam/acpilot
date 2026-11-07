@@ -97,7 +97,7 @@ the toast.
 | --- | --- | --- |
 | Menu bar, About | real, and every row is an existing path | — |
 | Sessions, transcript, composer | real, over the daemon; the transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and a streaming cursor, and the composer is multiline with `@path` completion from the daemon's walk | — |
-| Permission card | real answer path, seeded diff preview | P6-8 |
+| Permission card | real: the request's own title, kind and session, a preview of the write when it is one, one row per option the request actually sent (`y` once, `a` always for the session, `n` deny), `Tab`/`Shift-Tab` between questions that are waiting, and `Esc` to answer later — the card is drawn over the transcript while it streams, because a turn in flight is exactly when an agent asks | — |
 | Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
 | Command palette, which-key, toast | real | — |
@@ -127,6 +127,7 @@ the toast.
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
+| permission card | `y` allow once · `a` allow always for this session · `n` deny, only for the options the request sent · `Tab`/`Shift-Tab` the next/previous question · `Esc` answer later, and **Session → Answer Permission…** brings the card back |
 
 Every key in the `anywhere` row and every key in the editor's two rows comes from
 `crates/acpilot-tui/src/keymap.rs`, not from a `match` arm — that is what makes the

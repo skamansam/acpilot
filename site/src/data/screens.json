@@ -6754,7 +6754,7 @@
           },
           {
             "column": 11,
-            "text": "s1 · Write crates/acpilot-tui/src/app.rs",
+            "text": "file write · s1 · Write crates/acpilot-tui/src/app.rs",
             "style": 28
           },
           {
@@ -6781,8 +6781,8 @@
           },
           {
             "column": 11,
-            "text": "+ 1 000 lines of scrollback                                                                       ",
-            "style": 1
+            "text": "request 1 of 1",
+            "style": 3
           },
           {
             "column": 109,
@@ -6813,7 +6813,7 @@
           },
           {
             "column": 11,
-            "text": "+ F2 copy mode                                                                                    ",
+            "text": "+ 1 000 lines of scrollback                                                                       ",
             "style": 1
           },
           {
@@ -6840,7 +6840,7 @@
           },
           {
             "column": 11,
-            "text": "+ a picker when a session has several terminals                                                   ",
+            "text": "+ F2 copy mode                                                                                    ",
             "style": 1
           },
           {
@@ -6876,6 +6876,11 @@
             "style": 6
           },
           {
+            "column": 11,
+            "text": "+ a picker when a session has several terminals                                                   ",
+            "style": 1
+          },
+          {
             "column": 109,
             "text": "│",
             "style": 6
@@ -6884,6 +6889,33 @@
             "column": 110,
             "text": "d, and",
             "style": 15
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 1,
+            "text": "   ▸ acpi",
+            "style": 1
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
           },
           {
             "column": 119,
@@ -6931,7 +6963,7 @@
           },
           {
             "column": 1,
-            "text": "   ▸ acpi",
+            "text": " ▸ docs",
             "style": 1
           },
           {
@@ -6942,43 +6974,6 @@
           {
             "column": 13,
             "text": "    pub exit: Option<Option<i32>>,                                                              ",
-            "style": 1
-          },
-          {
-            "column": 109,
-            "text": "│",
-            "style": 6
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 1,
-            "text": " ▸ docs",
-            "style": 1
-          },
-          {
-            "column": 10,
-            "text": "│",
-            "style": 6
-          },
-          {
-            "column": 11,
-            "text": "+ ",
-            "style": 10
-          },
-          {
-            "column": 13,
-            "text": "    /// Following the program, or reading behind it.                                            ",
             "style": 1
           },
           {
@@ -7015,7 +7010,7 @@
           },
           {
             "column": 13,
-            "text": "    pub mode: PaneMode,                                                                         ",
+            "text": "    /// Following the program, or reading behind it.                                            ",
             "style": 1
           },
           {
@@ -7052,7 +7047,7 @@
           },
           {
             "column": 13,
-            "text": "    /// How many lines behind the live screen the view sits.                                    ",
+            "text": "    pub mode: PaneMode,                                                                         ",
             "style": 1
           },
           {
@@ -7089,6 +7084,38 @@
           },
           {
             "column": 13,
+            "text": "    /// How many lines behind the live screen the view sits.                                    ",
+            "style": 1
+          },
+          {
+            "column": 109,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 10,
+            "text": "│",
+            "style": 6
+          },
+          {
+            "column": 11,
+            "text": "+ ",
+            "style": 10
+          },
+          {
+            "column": 13,
             "text": "    pub scroll: usize,                                                                          ",
             "style": 1
           },
@@ -7096,6 +7123,11 @@
             "column": 109,
             "text": "│",
             "style": 6
+          },
+          {
+            "column": 110,
+            "text": "ded",
+            "style": 16
           },
           {
             "column": 119,
@@ -7126,7 +7158,7 @@
           },
           {
             "column": 110,
-            "text": "ded",
+            "text": "e",
             "style": 16
           },
           {
@@ -7158,8 +7190,8 @@
           },
           {
             "column": 110,
-            "text": "e",
-            "style": 16
+            "text": "ocket the",
+            "style": 1
           },
           {
             "column": 119,
@@ -7190,7 +7222,7 @@
           },
           {
             "column": 110,
-            "text": "ocket the",
+            "text": "n sees   ",
             "style": 1
           },
           {
@@ -7227,43 +7259,6 @@
           },
           {
             "column": 110,
-            "text": "n sees   ",
-            "style": 1
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 10,
-            "text": "│",
-            "style": 6
-          },
-          {
-            "column": 11,
-            "text": "+ ",
-            "style": 10
-          },
-          {
-            "column": 13,
-            "text": "        self.scroll = offset.min(self.history());                                               ",
-            "style": 1
-          },
-          {
-            "column": 109,
-            "text": "│",
-            "style": 6
-          },
-          {
-            "column": 110,
             "text": "isagree. ",
             "style": 1
           },
@@ -7291,7 +7286,7 @@
           },
           {
             "column": 13,
-            "text": "        self.parser.screen_mut().set_scrollback(self.scroll);                                   ",
+            "text": "        self.scroll = offset.min(self.history());                                               ",
             "style": 1
           },
           {
@@ -7355,7 +7350,7 @@
           },
           {
             "column": 10,
-            "text": "│y allow once · a allow always · n deny · Esc later",
+            "text": "│y allow once · a allow always · this session · n deny · Esc later · every answer is audited",
             "style": 6
           },
           {

@@ -160,6 +160,20 @@ pub struct CommitMessageRequest {
     pub prompt: Option<String>,
 }
 
+/// A request to commit what the index holds.
+///
+/// The message is the whole thing, subject and body, with the blank line between
+/// them: a client that split it into fields would have to put it back together, and
+/// the subject git derives is the first line either way. Nothing here stages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GitCommitRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The whole commit message.
+    pub message: String,
+}
+
 /// A generated message the person can edit before anything is committed.
 ///
 /// This is a draft: the daemon neither stages nor commits, and the message is not
@@ -227,6 +241,20 @@ mod tests {
         assert!(
             json.get("branch").is_none(),
             "a detached HEAD has no branch to name"
+        );
+    }
+
+    #[test]
+    fn a_commit_request_carries_the_whole_message() {
+        let request = GitCommitRequest {
+            workspace: None,
+            message: "feat(git): ✨ commit\n\nThe body is part of it.".to_owned(),
+        };
+        let json = serde_json::to_value(&request).expect("a request is JSON");
+        assert_eq!(json["message"], request.message);
+        assert!(
+            json.get("workspace").is_none(),
+            "the daemon's own workspace costs no bytes saying so"
         );
     }
 

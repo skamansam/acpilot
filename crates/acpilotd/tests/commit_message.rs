@@ -291,6 +291,81 @@ async fn an_empty_session_id_is_refused_without_touching_git() {
 }
 
 #[tokio::test]
+async fn a_confirmed_message_commits_the_index_and_returns_the_commit() {
+    let harness = harness().await;
+    let before = git(harness.repository.path(), &["rev-parse", "HEAD"]);
+    let message = "feat(git): ✨ commit the staged file\n\none.txt stays unstaged.";
+
+    let (status, body) = send(
+        harness.app.clone(),
+        "POST",
+        "/v1/git/commit",
+        Some(serde_json::json!({ "message": message })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["subject"], "feat(git): ✨ commit the staged file");
+    assert_ne!(
+        body["id"].as_str(),
+        Some(before.trim()),
+        "the answer is the new commit"
+    );
+    assert_eq!(
+        git(harness.repository.path(), &["log", "-1", "--format=%B"]).trim(),
+        message,
+        "git got the whole message, body included"
+    );
+
+    let (status, status_body) = send(harness.app, "GET", "/v1/git/status", None).await;
+    assert_eq!(status, StatusCode::OK, "{status_body}");
+    let files = status_body["files"].as_array().expect("a file list");
+    assert_eq!(files.len(), 1, "only two.txt was staged: {status_body}");
+    assert_eq!(files[0]["path"], "one.txt");
+}
+
+#[tokio::test]
+async fn an_empty_commit_message_is_refused_before_git_runs() {
+    let harness = harness().await;
+    let before = git(harness.repository.path(), &["rev-parse", "HEAD"]);
+
+    let (status, body) = send(
+        harness.app,
+        "POST",
+        "/v1/git/commit",
+        Some(serde_json::json!({ "message": "  \n" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["details"][0]["field"], "message");
+    assert_eq!(
+        git(harness.repository.path(), &["rev-parse", "HEAD"]),
+        before,
+        "nothing was committed"
+    );
+}
+
+#[tokio::test]
+async fn committing_with_nothing_staged_is_a_conflict() {
+    let harness = harness().await;
+    git(harness.repository.path(), &["commit", "-q", "-m", "second"]);
+
+    let (status, body) = send(
+        harness.app,
+        "POST",
+        "/v1/git/commit",
+        Some(serde_json::json!({ "message": "feat: nothing to commit" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("nothing is staged")),
+        "the refusal says what to do first: {body}"
+    );
+}
+
+#[tokio::test]
 async fn the_openapi_document_documents_the_commit_routes() {
     let (status, document) = send(acpilotd::router(), "GET", "/v1/openapi.json", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -302,11 +377,17 @@ async fn the_openapi_document_documents_the_commit_routes() {
         document["paths"]["/v1/git/commit-message"]["post"].is_object(),
         "the draft route is in the document"
     );
+    assert!(
+        document["paths"]["/v1/git/commit"]["post"].is_object(),
+        "the commit route is in the document"
+    );
     for schema in [
         "CommitPrompt",
         "CommitPromptSource",
         "CommitMessageRequest",
         "CommitDraft",
+        "GitCommitRequest",
+        "GitCommit",
     ] {
         assert!(
             document["components"]["schemas"][schema].is_object(),

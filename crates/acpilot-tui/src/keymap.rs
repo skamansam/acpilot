@@ -87,6 +87,8 @@ pub enum Action {
     StatsSources,
     /// Search the workspace's file contents.
     Grep,
+    /// Open or close the source-control pane.
+    SourceControl,
     /// Ask the daemon again.
     Refresh,
     /// Leave the app.
@@ -163,6 +165,7 @@ impl Action {
         Self::Transcript,
         Self::StatsSources,
         Self::Grep,
+        Self::SourceControl,
         Self::Refresh,
         Self::Quit,
         Self::Narrower,
@@ -210,6 +213,7 @@ impl Action {
             | Self::Transcript
             | Self::StatsSources
             | Self::Grep
+            | Self::SourceControl
             | Self::Refresh
             | Self::Quit
             | Self::Narrower
@@ -251,6 +255,7 @@ impl Action {
             Self::Transcript => "read the transcript",
             Self::StatsSources => "where the stats came from",
             Self::Grep => "search file contents",
+            Self::SourceControl => "source control",
             Self::Refresh => "refresh",
             Self::Quit => "quit",
             Self::Narrower => "narrower pane",
@@ -298,6 +303,7 @@ impl Action {
             Self::Transcript => "transcript",
             Self::StatsSources => "stats-sources",
             Self::Grep => "grep",
+            Self::SourceControl => "source-control",
             Self::Refresh => "refresh",
             Self::Quit => "quit",
             Self::Narrower => "narrower",
@@ -628,7 +634,9 @@ impl Preset {
 }
 
 use Action::{Grep, KeyList, Narrower, Transcript, Wider};
-use Action::{Menu, NextFocus, Palette, Quit, Refresh, Review, Save, StatsSources, Terminal};
+use Action::{
+    Menu, NextFocus, Palette, Quit, Refresh, Review, Save, SourceControl, StatsSources, Terminal,
+};
 
 /// The client's own keys, the same in both presets unless a preset adds one.
 const APP: &[(Action, &[&str])] = &[
@@ -641,6 +649,7 @@ const APP: &[(Action, &[&str])] = &[
     (Transcript, &["f3"]),
     (StatsSources, &["f4"]),
     (Grep, &["ctrl-shift-f"]),
+    (SourceControl, &["f6"]),
     (Refresh, &["ctrl-r"]),
     (Quit, &["ctrl-c", "ctrl-q"]),
     (Narrower, &["ctrl-left"]),

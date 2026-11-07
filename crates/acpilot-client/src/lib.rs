@@ -410,6 +410,62 @@ impl Client {
             .await
     }
 
+    /// `GET /v1/git/status`.
+    ///
+    /// Branch state and every changed path, with the index's answer and the working
+    /// tree's on one row. The source-control pane reads this and never writes it.
+    pub async fn git_status(&self) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        self.get("/v1/git/status").await
+    }
+
+    /// `GET /v1/git/diff?scope=all`.
+    ///
+    /// The patch and its file list, both from one request: the pane draws the files
+    /// from the list and the diff from the patch, and two reads could describe two
+    /// different moments.
+    pub async fn git_diff(&self, scope: &str) -> Result<acpilot_proto::git::GitDiff, ClientError> {
+        self.get(&format!("/v1/git/diff?scope={scope}")).await
+    }
+
+    /// `POST /v1/git/commit-message`.
+    ///
+    /// Asks the named session to draft a message from the staged diff. The answer is
+    /// a draft: the daemon has not staged or committed anything.
+    pub async fn commit_message(
+        &self,
+        session_id: &str,
+    ) -> Result<acpilot_proto::git::CommitDraft, ClientError> {
+        let body = acpilot_proto::git::CommitMessageRequest {
+            workspace: None,
+            session_id: session_id.to_owned(),
+            prompt: None,
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/commit-message"))
+            .json(&body);
+        self.send(request, "/v1/git/commit-message").await
+    }
+
+    /// `POST /v1/git/commit`.
+    ///
+    /// Commits the index with a message the person confirmed. This is the only write
+    /// in the git client, and it does not stage anything first.
+    pub async fn commit(
+        &self,
+        message: &str,
+    ) -> Result<acpilot_proto::git::GitCommit, ClientError> {
+        let body = acpilot_proto::git::GitCommitRequest {
+            workspace: None,
+            message: message.to_owned(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/commit"))
+            .json(&body);
+        self.send(request, "/v1/git/commit").await
+    }
+
     /// `GET /v1/terminals?session=`.
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger

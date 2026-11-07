@@ -1,8 +1,8 @@
 # The TUI shell: a design pass
 
-**Status:** designed and drawn, not wired. `acpilot tui --demo` is the screen this
-note describes; everything in it that has a backend works, and everything else says
-which task would give it one.
+**Status:** designed, drawn and wired where the table below says so. `acpilot tui
+--demo` is the screen this note describes; everything in it that has a backend
+works, and everything else says which task would give it one.
 
 ## Why a design pass at all
 
@@ -88,8 +88,8 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
   money, latency. A provider that stopped answering is drawn hollow, not hidden.
 
 Overlays, back to front: the terminal picker, the key list, the palette, the
-content search's jump list, the permission card, the diff review that answers it,
-the toast.
+content search's jump list, the source-control pane, the permission card, the diff
+review that answers it, the commit composer, the toast.
 
 ## What is real, and what is not
 
@@ -99,10 +99,12 @@ the toast.
 | Sessions, transcript, composer | real, over the daemon; the transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and a streaming cursor, and the composer is multiline with `@path` completion from the daemon's walk | — |
 | Permission card | real: the request's own title, kind and session, a preview of the write when it is one, one row per option the request actually sent (`y` once, `a` always for the session, `n` deny), `Tab`/`Shift-Tab` between questions that are waiting, and `Esc` to answer later — the card is drawn over the transcript while it streams, because a turn in flight is exactly when an agent asks | — |
 | Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
+| Source control | real: `F6` opens a modal pane over the shell, fed by `GET /v1/git/status` and `GET /v1/git/diff?scope=all`. The changed paths are on the left, the selected file's section of the patch on the right; `j`/`k` choose a path, `PgUp`/`PgDn` scroll its diff, `r` asks the daemon again. It stages nothing — the index is git's — and `--demo` uses its one seeded changed file | P6.5-5 (desktop and web) |
+| Commit composer | real: `c` opens it over the source pane and `Ctrl-G` asks the open session for a draft through `POST /v1/git/commit-message`; the message is editable with arrows, `Home`/`End`, `Backspace`/`Delete` and `Enter`. `Ctrl-S` asks, `y` sends the whole message to `POST /v1/git/commit`, and `Esc` closes without writing. The route refuses an empty message and an empty index before git runs, and maps a hook's refusal to `409` | P6.5-5 (desktop and web) |
 | Terminal pane | real attach, scrollback, find, copy mode, picker | P6-10 (done in the TUI) |
 | Command palette, which-key, toast | real | — |
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves; a running client watches the settings files and recolours on save, and `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
-| File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which ranks a substring or initials and walks with the same ignore rules, so a find cannot see what the tree cannot. `Ctrl-Shift-F` (or the palette's **Search file contents**) opens a jump list fed by `GET /v1/files/grep`, each row carrying the line with the words that matched marked (folded the way the daemon folded them): `Enter` opens the file at that line. A row's letter is the daemon's, not the client's: the listing marks each path with what git says changed (`M`, `A`, `?`, `D`, `!`), a directory with the most urgent change beneath it, and a workspace that is not a repository, or a host without `git`, shows none rather than claiming everything is committed | P6.5-2 served the `/v1/git/*` routes on 2026-11-07; the source-control pane is P6.5-4 |
+| File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth; `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed; `/` searches the workspace by path through `GET /v1/files/search`, which ranks a substring or initials and walks with the same ignore rules, so a find cannot see what the tree cannot. `Ctrl-Shift-F` (or the palette's **Search file contents**) opens a jump list fed by `GET /v1/files/grep`, each row carrying the line with the words that matched marked (folded the way the daemon folded them): `Enter` opens the file at that line. A row's letter is the daemon's, not the client's: the listing marks each path with what git says changed (`M`, `A`, `?`, `D`, `!`), a directory with the most urgent change beneath it, and a workspace that is not a repository, or a host without `git`, shows none rather than claiming everything is committed | P6.5-4 opens that pane with `F6`, drawing the changed paths and the selected file's diff |
 | Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, the daemon's language-server problems as gutter letters refreshed once the buffer has been still for 480 ms, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. `v` enters visual mode, where motions extend the run and `y` copies it, `d`/`x` delete it, and `Esc` leaves; `:` opens a command line with `:w`, `:q`/`:q!`, `:N` and `:e path`. A run of Up/Down keeps the column it started from across a short line, and Shift-click extends a selection. The buffer is whatever the tree opened — or the seeded one in `--demo` — and a `+` on the tab says the text is not the file's. Its normal and visual keys are the keymap's, so `keymap.toml` can move them | P7-10 (saving) |
 | Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a roster, plus an estimated context for an agent with a conversation behind it and no window unless the agent names one, so a live bar before any session is rows that say so; the seeded rows in `--demo` exercise all four sources | P4.5-12 (provider rows and balances) |
 | Outline panel | real: `acpilot_text::outline` collects the open buffer's definitions from the parse tree, `Show outline` in the Panels menu puts it up, `j`/`k` choose and `Enter` puts the caret on the definition's line. It re-reads when the text has changed since the last read — `App::tick` compares `Document::revision`, so a burst of typing costs one parse a frame rather than one per keystroke | — |
@@ -114,7 +116,7 @@ the toast.
 
 | Where | Keys |
 | --- | --- |
-| anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `Ctrl-T` terminal, or a new shell when the session has none · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
+| anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `F6` source control · `Ctrl-T` terminal, or a new shell when the session has none · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | terminal picker | `j`/`k` choose · `Enter` attach · `n` start a shell in the session's workspace · `Esc`/`q` close |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call under the cursor |
@@ -126,6 +128,8 @@ the toast.
 | prompt | `Enter` send · `Alt-Enter`/`Shift-Enter`/`Ctrl-Enter` a line · `@` complete a path · arrows and `Home`/`End` move the caret · `Backspace`/`Delete` edit beside it · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
 | copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `V` whole lines · `y` copy · `Esc` leaves |
+| source control | `j`/`k` changed file · `PgUp`/`PgDn` diff · `c` compose · `g` generate and compose · `r` re-read · `Esc`/`q` close |
+| commit composer | printable keys and `Enter` edit · arrows/`Home`/`End` move · `Backspace`/`Delete` edit · `Ctrl-G` generate from the open session · `Ctrl-S` ask to commit · `y`/`Enter` confirm · `n`/`Esc` cancel · `Esc` close when not committing |
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
 | permission card | `y` allow once · `a` allow always for this session · `n` deny, only for the options the request sent · `Tab`/`Shift-Tab` the next/previous question · `Esc` answer later, and **Session → Answer Permission…** brings the card back |
 

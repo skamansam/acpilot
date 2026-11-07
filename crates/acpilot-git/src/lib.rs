@@ -7,8 +7,9 @@
 //! integration at all. The cost is that `git` must be on the host, which it
 //! already is for anyone with a repository to open.
 //!
-//! Nothing here writes: no stage, commit, checkout or config change. The commit
-//! writer is a later, reviewed step with its own permission path.
+//! One method writes: [`Repo::commit`] commits the index, and only a caller that
+//! has confirmed the message calls it. Nothing here stages, checks out or changes
+//! config; the index is the person's to prepare.
 //!
 //! Parsing is confined to stable porcelain/plumbing output:
 //! `status --porcelain=v2 -z`, `diff --name-status -z`, `ls-files -z`, and a
@@ -335,6 +336,9 @@ pub enum GitError {
         /// Git's own diagnosis.
         stderr: String,
     },
+    /// A commit was asked for with no message.
+    #[error("a commit message cannot be empty")]
+    EmptyMessage,
     /// Output did not have the documented shape.
     #[error("could not parse git {what}: {reason}")]
     Parse {
@@ -531,6 +535,28 @@ impl Repo {
             "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e",
         ])?;
         parse_log(&output)
+    }
+
+    /// Commit the index with `message`, and return the commit that was made.
+    ///
+    /// This is the crate's one write, and it is deliberately narrow: the index is
+    /// staged already, so this neither adds nor cleans up. The whole message travels
+    /// as one argument, newlines included, because git takes the first paragraph as
+    /// the subject and a client that split it would only have to join it again.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::EmptyMessage`] before git runs, and [`GitError::Command`] when git
+    /// refuses — a hook, a merge conflict, or an identity it cannot read.
+    pub fn commit(&self, message: &str) -> Result<Commit, GitError> {
+        if message.trim().is_empty() {
+            return Err(GitError::EmptyMessage);
+        }
+        self.run(["commit", "-q", "-m", message])?;
+        self.log(1)?.into_iter().next().ok_or(GitError::Parse {
+            what: "commit",
+            reason: "git accepted the commit but log returned nothing".to_owned(),
+        })
     }
 
     fn has_head(&self) -> Result<bool, GitError> {
@@ -932,6 +958,33 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn an_empty_commit_message_never_reaches_git() {
+        let fixture = Fixture::new("empty-message");
+        let error = fixture
+            .repo()
+            .commit(" \n")
+            .expect_err("whitespace is not a message");
+        assert!(matches!(error, GitError::EmptyMessage));
+    }
+
+    #[test]
+    fn a_commit_uses_the_whole_message_and_returns_it() {
+        let fixture = Fixture::new("commit-message");
+        fixture.write("a.txt", "a\n");
+        fixture.git(&["add", "-A"]);
+        let message = "feat(git): ✨ commit\n\nOne message, body and all.";
+
+        let commit = fixture.repo().commit(message).expect("a commit");
+
+        assert_eq!(commit.subject, "feat(git): ✨ commit");
+        assert_eq!(
+            fixture.git(&["log", "-1", "--format=%B"]).trim(),
+            message,
+            "the body is the message, not a second argument"
+        );
     }
 
     #[test]

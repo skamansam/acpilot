@@ -92,6 +92,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.grep.is_some() {
         draw_grep(frame, app, body);
     }
+    if app.source.is_some() {
+        draw_source_control(frame, app, body);
+    }
     if app.permission_card
         && let Some(request) = app.permissions.get(app.permission_at)
     {
@@ -107,6 +110,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     }
     if app.review.is_some() {
         draw_review(frame, app, body);
+    }
+    if app.commit.is_some() {
+        draw_commit_composer(frame, app, body);
     }
     if let Some(toast) = &app.toast {
         draw_toast(frame, toast, body, &app.theme);
@@ -2424,6 +2430,287 @@ fn permission_hint(request: &PermissionRequest, at: usize, total: usize) -> Stri
     parts.join(" · ")
 }
 
+/// The source-control pane: changed paths on the left, the selected file's diff
+/// on the right.
+///
+/// Modal because it is about the repository rather than the buffer, and because the
+/// only write it leads to — a commit — is a decision that should not be one keystroke
+/// away from a pane that edits text. The pane itself is read-only: staging is git's,
+/// and a commit is the composer's confirmed action.
+fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(source) = &app.source else {
+        return;
+    };
+    let card = middle(area, 110, 88);
+    if card.width < 50 || card.height < 8 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let branch = source.status.branch.as_deref().unwrap_or("(detached)");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " Source control · {branch} · {} changed · {} staged ",
+            source.status.files.len(),
+            source.staged()
+        ))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let files_width = (body.width / 3).clamp(18, 38);
+    let [files, patch] =
+        Layout::horizontal([Constraint::Length(files_width), Constraint::Min(10)]).areas(body);
+
+    if source.loading {
+        frame.render_widget(
+            Paragraph::new("reading the index…").style(Style::default().fg(app.theme.text_muted())),
+            files,
+        );
+    } else if source.status.files.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no changed files").style(Style::default().fg(app.theme.text_muted())),
+            files,
+        );
+    } else {
+        let start = first_visible(
+            source.selected,
+            source.status.files.len(),
+            usize::from(files.height),
+        );
+        let rows: Vec<Line<'static>> = source
+            .status
+            .files
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(usize::from(files.height))
+            .map(|(index, entry)| {
+                let chosen = index == source.selected;
+                let style = if chosen {
+                    Style::default()
+                        .fg(app.theme.accent_high())
+                        .bg(app.theme.bg_panel())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(app.theme.text())
+                };
+                let marks = format!(
+                    "{}{} ",
+                    change_letter(entry.index),
+                    change_letter(entry.worktree)
+                );
+                let mark_style = Style::default()
+                    .fg(change_colour(entry.worktree, &app.theme))
+                    .bg(if chosen {
+                        app.theme.bg_panel()
+                    } else {
+                        app.theme.bg()
+                    });
+                Line::from(vec![
+                    Span::styled(marks, mark_style),
+                    Span::styled(entry.path.clone(), style),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(rows), files);
+    }
+    if let Some(error) = &source.error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(app.theme.danger()))
+                .wrap(Wrap { trim: false }),
+            patch,
+        );
+    } else if source.loading {
+        frame.render_widget(
+            Paragraph::new("reading the diff…").style(Style::default().fg(app.theme.text_muted())),
+            patch,
+        );
+    } else {
+        let section = source.section();
+        if section.is_empty() {
+            frame.render_widget(
+                Paragraph::new("no diff for this path yet · stage it with git first")
+                    .style(Style::default().fg(app.theme.text_muted()))
+                    .wrap(Wrap { trim: false }),
+                patch,
+            );
+        } else {
+            let height = usize::from(patch.height);
+            let lines: Vec<Line<'static>> = section
+                .iter()
+                .skip(source.scroll)
+                .take(height)
+                .map(|line| diff_line(line, &app.theme))
+                .collect();
+            frame.render_widget(Paragraph::new(lines), patch);
+        }
+    }
+
+    let total = source.section().len();
+    let position = if total > 0 {
+        format!(
+            " · lines {}-{}",
+            source.scroll + 1,
+            (source.scroll + usize::from(patch.height)).min(total)
+        )
+    } else {
+        String::new()
+    };
+    let footer_line = Line::from(Span::styled(
+        format!(
+            " j/k files · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
+        ),
+        Style::default().fg(app.theme.warning()),
+    ));
+    frame.render_widget(Paragraph::new(footer_line), footer);
+}
+
+fn change_letter(kind: acpilot_proto::git::GitChangeKind) -> char {
+    use acpilot_proto::git::GitChangeKind::{
+        Added, Copied, Deleted, Ignored, Modified, Renamed, TypeChanged, Unmerged, Unmodified,
+        Untracked,
+    };
+    match kind {
+        Unmodified | Ignored => '·',
+        Modified => 'M',
+        Added => 'A',
+        Deleted => 'D',
+        Renamed => 'R',
+        Copied => 'C',
+        TypeChanged => 'T',
+        Unmerged => 'U',
+        Untracked => '?',
+    }
+}
+
+fn change_colour(kind: acpilot_proto::git::GitChangeKind, theme: &Theme) -> Color {
+    use acpilot_proto::git::GitChangeKind::{Added, Deleted, Renamed, Unmerged, Untracked};
+    match kind {
+        Added | Untracked => theme.success(),
+        Deleted => theme.danger(),
+        Renamed => theme.accent_high(),
+        Unmerged => theme.warning(),
+        _ => theme.text_muted(),
+    }
+}
+
+/// One line of a unified diff, coloured by what its first character says.
+fn diff_line(text: &str, theme: &Theme) -> Line<'static> {
+    let colour = match text.chars().next() {
+        Some('+') => theme.success(),
+        Some('-') => theme.danger(),
+        Some('@') => theme.accent(),
+        Some('d') => theme.accent_high(),
+        _ => theme.text_muted(),
+    };
+    Line::from(Span::styled(text.to_owned(), Style::default().fg(colour)))
+}
+
+/// The commit composer, over the pane it will commit from.
+///
+/// The message is shown with a caret rather than sent to a terminal's line editor:
+/// the body is paragraphs, and editing it has to work before the one action that
+/// writes. The footer changes with the state, so `Ctrl-S` is visibly a question and
+/// `y` is visibly the answer.
+fn draw_commit_composer(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(composer) = &app.commit else {
+        return;
+    };
+    let card = middle(area, 84, 64);
+    if card.width < 32 || card.height < 6 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let staged = app.source.as_ref().map_or(0, |source| source.staged());
+    let state = if composer.generating {
+        "drafting"
+    } else if composer.committing {
+        "committing"
+    } else if composer.confirming {
+        "confirm"
+    } else {
+        "edit"
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Commit message · {staged} staged · {state} "))
+        .border_style(Style::default().fg(if composer.confirming {
+            app.theme.warning()
+        } else {
+            app.theme.accent()
+        }));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let lines = composer_lines(composer, &app.theme);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+
+    let (text, colour) = if let Some(error) = &composer.error {
+        (format!(" {error} "), app.theme.danger())
+    } else if composer.generating {
+        (
+            " the session is drafting from the staged diff… ".to_owned(),
+            app.theme.warning(),
+        )
+    } else if composer.committing {
+        (
+            " committing the staged index… ".to_owned(),
+            app.theme.warning(),
+        )
+    } else if composer.confirming {
+        (
+            format!(" commit {staged} staged? y confirms · n cancels "),
+            app.theme.warning(),
+        )
+    } else {
+        (
+            " ctrl-g generate from session · ctrl-s reviews and commits · esc closes ".to_owned(),
+            app.theme.text_muted(),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, Style::default().fg(colour)))),
+        footer,
+    );
+}
+
+/// The message as lines, with the caret drawn as a block or a bar.
+fn composer_lines(composer: &crate::app::CommitComposer, theme: &Theme) -> Vec<Line<'static>> {
+    let (cursor_line, cursor_column) = composer.line_col();
+    let mut lines = Vec::new();
+    for (line_index, text) in composer.text.split('\n').enumerate() {
+        let mut spans = Vec::new();
+        if line_index == cursor_line {
+            let characters: Vec<char> = text.chars().collect();
+            for (column, character) in characters.iter().enumerate() {
+                if column == cursor_column {
+                    spans.push(Span::styled(
+                        character.to_string(),
+                        Style::default().fg(theme.bg()).bg(theme.accent()),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        character.to_string(),
+                        Style::default().fg(theme.text()),
+                    ));
+                }
+            }
+            if cursor_column >= characters.len() {
+                spans.push(Span::styled("▏", Style::default().fg(theme.accent())));
+            }
+        } else {
+            spans.push(Span::styled(
+                text.to_owned(),
+                Style::default().fg(theme.text()),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
 /// The diff review: the agent's edit, hunk by hunk, with a decision on each.
 ///
 /// Drawn over the permission card rather than beside it, because the card is the
@@ -2640,6 +2927,11 @@ fn centred(area: Rect) -> Rect {
 
 /// A centred box `width` per cent across and `height` per cent tall.
 fn middle(area: Rect, width: u16, height: u16) -> Rect {
+    // Percentages above 100 are clamped rather than subtracted from: a caller asking
+    // for a card wider than the area means "as wide as it goes", and the arithmetic
+    // below should not underflow into a panic on the way to saying so.
+    let width = width.min(100);
+    let height = height.min(100);
     let top = (100 - height) / 2;
     let side = (100 - width) / 2;
     let [_, middle, _] = Layout::vertical([
@@ -3916,6 +4208,39 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("@app"), "{text}");
         assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
+    }
+
+    #[test]
+    fn the_source_pane_draws_the_changed_file_and_its_diff() {
+        let mut app = app_with_session();
+        let demo = acpilot_demo::demo();
+        app.source = Some(crate::app::SourceControl::fixture(&demo.diff));
+
+        let text = render(&mut app);
+        assert!(text.contains("Source control"), "{text}");
+        assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
+        assert!(text.contains("diff --git"), "{text}");
+        assert!(
+            text.contains("c compose"),
+            "the footer names the composer: {text}"
+        );
+    }
+
+    #[test]
+    fn the_composer_draws_the_message_and_the_confirmation_question() {
+        let mut app = app_with_session();
+        let demo = acpilot_demo::demo();
+        app.source = Some(crate::app::SourceControl::fixture(&demo.diff));
+        app.commit = Some(crate::app::CommitComposer {
+            text: "feat: write the message".to_owned(),
+            cursor: 24,
+            ..crate::app::CommitComposer::default()
+        });
+
+        let text = render(&mut app);
+        assert!(text.contains("Commit message"), "{text}");
+        assert!(text.contains("feat: write the message"), "{text}");
+        assert!(text.contains("ctrl-s"), "{text}");
     }
 
     #[test]

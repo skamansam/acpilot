@@ -6,10 +6,11 @@
 //! agent and the model they chose. The daemon's part is to gather what git says,
 //! fill the template, and check the answer before a client offers it.
 //!
-//! Nothing here commits. The response is a draft the editor can change; `git commit`
-//! itself is P6.5-4's reviewed action. A message that ignores the format is a `400`
-//! naming the rule rather than a repaired string, so the person sees what the agent
-//! did wrong instead of a commit subject nobody wrote.
+//! A draft and a commit are separate requests on purpose. The response to
+//! `commit-message` is a draft the editor can change, and `commit` is the explicit,
+//! confirmed action that gives that message to git. A message that ignores the format
+//! is a `400` naming the rule rather than a repaired string, so the person sees what
+//! the agent did wrong instead of a commit subject nobody wrote.
 //!
 //! # Only one generator exists
 //!
@@ -22,9 +23,12 @@ use std::path::Path;
 
 use acpilot_core::AcpilotError;
 use acpilot_core::commit::{CommitContext, DEFAULT_PROMPT, render_prompt};
-use acpilot_git::{DiffScope, Repo};
+use acpilot_git::{DiffScope, GitError, Repo};
 use acpilot_proto::ErrorBody;
-use acpilot_proto::git::{CommitDraft, CommitMessageRequest, CommitPrompt, CommitPromptSource};
+use acpilot_proto::git::{
+    CommitDraft, CommitMessageRequest, CommitPrompt, CommitPromptSource, GitCommit,
+    GitCommitRequest,
+};
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
@@ -182,11 +186,82 @@ async fn commit_message(
     )?))
 }
 
+/// `POST /v1/git/commit`.
+///
+/// Commits exactly what the index holds, with the message the person confirmed. The
+/// route never stages: an unstaged edit is not in the commit, and a caller that wants
+/// it there stages it with git first. The staged diff is checked before git runs, so
+/// an empty index is a `409` that says why rather than git's own `nothing to commit`
+/// on stderr.
+///
+/// # Errors
+///
+/// `400` for an empty message; `404` for no repository; `409` for nothing staged, a
+/// merge conflict, or a git hook that refused; `502` for a missing `git`.
+async fn commit(
+    State(state): State<AppState>,
+    Json(request): Json<GitCommitRequest>,
+) -> Result<Json<GitCommit>, ApiError> {
+    let message = request.message.trim_end();
+    if message.trim().is_empty() {
+        return Err(ApiError::new(AcpilotError::invalid("`message` is empty"))
+            .with_detail("message", "a subject line, and a body when there is one"));
+    }
+
+    let root = crate::files::workspace_root(&state, request.workspace.as_deref())?;
+    let repo = Repo::discover(&root).map_err(git_error)?;
+    let staged = repo.diff(DiffScope::Staged).map_err(git_error)?;
+    if staged.files.is_empty() && staged.patch.trim().is_empty() {
+        return Err(ApiError::new(AcpilotError::conflict(
+            "nothing is staged; stage the files the commit should contain",
+        ))
+        .with_detail(
+            "message",
+            "`git add` the files first; this route never stages for you",
+        ));
+    }
+
+    let commit = repo.commit(message).map_err(commit_error)?;
+    Ok(Json(GitCommit {
+        id: commit.id,
+        parents: commit.parents,
+        author: commit.author,
+        email: commit.email,
+        authored_at: commit.authored_at,
+        subject: commit.subject,
+    }))
+}
+
+/// A commit failure in this API's terms.
+///
+/// A refused commit is the request's conflict, not the host's `500`: a pre-commit
+/// hook, an unresolved merge or a missing identity is something the person can fix,
+/// and git's own words are more useful than a flattened "git failed".
+fn commit_error(error: GitError) -> ApiError {
+    match error {
+        GitError::EmptyMessage => ApiError::new(AcpilotError::invalid("`message` is empty"))
+            .with_detail("message", "a subject line, and a body when there is one"),
+        GitError::Command {
+            command,
+            status,
+            stderr,
+        } => {
+            let reason = stderr.trim();
+            ApiError::new(AcpilotError::conflict(format!(
+                "git {command} exited {status}: {reason}"
+            )))
+            .with_detail("message", reason.to_owned())
+        }
+        other => git_error(other),
+    }
+}
+
 /// This module's routes, ready to merge into the daemon's router.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/git/commit/prompt", get(prompt))
         .route("/v1/git/commit-message", post(commit_message))
+        .route("/v1/git/commit", post(commit))
 }
 
 #[allow(dead_code)]
@@ -219,6 +294,23 @@ fn commit_prompt_doc() {}
 )]
 fn commit_message_doc() {}
 
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/git/commit",
+    tag = "git",
+    summary = "Commit the staged index with a confirmed message",
+    request_body = GitCommitRequest,
+    responses(
+        (status = 200, description = "The commit that was made", body = GitCommit),
+        (status = 400, description = "The message is empty", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "Nothing is staged, or git refused the commit", body = ErrorBody),
+        (status = 502, description = "`git` is missing", body = ErrorBody)
+    )
+)]
+fn commit_doc() {}
+
 /// This module's operations, for the OpenAPI document.
 pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
     use utoipa::Path;
@@ -232,6 +324,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/git/commit-message",
             HttpMethod::Post,
             <__path_commit_message_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/commit",
+            HttpMethod::Post,
+            <__path_commit_doc as Path>::operation(),
         ),
     ]
 }

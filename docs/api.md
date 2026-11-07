@@ -716,8 +716,19 @@ is a `409` before the agent is asked. A busy or unknown session is `409`/`404`;
 a session that fails or does not answer inside two minutes is
 `502 agent_failed`.
 
-Nothing here writes to the repository. Staging, committing, checking out and
-config are separate, confirmed actions with their own permission path (P6.5-4).
+`POST /v1/git/commit` takes `GitCommitRequest { workspace?, message }` and commits
+the staged index with the whole message, returning the `GitCommit` git made. It is
+the one git route that writes, and it writes only after a person has confirmed the
+message. It never stages: an unstaged edit is not in the commit. An empty message
+is `400` with `details.field: "message"`, and an empty index is `409` before git
+runs. Git's own refusal — a failing hook, an unresolved merge, a missing identity —
+is also `409`, with git's words in the message and in `details.field: "message"`,
+because it is something the person can fix rather than a daemon fault. A missing
+`git` is still `502`.
+
+Staging, checking out and config changes remain separate, unbuilt actions. The TUI
+reads the routes with `F6`, drafts and edits in a composer, and calls `/commit` only
+after `Ctrl-S` followed by `y`; desktop and web clients are P6.5-5.
 
 ## Project map
 

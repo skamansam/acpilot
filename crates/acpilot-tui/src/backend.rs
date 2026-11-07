@@ -82,6 +82,18 @@ pub enum Request {
     CompleteFiles(String),
     /// Search the workspace's file contents for a query, for the jump list.
     Grep(String),
+    /// Read the source-control pane: branch state and the whole diff.
+    Git,
+    /// Ask the open session to draft a commit message from the staged index.
+    GenerateCommit {
+        /// The session whose agent writes it.
+        session_id: String,
+    },
+    /// Commit the staged index with a message the person confirmed.
+    Commit {
+        /// The whole message, subject and body.
+        message: String,
+    },
     /// Find the code uses of an identifier, for the references panel.
     ///
     /// The name *and* the caret: the name is what a parse-tree search needs, and the
@@ -204,6 +216,21 @@ pub enum Update {
         /// The lines that contain it, sorted by path and line.
         matches: Vec<acpilot_proto::file::GrepMatch>,
     },
+    /// The source-control pane's answer: status and the uncommitted diff.
+    Git {
+        /// Branch state and every changed path.
+        status: acpilot_proto::git::GitStatus,
+        /// The patch and its file list, read at the same moment.
+        diff: acpilot_proto::git::GitDiff,
+    },
+    /// The source-control read failed, with a message the pane can show.
+    GitError(String),
+    /// A session's draft of a commit message, for the composer to edit.
+    CommitDraft(acpilot_proto::git::CommitDraft),
+    /// A draft or a commit was refused, with a message the status line can show.
+    CommitError(String),
+    /// The index was committed.
+    Committed(acpilot_proto::git::GitCommit),
     /// The files an `@path` in the composer could mean.
     Completions {
         /// The query that was asked, so an answer about a word the caret has left
@@ -608,6 +635,37 @@ async fn run(
                         }
                     }
                 }
+                Some(Request::Git) => match client.git_status().await {
+                    Ok(status) => match client.git_diff("all").await {
+                        Ok(diff) => {
+                            let _ = updates.send(Update::Git { status, diff });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    },
+                    Err(error) => {
+                        let _ = updates.send(Update::GitError(describe(&error)));
+                    }
+                },
+                Some(Request::GenerateCommit { session_id }) => {
+                    match client.commit_message(&session_id).await {
+                        Ok(draft) => {
+                            let _ = updates.send(Update::CommitDraft(draft));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::CommitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Commit { message }) => match client.commit(&message).await {
+                    Ok(commit) => {
+                        let _ = updates.send(Update::Committed(commit));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::CommitError(describe(&error)));
+                    }
+                },
                 Some(Request::References {
                     name,
                     path,
@@ -1153,6 +1211,30 @@ async fn run_demo(
                 let _ = updates.send(Update::Status(format!(
                     "design pass · {path} is the fixture's text"
                 )));
+            }
+            Request::Git => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the changed file is the fixture's".to_owned(),
+                ));
+            }
+            Request::GenerateCommit { session_id } => {
+                // The design pass has a scripted answer so the composer can be
+                // reviewed in its generated state; no model ran.
+                let _ = updates.send(Update::CommitDraft(acpilot_proto::git::CommitDraft {
+                    message: "feat(tui): ✨ draw the source-control pane\n\nThe changed files and the selected diff are read from the daemon; the composer edits a message before anything is committed.".to_owned(),
+                    subject: "feat(tui): ✨ draw the source-control pane".to_owned(),
+                    body: "The changed files and the selected diff are read from the daemon; the composer edits a message before anything is committed.".to_owned(),
+                    kind: "feat".to_owned(),
+                    scope: Some("tui".to_owned()),
+                    breaking: false,
+                    emoji: Some("✨".to_owned()),
+                    generator: format!("session:{session_id}"),
+                }));
+            }
+            Request::Commit { .. } => {
+                let _ = updates.send(Update::CommitError(
+                    "design pass · nothing was committed".to_owned(),
+                ));
             }
             Request::Grep(query) => {
                 // The design pass has one file, and greps it: enough to review the

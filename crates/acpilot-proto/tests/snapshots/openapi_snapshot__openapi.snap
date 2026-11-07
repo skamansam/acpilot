@@ -1216,6 +1216,26 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "GitCommitRequest": {
+        "description": "A request to commit what the index holds.\n\nThe message is the whole thing, subject and body, with the blank line between\nthem: a client that split it into fields would have to put it back together, and\nthe subject git derives is the first line either way. Nothing here stages.",
+        "properties": {
+          "message": {
+            "description": "The whole commit message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
       "GitDiff": {
         "description": "A unified diff and the files it touches.\n\nThe patch is colour-free and external-diff-free, because a person reads it in a\npane rather than in a terminal that would render either. The file list is what a\ncommit composer iterates without parsing headers.",
         "properties": {

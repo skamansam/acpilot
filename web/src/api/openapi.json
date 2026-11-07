@@ -1212,6 +1212,26 @@
         ],
         "type": "object"
       },
+      "GitCommitRequest": {
+        "description": "A request to commit what the index holds.\n\nThe message is the whole thing, subject and body, with the blank line between\nthem: a client that split it into fields would have to put it back together, and\nthe subject git derives is the first line either way. Nothing here stages.",
+        "properties": {
+          "message": {
+            "description": "The whole commit message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
       "GitDiff": {
         "description": "A unified diff and the files it touches.\n\nThe patch is colour-free and external-diff-free, because a person reads it in a\npane rather than in a terminal that would render either. The file list is what a\ncommit composer iterates without parsing headers.",
         "properties": {
@@ -3630,6 +3650,74 @@
           }
         },
         "summary": "Find files by path"
+      }
+    },
+    "/v1/git/commit": {
+      "post": {
+        "operationId": "commit_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCommit"
+                }
+              }
+            },
+            "description": "The commit that was made"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The message is empty"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Nothing is staged, or git refused the commit"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is missing"
+          }
+        },
+        "summary": "Commit the staged index with a confirmed message"
       }
     },
     "/v1/git/commit-message": {

@@ -265,6 +265,10 @@ pub(crate) fn git_error(error: GitError) -> ApiError {
         } => ApiError::new(AcpilotError::Io(std::io::Error::other(format!(
             "git {command} exited {status}: {stderr}"
         )))),
+        GitError::EmptyMessage => {
+            ApiError::new(AcpilotError::invalid("a commit message cannot be empty"))
+                .with_detail("message", "a subject line, and a body when there is one")
+        }
         GitError::Parse { what, reason } => ApiError::new(AcpilotError::Protocol {
             message: format!("could not parse git {what}: {reason}"),
         }),

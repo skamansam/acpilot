@@ -187,6 +187,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit the staged index with a confirmed message */
+        post: operations["commit_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/git/commit-message": {
         parameters: {
             query?: never;
@@ -1163,6 +1180,19 @@ export interface components {
             parents: string[];
             /** @description First line of the message. */
             subject: string;
+        };
+        /**
+         * @description A request to commit what the index holds.
+         *
+         *     The message is the whole thing, subject and body, with the blank line between
+         *     them: a client that split it into fields would have to put it back together, and
+         *     the subject git derives is the first line either way. Nothing here stages.
+         */
+        GitCommitRequest: {
+            /** @description The whole commit message. */
+            message: string;
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
         };
         /**
          * @description A unified diff and the files it touches.
@@ -2650,6 +2680,66 @@ export interface operations {
             };
             /** @description This daemon has no workspace to walk */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description The commit that was made */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCommit"];
+                };
+            };
+            /** @description The message is empty */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Nothing is staged, or git refused the commit */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is missing */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

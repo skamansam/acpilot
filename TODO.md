@@ -1319,9 +1319,31 @@ what needs an editor shell waits for the editor shell.
     `agents.toml`; there is no save route. A draft is not persisted, and committing it is P6.5-4.
     The generating prompt and answer stay in that session's transcript, which is the record of how
     the draft was produced.
-- [ ] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
+- [x] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
   composer whose message can be generated then edited. `git` writes stay a separate, confirmed
   action; the pane never stages or commits on its own.
+  - `F6` opens a modal pane built from `GET /v1/git/status` and `GET /v1/git/diff?scope=all`: the
+    changed paths on the left and the selected file's section of the patch on the right. It stages
+    nothing, and `j`/`k` choose a file while `PgUp`/`PgDn` scroll its diff.
+  - `c` opens the composer and `Ctrl-G` asks the open session for a draft through
+    `POST /v1/git/commit-message`, then puts it in the editable message. `Ctrl-S` asks for
+    confirmation and `y` sends the message to the new `POST /v1/git/commit`; `Esc` closes without
+    writing. The route refuses an empty message with `400`, and an empty index or a git hook's
+    refusal with `409`.
+  - `acpilot-git::Repo::commit` is the crate's only write. It commits the index as it stands — no
+    staging, no cleanup — and is reached only by the confirmed route. The changed-file fixture in
+    `--demo` is a design-pass source, not a repository.
+  - **Tests:** three in `acpilot-git` (whole message and body, whitespace refused before git, the
+    existing first-commit case), three route tests (the index-only commit, the empty message, the
+    empty index) plus the OpenAPI operation and both schemas, four TUI state tests (`F6`, `g`,
+    `Ctrl-S`/`y`, a draft landing in the composer), and two render tests (the pane's list and diff,
+    the composer's message and footer).
+  - **Open:** the desktop and browser panes wait on P6.5-5. Staging remains git's job: there is no
+    stage/unstage route, so the commit acts on whatever the person has already added. The source
+    pane is modal rather than a movable `Panel`, because it is about the repository and the only
+    write it leads to needs the confirmation. A commit is not added to the transcript; the status
+    line and the refreshed index are the TUI's record, and the daemon's git output is only the
+    answer.
 - [ ] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
   no second diff implementation.
 - [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit

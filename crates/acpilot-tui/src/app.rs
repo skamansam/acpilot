@@ -243,6 +243,8 @@ pub enum MenuAction {
     Transcript,
     /// Attach a terminal, or leave the one that is open.
     Terminal,
+    /// Open or close the source-control pane.
+    SourceControl,
     /// Start a session with the first agent.
     NewSession,
     /// Cancel the turn in flight.
@@ -341,6 +343,11 @@ pub const MENUS: &[MenuDef] = &[
                 label: "Transcript",
                 keys: "f3",
                 action: MenuAction::Transcript,
+            },
+            MenuRow {
+                label: "Source Control",
+                keys: "f6",
+                action: MenuAction::SourceControl,
             },
             MenuRow {
                 label: "Terminal Pane",
@@ -1939,6 +1946,10 @@ pub struct App {
     pub review: Option<Review>,
     /// The workspace content search, when one is up.
     pub grep: Option<GrepSearch>,
+    /// The source-control pane, when one is up.
+    pub source: Option<SourceControl>,
+    /// The commit composer, when it is over the source-control pane.
+    pub commit: Option<CommitComposer>,
     /// The line a jump list's row named, waiting for the file to arrive.
     ///
     /// A list answers with a line before the text exists, so the line is held here
@@ -2129,6 +2140,289 @@ pub struct GrepSearch {
     pub selected: usize,
 }
 
+/// The source-control pane: what changed, and the diff of the selected path.
+///
+/// Modal rather than a panel because it is about the repository rather than the
+/// open buffer, and the write it can lead to is a decision. It reads status and a
+/// diff; it never stages. `loading` is what separates "the index is empty" from
+/// "the daemon has not answered yet", which is the difference between a clean tree
+/// and a pane that has not looked.
+#[derive(Debug)]
+pub struct SourceControl {
+    /// Branch state and every changed path.
+    pub status: acpilot_proto::git::GitStatus,
+    /// The whole uncommitted diff and its file list.
+    pub diff: acpilot_proto::git::GitDiff,
+    /// Which changed path the diff belongs to.
+    pub selected: usize,
+    /// The first diff line on screen.
+    pub scroll: usize,
+    /// Whether the daemon's answer has arrived.
+    pub loading: bool,
+    /// Why there is no answer, when the request failed.
+    pub error: Option<String>,
+}
+
+impl SourceControl {
+    /// A pane with nothing in it, waiting for the daemon.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            status: acpilot_proto::git::GitStatus {
+                branch: None,
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                head: None,
+                files: Vec::new(),
+            },
+            diff: acpilot_proto::git::GitDiff {
+                patch: String::new(),
+                files: Vec::new(),
+            },
+            selected: 0,
+            scroll: 0,
+            loading: true,
+            error: None,
+        }
+    }
+
+    /// The design pass's one changed file, so the pane can be reviewed without a
+    /// repository. It says `modified` in the index because a commit composer needs
+    /// something staged to talk about, and the fixture's diff is the change.
+    #[must_use]
+    pub fn fixture(diff: &Diff) -> Self {
+        let path = diff.path.clone();
+        Self {
+            status: acpilot_proto::git::GitStatus {
+                branch: Some("main".to_owned()),
+                upstream: Some("origin/main".to_owned()),
+                ahead: 1,
+                behind: 0,
+                head: None,
+                files: vec![acpilot_proto::git::GitStatusEntry {
+                    path: path.clone(),
+                    old_path: None,
+                    index: acpilot_proto::git::GitChangeKind::Modified,
+                    worktree: acpilot_proto::git::GitChangeKind::Unmodified,
+                }],
+            },
+            diff: acpilot_proto::git::GitDiff {
+                patch: diff.patch(),
+                files: vec![acpilot_proto::git::GitDiffFile {
+                    path,
+                    old_path: None,
+                    change: acpilot_proto::git::GitChangeKind::Modified,
+                }],
+            },
+            selected: 0,
+            scroll: 0,
+            loading: false,
+            error: None,
+        }
+    }
+
+    /// How many paths the next commit would contain.
+    #[must_use]
+    pub fn staged(&self) -> usize {
+        self.status
+            .files
+            .iter()
+            .filter(|entry| staged_kind(entry.index))
+            .count()
+    }
+
+    /// The path whose diff is on the right.
+    #[must_use]
+    pub fn selected_path(&self) -> Option<&str> {
+        self.status
+            .files
+            .get(self.selected)
+            .map(|entry| entry.path.as_str())
+    }
+
+    /// The selected file's section of the patch, header included.
+    ///
+    /// Selecting a path is the whole navigation model: the right side is one file,
+    /// not a scroll through all of them, because a commit is reviewed a file at a
+    /// time. An untracked path has no section yet, and an empty answer is the truth
+    /// rather than an error.
+    #[must_use]
+    pub fn section(&self) -> Vec<&str> {
+        let Some(path) = self.selected_path() else {
+            return Vec::new();
+        };
+        let suffix = format!(" b/{path}");
+        let mut lines = Vec::new();
+        let mut inside = false;
+        for line in self.diff.patch.lines() {
+            if line.starts_with("diff --git ") {
+                inside = line.ends_with(&suffix);
+                if inside {
+                    lines.push(line);
+                }
+            } else if inside {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+}
+
+/// Whether the index has something to commit for this kind.
+#[must_use]
+fn staged_kind(kind: acpilot_proto::git::GitChangeKind) -> bool {
+    !matches!(
+        kind,
+        acpilot_proto::git::GitChangeKind::Unmodified
+            | acpilot_proto::git::GitChangeKind::Untracked
+    )
+}
+
+/// A commit message being written or generated.
+///
+/// The message is one string, because that is what git takes and what the daemon
+/// commits: splitting it into a subject field and a body field would let the two
+/// disagree. `confirming` is the point of the whole composer — `Ctrl-S` asks, `y`
+/// commits, and nothing writes before that.
+#[derive(Debug, Default)]
+pub struct CommitComposer {
+    /// The whole message.
+    pub text: String,
+    /// The caret, counted in characters rather than bytes.
+    pub cursor: usize,
+    /// Whether the session is still drafting.
+    pub generating: bool,
+    /// Whether a commit request is in flight.
+    pub committing: bool,
+    /// Whether `Ctrl-S` is waiting for `y`.
+    pub confirming: bool,
+    /// The last refusal, shown in the composer rather than only in the status line.
+    pub error: Option<String>,
+}
+
+impl CommitComposer {
+    /// Where the caret is: line and column, both zero-based.
+    #[must_use]
+    pub fn line_col(&self) -> (usize, usize) {
+        let mut line = 0;
+        let mut column = 0;
+        for (index, character) in self.text.chars().enumerate() {
+            if index == self.cursor {
+                break;
+            }
+            if character == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+        }
+        (line, column)
+    }
+
+    fn byte_at_cursor(&self) -> usize {
+        self.text
+            .char_indices()
+            .nth(self.cursor)
+            .map_or(self.text.len(), |(byte, _)| byte)
+    }
+
+    /// Type one character at the caret.
+    pub fn insert(&mut self, character: char) {
+        let at = self.byte_at_cursor();
+        self.text.insert(at, character);
+        self.cursor += 1;
+        self.error = None;
+    }
+
+    /// Delete the character before the caret.
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let at = self.byte_at_cursor();
+        if let Some(previous) = self.text[..at].chars().next_back() {
+            self.text.remove(at - previous.len_utf8());
+            self.cursor -= 1;
+            self.error = None;
+        }
+    }
+
+    /// Delete the character under the caret.
+    pub fn delete(&mut self) {
+        if self.cursor >= self.text.chars().count() {
+            return;
+        }
+        let at = self.byte_at_cursor();
+        self.text.remove(at);
+        self.error = None;
+    }
+
+    /// Move the caret one character left.
+    pub fn left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    /// Move the caret one character right.
+    pub fn right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.text.chars().count());
+    }
+
+    /// Put the caret at the start of its line.
+    pub fn home(&mut self) {
+        let (line, _) = self.line_col();
+        self.cursor = self
+            .text
+            .chars()
+            .enumerate()
+            .filter(|(_, character)| *character == '\n')
+            .nth(line.saturating_sub(1))
+            .map_or(0, |(index, _)| index + 1);
+        if line == 0 {
+            self.cursor = 0;
+        }
+    }
+
+    /// Put the caret at the end of its line.
+    pub fn end(&mut self) {
+        self.cursor = self
+            .text
+            .chars()
+            .enumerate()
+            .skip(self.cursor)
+            .find(|(_, character)| *character == '\n')
+            .map_or_else(|| self.text.chars().count(), |(index, _)| index);
+    }
+
+    /// Move the caret to the same column on another line, clamped to its length.
+    pub fn vertical(&mut self, delta: isize) {
+        let (line, column) = self.line_col();
+        let target = if delta < 0 {
+            line.saturating_sub(delta.unsigned_abs())
+        } else {
+            line.saturating_add(delta as usize)
+        };
+        let mut starts = vec![0];
+        for (index, character) in self.text.chars().enumerate() {
+            if character == '\n' {
+                starts.push(index + 1);
+            }
+        }
+        let Some(&start) = starts.get(target) else {
+            return;
+        };
+        let end = self
+            .text
+            .chars()
+            .enumerate()
+            .skip(start)
+            .find(|(_, character)| *character == '\n')
+            .map_or_else(|| self.text.chars().count(), |(index, _)| index);
+        self.cursor = (start + column).min(end);
+    }
+}
+
 /// The first row a pane of `height` rows shows when `selected` is chosen.
 ///
 /// A pure function of the selection rather than a scroll offset the pane remembers:
@@ -2187,6 +2481,8 @@ impl App {
             diff: None,
             review: None,
             grep: None,
+            source: None,
+            commit: None,
             pending_line: None,
             palette: None,
             menu: None,
@@ -3075,6 +3371,61 @@ impl App {
                     };
                 }
             }
+            Update::Git { status, diff } => {
+                let changed = status.files.len();
+                let staged = status
+                    .files
+                    .iter()
+                    .filter(|entry| staged_kind(entry.index))
+                    .count();
+                if let Some(source) = &mut self.source {
+                    source.status = status;
+                    source.diff = diff;
+                    source.loading = false;
+                    source.error = None;
+                    source.selected = source
+                        .selected
+                        .min(source.status.files.len().saturating_sub(1));
+                }
+                self.status = format!("source control · {changed} changed · {staged} staged");
+            }
+            Update::GitError(message) => {
+                if let Some(source) = &mut self.source {
+                    source.loading = false;
+                    source.error = Some(message.clone());
+                }
+                self.status = message;
+            }
+            Update::CommitDraft(draft) => {
+                if let Some(commit) = &mut self.commit {
+                    commit.text = draft.message;
+                    commit.cursor = commit.text.chars().count();
+                    commit.generating = false;
+                    commit.error = None;
+                }
+                self.status = format!(
+                    "commit draft · {} · edit it, then ctrl-s commits",
+                    draft.kind
+                );
+            }
+            Update::CommitError(message) => {
+                if let Some(commit) = &mut self.commit {
+                    commit.generating = false;
+                    commit.committing = false;
+                    commit.confirming = false;
+                    commit.error = Some(message.clone());
+                }
+                self.status = message;
+            }
+            Update::Committed(commit) => {
+                let short: String = commit.id.chars().take(7).collect();
+                self.commit = None;
+                self.status = format!("committed {short} · {}", commit.subject);
+                // The index just changed under the pane that was showing it. Ask
+                // again rather than leaving a staged file on screen that is already
+                // in history.
+                self.pending.push(Request::Git);
+            }
             Update::References { name, hits } => {
                 // The same rule as the searches: an answer about the name before this
                 // one is an answer about a word the caret has left.
@@ -3431,6 +3782,19 @@ impl App {
             return self.review_key(key);
         }
 
+        // The composer is the innermost question: it covers the source-control
+        // pane, so every key is the message's until it closes. The pane behind it
+        // is checked next, then `F6`, so the same key opens and closes it.
+        if self.commit.is_some() {
+            return self.commit_key(key);
+        }
+        if self.action(Context::App, key) == Some(Action::SourceControl) {
+            return self.toggle_source();
+        }
+        if self.source.is_some() {
+            return self.source_key(key);
+        }
+
         // Ctrl-T is the way in and out of the terminal pane, and it outranks the
         // permission card: a shell that could not be left because an agent was
         // waiting would be a pane that traps the session.
@@ -3544,6 +3908,12 @@ impl App {
                 return Some(Request::Quit);
             }
             Some(Action::Refresh) => {
+                // The source-control pane is about the repository, not the daemon's
+                // session list, so refreshing it is a second question. It is queued
+                // rather than returned because one key returns one request.
+                if self.source.is_some() {
+                    self.pending.push(Request::Git);
+                }
                 return Some(Request::Refresh {
                     include_ignored: self.show_ignored,
                 });
@@ -5266,6 +5636,7 @@ impl App {
             MenuAction::Editor => self.set_focus(Focus::Editor),
             MenuAction::Sessions => self.set_focus(Focus::Sessions),
             MenuAction::Transcript => self.focus_transcript(),
+            MenuAction::SourceControl => return self.toggle_source(),
             MenuAction::Terminal => return self.toggle_terminal(),
             MenuAction::MovePanel(panel, side) => {
                 self.panels.move_to(panel, side);
@@ -5851,6 +6222,218 @@ impl App {
     /// Say something that needs no task id.
     fn notice(&mut self, message: &str) {
         self.status = message.to_owned();
+    }
+
+    /// Open the source-control pane, or put it away.
+    ///
+    /// The design pass has its one changed file already, so it opens without a
+    /// request; a real client asks the daemon and draws the empty state until the
+    /// answer arrives, which is a different claim from a clean tree.
+    fn toggle_source(&mut self) -> Option<Request> {
+        if self.source.take().is_some() {
+            self.commit = None;
+            self.notice("source control closed");
+            return None;
+        }
+        self.commit = None;
+        let source = if self.demo {
+            self.diff
+                .as_ref()
+                .map_or_else(SourceControl::empty, SourceControl::fixture)
+        } else {
+            SourceControl::empty()
+        };
+        self.source = Some(source);
+        if self.demo {
+            self.status = "design pass · source control · the fixture's change".to_owned();
+            return None;
+        }
+        self.status = "source control · reading the index…".to_owned();
+        Some(Request::Git)
+    }
+
+    /// The source-control pane's keys: choose a file, scroll its diff, or open the
+    /// composer. `r` asks again because staging happens in another window and the
+    /// index this pane drew is already out of date.
+    fn source_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.source = None;
+                self.commit = None;
+                self.notice("source control closed");
+                None
+            }
+            KeyCode::Char('r') => Some(Request::Git),
+            KeyCode::Char('c') => self.open_commit(false),
+            KeyCode::Char('g') => self.open_commit(true),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.step_source(1);
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.step_source(-1);
+                None
+            }
+            KeyCode::PageDown => {
+                if let Some(source) = &mut self.source {
+                    source.scroll = source.scroll.saturating_add(10);
+                }
+                None
+            }
+            KeyCode::PageUp => {
+                if let Some(source) = &mut self.source {
+                    source.scroll = source.scroll.saturating_sub(10);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn step_source(&mut self, delta: isize) {
+        let Some(source) = &mut self.source else {
+            return;
+        };
+        let last = source.status.files.len().saturating_sub(1);
+        source.selected = if delta < 0 {
+            source.selected.saturating_sub(delta.unsigned_abs())
+        } else {
+            (source.selected + delta as usize).min(last)
+        };
+        source.scroll = 0;
+    }
+
+    /// Open the composer, and optionally ask the session for a first draft.
+    ///
+    /// A staged file is required before either: the message describes the next
+    /// commit, and there is nothing for a model to read while the index is empty.
+    fn open_commit(&mut self, generate: bool) -> Option<Request> {
+        let staged = self.source.as_ref().map_or(0, SourceControl::staged);
+        if staged == 0 {
+            self.notice("nothing is staged · git add the files first");
+            return None;
+        }
+        self.commit = Some(CommitComposer {
+            generating: generate,
+            ..CommitComposer::default()
+        });
+        if !generate {
+            self.status =
+                format!("commit · {staged} staged · write the message · ctrl-s reviews it");
+            return None;
+        }
+        self.generate_commit()
+    }
+
+    /// Ask the open session to draft a message from what is staged.
+    fn generate_commit(&mut self) -> Option<Request> {
+        let session = self.open.clone();
+        let Some(composer) = &mut self.commit else {
+            return None;
+        };
+        composer.generating = true;
+        composer.confirming = false;
+        composer.error = None;
+        let Some(session_id) = session else {
+            let message = "no session is open · open one to generate a message".to_owned();
+            composer.generating = false;
+            composer.error = Some(message.clone());
+            self.status = message;
+            return None;
+        };
+        self.status = "commit · the session is drafting from the staged diff…".to_owned();
+        Some(Request::GenerateCommit { session_id })
+    }
+
+    /// The composer's keys. Text edits locally; only `Ctrl-S` then `y` writes, and
+    /// the commit request carries the message as it reads at that moment.
+    fn commit_key(&mut self, key: KeyEvent) -> Option<Request> {
+        if key.code == KeyCode::Esc {
+            if self.commit.as_ref().is_some_and(|commit| commit.committing) {
+                self.notice("the commit is in flight; wait for git");
+                return None;
+            }
+            self.commit = None;
+            self.notice("commit closed · nothing written");
+            return None;
+        }
+        if self.commit.as_ref().is_some_and(|commit| commit.committing) {
+            return None;
+        }
+        if self.commit.as_ref().is_some_and(|commit| commit.confirming) {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    let message = self.commit.as_ref().map(|commit| commit.text.clone())?;
+                    if message.trim().is_empty() {
+                        if let Some(commit) = &mut self.commit {
+                            commit.confirming = false;
+                            commit.error = Some("a commit needs a message".to_owned());
+                        }
+                        self.notice("a commit needs a message");
+                        return None;
+                    }
+                    if let Some(commit) = &mut self.commit {
+                        commit.confirming = false;
+                        commit.committing = true;
+                        commit.error = None;
+                    }
+                    self.status = "committing the staged index…".to_owned();
+                    return Some(Request::Commit { message });
+                }
+                KeyCode::Char('n') => {
+                    if let Some(commit) = &mut self.commit {
+                        commit.confirming = false;
+                    }
+                    self.notice("commit cancelled · nothing written");
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('g') => return self.generate_commit(),
+                KeyCode::Char('s') => {
+                    let text = self.commit.as_ref().map(|commit| commit.text.clone())?;
+                    if text.trim().is_empty() {
+                        if let Some(commit) = &mut self.commit {
+                            commit.error = Some("a commit needs a message".to_owned());
+                        }
+                        self.notice("write a message, or ctrl-g to draft one");
+                        return None;
+                    }
+                    let staged = self.source.as_ref().map_or(0, SourceControl::staged);
+                    if let Some(commit) = &mut self.commit {
+                        commit.confirming = true;
+                    }
+                    self.status = format!("commit {staged} staged? y confirms · n cancels");
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+        let Some(commit) = &mut self.commit else {
+            return None;
+        };
+        match key.code {
+            KeyCode::Enter => commit.insert('\n'),
+            KeyCode::Backspace => commit.backspace(),
+            KeyCode::Delete => commit.delete(),
+            KeyCode::Left => commit.left(),
+            KeyCode::Right => commit.right(),
+            KeyCode::Home => commit.home(),
+            KeyCode::End => commit.end(),
+            KeyCode::Up => commit.vertical(-1),
+            KeyCode::Down => commit.vertical(1),
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                commit.insert(character);
+            }
+            _ => {}
+        }
+        None
     }
 
     /// Open the review of the diff that is up, or close the one that is open.
@@ -10365,6 +10948,94 @@ mod tests {
             app.transcript.view.scroll, 0,
             "the newest line is still at the bottom of a shorter view"
         );
+    }
+
+    #[test]
+    fn f6_opens_the_source_pane_and_g_drafts_from_the_open_session() {
+        let mut app = App::demo(&acpilot_demo::demo());
+
+        assert_eq!(app.handle_key(key(KeyCode::F(6))), None);
+        assert!(app.source.is_some(), "f6 opens source control");
+        assert_eq!(
+            app.source.as_ref().map(SourceControl::staged),
+            Some(1),
+            "the fixture's change is staged"
+        );
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('g'))),
+            Some(Request::GenerateCommit {
+                session_id: "s1".to_owned()
+            }),
+            "g opens the composer and asks the session that is open"
+        );
+        assert!(app.commit.is_some_and(|commit| commit.generating));
+    }
+
+    #[test]
+    fn ctrl_s_asks_before_a_commit_and_y_sends_the_edited_message() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        app.handle_key(key(KeyCode::Char('c')));
+        for character in "fix: keep the commit confirmed".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.handle_key(ctrl_s), None);
+        assert!(
+            app.commit.as_ref().is_some_and(|commit| commit.confirming),
+            "ctrl-s asks, it does not write"
+        );
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::Commit {
+                message: "fix: keep the commit confirmed".to_owned()
+            }),
+            "the second key is the one that writes"
+        );
+        assert!(app.commit.as_ref().is_some_and(|commit| commit.committing));
+
+        app.apply(Update::Committed(acpilot_proto::git::GitCommit {
+            id: "0123456789abcdef".to_owned(),
+            parents: vec!["parent".to_owned()],
+            author: "Test User".to_owned(),
+            email: "test@example.com".to_owned(),
+            authored_at: "2026-11-07T12:00:00Z".to_owned(),
+            subject: "fix: keep the commit confirmed".to_owned(),
+        }));
+        assert!(app.commit.is_none(), "the composer closes on the answer");
+        assert!(app.status.contains("0123456"), "{}", app.status);
+        assert_eq!(
+            app.pending,
+            vec![Request::Git],
+            "the pane is asked for the new index"
+        );
+    }
+
+    #[test]
+    fn a_commit_draft_lands_in_the_composer_for_editing() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        app.handle_key(key(KeyCode::Char('g')));
+
+        app.apply(Update::CommitDraft(acpilot_proto::git::CommitDraft {
+            message: "feat: draft\n\nbody".to_owned(),
+            subject: "feat: draft".to_owned(),
+            body: "body".to_owned(),
+            kind: "feat".to_owned(),
+            scope: None,
+            breaking: false,
+            emoji: None,
+            generator: "session:s1".to_owned(),
+        }));
+
+        let commit = app.commit.as_ref().expect("the composer is up");
+        assert_eq!(commit.text, "feat: draft\n\nbody");
+        assert_eq!(commit.cursor, commit.text.chars().count());
+        assert!(!commit.generating);
+        assert!(app.status.contains("commit draft"), "{}", app.status);
     }
 
     #[test]

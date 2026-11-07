@@ -210,10 +210,13 @@ A drag does not stop at the pane's edge. A pointer cannot leave the screen, so a
 drag held against the top or bottom row of the pane it began in scrolls the view a
 line and keeps the selection growing with it — the loop's clock rather than an
 event's, because a pointer held still sends nothing at all, and a faster clock only
-while there is more view in the direction it is pulling. What was already marked
-stays marked: the editor's selection is a buffer offset, and the terminal's anchor
-travels with its text, so a drag across a shell's output cannot quietly hand the
-cells it covered to the lines above.
+while there is more view in the direction it is pulling. The copy view keeps its
+cursor and both selection ends in lines of the history rather than rows of the
+screen, so the drag can keep reading to the oldest line a pane holds and the yank
+takes every line between the two ends even when the screen shows only one of them.
+What was already marked stays marked: the editor's selection is a buffer offset,
+and the terminal's anchor is a history line, so a drag across a shell's output
+cannot quietly hand the cells it covered to the lines above.
 
 The widths the dividers were dragged to are remembered, once, on the way out — in
 `<data>/tui-layout.toml`, not in `config.toml`: a width is the client's memory of

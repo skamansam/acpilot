@@ -1137,8 +1137,11 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
         .border_style(Style::default().fg(border));
 
     let inner = block.inner(area);
+    let first = pane
+        .history()
+        .saturating_sub(pane.reader.view.scroll.min(pane.history()));
     let lines: Vec<Line> = (0..inner.height)
-        .map(|row| terminal_line(pane, row, inner.width, theme))
+        .map(|row| terminal_line(pane, row, first, inner.width, theme))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 
@@ -1158,9 +1161,16 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
 /// the attributes would be a terminal that lies about what a program drew. Runs of
 /// one style become one span, so a 200-column line is not 200 of them; trailing
 /// blanks are dropped because they would only paint the background.
-fn terminal_line(pane: &TerminalPane, row: u16, cols: u16, theme: &Theme) -> Line<'static> {
+fn terminal_line(
+    pane: &TerminalPane,
+    row: u16,
+    first: usize,
+    cols: u16,
+    theme: &Theme,
+) -> Line<'static> {
     let screen = pane.parser.screen();
     let copying = pane.mode == PaneMode::Copy;
+    let line = first + usize::from(row);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run_style: Option<Style> = None;
     let mut run_text = String::new();
@@ -1174,15 +1184,15 @@ fn terminal_line(pane: &TerminalPane, row: u16, cols: u16, theme: &Theme) -> Lin
             continue;
         }
         let mut style = cell_style(cell);
-        if pane.reader.view.selected(row, col) {
+        if pane.reader.view.selected(line, col) {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        if pane.matched(row, col) {
+        if pane.matched(line, col) {
             // Yellow rather than reversed: a match can sit inside a selection or
             // under the cursor, and it has to be readable through both.
             style = style.add_modifier(Modifier::UNDERLINED).fg(theme.warning());
         }
-        if copying && pane.reader.view.cursor == (row, col) {
+        if copying && pane.reader.view.cursor == (line, col) {
             // The cursor sits inside selections, so it reverses *and* underlines:
             // a bare inversion would be a cell a person cannot tell from the rest
             // of the selection.
@@ -1351,9 +1361,7 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
             .enumerate()
             .skip(start)
             .take(height)
-            .map(|(index, row)| {
-                transcript_line(app, row, u16::try_from(index - start).unwrap_or(u16::MAX))
-            })
+            .map(|(index, row)| transcript_line(app, row, index))
             .collect();
         // The cursor sits after the newest text and only while the tail is on
         // screen: a scrolled transcript with a cursor would point at a line the
@@ -1386,7 +1394,7 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
 ///
 /// A cell at a time only in copy mode: outside it a line is one span, because a
 /// style run per character is a cost a view pays only while someone points at it.
-fn transcript_line(app: &App, line: &crate::app::TranscriptRow, row: u16) -> Line<'static> {
+fn transcript_line(app: &App, line: &crate::app::TranscriptRow, index: usize) -> Line<'static> {
     let base = entry_style(line.kind, &app.theme);
     let reading = app.focus == Focus::Transcript;
     let mut spans: Vec<Span> = Vec::new();
@@ -1398,15 +1406,15 @@ fn transcript_line(app: &App, line: &crate::app::TranscriptRow, row: u16) -> Lin
         for character in segment.text.chars() {
             let mut style = base.patch(emphasis);
             if reading {
-                if app.transcript.view.selected(row, col) {
+                if app.transcript.view.selected(index, col) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
-                if app.matched_transcript(row, col) {
+                if app.matched_transcript(index, col) {
                     style = style
                         .add_modifier(Modifier::UNDERLINED)
                         .fg(app.theme.warning());
                 }
-                if app.transcript.view.cursor == (row, col) {
+                if app.transcript.view.cursor == (index, col) {
                     style = style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED);
                 }
             }
@@ -1430,7 +1438,7 @@ fn transcript_line(app: &App, line: &crate::app::TranscriptRow, row: u16) -> Lin
     if reading
         && app.transcript.view.cursor
             == (
-                row,
+                index,
                 u16::try_from(line.text().chars().count()).unwrap_or(u16::MAX),
             )
     {

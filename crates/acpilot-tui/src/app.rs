@@ -644,12 +644,19 @@ pub enum PaneMode {
 /// gesture, so it is one type. Nothing here knows what it is reading: the pane that
 /// owns it answers how big the view is and how much history there is, which is what
 /// makes the same keys, the same corners and the same yank work in both.
+///
+/// A line here is absolute — counted from the oldest line the pane still holds, not
+/// from the top of the screen. That is what lets a selection keep the text it was
+/// put on while output arrives, the wheel scrolls, or a drag at an edge reads
+/// further back than one screen: only [`CopyView::scroll`] says which lines are on
+/// screen, and the yank can take lines the screen no longer shows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CopyView {
-    /// Where the cursor is, in cells of the view.
-    pub cursor: (u16, u16),
-    /// Where a selection started, once `v` has been pressed.
-    pub anchor: Option<(u16, u16)>,
+    /// Where the cursor is: its line counted from the oldest line the pane keeps,
+    /// and its column in cells.
+    pub cursor: (usize, u16),
+    /// Where a selection started, on the same absolute line.
+    pub anchor: Option<(usize, u16)>,
     /// Whether the selection takes whole lines rather than the cells between its
     /// two ends.
     ///
@@ -663,7 +670,7 @@ pub struct CopyView {
 
 impl CopyView {
     /// A cursor standing still on the live view.
-    fn new(cursor: (u16, u16)) -> Self {
+    fn new(cursor: (usize, u16)) -> Self {
         Self {
             cursor,
             anchor: None,
@@ -673,7 +680,7 @@ impl CopyView {
     }
 
     /// The selection, in reading order: from the earlier cell to the later one.
-    fn selection(&self) -> Option<((u16, u16), (u16, u16))> {
+    fn selection(&self) -> Option<((usize, u16), (usize, u16))> {
         let anchor = self.anchor?;
         let cursor = self.cursor;
         Some(if (anchor.0, anchor.1) <= (cursor.0, cursor.1) {
@@ -684,7 +691,7 @@ impl CopyView {
     }
 
     /// The rows a line-wise selection covers, in reading order.
-    fn line_selection(&self) -> Option<(u16, u16)> {
+    fn line_selection(&self) -> Option<(usize, usize)> {
         let anchor = self.anchor?;
         Some(if anchor.0 <= self.cursor.0 {
             (anchor.0, self.cursor.0)
@@ -698,14 +705,14 @@ impl CopyView {
     /// A line-wise selection covers every cell of its rows, including the blanks
     /// past the end of a line: a row that was marked is a row the yank takes.
     #[must_use]
-    pub fn selected(&self, row: u16, col: u16) -> bool {
+    pub fn selected(&self, line: usize, col: u16) -> bool {
         if self.line {
             return self
                 .line_selection()
-                .is_some_and(|(start, end)| row >= start && row <= end);
+                .is_some_and(|(start, end)| line >= start && line <= end);
         }
         self.selection()
-            .is_some_and(|(start, end)| (row, col) >= start && (row, col) <= end)
+            .is_some_and(|(start, end)| (line, col) >= start && (line, col) <= end)
     }
 
     /// Start a selection at the cursor, or drop the one in progress.
@@ -735,12 +742,15 @@ impl CopyView {
     ///
     /// Scrolling at the edges is what lets one set of keys reach the whole of a
     /// pane's history: a cursor that could walk off the screen would be a cursor
-    /// nobody can see.
+    /// nobody can see, and a cursor kept in screen rows would forget which line it
+    /// was on as soon as output scrolled past it.
     fn move_by(&mut self, rows: i32, cols: i32, grid: (u16, u16), max_scroll: usize) {
         let (height, width) = grid;
-        let last_row = height.saturating_sub(1);
+        let last_line = max_scroll
+            .saturating_add(usize::from(height))
+            .saturating_sub(1);
         let last_col = width.saturating_sub(1);
-        let (mut row, mut col) = self.cursor;
+        let (line, mut col) = self.cursor;
         let step = |delta: i32| u16::try_from(delta.unsigned_abs()).unwrap_or(u16::MAX);
 
         if cols < 0 {
@@ -749,38 +759,33 @@ impl CopyView {
             col = col.saturating_add(step(cols)).min(last_col);
         }
 
-        if rows < 0 {
-            for _ in 0..rows.unsigned_abs() {
-                if row > 0 {
-                    row -= 1;
-                } else if self.scroll < max_scroll {
-                    self.scroll += 1;
-                } else {
-                    break;
-                }
-            }
+        let line = if rows < 0 {
+            line.saturating_sub(rows.unsigned_abs() as usize)
         } else {
-            for _ in 0..rows.unsigned_abs() {
-                if row < last_row {
-                    row += 1;
-                } else if self.scroll > 0 {
-                    self.scroll -= 1;
-                } else {
-                    break;
-                }
-            }
-        }
+            line.saturating_add(rows as usize).min(last_line)
+        };
 
-        self.cursor = (row, col);
+        self.cursor = (line, col);
+        self.reveal(grid, max_scroll);
         self.clamp(grid, max_scroll);
     }
 
-    /// The line the cursor is on, counted from the oldest line the pane keeps.
-    ///
-    /// The view is a window: the first row on screen is `max_scroll - scroll` lines
-    /// into the history, and the cursor is `row` rows below that.
-    fn line(&self, max_scroll: usize) -> usize {
-        max_scroll.saturating_sub(self.scroll) + usize::from(self.cursor.0)
+    /// The first line on screen, counted from the oldest line the pane keeps.
+    fn first(&self, max_scroll: usize) -> usize {
+        max_scroll.saturating_sub(self.scroll.min(max_scroll))
+    }
+
+    /// Scroll the least that puts the cursor back on screen.
+    fn reveal(&mut self, grid: (u16, u16), max_scroll: usize) {
+        let height = usize::from(grid.0.max(1));
+        let first = self.first(max_scroll);
+        let line = self.cursor.0;
+        if line < first {
+            self.scroll = max_scroll.saturating_sub(line).min(max_scroll);
+        } else if line >= first.saturating_add(height) {
+            let first = line.saturating_add(1).saturating_sub(height);
+            self.scroll = max_scroll.saturating_sub(first).min(max_scroll);
+        }
     }
 
     /// Put the view on `line`, with the line at the top and the cursor at `col`.
@@ -789,25 +794,24 @@ impl CopyView {
     /// context and no more; the top of the view is where a person looks after
     /// asking for something.
     fn jump_to(&mut self, line: usize, col: u16, max_scroll: usize, grid: (u16, u16)) {
-        self.scroll = max_scroll.saturating_sub(line);
-        let first = max_scroll - self.scroll;
-        self.cursor = (
-            u16::try_from(line.saturating_sub(first))
-                .unwrap_or(u16::MAX)
-                .min(grid.0.saturating_sub(1)),
-            col.min(grid.1.saturating_sub(1)),
-        );
+        let last_line = max_scroll
+            .saturating_add(usize::from(grid.0))
+            .saturating_sub(1);
+        self.cursor = (line.min(last_line), col.min(grid.1.saturating_sub(1)));
+        self.scroll = max_scroll.saturating_sub(line).min(max_scroll);
     }
 
     /// Keep the cursor, the selection and the view inside a grid that changed
     /// shape, or a history that turned out shorter than the view.
     fn clamp(&mut self, grid: (u16, u16), max_scroll: usize) {
         self.scroll = self.scroll.min(max_scroll);
-        let last_row = grid.0.saturating_sub(1);
+        let last_line = max_scroll
+            .saturating_add(usize::from(grid.0))
+            .saturating_sub(1);
         let last_col = grid.1.saturating_sub(1);
-        self.cursor = (self.cursor.0.min(last_row), self.cursor.1.min(last_col));
+        self.cursor = (self.cursor.0.min(last_line), self.cursor.1.min(last_col));
         if let Some(anchor) = self.anchor {
-            self.anchor = Some((anchor.0.min(last_row), anchor.1.min(last_col)));
+            self.anchor = Some((anchor.0.min(last_line), anchor.1.min(last_col)));
         }
     }
 }
@@ -938,7 +942,7 @@ pub struct Reader {
 
 impl Reader {
     /// A cursor standing still on the live view.
-    fn new(cursor: (u16, u16)) -> Self {
+    fn new(cursor: (usize, u16)) -> Self {
         Self {
             view: CopyView::new(cursor),
             ..Self::default()
@@ -1039,7 +1043,7 @@ impl Reader {
         if total == 0 {
             return 0;
         }
-        let cursor = self.view.line(max_scroll);
+        let cursor = self.view.cursor.0;
         let at = hits
             .iter()
             .rposition(|hit| hit.line <= cursor)
@@ -1092,13 +1096,11 @@ impl Reader {
     }
 
     /// Whether a cell is part of the match the search is sitting on.
-    fn matched(&self, row: u16, col: u16, max_scroll: usize) -> bool {
+    fn matched(&self, line: usize, col: u16) -> bool {
         let Some(hit) = self.find.as_ref().and_then(|find| find.hits.get(find.at)) else {
             return false;
         };
-        let first = max_scroll.saturating_sub(self.view.scroll.min(max_scroll));
-        let hit_row = hit.line as i64 - first as i64;
-        hit_row == i64::from(row) && col >= hit.col && col < hit.col.saturating_add(hit.len)
+        hit.line == line && col >= hit.col && col < hit.col.saturating_add(hit.len)
     }
 }
 
@@ -1146,7 +1148,7 @@ impl TerminalPane {
             alive: true,
             exit: None,
             mode: PaneMode::Live,
-            reader: Reader::new((rows.saturating_sub(1), 0)),
+            reader: Reader::new((0, 0)),
         }
     }
 
@@ -1191,10 +1193,17 @@ impl TerminalPane {
         let (row, col) = self.parser.screen().cursor_position();
         self.mode = PaneMode::Copy;
         self.reader = Reader::new((
-            row.min(rows.saturating_sub(1)),
+            self.history() + usize::from(row.min(rows.saturating_sub(1))),
             col.min(cols.saturating_sub(1)),
         ));
         self.apply_scroll();
+    }
+
+    /// The line a cell of the view is on, counted from the oldest line kept.
+    fn absolute(&self, (row, col): (u16, u16)) -> (usize, u16) {
+        let history = self.history();
+        let first = history.saturating_sub(self.reader.view.scroll.min(history));
+        (first + usize::from(row), col)
     }
 
     /// Start a selection at the cell under the pointer, entering copy mode.
@@ -1206,7 +1215,7 @@ impl TerminalPane {
     /// the cursor are the same cell until the pointer moves, which is what lets a
     /// plain click be told from a drag.
     pub fn select_at(&mut self, cell: (u16, u16)) {
-        let cell = self.cell_between(cell);
+        let cell = self.absolute(self.cell_between(cell));
         let scroll = self.reader.view.scroll;
         self.mode = PaneMode::Copy;
         self.reader = Reader::new(cell);
@@ -1226,7 +1235,7 @@ impl TerminalPane {
         if self.reader.view.anchor.is_none() {
             return;
         }
-        self.reader.view.cursor = self.cell_between(cell);
+        self.reader.view.cursor = self.absolute(self.cell_between(cell));
     }
 
     /// Whether the pane is holding a selection, rather than a bare cursor.
@@ -1249,11 +1258,12 @@ impl TerminalPane {
                 .reader
                 .view
                 .line_selection()
-                .map_or(0, |(start, end)| usize::from(end.saturating_sub(start)) + 1);
+                .map_or(0, |(start, end)| end.saturating_sub(start) + 1);
         }
-        self.reader.view.selection().map_or(0, |(start, end)| {
-            usize::from(end.0.saturating_sub(start.0)) + 1
-        })
+        self.reader
+            .view
+            .selection()
+            .map_or(0, |(start, end)| end.0.saturating_sub(start.0) + 1)
     }
 
     /// A cell `vt100` would answer, clamped to the grid it is drawing.
@@ -1268,7 +1278,7 @@ impl TerminalPane {
     /// Back to following the program.
     pub fn end_copy(&mut self) {
         self.mode = PaneMode::Live;
-        self.reader.view = CopyView::new(self.reader.view.cursor);
+        self.reader.view = CopyView::new((self.history(), 0));
         self.reader.typing = None;
         self.apply_scroll();
     }
@@ -1289,11 +1299,17 @@ impl TerminalPane {
 
     /// Put the oldest line in the view.
     fn scroll_to_top(&mut self) {
+        self.reader.view.cursor.0 = 0;
         self.set_scroll(self.scrollable());
     }
 
     /// Back to the live screen, without leaving copy mode.
     fn scroll_to_live(&mut self) {
+        let (rows, _) = self.grid_size();
+        self.reader.view.cursor.0 = self
+            .history()
+            .saturating_add(usize::from(rows))
+            .saturating_sub(1);
         self.set_scroll(0);
     }
 
@@ -1322,50 +1338,18 @@ impl TerminalPane {
     /// Scroll the view under a drag that is holding a selection.
     ///
     /// Positive is older output, the same way the wheel reads. The selection is
-    /// kept in cells of the view, so a scroll on its own would move what its
-    /// earlier cells point at — a drag across a shell's output would quietly drop
-    /// what it had marked and take the line above instead. The two ends therefore
-    /// travel with the text they were put on.
-    ///
-    /// A scroll that would carry either end off the screen is refused rather than
-    /// half-done: a selection with an end nobody can see is a selection the yank
-    /// could not take either, and stopping is the honest place to stop.
+    /// kept in lines of the history and columns of cells, so scrolling the view
+    /// under it cannot move what it marks: the two ends travel with the text they
+    /// were put on, and a drag at an edge can read back past the screen it began
+    /// on. Returns whether the view actually moved, so a drag at the oldest line
+    /// stops rather than redrawing for a scroll there is no more of.
     pub fn scroll_selection(&mut self, lines: i32) -> bool {
-        let Some(anchor) = self.reader.view.anchor else {
-            return false;
-        };
-        if lines == 0 {
+        if self.reader.view.anchor.is_none() || lines == 0 {
             return false;
         }
         let before = self.reader.view.scroll;
-        let target = if lines > 0 {
-            before.saturating_add(lines.unsigned_abs() as usize)
-        } else {
-            before.saturating_sub(lines.unsigned_abs() as usize)
-        };
-        self.set_scroll(target);
-        let after = self.reader.view.scroll;
-        if after == before {
-            return false;
-        }
-        // Which way the cells moved: reading further back pushes the text down.
-        let down = after > before;
-        let shift = i32::try_from(after.abs_diff(before)).unwrap_or(i32::MAX);
-        let rows = i32::from(self.grid_size().0.saturating_sub(1));
-        let carry = |cell: (u16, u16)| -> Option<(u16, u16)> {
-            let row = i32::from(cell.0) + if down { shift } else { -shift };
-            u16::try_from(row)
-                .ok()
-                .filter(|_| (0..=rows).contains(&row))
-                .map(|row| (row, cell.1))
-        };
-        let (Some(anchor), Some(cursor)) = (carry(anchor), carry(self.reader.view.cursor)) else {
-            self.set_scroll(before);
-            return false;
-        };
-        self.reader.view.anchor = Some(anchor);
-        self.reader.view.cursor = cursor;
-        true
+        self.wheel(lines);
+        self.reader.view.scroll != before
     }
 
     /// Back to the newest line, which is where answering a program puts the view.
@@ -1377,48 +1361,80 @@ impl TerminalPane {
         self.set_scroll(0);
     }
 
+    /// The cells of one history line, at the offset that line is visible at.
+    ///
+    /// The parser only exposes the screen it is showing, so reading an arbitrary
+    /// line is one temporary scroll. `line` is absolute, so the offset is how many
+    /// lines the history holds above it; a line on the live screen is read at
+    /// offset zero. The view's own offset is put back, because a yank must not
+    /// move the screen it was taken from.
+    fn line_cells(&mut self, line: usize, from: u16, to: u16) -> String {
+        let history = self.history();
+        let (rows, cols) = self.grid_size();
+        let offset = history.saturating_sub(line);
+        let first = history - offset;
+        let Some(row) = line
+            .checked_sub(first)
+            .and_then(|row| u16::try_from(row).ok())
+            .filter(|row| *row < rows)
+        else {
+            return String::new();
+        };
+        let was = self.reader.view.scroll;
+        self.parser.screen_mut().set_scrollback(offset);
+        let text = self
+            .parser
+            .screen()
+            .contents_between(row, from.min(cols), row, to.min(cols));
+        self.parser.screen_mut().set_scrollback(was);
+        text
+    }
+
     /// The text under the selection, or the cursor's line when nothing is
     /// selected.
     ///
-    /// The screen's own reader does the work, at the scroll offset the view is
-    /// drawn at, so a copy takes the cells that are highlighted rather than the
-    /// live screen behind them.
+    /// A selection is held in lines of the history, so it can cover lines the
+    /// screen has scrolled past; each of those is read at the offset it is visible
+    /// at, which is what lets a drag at an edge take more than one screen.
     #[must_use]
-    pub fn yank(&self) -> String {
+    pub fn yank(&mut self) -> String {
         let (_, width) = self.grid_size();
-        let screen = self.parser.screen();
         // Whole lines take the row from the left edge to the last non-blank cell:
         // a line is what a person marked, and the padding after it is not.
         if self.reader.view.line
             && let Some((start, end)) = self.reader.view.line_selection()
         {
             let mut lines = Vec::new();
-            for row in start..=end {
-                lines.push(
-                    screen
-                        .contents_between(row, 0, row, width)
-                        .trim_end()
-                        .to_owned(),
-                );
+            for line in start..=end {
+                lines.push(self.line_cells(line, 0, width).trim_end().to_owned());
             }
             return lines.join("\n");
         }
         let (start, end) = match self.reader.view.selection() {
             Some(selection) => selection,
             None => {
-                let (row, _) = self.reader.view.cursor;
-                ((row, 0), (row, width.saturating_sub(1)))
+                let line = self.reader.view.cursor.0;
+                ((line, 0), (line, width.saturating_sub(1)))
             }
         };
         // `contents_between` stops before `end_col`, and the cell under the cursor
         // is part of what a person selected, so it asks for one past it. Trailing
         // blanks are padding, not text: a line yanked from a terminal is pasted
         // into a prompt more often than into a file.
-        let end_col = end.1.saturating_add(1).min(width);
-        screen
-            .contents_between(start.0, start.1, end.0, end_col)
-            .trim_end()
-            .to_owned()
+        let mut text = String::new();
+        for line in start.0..=end.0 {
+            if line > start.0 {
+                text.push('\n');
+            }
+            let from = if line == start.0 { start.1 } else { 0 };
+            let to = if line == end.0 {
+                end.1.saturating_add(1).min(width)
+            } else {
+                width
+            };
+            text.push_str(&self.line_cells(line, from, to));
+        }
+        text.trim_end().to_owned()
     }
 
     /// The history as text, oldest line first.
@@ -1472,8 +1488,8 @@ impl TerminalPane {
 
     /// Whether a cell is part of the match the search is sitting on.
     #[must_use]
-    pub fn matched(&self, row: u16, col: u16) -> bool {
-        self.reader.matched(row, col, self.history())
+    pub fn matched(&self, line: usize, col: u16) -> bool {
+        self.reader.matched(line, col)
     }
 }
 
@@ -2603,11 +2619,7 @@ impl App {
         let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
         self.transcript.view.clamp((height, u16::MAX), max_scroll);
         let rows = self.transcript_rows();
-        let first = rows
-            .len()
-            .saturating_sub(usize::from(height))
-            .saturating_sub(self.transcript.view.scroll);
-        let Some(row) = rows.get(first + usize::from(self.transcript.view.cursor.0)) else {
+        let Some(row) = rows.get(self.transcript.view.cursor.0) else {
             return;
         };
         let entry = row.entry;
@@ -2693,9 +2705,8 @@ impl App {
             }
             return;
         }
-        let grid = self.transcript_grid();
-        let last = u16::try_from(self.transcript_len().saturating_sub(1)).unwrap_or(u16::MAX);
-        self.transcript = Reader::new((last.min(grid.0.saturating_sub(1)), 0));
+        let last = self.transcript_len().saturating_sub(1);
+        self.transcript = Reader::new((last, 0));
         self.focus = Focus::Transcript;
         self.status = COPY_HINT.to_owned();
     }
@@ -2745,8 +2756,14 @@ impl App {
             CopyKey::Select => view.toggle_anchor(),
             CopyKey::SelectLine => view.toggle_line(),
             CopyKey::Move { rows, cols } => view.move_by(rows, cols, grid, max_scroll),
-            CopyKey::Top => view.scroll = max_scroll,
-            CopyKey::Live => view.scroll = 0,
+            CopyKey::Top => {
+                view.cursor.0 = 0;
+                view.scroll = max_scroll;
+            }
+            CopyKey::Live => {
+                view.cursor.0 = self.transcript_len().saturating_sub(1);
+                view.scroll = 0;
+            }
             CopyKey::Yank => {
                 let text = self.transcript_yank(&view);
                 let lines = text.lines().count().max(1);
@@ -2789,10 +2806,8 @@ impl App {
 
     /// Whether a cell of the transcript is part of the match the search is on.
     #[must_use]
-    pub fn matched_transcript(&self, row: u16, col: u16) -> bool {
-        let grid = self.transcript_grid();
-        let max_scroll = self.transcript_len().saturating_sub(usize::from(grid.0));
-        self.transcript.matched(row, col, max_scroll)
+    pub fn matched_transcript(&self, line: usize, col: u16) -> bool {
+        self.transcript.matched(line, col)
     }
 
     /// Move to the next match in the transcript's search, and say where it landed.
@@ -2816,13 +2831,6 @@ impl App {
     /// often than into a file.
     fn transcript_yank(&self, view: &CopyView) -> String {
         let lines = self.transcript_rows();
-        let height = usize::from(self.transcript_size.map_or(24, |size| size.rows.max(1)));
-        // The selection is in cells of the view, and the view is a window onto the
-        // lines: the first row on screen is this far into them.
-        let first = lines
-            .len()
-            .saturating_sub(height)
-            .saturating_sub(view.scroll);
         // A line-wise selection is the rows' own text, trimmed of the padding a
         // line does not own. A blank line in the middle stays: it is a line the
         // person marked, and a yank that swallowed it would join two paragraphs.
@@ -2831,7 +2839,7 @@ impl App {
         {
             let mut text = String::new();
             for row in start..=end {
-                let Some(line) = lines.get(first + usize::from(row)) else {
+                let Some(line) = lines.get(row) else {
                     break;
                 };
                 if !text.is_empty() {
@@ -2850,7 +2858,7 @@ impl App {
         };
         let mut text = String::new();
         for row in start.0..=end.0 {
-            let Some(line) = lines.get(first + usize::from(row)) else {
+            let Some(line) = lines.get(row) else {
                 break;
             };
             let chars: Vec<char> = line.text().chars().collect();
@@ -2954,6 +2962,10 @@ impl App {
                     // answer would print above the fold.
                     let delta = pane.history().saturating_sub(before);
                     if delta > 0 && (pane.mode == PaneMode::Copy || pane.reader.view.scroll > 0) {
+                        // Absolute lines are stable as output appends below them, so
+                        // only the window moves: growing the offset by as many lines
+                        // as left the screen keeps the same text under the cursor
+                        // and the same cells in the selection.
                         pane.reader.view.scroll = pane.reader.view.scroll.saturating_add(delta);
                         pane.apply_scroll();
                     }
@@ -9181,11 +9193,11 @@ mod tests {
         // A press in the middle of the screen, dragged to the pane's first row.
         app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 12));
         app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 3, 2));
-        let before = app.terminal.as_ref().expect("a pane").yank();
+        let before = app.terminal.as_mut().expect("a pane").yank();
         let began_on = before.lines().last().unwrap_or("").to_owned();
 
         assert!(app.autoscroll(), "there is output behind the screen");
-        let pane = app.terminal.as_ref().expect("a pane");
+        let pane = app.terminal.as_mut().expect("a pane");
         assert_eq!(pane.reader.view.scroll, 1, "one line older, drawn lower");
         let after = pane.yank();
         assert_eq!(
@@ -9210,6 +9222,37 @@ mod tests {
         assert!(
             !app.autoscroll(),
             "and at the live screen there is nothing further forward"
+        );
+    }
+
+    #[test]
+    fn a_terminal_drag_reads_past_the_screen_it_began_on() {
+        let mut app = drawn_terminal();
+        let printed: String = (0..120).map(|line| format!("line {line}\r\n")).collect();
+        app.apply(Update::TerminalData(printed.into_bytes()));
+
+        // A press in the middle, dragged to the pane's first row and held there.
+        app.handle_mouse(mouse_at(MouseEventKind::Down(MouseButton::Left), 1, 12));
+        app.handle_mouse(mouse_at(MouseEventKind::Drag(MouseButton::Left), 1, 2));
+        let mut steps = 0;
+        while app.autoscroll() {
+            steps += 1;
+            assert!(steps < 1_000, "the history is finite");
+        }
+
+        let pane = app.terminal.as_mut().expect("a pane");
+        let rows = usize::from(pane.grid_size().0);
+        assert_eq!(pane.reader.view.scroll, pane.history(), "the oldest line");
+        let yanked = pane.yank();
+        assert!(
+            yanked.lines().count() > rows * 2,
+            "a drag at the edge is not held to one screen: {} lines",
+            yanked.lines().count()
+        );
+        assert_eq!(
+            yanked.lines().next().map(str::trim_end),
+            Some("line 0"),
+            "the anchor kept its text while the head walked to the oldest line"
         );
     }
 
@@ -9657,11 +9700,11 @@ mod tests {
             .reader
             .view
             .scroll;
-        let text = app.terminal.as_ref().expect("the pane is open").yank();
+        let text = app.terminal.as_mut().expect("the pane is open").yank();
 
         app.apply(Update::TerminalData(b"more\r\nmore\r\n".to_vec()));
 
-        let pane = app.terminal.as_ref().expect("the pane is open");
+        let pane = app.terminal.as_mut().expect("the pane is open");
         assert_eq!(
             pane.reader.view.scroll,
             before + 2,
@@ -9761,17 +9804,19 @@ mod tests {
         assert!(app.status.contains("11 matches"), "{}", app.status);
         // The newest match before where the cursor was reading. It is on the live
         // screen, so the view does not move; the cursor goes to it.
+        let line = pane.history() + 8;
         assert_eq!(
-            pane.reader.view.cursor.0, 8,
+            pane.reader.view.cursor.0, line,
             "line 39 is row 8 of the live screen"
         );
-        assert!(pane.matched(8, 0), "and the match is under the cursor");
+        assert!(pane.matched(line, 0), "and the match is under the cursor");
 
         // `n` is the next one older, and the status says where in the list it is.
         app.handle_key(key(KeyCode::Char('n')));
         let pane = app.terminal.as_ref().expect("the pane is open");
-        assert_eq!(pane.reader.view.cursor.0, 7);
-        assert!(pane.matched(7, 0));
+        let line = pane.history() + 7;
+        assert_eq!(pane.reader.view.cursor.0, line);
+        assert!(pane.matched(line, 0));
         assert!(app.status.contains("match 10/11"), "{}", app.status);
 
         // `N` goes back the other way, to the newest of the eleven.
@@ -9906,19 +9951,19 @@ mod tests {
         assert_eq!(app.focus, Focus::Transcript, "focus is the mode");
         assert_eq!(
             app.transcript.view.cursor,
-            (9, 0),
+            (49, 0),
             "the cursor starts on the newest line"
         );
 
         app.handle_key(key(KeyCode::Char('k')));
-        assert_eq!(app.transcript.view.cursor.0, 8);
+        assert_eq!(app.transcript.view.cursor.0, 48);
 
         // Twelve lines up is past the top of a ten-line view: the view scrolls so
         // the cursor stays on screen, which is how one set of keys reaches 50.
         for _ in 0..12 {
             app.handle_key(key(KeyCode::Char('k')));
         }
-        assert_eq!(app.transcript.view.cursor.0, 0);
+        assert_eq!(app.transcript.view.cursor.0, 36);
         assert_eq!(
             app.transcript.view.scroll, 4,
             "nine rows to the top, four lines further"
@@ -10188,14 +10233,14 @@ mod tests {
         assert!(app.status.contains("11 matches"), "{}", app.status);
         // The newest match before the cursor, which was on line 49 — so the newest
         // match of all, on the last line of the transcript.
-        assert_eq!(app.transcript.view.cursor, (9, 0));
+        assert_eq!(app.transcript.view.cursor, (49, 0));
         assert!(
-            app.matched_transcript(9, 0),
+            app.matched_transcript(49, 0),
             "the match is under the cursor"
         );
 
         app.handle_key(key(KeyCode::Char('n')));
-        assert_eq!(app.transcript.view.cursor, (8, 0), "line 48, one older");
+        assert_eq!(app.transcript.view.cursor, (48, 0), "line 48, one older");
         assert!(app.status.contains("match 10/11"), "{}", app.status);
 
         // A match far up the transcript scrolls the view to it: "line 7" is only on
@@ -10210,7 +10255,7 @@ mod tests {
             app.transcript.view.scroll, 33,
             "40 lines of history, and line 7 on top"
         );
-        assert_eq!(app.transcript.view.cursor, (0, 0));
+        assert_eq!(app.transcript.view.cursor, (7, 0));
     }
 
     #[test]
@@ -10289,8 +10334,8 @@ mod tests {
             app.transcript.view.scroll, 40,
             "50 lines in a 10-line view leave 40 behind it"
         );
-        // `g` moves the view, not the cursor: the top row is the oldest line
-        // once the cursor has walked up to it.
+        // `g` puts the cursor on the oldest line, so there is nothing further up
+        // for these keys to find.
         for _ in 0..9 {
             app.handle_key(key(KeyCode::Char('k')));
         }
@@ -10315,7 +10360,11 @@ mod tests {
             editor: None,
             terminal_area: None,
         });
-        assert_eq!(app.transcript.view.cursor, (4, 0));
+        assert_eq!(app.transcript.view.cursor, (49, 0));
+        assert_eq!(
+            app.transcript.view.scroll, 0,
+            "the newest line is still at the bottom of a shorter view"
+        );
     }
 
     #[test]

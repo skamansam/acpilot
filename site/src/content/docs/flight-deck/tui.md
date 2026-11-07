@@ -245,8 +245,8 @@ marked, so `y` takes it over OSC 52 and `Esc` gives the keys back; `V` marks who
 lines rather than the cells between two ends, which is what a path or a stack
 trace wants — and a click that selected nothing leaves again, because copy mode is the one state where a keystroke
 goes nowhere near the program. A drag held against the top or bottom of either pane
-keeps scrolling the view and keeps growing the selection, which is how a run longer
-than one screen gets marked at all. Mouse reporting costs the terminal its own
+keeps scrolling the view and keeps growing the selection, so a run can be marked all
+the way back to the oldest line the pane still holds and copied in one yank. Mouse reporting costs the terminal its own
 drag-to-select, so `acpilot tui --no-mouse` turns it off and the terminal keeps that
 gesture; every action the pointer has is also a key. The gutter beside the numbers is
 git's, asked on the host the files are on: `GET /v1/files` answers the text with the

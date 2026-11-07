@@ -172,8 +172,8 @@ and on a remote workspace that is a shell on the host the files are on, through 
 same helper the tree reads through. The pane keeps ten thousand
 lines behind its screen: `F2` reads back through them, `/` finds a string in that
 history — case-insensitive until the query has a capital in it, landing on the
-newest match before the cursor, with `n` and `N` to walk older and newer — and `v` and `y` copy a selection to the clipboard over OSC 52,
-which is what makes a copy work over SSH. The transcript is a pane like the others —
+newest match before the cursor, with `n` and `N` to walk older and newer — and `v` selects cells, `V` whole lines, and `y` copies the selection to the
+clipboard over OSC 52, which is what makes a copy work over SSH. The transcript is a pane like the others —
 `Tab` reaches it, or `F3` from anywhere — and answers to the same copy keys, so a
 long answer is scrolled, searched and yanked with what the terminal already taught;
 `?` lists those keys rather than the editor's while a pane is being read. The

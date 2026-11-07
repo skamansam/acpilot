@@ -1050,6 +1050,208 @@
         ],
         "type": "object"
       },
+      "GitChangeKind": {
+        "description": "What happened to a path, on one side of the index.",
+        "enum": [
+          "unmodified",
+          "modified",
+          "added",
+          "deleted",
+          "renamed",
+          "copied",
+          "type_changed",
+          "unmerged",
+          "untracked",
+          "ignored"
+        ],
+        "type": "string"
+      },
+      "GitCommit": {
+        "description": "One commit, with enough structure to draw a graph.",
+        "properties": {
+          "author": {
+            "description": "Author name.",
+            "type": "string"
+          },
+          "authored_at": {
+            "description": "Author timestamp, RFC 3339 with the author's offset.",
+            "type": "string"
+          },
+          "email": {
+            "description": "Author email.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Full commit id.",
+            "type": "string"
+          },
+          "parents": {
+            "description": "Parent ids, in order. Empty for a root commit.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "description": "First line of the message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parents",
+          "author",
+          "email",
+          "authored_at",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "GitDiff": {
+        "description": "A unified diff and the files it touches.\n\nThe patch is colour-free and external-diff-free, because a person reads it in a\npane rather than in a terminal that would render either. The file list is what a\ncommit composer iterates without parsing headers.",
+        "properties": {
+          "files": {
+            "description": "The files the patch touches.",
+            "items": {
+              "$ref": "#/components/schemas/GitDiffFile"
+            },
+            "type": "array"
+          },
+          "patch": {
+            "description": "The unified diff text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch",
+          "files"
+        ],
+        "type": "object"
+      },
+      "GitDiffFile": {
+        "description": "One file in a diff, independent of the patch text.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "What happened to it."
+          },
+          "old_path": {
+            "description": "The path before a rename or copy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Path after the change, relative to the repository root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change"
+        ],
+        "type": "object"
+      },
+      "GitStatus": {
+        "description": "Branch state and every changed path.",
+        "properties": {
+          "ahead": {
+            "description": "Commits ahead of the upstream. Always on the wire: zero is the answer.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behind": {
+            "description": "Commits behind the upstream.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "branch": {
+            "description": "Current branch, absent on a detached `HEAD`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "Every changed path, as git lists them.",
+            "items": {
+              "$ref": "#/components/schemas/GitStatusEntry"
+            },
+            "type": "array"
+          },
+          "head": {
+            "description": "The `HEAD` commit, absent before the first commit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream": {
+            "description": "Upstream branch, when one is configured.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ahead",
+          "behind",
+          "files"
+        ],
+        "type": "object"
+      },
+      "GitStatusEntry": {
+        "description": "One changed path, with the index's answer and the working tree's.",
+        "properties": {
+          "index": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "State in the index: what the next commit would contain."
+          },
+          "old_path": {
+            "description": "The path it was renamed or copied from, when it was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Path relative to the repository root, with `/` as the separator.",
+            "type": "string"
+          },
+          "worktree": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "State in the working tree: what the next `git add` would pick up."
+          }
+        },
+        "required": [
+          "path",
+          "index",
+          "worktree"
+        ],
+        "type": "object"
+      },
+      "GitTreeEntry": {
+        "description": "One path in the working tree, tracked or not.",
+        "properties": {
+          "path": {
+            "description": "Path relative to the repository root, with `/` as the separator.",
+            "type": "string"
+          },
+          "tracked": {
+            "description": "Whether the index knows about it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "tracked"
+        ],
+        "type": "object"
+      },
       "GrepMatch": {
         "description": "One line a content search matched.\n\nThe line's text travels with the match because a jump list has to be read\nbefore it is chosen from: a list of `src/main.rs:12` is a list nobody can pick\nthe right row out of without opening every one of them.",
         "properties": {
@@ -3323,6 +3525,277 @@
           }
         },
         "summary": "Find files by path"
+      }
+    },
+    "/v1/git/diff": {
+      "get": {
+        "operationId": "git_diff_doc",
+        "parameters": [
+          {
+            "description": "Workspace id; empty or absent means the one this daemon serves",
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`unstaged` (default), `staged` or `all`",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitDiff"
+                }
+              }
+            },
+            "description": "The patch and its file list; paths are repository-relative"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown scope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, or one on another host"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "A unified diff and the files it touches"
+      }
+    },
+    "/v1/git/log": {
+      "get": {
+        "operationId": "git_log_doc",
+        "parameters": [
+          {
+            "description": "Workspace id; empty or absent means the one this daemon serves",
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many commits, defaults to 50 and is capped at 500",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitCommit"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Commits in topological order, each with its parents"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, or one on another host"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "Recent commits, newest first"
+      }
+    },
+    "/v1/git/status": {
+      "get": {
+        "operationId": "git_status_doc",
+        "parameters": [
+          {
+            "description": "Workspace id; empty or absent means the one this daemon serves",
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStatus"
+                }
+              }
+            },
+            "description": "Branch, upstream, ahead/behind and both sides of every change; paths are repository-relative"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, or one on another host"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "Branch state and changed paths"
+      }
+    },
+    "/v1/git/tree": {
+      "get": {
+        "operationId": "git_tree_doc",
+        "parameters": [
+          {
+            "description": "Workspace id; empty or absent means the one this daemon serves",
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitTreeEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Paths sorted, each with whether the index knows it; paths are repository-relative"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, or one on another host"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "Every path in the working tree, tracked or not"
       }
     },
     "/v1/lsp/servers": {

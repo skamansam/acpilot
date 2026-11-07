@@ -281,9 +281,10 @@ POST   /v1/sessions/{id}/prompt           POST /v1/sessions/{id}/cancel
 POST   /v1/sessions/{id}/mode             GET  /v1/sessions/{id}/events   (SSE)
 WS     /v1/sessions/{id}/stream           GET  /v1/events                 (SSE)
 GET    /v1/permissions?status=pending     POST /v1/permissions/{id}/resolve
-GET    /v1/files?workspace=&path=         PUT  /v1/files
-GET    /v1/files/list
-GET    /v1/terminals?session=             POST /v1/terminals
+GET    /v1/files?workspace=&path=         PUT  /v1/filesGET    /v1/files/list
+GET    /v1/git/status?workspace=          GET    /v1/git/diff?scope=
+GET    /v1/git/tree?workspace=            GET    /v1/git/log?limit=
+GET    /v1/terminals?session=             POST   /v1/terminals
 WS     /v1/terminals/{id}/attach
 GET    /v1/profiles                       POST /v1/profiles
 GET    /v1/profiles/{id}                  PATCH/DELETE /v1/profiles/{id}

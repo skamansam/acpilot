@@ -95,6 +95,8 @@ GET    /v1/files                          PUT    /v1/files
 DELETE /v1/files                          POST   /v1/files/directory
 POST   /v1/files/rename
 GET    /v1/files/list
+GET    /v1/git/status?workspace=          GET    /v1/git/diff?workspace=&scope=
+GET    /v1/git/tree?workspace=            GET    /v1/git/log?workspace=&limit=
 
 GET    /v1/terminals?session=             POST   /v1/terminals
 DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
@@ -638,6 +640,58 @@ between it and the root. The deepest part of the path that already exists is the
 one resolved and checked, since a symlink in the middle is how a recursive create
 lands outside the workspace. Something already at that path is `409`; a
 zero-length name is `400`.
+
+## Git
+
+The source-control pane's read half, served from the host's own `git` through
+`acpilot-git`, so what a pane says is staged agrees with the command line. The
+repository is discovered from the workspace root; a workspace opened inside a
+monorepo is still about the repository that contains it.
+
+`GET /v1/git/status?workspace=` returns `GitStatus { branch?, upstream?, ahead,
+behind, head?, files[] }`, where each `GitStatusEntry` is `{ path, old_path?,
+index, worktree }` and both `index` and `worktree` are one of `unmodified`,
+`modified`, `added`, `deleted`, `renamed`, `copied`, `type_changed`, `unmerged`,
+`untracked` or `ignored`. Both halves travel on one row because which side of the
+edit is staged is the question the pane exists to answer. `branch` is absent on a
+detached `HEAD`, `head` before the first commit, and `ahead`/`behind` are always
+present — zero is an answer.
+
+`GET /v1/git/diff?workspace=&scope=` returns `GitDiff { patch, files[] }`. `scope`
+is `unstaged` (the default: working tree against the index), `staged` (index
+against `HEAD`), or `all` (working tree against `HEAD`); anything else is `400`
+with the accepted spellings in `details`. The patch is unified, colour-free and
+external-diff-free — the text a pane draws rather than the text a terminal would
+re-render — and `files` is the list a commit composer iterates without parsing
+headers.
+
+`GET /v1/git/tree?workspace=` returns `GitTreeEntry[]`, every path in the working
+tree, sorted, each with whether the index knows it. This is the listing a
+source-control tree folds into directories; `GET /v1/files/list` is still the one
+that lists a filesystem directory and marks hidden rows.
+
+`GET /v1/git/log?workspace=&limit=` returns `GitCommit[]`, newest first in
+topological order, each `{ id, parents[], author, email, authored_at, subject }`.
+`limit` defaults to 50 and is capped at 500 rather than refused; `limit=0` is an
+empty history, as it is for a repository with no commits.
+
+**Paths in every answer are relative to the repository root**, because that is
+what git reports and the one spelling a status row and a patch header can share.
+When the workspace is the repository's root — the ordinary case — they are the
+same paths `GET /v1/files` takes. A client drawing a workspace inside a monorepo
+asks `/v1/files/list` for the rows it may open.
+
+A directory that is not inside a repository is `404 not_found`, not an empty
+status: there is no repository to describe, which is the same answer a route that
+read one file would give. A host without `git` is `502 host_unavailable` with
+`details.field: "git"`, because installing it is the fix and a `500` would read as
+a bug in the daemon. A workspace on another host is `409`, like every other route
+that walks this machine's filesystem: its tree still gets letters through
+`/v1/files/list` (which asks the host), but a diff over there needs a helper
+method that does not exist yet.
+
+Nothing here writes. Staging, committing, checking out and config are separate,
+confirmed actions with their own permission path (P6.5-3, P6.5-4).
 
 ## Project map
 

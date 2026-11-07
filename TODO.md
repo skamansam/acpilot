@@ -1253,15 +1253,40 @@ what needs an editor shell waits for the editor shell.
   so config, filters, worktrees, submodules and signing stay consistent with the command line.
   Nine tests run against real temporary repositories, including a staged rename, an unborn
   repository, and a subdirectory discovery.
-- [ ] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
+- [x] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
   proto types mirroring `acpilot-git`; `404 not_found` for "not a repository" and a clear
-  `host_unavailable` when `git` is missing on the host.
+  `host_unavailable` when `git` is missing on the host. — **done 2026-11-07**
   - **The tree's letters needed none of those routes (2026-11-01).** `GET /v1/files/list`
     marks each row with a `FileChange`, so the decoration P6-6 was waiting on is done: one
     `git status` per listing, a directory summarised by the most urgent change beneath it,
     and silence rather than an error when there is no repository or no `git`. What is left
     here is the routes themselves and the source-control pane that reads both halves of a
     change.
+  - **Result:** the four routes are served from the host's own `git`, through the crate
+    that already parses porcelain, so a pane and the command line cannot disagree about
+    what is staged. `GitStatus` carries branch, upstream, ahead/behind and both sides of
+    every change; `GitDiff` the colour-free patch and its file list; `GitTreeEntry` every
+    working-tree path with whether the index knows it; `GitCommit` the parents a graph
+    needs. Scope defaults to `unstaged` and names the three spellings in a `400` rather
+    than silently answering a different question; `limit` defaults to 50 and is capped at
+    500 rather than refused. Paths are repository-relative — what git reports, and the
+    one spelling a status row and a patch header share — which is the same path as a
+    workspace file whenever the workspace is the repository's root, the ordinary case.
+    A directory that is not a repository is `404`; no `git` on the host is
+    `502 host_unavailable` with `details.field: "git"`; a workspace on another host is
+    `409`, because these routes walk this machine's filesystem. Nothing writes: staging
+    and committing stay the confirmed actions P6.5-3 and P6.5-4 own. **Tests:** nine route
+    tests over a real temporary repository (both halves of a change, the three diff
+    scopes and an unknown one, tracked and untracked tree rows, a log limit with its
+    parents and `limit=0`, not-a-repository, a remote workspace, no workspace, and the
+    four paths plus four schemas in the OpenAPI document), three unit tests in the
+    module, and three on the wire types' JSON shape.
+  - **Open:** the source-control pane that draws these is P6.5-4, and the commit writer is
+    P6.5-3. A remote workspace still gets letters only: its diff and log wait for a
+    helper method that runs `git` over there, and the refusal is the honest answer until
+    then. A patch is not capped by bytes — a repository-wide diff of a generated tree is
+    as large as git makes it — and neither `diff` nor `status` is pushed to a client, so a
+    pane refreshes by asking again.
 - [ ] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
   prompt (Conventional Commits with the gitmoji inside the description), the gitmoji table, and
   strict validation of the model's answer. Still open: per-profile prompt storage, a route that

@@ -187,6 +187,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A unified diff and the files it touches */
+        get: operations["git_diff_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent commits, newest first */
+        get: operations["git_log_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Branch state and changed paths */
+        get: operations["git_status_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every path in the working tree, tracked or not */
+        get: operations["git_tree_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/lsp/servers": {
         parameters: {
             query?: never;
@@ -995,6 +1063,87 @@ export interface components {
              *     an older client could ask for.
              */
             workspace?: string | null;
+        };
+        /**
+         * @description What happened to a path, on one side of the index.
+         * @enum {string}
+         */
+        GitChangeKind: "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "type_changed" | "unmerged" | "untracked" | "ignored";
+        /** @description One commit, with enough structure to draw a graph. */
+        GitCommit: {
+            /** @description Author name. */
+            author: string;
+            /** @description Author timestamp, RFC 3339 with the author's offset. */
+            authored_at: string;
+            /** @description Author email. */
+            email: string;
+            /** @description Full commit id. */
+            id: string;
+            /** @description Parent ids, in order. Empty for a root commit. */
+            parents: string[];
+            /** @description First line of the message. */
+            subject: string;
+        };
+        /**
+         * @description A unified diff and the files it touches.
+         *
+         *     The patch is colour-free and external-diff-free, because a person reads it in a
+         *     pane rather than in a terminal that would render either. The file list is what a
+         *     commit composer iterates without parsing headers.
+         */
+        GitDiff: {
+            /** @description The files the patch touches. */
+            files: components["schemas"]["GitDiffFile"][];
+            /** @description The unified diff text. */
+            patch: string;
+        };
+        /** @description One file in a diff, independent of the patch text. */
+        GitDiffFile: {
+            /** @description What happened to it. */
+            change: components["schemas"]["GitChangeKind"];
+            /** @description The path before a rename or copy. */
+            old_path?: string | null;
+            /** @description Path after the change, relative to the repository root. */
+            path: string;
+        };
+        /** @description Branch state and every changed path. */
+        GitStatus: {
+            /**
+             * Format: int32
+             * @description Commits ahead of the upstream. Always on the wire: zero is the answer.
+             */
+            ahead: number;
+            /**
+             * Format: int32
+             * @description Commits behind the upstream.
+             */
+            behind: number;
+            /** @description Current branch, absent on a detached `HEAD`. */
+            branch?: string | null;
+            /** @description Every changed path, as git lists them. */
+            files: components["schemas"]["GitStatusEntry"][];
+            /** @description The `HEAD` commit, absent before the first commit. */
+            head?: string | null;
+            /** @description Upstream branch, when one is configured. */
+            upstream?: string | null;
+        };
+        /** @description One changed path, with the index's answer and the working tree's. */
+        GitStatusEntry: {
+            /** @description State in the index: what the next commit would contain. */
+            index: components["schemas"]["GitChangeKind"];
+            /** @description The path it was renamed or copied from, when it was. */
+            old_path?: string | null;
+            /** @description Path relative to the repository root, with `/` as the separator. */
+            path: string;
+            /** @description State in the working tree: what the next `git add` would pick up. */
+            worktree: components["schemas"]["GitChangeKind"];
+        };
+        /** @description One path in the working tree, tracked or not. */
+        GitTreeEntry: {
+            /** @description Path relative to the repository root, with `/` as the separator. */
+            path: string;
+            /** @description Whether the index knows about it. */
+            tracked: boolean;
         };
         /**
          * @description One line a content search matched.
@@ -2421,6 +2570,219 @@ export interface operations {
             };
             /** @description This daemon has no workspace to walk */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_diff_doc: {
+        parameters: {
+            query?: {
+                /** @description Workspace id; empty or absent means the one this daemon serves */
+                workspace?: string;
+                /** @description `unstaged` (default), `staged` or `all` */
+                scope?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The patch and its file list; paths are repository-relative */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitDiff"];
+                };
+            };
+            /** @description An unknown scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_log_doc: {
+        parameters: {
+            query?: {
+                /** @description Workspace id; empty or absent means the one this daemon serves */
+                workspace?: string;
+                /** @description How many commits, defaults to 50 and is capped at 500 */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Commits in topological order, each with its parents */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCommit"][];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_status_doc: {
+        parameters: {
+            query?: {
+                /** @description Workspace id; empty or absent means the one this daemon serves */
+                workspace?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Branch, upstream, ahead/behind and both sides of every change; paths are repository-relative */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_tree_doc: {
+        parameters: {
+            query?: {
+                /** @description Workspace id; empty or absent means the one this daemon serves */
+                workspace?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paths sorted, each with whether the index knows it; paths are repository-relative */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTreeEntry"][];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

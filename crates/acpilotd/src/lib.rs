@@ -45,6 +45,9 @@ mod base64;
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
 mod files;
+// Status, diff, tree and log over the workspace's repository, from the host's
+// own `git`: the source-control pane's read half (P6.5-2).
+mod git;
 pub mod helper;
 pub mod hosts;
 mod lsp;
@@ -1582,6 +1585,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .into_iter()
         .chain(terminals::operations())
         .chain(files::operations())
+        .chain(git::operations())
         .chain(project::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
@@ -1975,6 +1979,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/p/{profile}/s/{session}", get(web_app))
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
+        .merge(git::routes())
         .merge(hosts::routes())
         .merge(sessions::routes())
         .merge(stats::routes())

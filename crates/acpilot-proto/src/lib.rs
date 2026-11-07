@@ -16,6 +16,7 @@ pub mod error;
 pub mod event;
 pub mod extension;
 pub mod file;
+pub mod git;
 pub mod host;
 pub mod lsp;
 pub mod model;
@@ -89,6 +90,13 @@ pub const API_PREFIX: &str = "/v1";
         file::LineMark,
         file::Reference,
         file::ReferencesRequest,
+        git::GitChangeKind,
+        git::GitStatusEntry,
+        git::GitStatus,
+        git::GitDiffFile,
+        git::GitDiff,
+        git::GitTreeEntry,
+        git::GitCommit,
         project::ProjectMap,
         project::MapArea,
         terminal::TerminalSize,

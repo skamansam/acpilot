@@ -623,7 +623,7 @@ pub struct Completion {
 const SCROLLBACK: usize = 10_000;
 
 /// What the status line says when a pane starts being read.
-const COPY_HINT: &str = "copy mode · j/k scroll · / find · v select · y copy · Esc leaves";
+const COPY_HINT: &str = "copy mode · j/k scroll · / find · v/V select · y copy · Esc leaves";
 
 /// What the status line says while a query is being typed.
 const SEARCH_HINT: &str = "find · type a pattern · Enter searches back · Esc cancels";
@@ -650,6 +650,13 @@ pub struct CopyView {
     pub cursor: (u16, u16),
     /// Where a selection started, once `v` has been pressed.
     pub anchor: Option<(u16, u16)>,
+    /// Whether the selection takes whole lines rather than the cells between its
+    /// two ends.
+    ///
+    /// `V` rather than a second pane: a build's output and an agent's answer are
+    /// read in lines, and marking one character at a time to reach the end of a
+    /// path or a timestamp is work the pane can do.
+    pub line: bool,
     /// How many lines behind the live view the pane sits. Zero is live.
     pub scroll: usize,
 }
@@ -660,6 +667,7 @@ impl CopyView {
         Self {
             cursor,
             anchor: None,
+            line: false,
             scroll: 0,
         }
     }
@@ -675,19 +683,52 @@ impl CopyView {
         })
     }
 
+    /// The rows a line-wise selection covers, in reading order.
+    fn line_selection(&self) -> Option<(u16, u16)> {
+        let anchor = self.anchor?;
+        Some(if anchor.0 <= self.cursor.0 {
+            (anchor.0, self.cursor.0)
+        } else {
+            (self.cursor.0, anchor.0)
+        })
+    }
+
     /// Whether a cell is inside the selection.
+    ///
+    /// A line-wise selection covers every cell of its rows, including the blanks
+    /// past the end of a line: a row that was marked is a row the yank takes.
     #[must_use]
     pub fn selected(&self, row: u16, col: u16) -> bool {
+        if self.line {
+            return self
+                .line_selection()
+                .is_some_and(|(start, end)| row >= start && row <= end);
+        }
         self.selection()
             .is_some_and(|(start, end)| (row, col) >= start && (row, col) <= end)
     }
 
     /// Start a selection at the cursor, or drop the one in progress.
+    ///
+    /// `v` is the character-wise one, so it also leaves a line-wise selection: the
+    /// keys are two answers to "what am I marking", not two modes to remember.
     fn toggle_anchor(&mut self) {
         self.anchor = match self.anchor {
             Some(_) => None,
             None => Some(self.cursor),
         };
+        self.line = false;
+    }
+
+    /// Start a line-wise selection at the cursor, or drop the one in progress.
+    fn toggle_line(&mut self) {
+        if self.line {
+            self.line = false;
+            self.anchor = None;
+        } else {
+            self.line = true;
+            self.anchor = Some(self.cursor);
+        }
     }
 
     /// Move the cursor in a `grid` whose history is `max_scroll` lines deep.
@@ -781,6 +822,8 @@ enum CopyKey {
     Leave,
     /// Start a selection at the cursor, or drop the one in progress.
     Select,
+    /// Start a whole-line selection at the cursor, or drop the one in progress.
+    SelectLine,
     /// Move the cursor, scrolling when it reaches an edge.
     Move { rows: i32, cols: i32 },
     /// The oldest line in the view.
@@ -828,6 +871,7 @@ impl CopyKey {
             KeyCode::Char('g') => Self::Top,
             KeyCode::Char('G') => Self::Live,
             KeyCode::Char('v') => Self::Select,
+            KeyCode::Char('V') => Self::SelectLine,
             KeyCode::Char('y') => Self::Yank,
             KeyCode::Char('/') => Self::Find,
             KeyCode::Char('n') => Self::Older,
@@ -1188,6 +1232,9 @@ impl TerminalPane {
     /// Whether the pane is holding a selection, rather than a bare cursor.
     #[must_use]
     pub fn has_selection(&self) -> bool {
+        if self.reader.view.line {
+            return self.reader.view.anchor.is_some();
+        }
         self.reader
             .view
             .selection()
@@ -1197,6 +1244,13 @@ impl TerminalPane {
     /// How many lines the selection covers, counting both ends.
     #[must_use]
     pub fn selected_lines(&self) -> usize {
+        if self.reader.view.line {
+            return self
+                .reader
+                .view
+                .line_selection()
+                .map_or(0, |(start, end)| usize::from(end.saturating_sub(start)) + 1);
+        }
         self.reader.view.selection().map_or(0, |(start, end)| {
             usize::from(end.0.saturating_sub(start.0)) + 1
         })
@@ -1333,6 +1387,22 @@ impl TerminalPane {
     pub fn yank(&self) -> String {
         let (_, width) = self.grid_size();
         let screen = self.parser.screen();
+        // Whole lines take the row from the left edge to the last non-blank cell:
+        // a line is what a person marked, and the padding after it is not.
+        if self.reader.view.line
+            && let Some((start, end)) = self.reader.view.line_selection()
+        {
+            let mut lines = Vec::new();
+            for row in start..=end {
+                lines.push(
+                    screen
+                        .contents_between(row, 0, row, width)
+                        .trim_end()
+                        .to_owned(),
+                );
+            }
+            return lines.join("\n");
+        }
         let (start, end) = match self.reader.view.selection() {
             Some(selection) => selection,
             None => {
@@ -2673,6 +2743,7 @@ impl App {
         let mut view = self.transcript.view;
         match action {
             CopyKey::Select => view.toggle_anchor(),
+            CopyKey::SelectLine => view.toggle_line(),
             CopyKey::Move { rows, cols } => view.move_by(rows, cols, grid, max_scroll),
             CopyKey::Top => view.scroll = max_scroll,
             CopyKey::Live => view.scroll = 0,
@@ -2752,6 +2823,24 @@ impl App {
             .len()
             .saturating_sub(height)
             .saturating_sub(view.scroll);
+        // A line-wise selection is the rows' own text, trimmed of the padding a
+        // line does not own. A blank line in the middle stays: it is a line the
+        // person marked, and a yank that swallowed it would join two paragraphs.
+        if view.line
+            && let Some((start, end)) = view.line_selection()
+        {
+            let mut text = String::new();
+            for row in start..=end {
+                let Some(line) = lines.get(first + usize::from(row)) else {
+                    break;
+                };
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(line.text().trim_end());
+            }
+            return text;
+        }
         let (start, end) = match view.selection() {
             Some(selection) => selection,
             None => {
@@ -6087,6 +6176,7 @@ impl App {
         match action {
             CopyKey::Leave => pane.end_copy(),
             CopyKey::Select => pane.reader.view.toggle_anchor(),
+            CopyKey::SelectLine => pane.reader.view.toggle_line(),
             CopyKey::Move { rows, cols } => pane.copy_move(rows, cols),
             CopyKey::Top => pane.scroll_to_top(),
             CopyKey::Live => pane.scroll_to_live(),
@@ -9539,6 +9629,46 @@ mod tests {
             "a copy ends copy mode, so the shell has the keyboard again"
         );
         assert!(app.status.contains("copied"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_line_selection_yanks_the_whole_lines() {
+        let mut app = with_terminal();
+        app.apply(Update::TerminalData(b"one\r\ntwo\r\nthree\r\n".to_vec()));
+        app.handle_key(key(KeyCode::F(2)));
+        for _ in 0..5 {
+            app.handle_key(key(KeyCode::Char('k')));
+        }
+        app.handle_key(key(KeyCode::Char('V')));
+        app.handle_key(key(KeyCode::Char('j')));
+        app.handle_key(key(KeyCode::Char('j')));
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            app.take_clipboard().as_deref(),
+            Some("one\ntwo\nthree"),
+            "V marks lines, not the cells between two columns"
+        );
+    }
+
+    #[test]
+    fn a_line_selection_in_the_transcript_takes_rows_not_cells() {
+        let mut app = transcript_app();
+        app.handle_key(key(KeyCode::F(3)));
+        app.handle_key(key(KeyCode::Char('V')));
+        assert!(app.transcript.view.line, "V starts a line-wise selection");
+        app.handle_key(key(KeyCode::Char('v')));
+        assert!(
+            !app.transcript.view.line && app.transcript.view.anchor.is_none(),
+            "v is character-wise, and drops the line-wise selection"
+        );
+        app.handle_key(key(KeyCode::Char('V')));
+        app.handle_key(key(KeyCode::Char('k')));
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            app.take_clipboard().as_deref(),
+            Some("line 48\nline 49"),
+            "the row above the cursor comes with the row it started on"
+        );
     }
 
     #[test]

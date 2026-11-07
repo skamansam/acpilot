@@ -1110,7 +1110,7 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
                 history = pane.history()
             ),
             (None, None) => format!(
-                "copy {}/{history} · / find · v select · y copy · Esc leaves",
+                "copy {}/{history} · / find · v/V select · y copy · Esc leaves",
                 pane.reader.view.scroll,
                 history = pane.history()
             ),
@@ -2129,7 +2129,7 @@ fn draw_toast(frame: &mut Frame, toast: &Toast, area: Rect, theme: &Theme) {
 ///
 /// One list for both, because the keys are one list: the terminal's copy mode and
 /// the transcript are the same gesture over different media.
-const COPY_KEYS: [(&str, &str); 10] = [
+const COPY_KEYS: [(&str, &str); 11] = [
     ("j / k", "line down / up"),
     ("h / l", "left / right"),
     ("ctrl-u / ctrl-d", "page back / forward"),
@@ -2137,6 +2137,7 @@ const COPY_KEYS: [(&str, &str); 10] = [
     ("/", "find in what is above"),
     ("n / N", "next match, older / newer"),
     ("v", "select"),
+    ("V", "select whole lines"),
     ("y", "copy and leave"),
     ("esc", "leave"),
     ("?", "these keys"),
@@ -3136,7 +3137,7 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("hello"), "{text}");
         assert!(text.contains("copy"), "{text}");
-        assert!(text.contains("v select"), "{text}");
+        assert!(text.contains("v/V select"), "{text}");
     }
 
     #[test]
@@ -3169,7 +3170,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
         let text = render(&mut app);
         assert!(text.contains("copy"), "{text}");
-        assert!(text.contains("v select"), "{text}");
+        assert!(text.contains("v/V select"), "{text}");
         assert!(text.contains("y copy"), "{text}");
     }
 

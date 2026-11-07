@@ -125,7 +125,7 @@ the toast.
 | sessions | `j`/`k` or the arrows choose · `Enter` open · `i` compose · `n` new · `d` end · `c` cancel · a click focuses the list on that session and opens it |
 | prompt | `Enter` send · `Alt-Enter`/`Shift-Enter`/`Ctrl-Enter` a line · `@` complete a path · arrows and `Home`/`End` move the caret · `Backspace`/`Delete` edit beside it · `Esc` back to the list |
 | terminal | any key is a byte · `F2` copy mode · drag selects · `Ctrl-T` leave |
-| copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `y` copy · `Esc` leaves |
+| copy mode | `j`/`k`/`h`/`l` move · `Ctrl-U`/`Ctrl-D` page · `g`/`G` top/live · `/` find (smart-case) · `n`/`N` next match · `v` select · `V` whole lines · `y` copy · `Esc` leaves |
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
 | permission card | `y` allow once · `a` allow always for this session · `n` deny, only for the options the request sent · `Tab`/`Shift-Tab` the next/previous question · `Esc` answer later, and **Session → Answer Permission…** brings the card back |
 

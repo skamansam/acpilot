@@ -7,9 +7,12 @@ import {
   joinPath,
   languageFor,
   listingRows,
+  markLabel,
+  markTitle,
   normalisePath,
   parentOf,
   saveFailure,
+  tabDirty,
 } from './files';
 
 function entry(path: string, isDir = false): FileEntry {
@@ -99,6 +102,25 @@ describe('isDirty', () => {
     expect(isDirty(null, 'anything')).toBe(false);
     expect(isDirty(content('one\ntwo\n'), 'one\ntwo\n')).toBe(false);
     expect(isDirty(content('one\ntwo\n'), 'one\ntwo')).toBe(true);
+  });
+});
+
+describe('tabDirty', () => {
+  it('is dirty when the buffer differs from disk, and when there is no file yet', () => {
+    expect(tabDirty({ path: 'new.txt', file: null, draft: '' })).toBe(true);
+    expect(tabDirty({ path: 'src/main.rs', file: content('one'), draft: 'one' })).toBe(false);
+    expect(tabDirty({ path: 'src/main.rs', file: content('one'), draft: 'two' })).toBe(true);
+  });
+});
+
+describe('gutter labels', () => {
+  it('names each change in one character, with a sentence for its title', () => {
+    expect(markLabel('added')).toBe('+');
+    expect(markLabel('modified')).toBe('~');
+    expect(markLabel('deleted')).toBe('-');
+    expect(markTitle('added')).toContain('Added');
+    expect(markTitle('modified')).toContain('Changed');
+    expect(markTitle('deleted')).toContain('removed');
   });
 });
 

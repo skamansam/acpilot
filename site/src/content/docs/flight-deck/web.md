@@ -46,7 +46,15 @@ it back with `PUT /v1/files` carrying the `etag` it read as `if_match`. A file t
 changed on disk while the buffer was open is therefore a `409` the page shows as
 "nothing was overwritten", never a silent save. The diff view is
 `@codemirror/merge` over the version on disk and the buffer, and the git marks the
-read route returns are reported under the pane.
+read route returns are drawn in a gutter beside the line numbers — `+` added, `~`
+changed, `-` removed — and asked again after a save or reload.
+
+Open files are tabs: each keeps its own buffer, so switching back to one does not
+re-read the disk and lose an edit, and a dot marks the tabs with unsaved text.
+**New file** takes a path and opens an empty buffer; its first **Save** sends
+`PUT /v1/files` without `if_match`, which the daemon reads as a create and refuses
+with `409` if something already exists there. Closing a tab with unsaved text asks
+first.
 
 Highlighting is `@codemirror/lang-*`, the fallback the plan names: the page is one
 inlined HTML file, and a tree-sitter wasm grammar would be a second asset the

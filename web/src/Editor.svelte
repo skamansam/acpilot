@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { basicSetup } from 'codemirror';
-  import { EditorState, type Extension } from '@codemirror/state';
-  import { EditorView } from '@codemirror/view';
+  import { EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
+  import { EditorView, GutterMarker, gutter } from '@codemirror/view';
   import { MergeView } from '@codemirror/merge';
   import { javascript } from '@codemirror/lang-javascript';
   import { json } from '@codemirror/lang-json';
@@ -11,24 +11,43 @@
   import { python } from '@codemirror/lang-python';
   import {
     ApiError,
+    createFile,
     listDirectory,
     readFile,
     writeFile,
-    type FileContent,
     type FileEntry,
+    type LineMark,
   } from './api';
   import {
     basename,
-    isDirty,
     languageFor,
     listingRows,
+    markLabel,
+    markTitle,
     normalisePath,
     parentOf,
     saveFailure,
+    tabDirty,
     type EditorLanguage,
+    type EditorTab,
   } from './files';
 
   let { token }: { token: string } = $props();
+
+  // A tab is a buffer plus the version of the file it was read at. A tab with no
+  // `file` is a path whose first save is a create, which is why it is dirty from
+  // the moment it exists.
+  interface Tab extends EditorTab {
+    /** `edit` or the read-only diff against the version on disk. */
+    mode: 'edit' | 'diff';
+    /** Bumped when the document is replaced, so the view is rebuilt for it. */
+    generation: number;
+  }
+
+  let tabs = $state<Tab[]>([]);
+  let active = $state(0);
+  const tab = $derived(tabs[active] ?? null);
+  const dirty = $derived(tab !== null && tabDirty(tab));
 
   // The browser's state: which directory is listed, and the rows in it.
   let dir = $state('');
@@ -36,14 +55,11 @@
   let listingNote = $state<string | null>(null);
   const listing = $derived(listingRows(entries));
 
-  // The open file and the buffer. `file` is the version last read from or written
-  // to disk — its `etag` is what a save sends — and `draft` is what is on screen.
-  let file = $state<FileContent | null>(null);
-  let draft = $state('');
-  // Bumped on every load, so the editor is rebuilt for a new document rather
-  // than having its changes dispatched into the previous one.
-  let generation = $state(0);
-  let mode = $state<'edit' | 'diff'>('edit');
+  // The create flow: a path and the form that asks for it. The tab exists before
+  // the file does — saving it is the request that creates it.
+  let creating = $state(false);
+  let newPath = $state('');
+
   let hostEl = $state<HTMLDivElement | null>(null);
   let diffEl = $state<HTMLDivElement | null>(null);
 
@@ -54,7 +70,76 @@
   let pathInput = $state('');
   let browserOpen = $state(true);
 
-  const dirty = $derived(isDirty(file, draft));
+  // The live view, when the pane is in edit mode. A save asks git again and hands
+  // the new marks to this view; a tab switch builds a new one with its own marks.
+  let view: EditorView | null = null;
+
+  /**
+   * The git mark in one gutter cell.
+   *
+   * The daemon already says which lines differ; this only decides how the letter
+   * is drawn. `eq` keeps a mark from being rebuilt on every update when its change
+   * did not move.
+   */
+  class GitMark extends GutterMarker {
+    private readonly change: LineMark['change'];
+
+    constructor(change: LineMark['change']) {
+      super();
+      this.change = change;
+    }
+
+    eq(other: GutterMarker): boolean {
+      return other instanceof GitMark && other.change === this.change;
+    }
+
+    toDOM(): HTMLElement {
+      const element = document.createElement('span');
+      element.className = `cm-git-mark cm-git-${this.change}`;
+      element.dataset.change = this.change;
+      element.textContent = markLabel(this.change);
+      element.title = markTitle(this.change);
+      return element;
+    }
+  }
+
+  // The marks travel as a state effect rather than through the document: a save
+  // asks git again, and the answer is drawn without rebuilding the buffer.
+  const setGitMarks = StateEffect.define<LineMark[]>();
+
+  const gitMarks = StateField.define<LineMark[]>({
+    create: () => [],
+    update(value, transaction) {
+      for (const effect of transaction.effects) {
+        if (effect.is(setGitMarks)) {
+          return effect.value;
+        }
+      }
+      return value;
+    },
+  });
+
+  // One character beside the line number. A deletion names the line above the gap,
+  // which is where the daemon counts it and where the TUI draws it.
+  const gitGutter = gutter({
+    class: 'cm-git-gutter',
+    markers: (view) => {
+      const doc = view.state.doc;
+      const marks = [...view.state.field(gitMarks)].sort((left, right) => left.line - right.line);
+      const ranges = [];
+      for (const mark of marks) {
+        // A mark past the end is a line count from before an edit removed lines;
+        // drawing it nowhere is better than throwing the pane away for it.
+        if (mark.line < 1 || mark.line > doc.lines) {
+          continue;
+        }
+        ranges.push(new GitMark(mark.change).range(doc.line(mark.line).from));
+      }
+      // `true`: the marks were sorted by line above, and a gutter asks for a set
+      // ordered by position rather than by the order git happened to report.
+      return RangeSet.of(ranges, true);
+    },
+  });
 
   // The palette, not a second theme file: the daemon's colours arrive as custom
   // properties, and an editor that named its own would be the one pane that did
@@ -79,6 +164,15 @@
     '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text)' },
     '&.cm-focused': { outline: 'none' },
     '.cm-selectionBackground, ::selection': { backgroundColor: 'rgb(90 169 255 / 0.25)' },
+    '.cm-git-gutter': { width: '0.9rem' },
+    '.cm-git-mark': {
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontSize: '0.75rem',
+      padding: '0 0.15rem',
+    },
+    '.cm-git-added': { color: 'var(--success)' },
+    '.cm-git-modified': { color: 'var(--warning)' },
+    '.cm-git-deleted': { color: 'var(--danger)' },
   });
 
   function extensionFor(language: EditorLanguage, path: string): Extension {
@@ -123,9 +217,22 @@
     }
   }
 
+  /**
+   * Open a path, or bring its tab forward.
+   *
+   * A tab already holds a buffer that may be dirty, so opening a path again is a
+   * switch rather than a re-read: a second read would silently replace edits the
+   * person can see.
+   */
   async function open(path: string): Promise<void> {
     const next = normalisePath(path);
     if (!next) {
+      return;
+    }
+    const existing = tabs.findIndex((candidate) => candidate.path === next);
+    if (existing >= 0) {
+      active = existing;
+      pathInput = next;
       return;
     }
     opening = true;
@@ -133,11 +240,9 @@
     note = null;
     try {
       const read = await readFile(next, token);
-      file = read;
-      draft = read.text;
+      tabs.push({ path: read.path, file: read, draft: read.text, mode: 'edit', generation: 1 });
+      active = tabs.length - 1;
       pathInput = read.path;
-      generation += 1;
-      mode = 'edit';
       // A file opened by path should leave the browser looking at its directory,
       // or the next click would be measured from a listing nobody can see.
       const parent = parentOf(read.path);
@@ -152,17 +257,84 @@
     }
   }
 
+  /** Start a file that does not exist yet: an empty buffer and a path to create. */
+  function addDraft(event: Event): void {
+    event.preventDefault();
+    const path = normalisePath(newPath);
+    if (!path) {
+      return;
+    }
+    const existing = tabs.findIndex((candidate) => candidate.path === path);
+    if (existing >= 0) {
+      active = existing;
+    } else {
+      tabs.push({ path, file: null, draft: '', mode: 'edit', generation: 1 });
+      active = tabs.length - 1;
+    }
+    creating = false;
+    newPath = '';
+    error = null;
+    note = `New ${path} — its first save creates it.`;
+    // The parent may not be listed yet; the save reports a missing directory in
+    // the daemon's own words, so a browse that fails here is not an error.
+    void browse(parentOf(path));
+  }
+
+  function beginCreate(): void {
+    creating = true;
+    newPath = dir ? `${dir}/` : '';
+  }
+
+  function close(index: number): void {
+    const target = tabs[index];
+    if (!target) {
+      return;
+    }
+    if (tabDirty(target)) {
+      const ask = globalThis.confirm;
+      if (typeof ask === 'function' && !ask(`Close ${target.path} and discard unsaved changes?`)) {
+        return;
+      }
+    }
+    tabs.splice(index, 1);
+    if (index < active) {
+      active -= 1;
+    } else if (active > tabs.length - 1) {
+      active = Math.max(0, tabs.length - 1);
+    }
+  }
+
+  /** Hand the gutter a new set of marks without replacing the document. */
+  function showMarks(marks: LineMark[]): void {
+    view?.dispatch({
+      effects: setGitMarks.of(marks.map((mark) => ({ line: mark.line, change: mark.change }))),
+    });
+  }
+
   async function save(): Promise<void> {
-    if (!file || !dirty || saving) {
+    const open = tab;
+    if (!open || saving) {
+      return;
+    }
+    if (open.file !== null && open.draft === open.file.text) {
       return;
     }
     saving = true;
     error = null;
     note = null;
     try {
-      const written = await writeFile(file.path, draft, file.etag, token);
-      file = written;
-      draft = written.text;
+      // A tab with no file is a create: the daemon reads an absent `if_match` as
+      // "this path is new" and refuses a file that is already there.
+      const written =
+        open.file === null
+          ? await createFile(open.path, open.draft, token)
+          : await writeFile(open.path, open.draft, open.file.etag, token);
+      open.file = written;
+      open.draft = written.text;
+      open.path = written.path;
+      // The write answered with the marks this text earns; draw them now rather
+      // than rebuilding the view and moving the caret to apply them.
+      showMarks(written.marks ?? []);
       note = `Saved ${written.path}`;
       // The row's git status changed with the write; the listing is a second
       // question about the same file, so it is asked again rather than guessed.
@@ -175,12 +347,25 @@
   }
 
   async function reload(): Promise<void> {
-    if (!file) {
+    const open = tab;
+    if (!open || open.file === null) {
       return;
     }
-    const path = file.path;
-    await open(path);
-    note = 'Reloaded from disk. Unsaved edits were discarded.';
+    opening = true;
+    error = null;
+    note = null;
+    try {
+      const read = await readFile(open.path, token);
+      open.file = read;
+      open.draft = read.text;
+      open.mode = 'edit';
+      open.generation += 1;
+      note = 'Reloaded from disk. Unsaved edits were discarded.';
+    } catch (failure) {
+      error = describe(failure);
+    } finally {
+      opening = false;
+    }
   }
 
   // The editor is built once per loaded document. Reading `draft` and `file`
@@ -188,31 +373,42 @@
   // the view, and a save must not move the caret.
   $effect(() => {
     const target = hostEl;
-    const loaded = generation;
-    const editing = mode === 'edit';
-    if (!target || !loaded || !editing) {
+    const open = tab;
+    const editing = open?.mode === 'edit';
+    const generation = open?.generation ?? 0;
+    if (!target || !open || !editing) {
       return;
     }
-    const doc = untrack(() => draft);
-    const where = untrack(() => file?.path ?? '');
-    const view = new EditorView({
+    void generation;
+    const doc = untrack(() => open.draft);
+    const path = untrack(() => open.path);
+    const marks = untrack(() => open.file?.marks ?? []);
+    const created = new EditorView({
       state: EditorState.create({
         doc,
         extensions: [
           basicSetup,
           theme,
-          extensionFor(languageFor(where), where),
+          extensionFor(languageFor(path), path),
+          gitMarks.init(() => marks.map((mark) => ({ line: mark.line, change: mark.change }))),
+          gitGutter,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
-              draft = update.state.doc.toString();
+              open.draft = update.state.doc.toString();
             }
           }),
         ],
       }),
       parent: target,
     });
-    view.focus();
-    return () => view.destroy();
+    view = created;
+    created.focus();
+    return () => {
+      if (view === created) {
+        view = null;
+      }
+      created.destroy();
+    };
   });
 
   // The diff is `@codemirror/merge` over the two documents the page already has:
@@ -221,12 +417,13 @@
   // edit to a document that is not the one being saved.
   $effect(() => {
     const target = diffEl;
-    const comparing = mode === 'diff';
-    if (!target || !comparing) {
+    const open = tab;
+    const comparing = open?.mode === 'diff' && open.file !== null;
+    if (!target || !open || !comparing) {
       return;
     }
-    const before = untrack(() => file?.text ?? '');
-    const after = untrack(() => draft);
+    const before = untrack(() => open.file?.text ?? '');
+    const after = untrack(() => open.draft);
     const merge = new MergeView({
       a: {
         doc: before,
@@ -248,6 +445,37 @@
 </script>
 
 <section class="editor" aria-label="Editor">
+  {#if tabs.length}
+    <div class="editor-tabs" role="tablist" aria-label="Open files">
+      {#each tabs as open, index (open.path)}
+        <div class="editor-tab" data-active={index === active}>
+          <button
+            type="button"
+            class="tab-name"
+            role="tab"
+            aria-selected={index === active}
+            title={open.path}
+            onclick={() => (active = index)}
+          >
+            {basename(open.path) || open.path}
+          </button>
+          {#if tabDirty(open)}
+            <span class="dirty" title="Unsaved changes" aria-label="Unsaved changes">●</span>
+          {/if}
+          <button
+            type="button"
+            class="tab-close"
+            aria-label={`Close ${open.path}`}
+            title={`Close ${open.path}`}
+            onclick={() => close(index)}
+          >
+            ×
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
   <div class="editor-bar">
     <button
       type="button"
@@ -257,23 +485,38 @@
     >
       Files
     </button>
-    <code class="editor-path">{file?.path ?? 'no file open'}</code>
+    <code class="editor-path">{tab?.path ?? 'no file open'}</code>
     {#if dirty}
       <span class="dirty" title="Unsaved changes" aria-label="Unsaved changes">●</span>
     {/if}
     <span class="editor-spacer"></span>
-    {#if file}
+    {#if tab}
+      {#if tab.file}
+        <button
+          type="button"
+          aria-pressed={tab.mode === 'diff'}
+          onclick={() => {
+            if (tab) {
+              tab.mode = tab.mode === 'edit' ? 'diff' : 'edit';
+            }
+          }}
+        >
+          {tab.mode === 'diff' ? 'Edit' : 'Diff'}
+        </button>
+      {/if}
       <button
         type="button"
-        aria-pressed={mode === 'diff'}
-        onclick={() => (mode = mode === 'edit' ? 'diff' : 'edit')}
+        onclick={() => void reload()}
+        disabled={opening || saving || tab.file === null}
       >
-        {mode === 'diff' ? 'Edit' : 'Diff'}
-      </button>
-      <button type="button" onclick={() => void reload()} disabled={opening || saving}>
         Reload
       </button>
-      <button type="button" class="primary" onclick={() => void save()} disabled={!dirty || saving}>
+      <button
+        type="button"
+        class="primary"
+        onclick={() => void save()}
+        disabled={saving || !dirty}
+      >
         {saving ? 'Saving…' : 'Save'}
       </button>
     {/if}
@@ -297,7 +540,22 @@
           autocomplete="off"
         />
         <button type="submit" disabled={opening}>Open</button>
+        <button type="button" onclick={beginCreate}>New file</button>
       </form>
+      {#if creating}
+        <form class="file-new-form" onsubmit={addDraft}>
+          <label for="new-file-path" class="visually-hidden">Path for the new file</label>
+          <input
+            id="new-file-path"
+            bind:value={newPath}
+            placeholder="path/to/new-file"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <button type="submit">Create</button>
+          <button type="button" onclick={() => (creating = false)}>Cancel</button>
+        </form>
+      {/if}
       <p class="file-where">
         <button type="button" class="link" onclick={() => void browse('')}>root</button>
         {#if dir}<span>/ {dir}</span>{/if}
@@ -334,8 +592,8 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if note}<p class="note" role="status">{note}</p>{/if}
 
-  {#if file}
-    {#if mode === 'diff'}
+  {#if tab}
+    {#if tab.mode === 'diff' && tab.file}
       <div class="diff-host" bind:this={diffEl} aria-label="Diff against the version on disk"></div>
       <p class="note">
         Left is the version on disk, right is the buffer. Both are read-only here;
@@ -344,17 +602,21 @@
     {:else}
       <div class="editor-host" bind:this={hostEl}></div>
     {/if}
-    {#if file.marks?.length}
+    {#if tab.file?.marks?.length}
       <p class="note">
-        {file.marks.length}
-        {file.marks.length === 1 ? 'line differs' : 'lines differ'} from the last commit.
+        {tab.file.marks.length}
+        {tab.file.marks.length === 1 ? 'line differs' : 'lines differ'} from the last commit.
+        The gutter marks them: <span class="file-status" data-change="added">+</span> added,
+        <span class="file-status" data-change="modified">~</span> changed,
+        <span class="file-status" data-change="deleted">-</span> removed.
       </p>
     {/if}
   {:else}
     <p class="note">
-      Open a file from the list or type its path. A save carries the version the
-      file was read at (<code>if_match</code>), so a file somebody else changed is
-      refused rather than overwritten.
+      Open a file from the list, type its path, or start a new one with <strong>New file</strong>.
+      A save carries the version the file was read at (<code>if_match</code>), so a file
+      somebody else changed is refused rather than overwritten; a new file's first save
+      sends no token and the daemon creates it.
     </p>
   {/if}
 </section>

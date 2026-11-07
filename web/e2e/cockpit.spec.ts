@@ -216,7 +216,8 @@ test('edits a file, shows the diff, and saves with the version it read', async (
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+End');
   await page.keyboard.type('\nfrom the browser');
-  await expect(page.locator('.dirty')).toBeVisible();
+  // The tab strip has its own dot; the bar's is the one this pane always had.
+  await expect(page.locator('.editor-bar .dirty')).toBeVisible();
 
   await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await expect(page.locator('.diff-host .cm-mergeView')).toBeVisible();
@@ -225,7 +226,7 @@ test('edits a file, shows the diff, and saves with the version it read', async (
 
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Saved notes.txt' })).toBeVisible();
-  await expect(page.locator('.dirty')).toHaveCount(0);
+  await expect(page.locator('.editor-bar .dirty')).toHaveCount(0);
 
   // The daemon wrote the workspace's file, not a browser-side copy.
   await expect

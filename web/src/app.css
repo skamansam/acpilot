@@ -957,6 +957,60 @@ a:focus-visible {
   overflow: hidden;
 }
 
+/*
+ * One tab per open buffer. The strip is the pane's own list, not a route: the
+ * address names a workspace, and which files are open is state a reload may drop
+ * without changing what the link means.
+ */
+.editor-tabs {
+  display: flex;
+  gap: 0.2rem;
+  overflow-x: auto;
+  padding: 0.35rem 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0 0.2rem;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 0.4rem 0.4rem 0 0;
+}
+
+.editor-tab[data-active='true'] {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.editor-tab .tab-name {
+  padding: 0.2rem 0.15rem;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.editor-tab[data-active='true'] .tab-name {
+  color: var(--text);
+}
+
+.editor-tab .tab-close {
+  padding: 0 0.15rem;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.editor-tab .tab-close:hover {
+  color: var(--danger);
+}
+
 .editor-bar {
   display: flex;
   align-items: center;
@@ -1012,7 +1066,8 @@ a:focus-visible {
   gap: 0.5rem;
 }
 
-.file-open input {
+.file-open input,
+.file-new-form input {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -1022,6 +1077,14 @@ a:focus-visible {
   border-radius: 0.4rem;
   background: var(--bg);
   color: var(--text);
+}
+
+.file-new-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--border);
 }
 
 .file-where {

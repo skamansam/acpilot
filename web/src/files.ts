@@ -2,7 +2,7 @@
 // without a DOM: which grammar a path earns, what a listing looks like, and what
 // a refused save should say to the person who made it.
 
-import type { FileContent, FileEntry } from './api';
+import type { FileContent, FileEntry, LineChange } from './api';
 
 export type EditorLanguage = 'javascript' | 'json' | 'markdown' | 'rust' | 'python' | 'plain';
 
@@ -96,6 +96,48 @@ export function listingRows(entries: FileEntry[]): FileEntry[] {
 /** A buffer is dirty when it differs from the version it was read at. */
 export function isDirty(file: FileContent | null, draft: string): boolean {
   return file !== null && draft !== file.text;
+}
+
+/** One open buffer: the file it was read from, and the text on screen. */
+export interface EditorTab {
+  /** Workspace-relative path, as the routes spell it. */
+  path: string;
+  /** The version last read or written; `null` until the first save creates it. */
+  file: FileContent | null;
+  /** What the editor is drawing. */
+  draft: string;
+}
+
+/**
+ * A tab is dirty when its buffer differs from the file, and a tab with no file is
+ * dirty on purpose: it is a path whose first save is the create.
+ */
+export function tabDirty(tab: EditorTab): boolean {
+  return tab.file === null || tab.draft !== tab.file.text;
+}
+
+/** The one character a gutter draws for a change. */
+export function markLabel(change: LineChange): string {
+  switch (change) {
+    case 'added':
+      return '+';
+    case 'modified':
+      return '~';
+    case 'deleted':
+      return '-';
+  }
+}
+
+/** What a gutter mark means, in the sentence an element's title carries. */
+export function markTitle(change: LineChange): string {
+  switch (change) {
+    case 'added':
+      return 'Added since the last commit';
+    case 'modified':
+      return 'Changed since the last commit';
+    case 'deleted':
+      return 'Lines removed above this line since the last commit';
+  }
 }
 
 /**

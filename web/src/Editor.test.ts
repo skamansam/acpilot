@@ -39,6 +39,7 @@ function json(body: unknown, status = 200): Response {
 let target: HTMLDivElement;
 let cleanups: (() => void)[];
 let calls: { route: string; authorization: string | undefined }[];
+let writes: { path: string; text: string; if_match?: string }[];
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -46,6 +47,7 @@ beforeEach(() => {
   document.body.append(target);
   cleanups = [];
   calls = [];
+  writes = [];
   vi.stubGlobal(
     'fetch',
     plainFetch(
@@ -64,6 +66,15 @@ beforeEach(() => {
         }
         if (route.startsWith('/v1/files?path=README.md')) {
           return json(README);
+        }
+        if (route === '/v1/files' && init?.method === 'PUT') {
+          const body = JSON.parse(String(init.body ?? '{}')) as {
+            path: string;
+            text: string;
+            if_match?: string;
+          };
+          writes.push(body);
+          return json({ path: body.path, text: body.text, etag: 'v9', marks: [] });
         }
         return new Response('not found', { status: 404 });
       }) as PlainFetch,
@@ -168,13 +179,10 @@ describe('a file', () => {
     expect(calls.some((call) => call.route.startsWith('/v1/files?path=src%2Fmain.rs'))).toBe(true);
   });
 
-  it('reports the git marks it was given without pretending to draw a gutter', async () => {
+  it('draws the git marks in a gutter beside the line numbers', async () => {
     render();
-    await (await findButton('README.md')).click();
-    await find('.cm-editor');
+    await find('ul.file-rows');
 
-    // README has no marks; main.rs does, so open it the same way the browser does.
-    // The browser stays open: its form is where a path is typed.
     const input = (await find('input#file-path')) as HTMLInputElement;
     input.value = 'src/main.rs';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -182,11 +190,74 @@ describe('a file', () => {
       .querySelector('form.file-open')
       ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 
-    // The sentence is wrapped across lines in the markup; compare it as one line.
+    const added = await find('.cm-git-mark[data-change="added"]');
+    expect(added.textContent).toBe('+');
+    const deleted = await find('.cm-git-mark[data-change="deleted"]');
+    expect(deleted.textContent).toBe('-');
+    // The sentence under the pane still counts them; the gutter says which lines.
     await vi.waitFor(() =>
       expect(target.textContent?.replace(/\s+/g, ' ')).toContain(
         '2 lines differ from the last commit.',
       ),
     );
+  });
+
+  it('keeps a tab per file and switching one brings its buffer back', async () => {
+    render();
+
+    await (await findButton('README.md')).click();
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(1));
+
+    const input = (await find('input#file-path')) as HTMLInputElement;
+    input.value = 'src/main.rs';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    target
+      .querySelector('form.file-open')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(2));
+    const readme = [...target.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (candidate) => candidate.textContent?.trim() === 'README.md',
+    );
+    expect(readme, 'README kept its tab').toBeDefined();
+    readme!.click();
+
+    await vi.waitFor(() =>
+      expect(target.querySelector('.editor-path')?.textContent).toBe('README.md'),
+    );
+    expect(target.textContent).toContain('# Acpilot');
+  });
+
+  it('closes a tab and leaves no file open when it was the last', async () => {
+    render();
+
+    await (await findButton('README.md')).click();
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(1));
+    (await find('[aria-label="Close README.md"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(target.querySelectorAll('[role="tab"]').length).toBe(0));
+    expect(target.querySelector('.editor-path')?.textContent).toBe('no file open');
+  });
+
+  it('creates a new file with no if_match on its first save', async () => {
+    render();
+    await find('ul.file-rows');
+
+    (await findButton('New file')).click();
+    const input = (await find('input#new-file-path')) as HTMLInputElement;
+    input.value = 'notes.txt';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    target
+      .querySelector('form.file-new-form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(target.querySelector('.editor-path')?.textContent).toBe('notes.txt'),
+    );
+
+    (await findButton('Save')).click();
+    await vi.waitFor(() => expect(writes.length).toBe(1));
+    // The absent token is the create: the daemon refuses a path that exists.
+    expect(writes[0]).toEqual({ path: 'notes.txt', text: '' });
   });
 });

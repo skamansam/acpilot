@@ -74,6 +74,12 @@ export type FileContent = components['schemas']['FileContent'];
 /** One row of `GET /v1/files/list`: a file or a directory. */
 export type FileEntry = components['schemas']['FileEntry'];
 
+/** What happened to one line since the last commit, as a gutter draws it. */
+export type LineChange = components['schemas']['LineChange'];
+
+/** One marked line: 1-based line number and what changed on it. */
+export type LineMark = components['schemas']['LineMark'];
+
 /** One row of `GET /v1/workspaces`: a directory this daemon may serve. */
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 
@@ -466,6 +472,27 @@ export async function writeFile(
   return answered(
     await client.PUT('/v1/files', {
       body: { path, text, if_match: ifMatch },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `PUT /v1/files` without `if_match` — create a file that is not there yet.
+ *
+ * The daemon reads the absent token as "this path is new" and answers `409` when
+ * something already exists there, so a create cannot become the silent replace
+ * the route refuses. The parent directory has to exist: a save into a directory
+ * that is not there is reported rather than built.
+ */
+export async function createFile(
+  path: string,
+  text: string,
+  token: string,
+): Promise<FileContent> {
+  return answered(
+    await client.PUT('/v1/files', {
+      body: { path, text },
       headers: auth(token),
     }),
   );

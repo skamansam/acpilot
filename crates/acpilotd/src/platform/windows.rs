@@ -26,8 +26,13 @@ pub(crate) fn default_target() -> Target {
 ///
 /// Windows resolves `rust-analyzer` to `rust-analyzer.exe`, and a package manager's
 /// shim is a `.cmd` beside it, so both are tried before the program is declared
-/// absent. Nothing here launches a shell to find out.
+/// absent. Nothing here launches a shell to find out. A program that already names
+/// an extension is not given another one: `acpilot.exe` is a file, and
+/// `acpilot.exe.exe` is a lookup that can only fail.
 pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
+    if Path::new(program).extension().is_some() {
+        return vec![PathBuf::from(program)];
+    }
     vec![
         PathBuf::from(format!("{program}.exe")),
         PathBuf::from(format!("{program}.cmd")),

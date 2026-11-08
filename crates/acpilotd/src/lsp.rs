@@ -646,12 +646,21 @@ pub fn language_of(path: &str) -> Option<&'static str> {
 /// not "what does the shell think". The names to look for are the platform's
 /// ([`crate::platform`]), because an extension is a platform fact and the workspace's
 /// boundary test says so.
+///
+/// A program that contains a directory is a path, not a name to search for, so it is
+/// checked where it points and does not need `PATH` to exist at all. Joining such a
+/// name onto every path entry happens to work on Windows but only when the path is
+/// absolute and non-empty, and a declaration that names its own executable is a
+/// first-class case, not a lucky one.
 #[must_use]
 pub fn installed(program: &str) -> bool {
+    let names = crate::platform::executable_names(program);
+    if Path::new(program).components().count() > 1 {
+        return names.iter().any(|name| name.is_file());
+    }
     let Some(path) = std::env::var_os("PATH") else {
         return false;
     };
-    let names = crate::platform::executable_names(program);
     std::env::split_paths(&path).any(|directory| {
         names.iter().any(|name| {
             let candidate = directory.join(name);
@@ -689,6 +698,15 @@ mod tests {
     #[test]
     fn a_program_that_cannot_be_here_is_not_installed() {
         assert!(!installed("acpilot-no-such-language-server"));
+    }
+
+    #[test]
+    fn a_program_given_as_a_path_is_installed_at_that_path() {
+        let program = std::env::current_exe().expect("the test binary has a path");
+        assert!(
+            installed(program.to_str().expect("utf-8 path")),
+            "the file exists; PATH is not part of that answer"
+        );
     }
 
     // "A program that is on PATH is installed" is asserted in `crate::platform`,

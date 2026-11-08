@@ -823,75 +823,6 @@ impl CopyView {
     }
 }
 
-/// What a copy-mode keystroke means, in either pane.
-///
-/// The terminal and the transcript read the same way, so they read the same keys:
-/// one parser, so a motion added to one cannot quietly not exist in the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CopyKey {
-    /// Leave copy mode and give the keyboard back.
-    Leave,
-    /// Start a selection at the cursor, or drop the one in progress.
-    Select,
-    /// Start a whole-line selection at the cursor, or drop the one in progress.
-    SelectLine,
-    /// Move the cursor, scrolling when it reaches an edge.
-    Move { rows: i32, cols: i32 },
-    /// The oldest line in the view.
-    Top,
-    /// Back to the live view.
-    Live,
-    /// Put the selection on the clipboard.
-    Yank,
-    /// Open a line for a search.
-    Find,
-    /// The next match, older.
-    Older,
-    /// The next match, newer.
-    Newer,
-    /// A key copy mode has no use for.
-    Nothing,
-}
-
-impl CopyKey {
-    /// Read a key, with `page` being how many rows a screenful is in this pane.
-    fn parse(key: KeyEvent, page: i32) -> Self {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Self::Leave,
-            KeyCode::Char('j') | KeyCode::Down => Self::Move { rows: 1, cols: 0 },
-            KeyCode::Char('k') | KeyCode::Up => Self::Move { rows: -1, cols: 0 },
-            KeyCode::Char('h') | KeyCode::Left => Self::Move { rows: 0, cols: -1 },
-            KeyCode::Char('l') | KeyCode::Right => Self::Move { rows: 0, cols: 1 },
-            KeyCode::Char('d') if control => Self::Move {
-                rows: page,
-                cols: 0,
-            },
-            KeyCode::Char('u') if control => Self::Move {
-                rows: -page,
-                cols: 0,
-            },
-            KeyCode::PageDown => Self::Move {
-                rows: page,
-                cols: 0,
-            },
-            KeyCode::PageUp => Self::Move {
-                rows: -page,
-                cols: 0,
-            },
-            KeyCode::Char('g') => Self::Top,
-            KeyCode::Char('G') => Self::Live,
-            KeyCode::Char('v') => Self::Select,
-            KeyCode::Char('V') => Self::SelectLine,
-            KeyCode::Char('y') => Self::Yank,
-            KeyCode::Char('/') => Self::Find,
-            KeyCode::Char('n') => Self::Older,
-            KeyCode::Char('N') => Self::Newer,
-            _ => Self::Nothing,
-        }
-    }
-}
-
 /// One place a search found its query.
 ///
 /// The line is absolute — counted from the oldest line the history still holds —
@@ -3261,22 +3192,22 @@ impl App {
         let grid = self.transcript_grid();
         let max_scroll = self.transcript_len().saturating_sub(usize::from(grid.0));
         let page = i32::from(grid.0).saturating_sub(1).max(1);
-        let action = CopyKey::parse(key, page);
+        let action = self.action(Context::Copy, key);
         match action {
-            CopyKey::Leave => {
+            Some(Action::Cancel) => {
                 self.set_focus(Focus::Sessions);
                 return None;
             }
-            CopyKey::Find => {
+            Some(Action::Find) => {
                 self.transcript.begin_search();
                 self.status = SEARCH_HINT.to_owned();
                 return None;
             }
-            CopyKey::Older => {
+            Some(Action::NextMatch) => {
                 self.transcript_step(true);
                 return None;
             }
-            CopyKey::Newer => {
+            Some(Action::PrevMatch) => {
                 self.transcript_step(false);
                 return None;
             }
@@ -3285,18 +3216,23 @@ impl App {
 
         let mut view = self.transcript.view;
         match action {
-            CopyKey::Select => view.toggle_anchor(),
-            CopyKey::SelectLine => view.toggle_line(),
-            CopyKey::Move { rows, cols } => view.move_by(rows, cols, grid, max_scroll),
-            CopyKey::Top => {
+            Some(Action::Visual) => view.toggle_anchor(),
+            Some(Action::SelectLine) => view.toggle_line(),
+            Some(Action::MoveUp) => view.move_by(-1, 0, grid, max_scroll),
+            Some(Action::MoveDown) => view.move_by(1, 0, grid, max_scroll),
+            Some(Action::MoveLeft) => view.move_by(0, -1, grid, max_scroll),
+            Some(Action::MoveRight) => view.move_by(0, 1, grid, max_scroll),
+            Some(Action::PageUp) => view.move_by(-page, 0, grid, max_scroll),
+            Some(Action::PageDown) => view.move_by(page, 0, grid, max_scroll),
+            Some(Action::Top) => {
                 view.cursor.0 = 0;
                 view.scroll = max_scroll;
             }
-            CopyKey::Live => {
+            Some(Action::Live) => {
                 view.cursor.0 = self.transcript_len().saturating_sub(1);
                 view.scroll = 0;
             }
-            CopyKey::Yank => {
+            Some(Action::Yank) => {
                 let text = self.transcript_yank(&view);
                 let lines = text.lines().count().max(1);
                 self.set_focus(Focus::Sessions);
@@ -3308,8 +3244,7 @@ impl App {
                 }
                 return None;
             }
-            CopyKey::Leave | CopyKey::Find | CopyKey::Older | CopyKey::Newer | CopyKey::Nothing => {
-            }
+            _ => {}
         }
         self.transcript.view = view;
         None
@@ -4177,10 +4112,10 @@ impl App {
                 self.permission_card = false;
                 return None;
             };
-            match key.code {
+            match self.action(Context::Permission, key) {
                 // Tab walks the requests that are waiting, because a question does
                 // not stop the world: an agent can ask about two files at once.
-                KeyCode::Tab => {
+                Some(Action::NextQuestion) => {
                     self.permission_at = (self.permission_at + 1) % self.permissions.len();
                     self.status = format!(
                         "request {} of {}",
@@ -4189,7 +4124,7 @@ impl App {
                     );
                     return None;
                 }
-                KeyCode::BackTab => {
+                Some(Action::PreviousQuestion) => {
                     self.permission_at =
                         (self.permission_at + self.permissions.len() - 1) % self.permissions.len();
                     self.status = format!(
@@ -4199,7 +4134,7 @@ impl App {
                     );
                     return None;
                 }
-                KeyCode::Esc => {
+                Some(Action::PutAside) => {
                     self.permission_card = false;
                     self.status = format!(
                         "permission put aside · {} waiting · Session → Answer Permission",
@@ -4207,11 +4142,20 @@ impl App {
                     );
                     return None;
                 }
-                KeyCode::Char(character) => {
+                Some(
+                    action @ (Action::PermissionOnce
+                    | Action::PermissionAlways
+                    | Action::PermissionDeny),
+                ) => {
                     // Only the answers this request actually offers, with the key
                     // the card draws: a card that advertised an option the wire did
                     // not send would answer with something nobody could choose.
-                    if let Some(option) = option_for_key(character, &request.options) {
+                    let option = match action {
+                        Action::PermissionOnce => PermissionOption::AllowOnce,
+                        Action::PermissionAlways => PermissionOption::AllowAlways,
+                        _ => PermissionOption::Deny,
+                    };
+                    if request.options.contains(&option) {
                         let message =
                             format!("{} · {} · recorded", option_label(option), request.title);
                         return self.answer_permission(option, message);
@@ -4328,26 +4272,26 @@ impl App {
         if self.search.is_some() {
             return self.search_key(key);
         }
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match self.action(Context::Files, key) {
+            Some(Action::MoveUp) => {
                 self.file_selected = self.file_selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(Action::MoveDown) => {
                 if self.file_selected + 1 < self.visible_files().len() {
                     self.file_selected += 1;
                 }
             }
-            KeyCode::Left | KeyCode::Char('h') => return self.set_expanded(false),
-            KeyCode::Right | KeyCode::Char('l') => return self.set_expanded(true),
-            KeyCode::Enter => return self.activate_row(),
+            Some(Action::Collapse) => return self.set_expanded(false),
+            Some(Action::Expand) => return self.set_expanded(true),
+            Some(Action::Activate) => return self.activate_row(),
             // The workspace's paths are the daemon's to walk, for the same reason its
             // directories are: the ignore rules and the disk are on that side, and a
             // find here must not see what the tree cannot.
-            KeyCode::Char('/') => self.find_file(),
+            Some(Action::Find) => self.find_file(),
             // The other answer to `tree_respect_gitignore`, for one look: every open
             // directory is asked again so the tree keeps its shape while the hidden
             // rows appear.
-            KeyCode::Char('H') => {
+            Some(Action::ToggleHidden) => {
                 self.show_ignored = !self.show_ignored;
                 self.relist();
             }
@@ -5336,39 +5280,39 @@ impl App {
 
     /// The session list's keys.
     fn sessions_key(&mut self, key: KeyEvent) -> Option<Request> {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match self.action(Context::Sessions, key) {
+            Some(Action::MoveUp) => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.chose = true;
                     return self.open_selected();
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(Action::MoveDown) => {
                 if self.selected + 1 < self.sessions.len() {
                     self.selected += 1;
                     self.chose = true;
                     return self.open_selected();
                 }
             }
-            KeyCode::Enter => {
+            Some(Action::Activate) => {
                 self.chose = true;
                 return self.open_selected();
             }
-            KeyCode::Char('i') => {
+            Some(Action::Compose) => {
                 self.set_focus(Focus::Prompt);
             }
-            KeyCode::Char('n') => {
+            Some(Action::NewSession) => {
                 if let Some(agent) = self.agents.first() {
                     return Some(Request::New(agent.id.clone()));
                 }
             }
-            KeyCode::Char('d') => {
+            Some(Action::EndSession) => {
                 if let Some(session) = self.selected_session() {
                     return Some(Request::Delete(session.id.clone()));
                 }
             }
-            KeyCode::Char('c') => return Some(Request::Cancel),
+            Some(Action::CancelTurn) => return Some(Request::Cancel),
             _ => {}
         }
         None
@@ -5667,40 +5611,39 @@ impl App {
     /// keys come first because they are answers to a question that is on screen.
     fn prompt_key(&mut self, key: KeyEvent) -> Option<Request> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let action = self.action(Context::Prompt, key);
         if self.completion.is_some() {
-            match key.code {
-                KeyCode::Up => {
+            match action {
+                Some(Action::MoveUp) => {
                     if let Some(completion) = &mut self.completion {
                         completion.selected = completion.selected.saturating_sub(1);
                     }
                     return None;
                 }
-                KeyCode::Down => {
+                Some(Action::MoveDown) => {
                     if let Some(completion) = &mut self.completion {
                         let last = completion.rows.len().saturating_sub(1);
                         completion.selected = (completion.selected + 1).min(last);
                     }
                     return None;
                 }
-                KeyCode::Esc => {
+                Some(Action::Cancel) => {
                     self.completion = None;
                     return None;
                 }
-                KeyCode::Tab | KeyCode::Enter if !control && !alt && !shift => {
+                Some(Action::Complete | Action::Submit) => {
                     self.accept_completion();
                     return None;
                 }
                 _ => {}
             }
         }
-        match key.code {
-            KeyCode::Enter if alt || shift || control => {
+        match action {
+            Some(Action::Newline) => {
                 self.insert_character('\n');
                 self.refresh_completion()
             }
-            KeyCode::Enter => {
+            Some(Action::Submit) => {
                 let text = self.input.trim().to_owned();
                 if text.is_empty() {
                     return None;
@@ -5713,36 +5656,36 @@ impl App {
                 self.push(Kind::User, &format!("{text}\n"));
                 Some(Request::Prompt(text))
             }
-            KeyCode::Tab => self.refresh_completion(),
-            KeyCode::Backspace => {
+            Some(Action::Complete) => self.refresh_completion(),
+            Some(Action::Backspace) => {
                 self.backspace();
                 self.refresh_completion()
             }
-            KeyCode::Delete => {
+            Some(Action::DeleteChar) => {
                 self.delete_character();
                 self.refresh_completion()
             }
-            KeyCode::Left => {
+            Some(Action::MoveLeft) => {
                 self.cursor = self.cursor.saturating_sub(1);
                 self.completion = None;
                 None
             }
-            KeyCode::Right => {
+            Some(Action::MoveRight) => {
                 if self.cursor < self.input.chars().count() {
                     self.cursor += 1;
                 }
                 self.completion = None;
                 None
             }
-            KeyCode::Up => {
+            Some(Action::MoveUp) => {
                 self.composer_move(-1);
                 None
             }
-            KeyCode::Down => {
+            Some(Action::MoveDown) => {
                 self.composer_move(1);
                 None
             }
-            KeyCode::Home => {
+            Some(Action::LineStart) => {
                 let before: String = self.input.chars().take(self.cursor).collect();
                 let row = before.matches('\n').count();
                 self.cursor = self
@@ -5754,7 +5697,7 @@ impl App {
                 self.completion = None;
                 None
             }
-            KeyCode::End => {
+            Some(Action::LineEnd) => {
                 let before: String = self.input.chars().take(self.cursor).collect();
                 let row = before.matches('\n').count();
                 let start: usize = self
@@ -5772,15 +5715,19 @@ impl App {
                 self.completion = None;
                 None
             }
-            KeyCode::Esc => {
+            Some(Action::Cancel) => {
                 self.set_focus(Focus::Sessions);
                 None
             }
-            KeyCode::Char(character) if !control => {
-                self.insert_character(character);
-                self.refresh_completion()
+            _ => {
+                if let KeyCode::Char(character) = key.code
+                    && !control
+                {
+                    self.insert_character(character);
+                    return self.refresh_completion();
+                }
+                None
             }
-            _ => None,
         }
     }
 
@@ -7149,20 +7096,20 @@ impl App {
             let pane = self.terminal.as_ref()?;
             i32::from(pane.grid_size().0).saturating_sub(1).max(1)
         };
-        let action = CopyKey::parse(key, page);
+        let action = self.action(Context::Copy, key)?;
         match action {
-            CopyKey::Find => {
+            Action::Find => {
                 if let Some(pane) = self.terminal.as_mut() {
                     pane.reader.begin_search();
                 }
                 self.status = SEARCH_HINT.to_owned();
                 return None;
             }
-            CopyKey::Older => {
+            Action::NextMatch => {
                 self.step_hit(true);
                 return None;
             }
-            CopyKey::Newer => {
+            Action::PrevMatch => {
                 self.step_hit(false);
                 return None;
             }
@@ -7171,13 +7118,18 @@ impl App {
 
         let pane = self.terminal.as_mut()?;
         match action {
-            CopyKey::Leave => pane.end_copy(),
-            CopyKey::Select => pane.reader.view.toggle_anchor(),
-            CopyKey::SelectLine => pane.reader.view.toggle_line(),
-            CopyKey::Move { rows, cols } => pane.copy_move(rows, cols),
-            CopyKey::Top => pane.scroll_to_top(),
-            CopyKey::Live => pane.scroll_to_live(),
-            CopyKey::Yank => {
+            Action::Cancel => pane.end_copy(),
+            Action::Visual => pane.reader.view.toggle_anchor(),
+            Action::SelectLine => pane.reader.view.toggle_line(),
+            Action::MoveUp => pane.copy_move(-1, 0),
+            Action::MoveDown => pane.copy_move(1, 0),
+            Action::MoveLeft => pane.copy_move(0, -1),
+            Action::MoveRight => pane.copy_move(0, 1),
+            Action::PageUp => pane.copy_move(-page, 0),
+            Action::PageDown => pane.copy_move(page, 0),
+            Action::Top => pane.scroll_to_top(),
+            Action::Live => pane.scroll_to_live(),
+            Action::Yank => {
                 let text = pane.yank();
                 let lines = text.lines().count().max(1);
                 pane.end_copy();
@@ -7188,7 +7140,7 @@ impl App {
                 self.status = format!("copied {lines} line(s) to the clipboard");
                 self.clipboard = Some(text);
             }
-            CopyKey::Find | CopyKey::Older | CopyKey::Newer | CopyKey::Nothing => {}
+            _ => {}
         }
         None
     }
@@ -11617,5 +11569,92 @@ mod tests {
             "the terminal covers the transcript"
         );
         assert!(app.status.contains("ctrl-t"), "{}", app.status);
+    }
+
+    #[test]
+    fn the_tree_takes_its_keys_from_the_table() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Files;
+        app.keymap = Keymap::from_toml("[keys]\nexpand = [\"e\"]\n").expect("a keymap");
+        app.apply(Update::Listing {
+            path: String::new(),
+            entries: vec![entry("src", true)],
+        });
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('l'))), None);
+        assert!(!app.files[0].expanded, "the old key was unhooked");
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('e'))),
+            Some(Request::ListDir {
+                path: "src".to_owned(),
+                include_ignored: false,
+            })
+        );
+    }
+
+    #[test]
+    fn the_session_list_takes_its_keys_from_the_table() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Sessions;
+        app.keymap = Keymap::from_toml("[keys]\ncompose = [\"p\"]\n").expect("a keymap");
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('i'))), None);
+        assert_eq!(app.focus, Focus::Sessions, "the old key was unhooked");
+        assert_eq!(app.handle_key(key(KeyCode::Char('p'))), None);
+        assert_eq!(app.focus, Focus::Prompt, "the composer has the keys");
+    }
+
+    #[test]
+    fn the_composer_takes_its_keys_from_the_table() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.focus = Focus::Prompt;
+        app.input = "run the tests".to_owned();
+        app.keymap = Keymap::from_toml("[keys]\nsubmit = [\"ctrl-j\"]\n").expect("a keymap");
+
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.input, "run the tests", "enter no longer sends");
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(Request::Prompt("run the tests".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_permission_card_takes_its_answers_from_the_table() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.keymap = Keymap::from_toml("[keys]\npermission-deny = [\"x\"]\n").expect("a keymap");
+        app.apply(Update::Permissions(vec![PermissionRequest {
+            id: "p1".to_owned(),
+            session_id: "s1".to_owned(),
+            kind: acpilot_proto::permission::PermissionKind::FileWrite,
+            title: "Write".to_owned(),
+            detail: String::new(),
+            options: vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }]));
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('n'))), None);
+        assert_eq!(app.permissions.len(), 1, "the old key was unhooked");
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('x'))),
+            Some(Request::Resolve {
+                id: "p1".to_owned(),
+                option: PermissionOption::Deny,
+            })
+        );
+    }
+
+    #[test]
+    fn copy_mode_takes_its_keys_from_the_table() {
+        let mut app = transcript_app();
+        app.keymap = Keymap::from_toml("[keys]\nlive = [\"z\"]\n").expect("a keymap");
+        app.handle_key(key(KeyCode::F(3)));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.transcript.view.cursor.0, 48);
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('G'))), None);
+        assert_eq!(app.transcript.view.cursor.0, 48, "the old key was unhooked");
+        assert_eq!(app.handle_key(key(KeyCode::Char('z'))), None);
+        assert_eq!(app.transcript.view.cursor.0, 49, "live output");
     }
 }

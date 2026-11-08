@@ -44,6 +44,16 @@ use serde::Deserialize;
 pub enum Context {
     /// The client's own keys: the palette, the panes, the session, the terminal.
     App,
+    /// The workspace tree while it has the keyboard.
+    Files,
+    /// The session list while it has the keyboard.
+    Sessions,
+    /// The prompt composer, whose printable keys stay text.
+    Prompt,
+    /// The permission card, which is modal over every pane.
+    Permission,
+    /// A terminal or transcript being read rather than typed into.
+    Copy,
     /// The editor while its keys are commands.
     Editor,
     /// The editor while its motions extend a selection.
@@ -56,6 +66,11 @@ impl Context {
     pub const fn name(self) -> &'static str {
         match self {
             Self::App => "app",
+            Self::Files => "files",
+            Self::Sessions => "sessions",
+            Self::Prompt => "prompt",
+            Self::Permission => "permission",
+            Self::Copy => "copy",
             Self::Editor => "editor",
             Self::Visual => "visual",
         }
@@ -99,6 +114,48 @@ pub enum Action {
     Wider,
     /// Save the buffer through the daemon.
     Save,
+    /// Open the selected row, or fold the tool call under the cursor.
+    Activate,
+    /// Close the selected directory.
+    Collapse,
+    /// Open the selected directory.
+    Expand,
+    /// Show or hide the rows an ignore rule hides.
+    ToggleHidden,
+    /// Move from the session list to the composer.
+    Compose,
+    /// Start a session with the first agent.
+    NewSession,
+    /// End the selected session.
+    EndSession,
+    /// Cancel the turn in flight.
+    CancelTurn,
+    /// Send the composer's text.
+    Submit,
+    /// Write a newline in the composer.
+    Newline,
+    /// Complete the path being typed.
+    Complete,
+    /// Delete the character before the caret.
+    Backspace,
+    /// Show the next permission question.
+    NextQuestion,
+    /// Show the previous permission question.
+    PreviousQuestion,
+    /// Put the permission card aside without answering.
+    PutAside,
+    /// Allow the request once.
+    PermissionOnce,
+    /// Allow matching requests for the session.
+    PermissionAlways,
+    /// Deny the request.
+    PermissionDeny,
+    /// Jump to the oldest line in the view.
+    Top,
+    /// Jump back to live output.
+    Live,
+    /// Select whole lines.
+    SelectLine,
     /// Move the caret up.
     MoveUp,
     /// Move the caret down.
@@ -171,6 +228,27 @@ impl Action {
         Self::Narrower,
         Self::Wider,
         Self::Save,
+        Self::Activate,
+        Self::Collapse,
+        Self::Expand,
+        Self::ToggleHidden,
+        Self::Compose,
+        Self::NewSession,
+        Self::EndSession,
+        Self::CancelTurn,
+        Self::Submit,
+        Self::Newline,
+        Self::Complete,
+        Self::Backspace,
+        Self::NextQuestion,
+        Self::PreviousQuestion,
+        Self::PutAside,
+        Self::PermissionOnce,
+        Self::PermissionAlways,
+        Self::PermissionDeny,
+        Self::Top,
+        Self::Live,
+        Self::SelectLine,
         Self::MoveUp,
         Self::MoveDown,
         Self::MoveLeft,
@@ -202,7 +280,7 @@ impl Action {
     /// The contexts the verb is live in.
     #[must_use]
     pub const fn contexts(self) -> &'static [Context] {
-        use Context::{App, Editor, Visual};
+        use Context::{App, Copy, Editor, Files, Permission, Prompt, Sessions, Visual};
         match self {
             Self::Palette
             | Self::KeyList
@@ -219,24 +297,36 @@ impl Action {
             | Self::Narrower
             | Self::Wider
             | Self::Save => &[App],
-            Self::MoveUp | Self::MoveDown | Self::MoveLeft | Self::MoveRight => &[Editor, Visual],
-            Self::LineStart | Self::LineEnd | Self::PageUp | Self::PageDown => &[Editor, Visual],
-            Self::Yank => &[Editor, Visual],
-            Self::Visual => &[Editor, Visual],
+            Self::Activate => &[Files, Sessions, Copy],
+            Self::Collapse | Self::Expand | Self::ToggleHidden => &[Files],
+            Self::Compose | Self::NewSession | Self::EndSession | Self::CancelTurn => &[Sessions],
+            Self::Submit | Self::Newline | Self::Complete | Self::Backspace => &[Prompt],
+            Self::NextQuestion
+            | Self::PreviousQuestion
+            | Self::PutAside
+            | Self::PermissionOnce
+            | Self::PermissionAlways
+            | Self::PermissionDeny => &[Permission],
+            Self::Top | Self::Live | Self::SelectLine => &[Copy],
+            Self::MoveUp | Self::MoveDown => &[Editor, Visual, Files, Sessions, Prompt, Copy],
+            Self::MoveLeft | Self::MoveRight => &[Editor, Visual, Prompt, Copy],
+            Self::LineStart | Self::LineEnd => &[Editor, Visual, Prompt],
+            Self::PageUp | Self::PageDown => &[Editor, Visual, Copy],
+            Self::Find => &[Files, Editor, Copy],
+            Self::NextMatch | Self::PrevMatch => &[Editor, Copy],
+            Self::Yank => &[Editor, Visual, Copy],
+            Self::Visual => &[Editor, Visual, Copy],
             Self::Command => &[Editor, Visual],
-            Self::Cancel => &[Editor, Visual],
+            Self::Cancel => &[Editor, Visual, Prompt, Copy],
             Self::DeleteSelection => &[Visual],
-            Self::Find
-            | Self::GotoLine
-            | Self::NextMatch
-            | Self::PrevMatch
+            Self::DeleteChar => &[Editor, Prompt],
+            Self::GotoLine
             | Self::Insert
             | Self::Append
             | Self::InsertLineStart
             | Self::InsertLineEnd
             | Self::OpenBelow
             | Self::OpenAbove
-            | Self::DeleteChar
             | Self::Undo
             | Self::Redo => &[Editor],
         }
@@ -261,6 +351,27 @@ impl Action {
             Self::Narrower => "narrower pane",
             Self::Wider => "wider pane",
             Self::Save => "save",
+            Self::Activate => "open / fold",
+            Self::Collapse => "collapse",
+            Self::Expand => "expand",
+            Self::ToggleHidden => "hidden files",
+            Self::Compose => "compose",
+            Self::NewSession => "new session",
+            Self::EndSession => "end session",
+            Self::CancelTurn => "cancel turn",
+            Self::Submit => "send",
+            Self::Newline => "a new line",
+            Self::Complete => "complete the path",
+            Self::Backspace => "delete backwards",
+            Self::NextQuestion => "next question",
+            Self::PreviousQuestion => "previous question",
+            Self::PutAside => "put the card aside",
+            Self::PermissionOnce => "allow once",
+            Self::PermissionAlways => "allow for the session",
+            Self::PermissionDeny => "deny",
+            Self::Top => "oldest line",
+            Self::Live => "live output",
+            Self::SelectLine => "select whole lines",
             Self::MoveUp => "move up",
             Self::MoveDown => "move down",
             Self::MoveLeft => "move left",
@@ -290,6 +401,22 @@ impl Action {
         }
     }
 
+    /// What a person would call it in one context, when the pane changes the
+    /// sentence without changing the verb.
+    #[must_use]
+    pub const fn what_in(self, context: Context) -> &'static str {
+        match (self, context) {
+            (Self::Activate, Context::Files | Context::Sessions) => "open",
+            (Self::Activate, Context::Copy) => "open the tool call",
+            (Self::Find, Context::Copy) => "find in what is above",
+            (Self::Visual, Context::Copy) => "select",
+            (Self::Yank, Context::Copy) => "copy and leave",
+            (Self::Cancel, Context::Copy) => "leave",
+            (Self::Cancel, Context::Prompt) => "back to the list",
+            _ => self.what(),
+        }
+    }
+
     /// The name the file uses.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -309,6 +436,27 @@ impl Action {
             Self::Narrower => "narrower",
             Self::Wider => "wider",
             Self::Save => "save",
+            Self::Activate => "activate",
+            Self::Collapse => "collapse",
+            Self::Expand => "expand",
+            Self::ToggleHidden => "toggle-hidden",
+            Self::Compose => "compose",
+            Self::NewSession => "new-session",
+            Self::EndSession => "end-session",
+            Self::CancelTurn => "cancel-turn",
+            Self::Submit => "submit",
+            Self::Newline => "newline",
+            Self::Complete => "complete",
+            Self::Backspace => "backspace",
+            Self::NextQuestion => "next-question",
+            Self::PreviousQuestion => "previous-question",
+            Self::PutAside => "put-aside",
+            Self::PermissionOnce => "permission-once",
+            Self::PermissionAlways => "permission-always",
+            Self::PermissionDeny => "permission-deny",
+            Self::Top => "top",
+            Self::Live => "live",
+            Self::SelectLine => "select-line",
             Self::MoveUp => "move-up",
             Self::MoveDown => "move-down",
             Self::MoveLeft => "move-left",
@@ -386,6 +534,7 @@ impl Chord {
             "" => return Err(format!("no key after the modifiers: {text}")),
             "space" => KeyCode::Char(' '),
             "tab" => KeyCode::Tab,
+            "backtab" => KeyCode::BackTab,
             "enter" | "return" => KeyCode::Enter,
             "esc" | "escape" => KeyCode::Esc,
             "backspace" => KeyCode::Backspace,
@@ -467,6 +616,14 @@ fn canonical(code: KeyCode, modifiers: KeyModifiers) -> (KeyCode, KeyModifiers) 
                 (KeyCode::Char(character), held & !KeyModifiers::SHIFT)
             }
         }
+        // Crossterm reports Shift-Tab two ways, and a key file may write it as
+        // either. One chord, so a binding cannot work on one terminal and not the
+        // other; the shift is already in the key's name. The same rule covers
+        // `shift-tab`, which parses as Tab plus Shift before it gets here.
+        KeyCode::Tab if held.contains(KeyModifiers::SHIFT) => {
+            (KeyCode::BackTab, held & !KeyModifiers::SHIFT)
+        }
+        KeyCode::BackTab => (KeyCode::BackTab, held & !KeyModifiers::SHIFT),
         other => (other, held),
     }
 }
@@ -539,7 +696,7 @@ impl Preset {
         }
     }
 
-    fn table(self) -> Vec<(Action, &'static [&'static str])> {
+    fn table(self) -> Vec<(Context, Action, &'static [&'static str])> {
         use Action::{
             Append, Cancel, Command, DeleteChar, DeleteSelection, Find, GotoLine, Insert,
             InsertLineEnd, InsertLineStart, LineEnd, LineStart, MoveDown, MoveLeft, MoveRight,
@@ -547,96 +704,193 @@ impl Preset {
             Visual, Yank,
         };
 
-        let mut table: Vec<(Action, &'static [&'static str])> = APP.to_vec();
-        match self {
-            Self::Vim => {
-                table.extend_from_slice(&[
-                    (MoveUp, &["up", "k"]),
-                    (MoveDown, &["down", "j"]),
-                    (MoveLeft, &["left", "h"]),
-                    (MoveRight, &["right", "l"]),
-                    (LineStart, &["home", "0"]),
-                    (LineEnd, &["end", "$"]),
-                    (PageUp, &["pageup"]),
-                    (PageDown, &["pagedown"]),
-                    (Find, &["/", "ctrl-f"]),
-                    (GotoLine, &["ctrl-g"]),
-                    (NextMatch, &["n"]),
-                    (PrevMatch, &["N"]),
-                    (Yank, &["y"]),
-                    (Visual, &["v"]),
-                    (Command, &[":"]),
-                    (Cancel, &["esc"]),
-                    (Insert, &["i"]),
-                    (Append, &["a"]),
-                    (InsertLineStart, &["I"]),
-                    (InsertLineEnd, &["A"]),
-                    (OpenBelow, &["o"]),
-                    (OpenAbove, &["O"]),
-                    (DeleteChar, &["x"]),
-                    (Undo, &["u", "ctrl-z"]),
-                    (Redo, &["ctrl-y", "ctrl-shift-z"]),
-                ]);
-            }
-            Self::VsCode => {
-                table.extend_from_slice(&[
-                    (MoveUp, &["up"]),
-                    (MoveDown, &["down"]),
-                    (MoveLeft, &["left"]),
-                    (MoveRight, &["right"]),
-                    (LineStart, &["home"]),
-                    (LineEnd, &["end"]),
-                    (PageUp, &["pageup"]),
-                    (PageDown, &["pagedown"]),
-                    (Find, &["ctrl-f"]),
-                    (GotoLine, &["ctrl-g"]),
-                    (NextMatch, &["n"]),
-                    (PrevMatch, &["N"]),
-                    (Yank, &["y"]),
-                    (Visual, &["v"]),
-                    (Command, &[":"]),
-                    (Cancel, &["esc"]),
-                    (Insert, &["i"]),
-                    (Append, &["a"]),
-                    (InsertLineEnd, &["A"]),
-                    (OpenBelow, &["o"]),
-                    (DeleteChar, &["x"]),
-                    (Undo, &["ctrl-z"]),
-                    (Redo, &["ctrl-y"]),
-                ]);
-            }
-        }
-        // The motions a visual selection needs are the same table in both presets:
-        // what a person rebinds once should not have to be rebound twice.
-        table.extend_from_slice(&[
-            (MoveUp, &["up"]),
-            (MoveDown, &["down"]),
-            (MoveLeft, &["left"]),
-            (MoveRight, &["right"]),
-            (LineStart, &["home"]),
-            (LineEnd, &["end"]),
-            (PageUp, &["pageup"]),
-            (PageDown, &["pagedown"]),
-            (Yank, &["y"]),
-            (DeleteSelection, &["d", "x"]),
-            (Visual, &["v"]),
-            (Cancel, &["esc"]),
-            (Command, &[":"]),
-        ]);
+        let mut table = tagged(Context::App, APP);
+        let editor: Vec<(Action, &'static [&'static str])> = match self {
+            Self::Vim => vec![
+                (MoveUp, &["up", "k"]),
+                (MoveDown, &["down", "j"]),
+                (MoveLeft, &["left", "h"]),
+                (MoveRight, &["right", "l"]),
+                (LineStart, &["home", "0"]),
+                (LineEnd, &["end", "$"]),
+                (PageUp, &["pageup"]),
+                (PageDown, &["pagedown"]),
+                (Find, &["/", "ctrl-f"]),
+                (GotoLine, &["ctrl-g"]),
+                (NextMatch, &["n"]),
+                (PrevMatch, &["N"]),
+                (Yank, &["y"]),
+                (Visual, &["v"]),
+                (Command, &[":"]),
+                (Cancel, &["esc"]),
+                (Insert, &["i"]),
+                (Append, &["a"]),
+                (InsertLineStart, &["I"]),
+                (InsertLineEnd, &["A"]),
+                (OpenBelow, &["o"]),
+                (OpenAbove, &["O"]),
+                (DeleteChar, &["x"]),
+                (Undo, &["u", "ctrl-z"]),
+                (Redo, &["ctrl-y", "ctrl-shift-z"]),
+            ],
+            Self::VsCode => vec![
+                (MoveUp, &["up"]),
+                (MoveDown, &["down"]),
+                (MoveLeft, &["left"]),
+                (MoveRight, &["right"]),
+                (LineStart, &["home"]),
+                (LineEnd, &["end"]),
+                (PageUp, &["pageup"]),
+                (PageDown, &["pagedown"]),
+                (Find, &["ctrl-f"]),
+                (GotoLine, &["ctrl-g"]),
+                (NextMatch, &["n"]),
+                (PrevMatch, &["N"]),
+                (Yank, &["y"]),
+                (Visual, &["v"]),
+                (Command, &[":"]),
+                (Cancel, &["esc"]),
+                (Insert, &["i"]),
+                (Append, &["a"]),
+                (InsertLineEnd, &["A"]),
+                (OpenBelow, &["o"]),
+                (DeleteChar, &["x"]),
+                (Undo, &["ctrl-z"]),
+                (Redo, &["ctrl-y"]),
+            ],
+        };
+        table.extend(tagged(Context::Editor, &editor));
+        // Visual mode moves with the same keys the preset uses in the editor: Vim
+        // keeps `hjkl`, VS Code keeps the arrows. The commands about the run are
+        // the same in both.
+        let visual: Vec<(Action, &'static [&'static str])> = match self {
+            Self::Vim => vec![
+                (MoveUp, &["up", "k"]),
+                (MoveDown, &["down", "j"]),
+                (MoveLeft, &["left", "h"]),
+                (MoveRight, &["right", "l"]),
+                (LineStart, &["home", "0"]),
+                (LineEnd, &["end", "$"]),
+                (PageUp, &["pageup"]),
+                (PageDown, &["pagedown"]),
+                (Yank, &["y"]),
+                (DeleteSelection, &["d", "x"]),
+                (Visual, &["v"]),
+                (Cancel, &["esc"]),
+                (Command, &[":"]),
+            ],
+            Self::VsCode => vec![
+                (MoveUp, &["up"]),
+                (MoveDown, &["down"]),
+                (MoveLeft, &["left"]),
+                (MoveRight, &["right"]),
+                (LineStart, &["home"]),
+                (LineEnd, &["end"]),
+                (PageUp, &["pageup"]),
+                (PageDown, &["pagedown"]),
+                (Yank, &["y"]),
+                (DeleteSelection, &["d", "x"]),
+                (Visual, &["v"]),
+                (Cancel, &["esc"]),
+                (Command, &[":"]),
+            ],
+        };
+        table.extend(tagged(Context::Visual, &visual));
+        table.extend(tagged(Context::Files, FILES));
+        table.extend(tagged(Context::Sessions, SESSIONS));
+        table.extend(tagged(Context::Prompt, PROMPT));
+        table.extend(tagged(Context::Permission, PERMISSION));
+        table.extend(tagged(Context::Copy, COPY));
         if self == Self::VsCode {
-            table.extend_from_slice(&[
-                (Action::Palette, &["ctrl-shift-p"]),
-                (Action::KeyList, &["f1"]),
-            ]);
+            table.push((Context::App, Action::Palette, &["ctrl-shift-p"]));
+            table.push((Context::App, Action::KeyList, &["f1"]));
         }
         table
     }
+}
+
+/// One context's rows, with the context attached.
+fn tagged(
+    context: Context,
+    rows: &[(Action, &'static [&'static str])],
+) -> Vec<(Context, Action, &'static [&'static str])> {
+    rows.iter()
+        .map(|(action, keys)| (context, *action, *keys))
+        .collect()
 }
 
 use Action::{Grep, KeyList, Narrower, Transcript, Wider};
 use Action::{
     Menu, NextFocus, Palette, Quit, Refresh, Review, Save, SourceControl, StatsSources, Terminal,
 };
+
+/// The workspace tree, the same in both presets unless a file changes it.
+const FILES: &[(Action, &[&str])] = &[
+    (Action::MoveUp, &["up", "k"]),
+    (Action::MoveDown, &["down", "j"]),
+    (Action::Collapse, &["left", "h"]),
+    (Action::Expand, &["right", "l"]),
+    (Action::Activate, &["enter"]),
+    (Action::Find, &["/"]),
+    (Action::ToggleHidden, &["H"]),
+];
+
+/// The session list.
+const SESSIONS: &[(Action, &[&str])] = &[
+    (Action::MoveUp, &["up", "k"]),
+    (Action::MoveDown, &["down", "j"]),
+    (Action::Activate, &["enter"]),
+    (Action::Compose, &["i"]),
+    (Action::NewSession, &["n"]),
+    (Action::EndSession, &["d"]),
+    (Action::CancelTurn, &["c"]),
+];
+
+/// The composer. Printable keys are text and never reach this table.
+const PROMPT: &[(Action, &[&str])] = &[
+    (Action::Submit, &["enter"]),
+    (Action::Newline, &["alt-enter", "shift-enter", "ctrl-enter"]),
+    (Action::Complete, &["tab"]),
+    (Action::Backspace, &["backspace"]),
+    (Action::DeleteChar, &["delete"]),
+    (Action::MoveUp, &["up"]),
+    (Action::MoveDown, &["down"]),
+    (Action::MoveLeft, &["left"]),
+    (Action::MoveRight, &["right"]),
+    (Action::LineStart, &["home"]),
+    (Action::LineEnd, &["end"]),
+    (Action::Cancel, &["esc"]),
+];
+
+/// The permission card, which answers only what the request offered.
+const PERMISSION: &[(Action, &[&str])] = &[
+    (Action::NextQuestion, &["tab"]),
+    (Action::PreviousQuestion, &["backtab"]),
+    (Action::PermissionOnce, &["y"]),
+    (Action::PermissionAlways, &["a"]),
+    (Action::PermissionDeny, &["n"]),
+    (Action::PutAside, &["esc"]),
+];
+
+/// A terminal or transcript being read. Both media use one gesture.
+const COPY: &[(Action, &[&str])] = &[
+    (Action::MoveUp, &["up", "k"]),
+    (Action::MoveDown, &["down", "j"]),
+    (Action::MoveLeft, &["left", "h"]),
+    (Action::MoveRight, &["right", "l"]),
+    (Action::PageUp, &["pageup", "ctrl-u"]),
+    (Action::PageDown, &["pagedown", "ctrl-d"]),
+    (Action::Top, &["g"]),
+    (Action::Live, &["G"]),
+    (Action::Visual, &["v"]),
+    (Action::SelectLine, &["V"]),
+    (Action::Yank, &["y"]),
+    (Action::Find, &["/"]),
+    (Action::NextMatch, &["n"]),
+    (Action::PrevMatch, &["N"]),
+    (Action::Activate, &["enter"]),
+    (Action::Cancel, &["esc", "q"]),
+];
 
 /// The client's own keys, the same in both presets unless a preset adds one.
 const APP: &[(Action, &[&str])] = &[
@@ -657,11 +911,17 @@ const APP: &[(Action, &[&str])] = &[
     (Save, &["ctrl-s"]),
 ];
 
-/// One verb and every key that means it.
+/// One verb, one context, and every key that means it there.
+///
+/// A verb can have different keys in different panes — `h` collapses a directory
+/// but moves a caret left in Vim and does nothing in a VS Code editor — so the
+/// context belongs on the binding rather than only on the verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     /// What the key does.
     pub action: Action,
+    /// Where it does it.
+    pub context: Context,
     /// The keys that do it, in the order they should be listed.
     pub chords: Vec<Chord>,
 }
@@ -684,14 +944,21 @@ impl Keymap {
     #[must_use]
     pub fn preset(preset: Preset) -> Self {
         let mut bindings: Vec<Binding> = Vec::new();
-        for (action, keys) in preset.table() {
+        for (context, action, keys) in preset.table() {
             let chords: Vec<Chord> = keys
                 .iter()
                 .map(|text| Chord::parse(text).expect("a built-in chord is a key"))
                 .collect();
-            match bindings.iter_mut().find(|binding| binding.action == action) {
+            match bindings
+                .iter_mut()
+                .find(|binding| binding.action == action && binding.context == context)
+            {
                 Some(binding) => binding.chords.extend(chords),
-                None => bindings.push(Binding { action, chords }),
+                None => bindings.push(Binding {
+                    action,
+                    context,
+                    chords,
+                }),
             }
         }
         Self { preset, bindings }
@@ -745,14 +1012,22 @@ impl Keymap {
             for text in keys {
                 chords.push(Chord::parse(text).map_err(|error| format!("{name}: {error}"))?);
             }
-            match keymap
-                .bindings
-                .iter_mut()
-                .find(|binding| binding.action == action)
-            {
-                // Replaced where it stands, so a file does not reshuffle the list.
-                Some(binding) => binding.chords = chords,
-                None => keymap.bindings.push(Binding { action, chords }),
+            // An override means "these are the keys for this verb", so it applies
+            // to every context the verb is live in. Replaced where it stands, so a
+            // file does not reshuffle the list.
+            for context in action.contexts() {
+                match keymap
+                    .bindings
+                    .iter_mut()
+                    .find(|binding| binding.action == action && binding.context == *context)
+                {
+                    Some(binding) => binding.chords.clone_from(&chords),
+                    None => keymap.bindings.push(Binding {
+                        action,
+                        context: *context,
+                        chords: chords.clone(),
+                    }),
+                }
             }
         }
         keymap.check()?;
@@ -770,18 +1045,28 @@ impl Keymap {
     pub fn action(&self, context: Context, key: KeyEvent) -> Option<Action> {
         self.bindings
             .iter()
-            .filter(|binding| binding.action.contexts().contains(&context))
+            .filter(|binding| binding.context == context)
             .find(|binding| binding.chords.iter().any(|chord| chord.matches(key)))
             .map(|binding| binding.action)
     }
 
-    /// Every key bound to an action, or nothing when it is unbound.
+    /// Every key bound to an action, in every context, or nothing when it is
+    /// unbound. A key a verb has in two panes is listed once.
     #[must_use]
-    pub fn chords(&self, action: Action) -> &[Chord] {
-        self.bindings
+    pub fn chords(&self, action: Action) -> Vec<Chord> {
+        let mut chords = Vec::new();
+        for binding in self
+            .bindings
             .iter()
-            .find(|binding| binding.action == action)
-            .map_or(&[], |binding| binding.chords.as_slice())
+            .filter(|binding| binding.action == action)
+        {
+            for chord in &binding.chords {
+                if !chords.contains(chord) {
+                    chords.push(*chord);
+                }
+            }
+        }
+        chords
     }
 
     /// The effective bindings for a context, ready for the key list.
@@ -795,12 +1080,17 @@ impl Keymap {
             if !action.contexts().contains(&context) {
                 continue;
             }
-            let chords = self.chords(*action);
+            let chords: Vec<Chord> = self
+                .bindings
+                .iter()
+                .filter(|binding| binding.action == *action && binding.context == context)
+                .flat_map(|binding| binding.chords.iter().copied())
+                .collect();
             if chords.is_empty() {
                 continue;
             }
             let keys: Vec<String> = chords.iter().map(ToString::to_string).collect();
-            rows.push((keys.join(" / "), action.what()));
+            rows.push((keys.join(" / "), action.what_in(context)));
         }
         rows
     }
@@ -811,10 +1101,19 @@ impl Keymap {
     /// override can *free* a key as well as take one: binding `palette` away from
     /// `Ctrl-P` and `quit` to it is not a conflict, it is a swap.
     fn check(&self) -> Result<(), String> {
-        for context in [Context::App, Context::Editor, Context::Visual] {
+        for context in [
+            Context::App,
+            Context::Files,
+            Context::Sessions,
+            Context::Prompt,
+            Context::Permission,
+            Context::Copy,
+            Context::Editor,
+            Context::Visual,
+        ] {
             let mut seen: Vec<(Chord, Action)> = Vec::new();
             for binding in &self.bindings {
-                if !binding.action.contexts().contains(&context) {
+                if binding.context != context {
                     continue;
                 }
                 for chord in &binding.chords {
@@ -847,6 +1146,62 @@ mod tests {
 
     fn ctrl(character: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn shift_tab_is_one_chord_however_it_arrives() {
+        let written = Chord::parse("backtab").expect("a key");
+        let shifted = Chord::parse("shift-tab").expect("a key");
+        assert_eq!(written, shifted);
+        assert!(written.matches(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)));
+        assert!(written.matches(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)));
+        assert_eq!(written.to_string(), "shift-tab");
+    }
+
+    #[test]
+    fn a_pane_verb_rebinds_without_touching_another_pane() {
+        let keymap = Keymap::from_toml("[keys]\nexpand = [\"e\"]\n").expect("a keymap");
+        assert_eq!(
+            keymap.action(Context::Files, key(KeyCode::Char('e'))),
+            Some(Action::Expand)
+        );
+        assert_eq!(
+            keymap.action(Context::Files, key(KeyCode::Char('l'))),
+            None,
+            "the key the file moved is no longer expand"
+        );
+        assert_eq!(
+            keymap.action(Context::Editor, key(KeyCode::Char('l'))),
+            Some(Action::MoveRight),
+            "the editor's l is its own"
+        );
+    }
+
+    #[test]
+    fn both_presets_bind_every_moved_pane() {
+        for preset in [Preset::Vim, Preset::VsCode] {
+            let keymap = Keymap::preset(preset);
+            assert_eq!(
+                keymap.action(Context::Files, key(KeyCode::Char('j'))),
+                Some(Action::MoveDown)
+            );
+            assert_eq!(
+                keymap.action(Context::Sessions, key(KeyCode::Enter)),
+                Some(Action::Activate)
+            );
+            assert_eq!(
+                keymap.action(Context::Prompt, key(KeyCode::Enter)),
+                Some(Action::Submit)
+            );
+            assert_eq!(
+                keymap.action(Context::Permission, key(KeyCode::Char('y'))),
+                Some(Action::PermissionOnce)
+            );
+            assert_eq!(
+                keymap.action(Context::Copy, key(KeyCode::Char('G'))),
+                Some(Action::Live)
+            );
+        }
     }
 
     #[test]

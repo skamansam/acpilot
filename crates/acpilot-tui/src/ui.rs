@@ -2139,32 +2139,12 @@ fn draw_toast(frame: &mut Frame, toast: &Toast, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
-/// The keys a pane being read answers to, in either pane.
-///
-/// One list for both, because the keys are one list: the terminal's copy mode and
-/// the transcript are the same gesture over different media.
-const COPY_KEYS: [(&str, &str); 11] = [
-    ("j / k", "line down / up"),
-    ("h / l", "left / right"),
-    ("ctrl-u / ctrl-d", "page back / forward"),
-    ("g / G", "oldest line / live"),
-    ("/", "find in what is above"),
-    ("n / N", "next match, older / newer"),
-    ("v", "select"),
-    ("V", "select whole lines"),
-    ("y", "copy and leave"),
-    ("esc", "leave"),
-    ("?", "these keys"),
-];
-
 /// The keys the pane with the keyboard answers to, and what to call it.
 ///
-/// The editor's list is the keymap's, because those keys are: rebinding
-/// `move-down` or the palette changes what this card says, and the client's keys
-/// are appended after the pane's because they are live there too. A pane whose own
-/// keys are still the crate's match arms keeps its written list, which names the
-/// client's keys in the pane alongside its own — the same card a person has always
-/// read, and the place the next piece of the keymap work lands.
+/// Every pane that has moved into `Keymap` asks the table, then appends the
+/// client's own keys because they are live there too. A rebind therefore changes
+/// what works and what this card says in one step. The outline, references and
+/// project-map panels still keep their written lists.
 fn keys_for(app: &App) -> (&'static str, Vec<(String, &'static str)>) {
     let reading = app.focus == Focus::Transcript
         || (app.focus == Focus::Terminal
@@ -2173,30 +2153,35 @@ fn keys_for(app: &App) -> (&'static str, Vec<(String, &'static str)>) {
                 .as_ref()
                 .is_some_and(|pane| pane.mode == PaneMode::Copy));
     if reading {
-        return (
-            "copy mode",
-            COPY_KEYS
-                .iter()
-                .map(|(key, what)| ((*key).to_owned(), *what))
-                .collect(),
-        );
+        let mut rows = app.keymap.rows(Context::Copy);
+        rows.extend(app.keymap.rows(Context::App));
+        return ("copy mode", rows);
     }
     // No insert-mode list here: `?` is a character in insert mode, so the panel
     // cannot open while those keys are the pane's. The way in is on the normal-mode
     // list and the insert keys are in `docs/notes/tui-shell.md`, which is the one
     // place a person reading the settings can find them.
-    // The editor's verbs come from the table, then the client's — they are the same
-    // in every pane and a person who rebound the palette expects the card to say so.
-    // The other panes keep their written list, which is shorter than a table dump and
-    // already names the client's keys among them.
-    if app.focus == Focus::Editor {
-        let mut rows = app.keymap.rows(Context::Editor);
+    let context = match app.focus {
+        Focus::Files => Some(Context::Files),
+        Focus::Sessions => Some(Context::Sessions),
+        Focus::Prompt => Some(Context::Prompt),
+        Focus::Editor => Some(Context::Editor),
+        Focus::Outline
+        | Focus::References
+        | Focus::ProjectMap
+        | Focus::Transcript
+        | Focus::Terminal => None,
+    };
+    if let Some(context) = context {
+        let mut rows = app.keymap.rows(context);
         rows.extend(app.keymap.rows(Context::App));
-        // Not in the table: one plans a task and the other asks the daemon, and the
-        // one that plans is not a verb a person should be able to bind.
-        rows.push(("f12".to_owned(), "go to definition"));
-        rows.push(("shift-f12".to_owned(), "find references"));
-        return (Focus::Editor.label(), rows);
+        if context == Context::Editor {
+            // Not in the table: one plans a task and the other asks the daemon, and
+            // the one that plans is not a verb a person should be able to bind.
+            rows.push(("f12".to_owned(), "go to definition"));
+            rows.push(("shift-f12".to_owned(), "find references"));
+        }
+        return (app.focus.label(), rows);
     }
     let rows = pane_keys(app.focus)
         .iter()
@@ -2208,52 +2193,15 @@ fn keys_for(app: &App) -> (&'static str, Vec<(String, &'static str)>) {
 /// The keys a pane answers to, as the which-key panel lists them.
 fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
     match focus {
-        Focus::Files => &[
-            ("j / k", "move"),
-            ("h / l", "collapse / expand"),
-            ("enter", "open"),
-            ("/", "find a file"),
-            ("H", "hidden files"),
-            ("tab", "next pane"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("?", "these keys"),
-        ],
-        // The editor's keys are the keymap's; this arm exists because the match is on
-        // every pane and the key list asks the table instead.
-        Focus::Editor => &[],
+        // These panes are in the keymap now; the match keeps the arms for the
+        // three panels that are still written here.
+        Focus::Files | Focus::Editor | Focus::Sessions | Focus::Prompt | Focus::Transcript => &[],
         Focus::References => &[
             ("j / k", "move"),
             ("enter", "open the use"),
             ("shift-f12", "another word"),
             ("esc", "back to the buffer"),
             ("tab", "next pane"),
-        ],
-        Focus::Sessions => &[
-            ("j / k", "choose"),
-            ("enter", "open"),
-            ("i", "compose"),
-            ("tab", "read the transcript"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("n", "new session"),
-            ("d", "end session"),
-            ("c", "cancel turn"),
-        ],
-        // Reached only by a pane that is not being read: once it is, this list is
-        // replaced by the copy keys above.
-        Focus::Transcript => &[
-            ("j / k", "scroll"),
-            ("v", "select"),
-            ("y", "copy"),
-            ("esc", "back to the list"),
-            ("tab", "next pane"),
-        ],
-        Focus::Prompt => &[
-            ("enter", "send"),
-            ("esc", "back to the list"),
-            ("ctrl-t", "terminal pane"),
-            ("tab", "read the transcript"),
-            ("ctrl-p", "commands"),
-            ("f4", "where the stats came from"),
         ],
         Focus::Outline => &[
             ("j / k", "choose a definition"),
@@ -3510,7 +3458,8 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
         assert!(text.contains("find in what is above"), "{text}");
-        assert!(text.contains("ctrl-u / ctrl-d"), "{text}");
+        assert!(text.contains("ctrl-u"), "{text}");
+        assert!(text.contains("ctrl-d"), "{text}");
     }
 
     #[test]
@@ -3529,10 +3478,30 @@ mod tests {
 
         let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
-        assert!(text.contains("page back / forward"), "{text}");
+        assert!(text.contains("a page back"), "{text}");
         assert!(
             !text.contains("interrupt the program"),
             "the shell's keys are not the pane's while it is being read: {text}"
+        );
+    }
+
+    #[test]
+    fn a_panes_key_list_asks_the_table_too() {
+        let mut app = app_with_session();
+        app.focus = Focus::Files;
+        app.keymap =
+            crate::keymap::Keymap::from_toml("[keys]\nexpand = [\"e\"]\n").expect("a keymap");
+
+        let (pane, rows) = keys_for(&app);
+        assert_eq!(pane, "file manager");
+        assert!(
+            rows.iter()
+                .any(|(keys, what)| keys == "e" && *what == "expand"),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(keys, _)| keys != "l"),
+            "the chord the file moved is not listed as if it still worked: {rows:?}"
         );
     }
 

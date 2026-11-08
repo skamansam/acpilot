@@ -3366,27 +3366,12 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "┌ assistant keys · any key closes ───────────┐",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "         backend.rs",
-            "style": 1
-          },
-          {
-            "column": 20,
-            "text": " M",
-            "style": 6
-          },
-          {
-            "column": 25,
-            "text": "││  6 ",
-            "style": 3
-          },
-          {
-            "column": 33,
-            "text": "/// Whether a pane is following the progra",
+            "column": 46,
+            "text": " pane is following the progra",
             "style": 11
           },
           {
@@ -3408,47 +3393,22 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│enter     ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "         ui.rs",
+            "column": 11,
+            "text": "open                              ",
             "style": 1
           },
           {
-            "column": 15,
-            "text": " M",
-            "style": 6
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││  7 ",
-            "style": 3
-          },
-          {
-            "column": 33,
-            "text": "#",
-            "style": 14
-          },
-          {
-            "column": 34,
-            "text": "[",
-            "style": 8
-          },
-          {
-            "column": 35,
-            "text": "derive",
-            "style": 14
-          },
-          {
-            "column": 41,
-            "text": "(",
-            "style": 8
-          },
-          {
-            "column": 42,
-            "text": "Debug",
+            "column": 46,
+            "text": "g",
             "style": 9
           },
           {
@@ -3510,32 +3470,22 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│i         ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "     ▸ tests",
+            "column": 11,
+            "text": "compose                           ",
             "style": 1
           },
           {
-            "column": 25,
-            "text": "││  8 ",
-            "style": 3
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
-            "column": 33,
-            "text": "pub",
-            "style": 7
-          },
-          {
-            "column": 37,
-            "text": "enum",
-            "style": 7
-          },
-          {
-            "column": 42,
-            "text": "PaneMode",
+            "column": 46,
+            "text": "Mode",
             "style": 9
           },
           {
@@ -3562,33 +3512,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│n         ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "   ▸ acpilot-demo",
+            "column": 11,
+            "text": "new session                       ",
             "style": 1
           },
           {
-            "column": 25,
-            "text": "││  9 ",
-            "style": 3
-          },
-          {
-            "column": 31,
-            "text": "+ ",
-            "style": 6
-          },
-          {
-            "column": 37,
-            "text": "Live",
-            "style": 9
-          },
-          {
-            "column": 41,
-            "text": ",",
-            "style": 8
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
             "column": 75,
@@ -3609,33 +3544,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│d         ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "   ▸ acpilotd",
+            "column": 11,
+            "text": "end session                       ",
             "style": 1
           },
           {
-            "column": 25,
-            "text": "││ 10 ",
-            "style": 3
-          },
-          {
-            "column": 31,
-            "text": "+ ",
-            "style": 6
-          },
-          {
-            "column": 37,
-            "text": "Copy",
-            "style": 9
-          },
-          {
-            "column": 41,
-            "text": ",",
-            "style": 8
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
             "column": 75,
@@ -3656,28 +3576,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│c         ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": " ▸ docs",
+            "column": 11,
+            "text": "cancel turn                       ",
             "style": 1
           },
           {
-            "column": 25,
-            "text": "││ 11 ",
-            "style": 3
-          },
-          {
-            "column": 31,
-            "text": "+ ",
-            "style": 6
-          },
-          {
-            "column": 33,
-            "text": "}",
-            "style": 8
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
             "column": 75,
@@ -3698,23 +3608,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│up / k    ",
+            "style": 13
           },
           {
-            "column": 1,
-            "text": "   README.md",
+            "column": 11,
+            "text": "move up                           ",
             "style": 1
           },
           {
-            "column": 25,
-            "text": "││ 12 ",
-            "style": 3
-          },
-          {
-            "column": 31,
-            "text": "+ ",
-            "style": 6
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
             "column": 75,
@@ -3735,32 +3640,22 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 1,
-            "text": "   TODO.md",
-            "style": 1
-          },
-          {
-            "column": 11,
-            "text": " ?",
+            "text": "│down / j  ",
             "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 13 ",
-            "style": 3
+            "column": 11,
+            "text": "move down                         ",
+            "style": 1
           },
           {
-            "column": 33,
-            "text": "impl",
-            "style": 7
+            "column": 45,
+            "text": "│",
+            "style": 13
           },
           {
-            "column": 38,
-            "text": "TerminalPane",
+            "column": 46,
+            "text": "Pane",
             "style": 9
           },
           {
@@ -3787,17 +3682,22 @@
         [
           {
             "column": 0,
+            "text": "│ctrl-p    ",
+            "style": 13
+          },
+          {
+            "column": 11,
+            "text": "commands                          ",
+            "style": 1
+          },
+          {
+            "column": 45,
             "text": "│",
-            "style": 3
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 14 ",
-            "style": 3
-          },
-          {
-            "column": 37,
-            "text": "/// Move the copy cursor, scrolling wh",
+            "column": 46,
+            "text": "the copy cursor, scrolling wh",
             "style": 11
           },
           {
@@ -3819,22 +3719,22 @@
         [
           {
             "column": 0,
+            "text": "│?         ",
+            "style": 13
+          },
+          {
+            "column": 11,
+            "text": "these keys                        ",
+            "style": 1
+          },
+          {
+            "column": 45,
             "text": "│",
-            "style": 3
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 15 ",
-            "style": 3
-          },
-          {
-            "column": 37,
-            "text": "fn",
-            "style": 7
-          },
-          {
-            "column": 40,
-            "text": "copy_move",
+            "column": 46,
+            "text": "ove",
             "style": 14
           },
           {
@@ -3906,23 +3806,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│tab       ",
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 16 ",
-            "style": 3
-          },
-          {
-            "column": 41,
-            "text": "let",
-            "style": 7
+            "column": 11,
+            "text": "next pane                         ",
+            "style": 1
           },
           {
             "column": 45,
-            "text": "(",
-            "style": 8
+            "text": "│",
+            "style": 13
           },
           {
             "column": 46,
@@ -3983,43 +3878,18 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│f9        ",
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││",
-            "style": 3
-          },
-          {
-            "column": 27,
-            "text": " 17 ",
-            "style": 19
-          },
-          {
-            "column": 31,
-            "text": "  ",
-            "style": 20
-          },
-          {
-            "column": 33,
-            "text": "        ",
-            "style": 21
-          },
-          {
-            "column": 41,
-            "text": "let",
-            "style": 22
-          },
-          {
-            "column": 44,
-            "text": " ",
-            "style": 21
+            "column": 11,
+            "text": "menu bar                          ",
+            "style": 1
           },
           {
             "column": 45,
-            "text": "(",
-            "style": 23
+            "text": "│",
+            "style": 13
           },
           {
             "column": 46,
@@ -4095,22 +3965,22 @@
         [
           {
             "column": 0,
+            "text": "│ctrl-t    ",
+            "style": 13
+          },
+          {
+            "column": 11,
+            "text": "terminal pane                     ",
+            "style": 1
+          },
+          {
+            "column": 45,
             "text": "│",
-            "style": 3
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 18 ",
-            "style": 3
-          },
-          {
-            "column": 41,
-            "text": "if",
-            "style": 7
-          },
-          {
-            "column": 43,
-            "text": " rows < ",
+            "column": 46,
+            "text": "ws < ",
             "style": 1
           },
           {
@@ -4167,17 +4037,22 @@
         [
           {
             "column": 0,
-            "text": "│",
-            "style": 3
+            "text": "│ctrl-d    ",
+            "style": 13
           },
           {
-            "column": 25,
-            "text": "││ 19 ",
-            "style": 3
+            "column": 11,
+            "text": "review diff                       ",
+            "style": 1
           },
           {
             "column": 45,
-            "text": "self",
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 46,
+            "text": "elf",
             "style": 18
           },
           {
@@ -4234,7 +4109,17 @@
         [
           {
             "column": 0,
-            "text": "┌ assistant keys · any key closes ───────────┐",
+            "text": "│f3        ",
+            "style": 13
+          },
+          {
+            "column": 11,
+            "text": "read the transcript               ",
+            "style": 1
+          },
+          {
+            "column": 45,
+            "text": "│",
             "style": 13
           },
           {
@@ -4276,12 +4161,12 @@
         [
           {
             "column": 0,
-            "text": "│j / k     ",
+            "text": "│f4        ",
             "style": 13
           },
           {
             "column": 11,
-            "text": "choose                            ",
+            "text": "where the stats came from         ",
             "style": 1
           },
           {
@@ -4348,12 +4233,12 @@
         [
           {
             "column": 0,
-            "text": "│enter     ",
+            "text": "│ctrl-shift-f",
             "style": 13
           },
           {
-            "column": 11,
-            "text": "open                              ",
+            "column": 13,
+            "text": "search file contents            ",
             "style": 1
           },
           {
@@ -4380,12 +4265,12 @@
         [
           {
             "column": 0,
-            "text": "│i         ",
+            "text": "│f6        ",
             "style": 13
           },
           {
             "column": 11,
-            "text": "compose                           ",
+            "text": "source control                    ",
             "style": 1
           },
           {
@@ -4457,12 +4342,12 @@
         [
           {
             "column": 0,
-            "text": "│tab       ",
+            "text": "│ctrl-r    ",
             "style": 13
           },
           {
             "column": 11,
-            "text": "read the transcript               ",
+            "text": "refresh                           ",
             "style": 1
           },
           {
@@ -4489,12 +4374,12 @@
         [
           {
             "column": 0,
-            "text": "│ctrl-←/→  ",
+            "text": "│ctrl-c / ctrl-q",
             "style": 13
           },
           {
-            "column": 11,
-            "text": "narrower / wider                  ",
+            "column": 16,
+            "text": "quit                         ",
             "style": 1
           },
           {
@@ -4521,12 +4406,12 @@
         [
           {
             "column": 0,
-            "text": "│n         ",
+            "text": "│ctrl-left ",
             "style": 13
           },
           {
             "column": 11,
-            "text": "new session                       ",
+            "text": "narrower pane                     ",
             "style": 1
           },
           {
@@ -4543,12 +4428,12 @@
         [
           {
             "column": 0,
-            "text": "│d         ",
+            "text": "│ctrl-right",
             "style": 13
           },
           {
             "column": 11,
-            "text": "end session                       ",
+            "text": "wider pane                        ",
             "style": 1
           },
           {
@@ -4565,12 +4450,12 @@
         [
           {
             "column": 0,
-            "text": "│c         ",
+            "text": "│ctrl-s    ",
             "style": 13
           },
           {
             "column": 11,
-            "text": "cancel turn                       ",
+            "text": "save                              ",
             "style": 1
           },
           {

@@ -133,9 +133,12 @@ review that answers it, the commit composer, the toast.
 | review | `j`/`k` hunk · `a` accept · `x` reject · `A`/`X` all · `s` split/inline · `y` answer · `n` decline · `Esc` or `Ctrl-D` close |
 | permission card | `y` allow once · `a` allow always for this session · `n` deny, only for the options the request sent · `Tab`/`Shift-Tab` the next/previous question · `Esc` answer later, and **Session → Answer Permission…** brings the card back |
 
-Every key in the `anywhere` row and every key in the editor's two rows comes from
-`crates/acpilot-tui/src/keymap.rs`, not from a `match` arm — that is what makes the
-file below possible. `keymap.toml` beside `config.toml` chooses a preset and
+Every key in the `anywhere`, files, editor, visual, sessions, prompt, copy-mode
+and permission rows comes from `crates/acpilot-tui/src/keymap.rs`, not from a
+`match` arm — that is what makes the file below possible. The table has a context
+for each of those panes, so `expand = ["e"]` moves the tree's expand verb without
+touching the editor's `l`, and `permission-deny = ["x"]` moves the answer without
+touching the composer's `x`. `keymap.toml` beside `config.toml` chooses a preset and
 rebinds any of those verbs by name. `preset = "vim"` is the table above;
 `preset = "vscode"` moves with the arrows and `Home`/`End` instead of
 `h`/`j`/`k`/`l` and `0`/`$`, and puts the palette on `Ctrl-Shift-P` as well as
@@ -149,13 +152,15 @@ stderr before taking the screen, because starting on no keys at all is worse tha
 starting on the ones the preset describes. `?` lists the bindings in force, client
 keys first, so the panel and the keys cannot disagree about what `Ctrl-P` does.
 
-Three things are deliberately outside the table. Insert mode is a text field,
-where every printable key is a character and `?` and `Tab` are text rather than the
-app's keys. The tree, session list, composer, permission card and copy mode keep
-their own arms: their letters are read in a pane and move a row, which is not a
-client verb, and their rows are still written in `ui.rs`. And `F12`/`Shift-F12` are
-not bound — one of them raises a task marker rather than doing something, and a
-marker is not a verb a person should be able to move onto a key that works.
+Two things are deliberately outside the table. Insert mode is a text field, where
+every printable key is a character and `?` and `Tab` are text rather than the app's
+keys; the composer follows the same rule, so its printable keys are text and only
+its commands (`submit`, `newline`, `complete`, the motions and `cancel`) are in the
+table. And `F12`/`Shift-F12` are not bound — one of them raises a task marker rather
+than doing something, and a marker is not a verb a person should be able to move
+onto a key that works. The menu bar, terminal picker, source-control pane, commit
+composer and diff review still keep their own keys; they are the next piece of this
+work rather than a second table.
 
 `Tab` never lands in the terminal: a shell wants the byte. The pane is entered and
 left with `Ctrl-T`, and the copy mode's own keys take over while it is up. The

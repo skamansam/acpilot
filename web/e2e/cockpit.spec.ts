@@ -12,7 +12,7 @@
 // CI exercises the same page a release ships. `CONTRIBUTING.md` says to install
 // the browser once with `npx playwright install chromium`.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -45,6 +45,19 @@ let log = '';
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
+  });
+}
+
+/** Run git in the fixture workspace, rejecting with the command and its stderr. */
+function git(...args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd: workspace, encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`git ${args.join(' ')} failed: ${stderr || error.message}`));
+        return;
+      }
+      resolve(stdout.trim());
+    });
   });
 }
 
@@ -143,6 +156,22 @@ command = ${JSON.stringify(MOCK_AGENT)}
   );
   await writeFile(join(workspace, 'notes.txt'), NOTES);
 
+  // The source-control pane needs a repository, and a tracked edit is what it
+  // can stage. Committing the baseline first leaves the appended line unstaged.
+  await git('init', '-q');
+  await git('add', '--', 'notes.txt');
+  await git(
+    '-c',
+    'user.name=Acpilot',
+    '-c',
+    'user.email=acpilot@example.com',
+    'commit',
+    '-q',
+    '-m',
+    'baseline',
+  );
+  await writeFile(join(workspace, 'notes.txt'), `${NOTES}unstaged change\n`);
+
   const port = await freePort();
   origin = `http://127.0.0.1:${port}`;
   daemon = spawn(
@@ -232,6 +261,31 @@ test('edits a file, shows the diff, and saves with the version it read', async (
   await expect
     .poll(async () => readFile(join(workspace, 'notes.txt'), 'utf8'))
     .toContain('from the browser');
+});
+
+test('stages and unstages a path through the source-control panel', async ({ page }) => {
+  await connect(page);
+  const source = page.locator('section.source');
+  await source.getByRole('button', { name: 'Open source control', exact: true }).click();
+
+  const files = source.locator('.source-files');
+  await expect(files).toContainText('notes.txt');
+  await files.getByRole('button').filter({ hasText: 'notes.txt' }).click();
+  await expect(source.locator('.source-branch')).toContainText('1 changed');
+  await expect(source.locator('.source-branch')).toContainText('0 staged');
+  await expect.poll(() => git('diff', '--cached', '--name-only')).toBe('');
+
+  await source.getByRole('button', { name: 'Stage path', exact: true }).click();
+  await expect(source.getByRole('status')).toContainText('Staged notes.txt.');
+  await expect(source.locator('.source-branch')).toContainText('1 staged');
+  await expect.poll(() => git('diff', '--cached', '--name-only')).toBe('notes.txt');
+  await expect.poll(() => git('show', ':notes.txt')).toContain('unstaged change');
+
+  await source.getByRole('button', { name: 'Unstage', exact: true }).click();
+  await expect(source.getByRole('status')).toContainText('Unstaged notes.txt.');
+  await expect(source.locator('.source-branch')).toContainText('0 staged');
+  await expect.poll(() => git('diff', '--cached', '--name-only')).toBe('');
+  await expect.poll(() => git('diff', '--name-only')).toBe('notes.txt');
 });
 
 test('prompts the mock agent, approves its write outside the workspace, and sees it land', async ({

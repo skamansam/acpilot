@@ -188,6 +188,82 @@ async fn a_draft_comes_from_the_staged_diff_and_the_named_session() {
 }
 
 #[tokio::test]
+async fn the_whole_index_flow_from_stage_to_draft_to_commit_runs_offline() {
+    let harness = harness().await;
+    let app = harness.app.clone();
+
+    let (status, before) = send(app.clone(), "GET", "/v1/git/status", None).await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    assert_eq!(
+        before["files"].as_array().map(Vec::len),
+        Some(2),
+        "one edit is unstaged and one is staged: {before}"
+    );
+
+    let (status, staged) = send(
+        app.clone(),
+        "POST",
+        "/v1/git/stage",
+        Some(serde_json::json!({ "paths": ["one.txt"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{staged}");
+    let files = staged["files"].as_array().expect("a file list");
+    for path in ["one.txt", "two.txt"] {
+        let entry = files
+            .iter()
+            .find(|entry| entry["path"] == path)
+            .unwrap_or_else(|| panic!("{path} is in the status: {staged}"));
+        assert_eq!(entry["index"], "modified", "{path} is staged: {staged}");
+        assert_eq!(entry["worktree"], "unmodified", "{staged}");
+    }
+
+    // The fixture agent is a child process speaking ACP over stdio, not a network
+    // service. This is the join the task asks for: the daemon reads the staged
+    // diff, renders the prompt, gets a validated draft, and commits that message.
+    let (status, draft) = send(
+        app.clone(),
+        "POST",
+        "/v1/git/commit-message",
+        Some(serde_json::json!({ "session_id": harness.session })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    assert_eq!(
+        draft["generator"],
+        format!("session:{}", harness.session),
+        "the draft names the offline generator that produced it"
+    );
+    let message = draft["message"]
+        .as_str()
+        .expect("a validated message")
+        .to_owned();
+
+    let (status, commit) = send(
+        app.clone(),
+        "POST",
+        "/v1/git/commit",
+        Some(serde_json::json!({ "message": message.clone() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{commit}");
+    assert_eq!(commit["subject"], draft["subject"]);
+
+    let (status, after) = send(harness.app, "GET", "/v1/git/status", None).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(
+        after["files"],
+        serde_json::json!([]),
+        "the commit took both staged paths: {after}"
+    );
+    assert_eq!(
+        git(harness.repository.path(), &["log", "-1", "--format=%B"]).trim(),
+        message,
+        "git stored the drafted message, not a reconstruction"
+    );
+}
+
+#[tokio::test]
 async fn the_prompt_route_shows_the_default_then_the_profile_s_file() {
     let harness = harness().await;
 

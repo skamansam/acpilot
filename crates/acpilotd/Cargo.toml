@@ -108,6 +108,9 @@ acpilot-client = { workspace = true }
 # The session stream is a socket, and a test that drove it through `oneshot` would
 # never run the upgrade it exists for: this is the client half.
 tokio-tungstenite = { workspace = true }
+# The diff text is what every pane draws; a snapshot makes a changed hunk a
+# reviewable diff rather than a string assertion somebody has to remember.
+insta = { workspace = true }
 http-body-util = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

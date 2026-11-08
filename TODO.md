@@ -1274,8 +1274,8 @@ what needs an editor shell waits for the editor shell.
     workspace file whenever the workspace is the repository's root, the ordinary case.
     A directory that is not a repository is `404`; no `git` on the host is
     `502 host_unavailable` with `details.field: "git"`; a workspace on another host is
-    `409`, because these routes walk this machine's filesystem. Nothing writes: staging
-    and committing stay the confirmed actions P6.5-3 and P6.5-4 own. **Tests:** nine route
+    `409`, because these routes walk this machine's filesystem. Nothing wrote at this task;
+    P6.5-7 later adds the index writes, and P6.5-3/4 the commit. **Tests:** nine route
     tests over a real temporary repository (both halves of a change, the three diff
     scopes and an unknown one, tracked and untracked tree rows, a log limit with its
     parents and `limit=0`, not-a-repository, a remote workspace, no workspace, and the
@@ -1320,26 +1320,27 @@ what needs an editor shell waits for the editor shell.
     The generating prompt and answer stay in that session's transcript, which is the record of how
     the draft was produced.
 - [x] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
-  composer whose message can be generated then edited. `git` writes stay a separate, confirmed
-  action; the pane never stages or commits on its own.
+  composer whose message can be generated then edited. At this task `git` writes stayed separate
+  actions; P6.5-7 later adds stage/unstage, and the commit remains confirmed.
   - `F6` opens a modal pane built from `GET /v1/git/status` and `GET /v1/git/diff?scope=all`: the
-    changed paths on the left and the selected file's section of the patch on the right. It stages
-    nothing, and `j`/`k` choose a file while `PgUp`/`PgDn` scroll its diff.
+    changed paths on the left and the selected file's section of the patch on the right. It staged
+    nothing at this task; `j`/`k` choose a file while `PgUp`/`PgDn` scroll its diff.
   - `c` opens the composer and `Ctrl-G` asks the open session for a draft through
     `POST /v1/git/commit-message`, then puts it in the editable message. `Ctrl-S` asks for
     confirmation and `y` sends the message to the new `POST /v1/git/commit`; `Esc` closes without
     writing. The route refuses an empty message with `400`, and an empty index or a git hook's
     refusal with `409`.
-  - `acpilot-git::Repo::commit` is the crate's only write. It commits the index as it stands — no
-    staging, no cleanup — and is reached only by the confirmed route. The changed-file fixture in
-    `--demo` is a design-pass source, not a repository.
+  - `acpilot-git::Repo::commit` is the commit write. It commits the index as it stands — no
+    staging, no cleanup — and is reached only by the confirmed route; P6.5-7 later adds `stage`
+    and `unstage`. The changed-file fixture in `--demo` is a design-pass source, not a repository.
   - **Tests:** three in `acpilot-git` (whole message and body, whitespace refused before git, the
     existing first-commit case), three route tests (the index-only commit, the empty message, the
     empty index) plus the OpenAPI operation and both schemas, four TUI state tests (`F6`, `g`,
     `Ctrl-S`/`y`, a draft landing in the composer), and two render tests (the pane's list and diff,
     the composer's message and footer).
-  - **Open:** the desktop and browser panes wait on P6.5-5. Staging remains git's job: there is no
-    stage/unstage route, so the commit acts on whatever the person has already added. The source
+  - **Open:** the desktop and browser panes wait on P6.5-5. There was no stage/unstage route at
+    this task, so the commit acted on whatever the person had already added; P6.5-7 later added
+    it. The source
     pane is modal rather than a movable `Panel`, because it is about the repository and the only
     write it leads to needs the confirmation. A commit is not added to the transcript; the status
     line and the refreshed index are the TUI's record, and the daemon's git output is only the
@@ -1362,10 +1363,19 @@ what needs an editor shell waits for the editor shell.
     before the daemon, the shared header rule, index-only staging), plus the `acpilot-git` helper test.
   - **Open:** the desktop shell has no session pane, so generation names the first listed session
     rather than a person's choice; the browser panel does not do the `F6`/keyboard route (it has no
-    global keymap), and neither client stages. The pane remains modal in the desktop app, as in the
-    TUI, because its one write needs the confirmation.
-- [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
+    global keymap), and neither client staged at this task; P6.5-7 later adds stage/unstage to all
+    three panes. The pane remains modal in the desktop app, as in the TUI, because its one write
+    needs the confirmation.
+- [x] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
   generation exercised without a network call.
+  - **Result:** the git route suite snapshots all three diff scopes in
+    `crates/acpilotd/tests/snapshots/git__diff_scopes.snap`. The snapshot is the exact patch text
+    and file order three clients draw, so a changed hunk, header or path shows up as a reviewable
+    diff. The commit-message suite adds one lifecycle test that stages `one.txt` through
+    `/v1/git/stage`, drafts through the fixture agent over ACP, commits the validated message, and
+    asserts both that the index is clean and that `git log` stored that message. The two suites are
+    14 and 11 route tests; both run entirely against a temporary repository and a child process.
+  - **Open:** none.
 - [x] **P6.5-7 · Stage and unstage from the panes** — `POST /v1/git/stage` and
   `POST /v1/git/unstage` take `GitIndexRequest { workspace?, paths[] }` and answer the new
   `GitStatus`, so preparing the index no longer sends a person to a terminal.

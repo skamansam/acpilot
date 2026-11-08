@@ -234,6 +234,23 @@ async fn the_diff_answers_the_scope_it_was_asked_for() {
 }
 
 #[tokio::test]
+async fn the_three_diff_scopes_are_snapshotted() {
+    let directory = repository();
+    let state = serving(directory.path());
+    let mut scopes = serde_json::Map::new();
+    for scope in ["unstaged", "staged", "all"] {
+        let (status, body) = send(app(state.clone()), &format!("/v1/git/diff?scope={scope}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        scopes.insert(scope.to_owned(), body);
+    }
+
+    // The patch is the exact text three clients draw. A changed line, a hunk
+    // header or a file list that moves shows up here as a reviewable diff rather
+    // than as a screenshot somebody has to compare by eye.
+    insta::assert_json_snapshot!("diff_scopes", serde_json::Value::Object(scopes));
+}
+
+#[tokio::test]
 async fn stage_puts_an_edit_and_an_untracked_file_in_the_index() {
     let directory = repository();
     let state = serving(directory.path());

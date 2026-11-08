@@ -331,6 +331,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "ignore",
+ "insta",
  "jiff",
  "reqwest",
  "serde",

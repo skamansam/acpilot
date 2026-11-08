@@ -217,7 +217,7 @@ async fn commit(
         ))
         .with_detail(
             "message",
-            "`git add` the files first; this route never stages for you",
+            "stage the files in the source pane first; this route never stages for you",
         ));
     }
 

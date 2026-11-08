@@ -87,9 +87,14 @@ the split.- **The menu bar** is one row of chrome, not a modal: the titles are a
 - The **stats bar** is one row per integration: provider, model, tokens both ways,
   money, latency. A provider that stopped answering is drawn hollow, not hidden.
 
-Overlays, back to front: the terminal picker, the key list, the palette, the
-content search's jump list, the source-control pane, the permission card, the diff
-review that answers it, the commit composer, the toast.
+Overlays, back to front: the agent picker, the terminal picker, the key list, the
+palette, the content search's jump list, the source-control pane, the permission
+card, the diff review that answers it, the commit composer, the toast.
+
+The assistant's overlays and panes are absent at launch: the window opens in the
+editor, and only **Session → Select Agent…** (or the palette's **Select agent…**)
+brings the sessions, transcript and composer into being. Closing them leaves the
+document open.
 
 ## What is real, and what is not
 
@@ -118,6 +123,7 @@ review that answers it, the commit composer, the toast.
 | --- | --- |
 | anywhere | `Tab` next pane · `?` keys · `Ctrl-P` palette · `F9` menus · `Alt`+underlined letter a menu · `F6` source control · `Ctrl-T` terminal, or a new shell when the session has none · `F3` read the transcript · `Ctrl-←`/`Ctrl-→` narrower/wider · drag a divider · `Ctrl-R` refresh · `Ctrl-C` quit |
 | terminal picker | `j`/`k` choose · `Enter` attach · `n` start a shell in the session's workspace · `Esc`/`q` close |
+| agent picker | `j`/`k` choose · `Enter` chooses the agent and reveals the assistant · `Esc`/`q` close |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
 | transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call under the cursor |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |

@@ -49,6 +49,17 @@ solves a palette around them, so the terminal UI can match the shell it was open
 in rather than the other way round; a terminal that will not answer keeps the named
 theme.
 
+## Opening
+
+`acpilot tui README.md` opens the file's project and the file: the keyboard is in
+the editor and no assistant pane is drawn. The window is a text editor before it
+is an agent client — the session list, transcript and composer do not exist until
+**Session → Select Agent…** (or the palette's **Select agent…**) chooses one, at
+which point the agent's newest conversation opens or a new one starts and the
+panel appears beside the editor. A profile with no `agents.toml` has no agents to
+list, so that row says so and points at the model lab (P4.5); **Session → Close
+Assistant** puts the panel away and leaves the document open.
+
 ## Panels
 
 The editor is the middle of the window and the columns either side hold panels.
@@ -60,7 +71,7 @@ the arrangement is remembered with the divider widths. Five panels are built tod
 | --- | --- | --- |
 | **File manager** | where the files are, what git says changed about them, and a find over paths and contents | built |
 | **Outline** | what the open buffer defines, from the grammar it is highlighted with; `Enter` on a row puts the caret on the definition's line | built |
-| **Assistant** | the sessions, the open transcript and the composer — the agent's half of the window | built |
+| **Assistant** | the sessions, the open transcript and the composer — the agent's half of the window, shown once an agent is chosen | built |
 | **Project map** | what the workspace is *for*: what each area is for, which path it owns, and what it depends on; the area the open file is in is opened under the list | built |
 | **Wiki** | one linked page per subsystem, written from the code so the repository explains itself | <span class="pill pill--hangar">hangar</span> |
 | **References** | every real use of the identifier under the caret, without the language's own noise; `Enter` on a row opens the file at the use | built |

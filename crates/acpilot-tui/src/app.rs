@@ -247,6 +247,12 @@ pub enum MenuAction {
     SourceControl,
     /// Start a session with the first agent.
     NewSession,
+    /// Ask which declared agent the assistant should run.
+    SelectAgent,
+    /// Put the assistant away, leaving the editor open.
+    CloseAssistant,
+    /// Say where an agent is written, while the model lab is P4.5.
+    ModelLab,
     /// Cancel the turn in flight.
     Cancel,
     /// Show a permission request that was put aside with `Esc`.
@@ -438,6 +444,14 @@ pub const MENUS: &[MenuDef] = &[
         title: "Session",
         mnemonic: 's',
         items: &[
+            // Choosing the agent is the row that makes the assistant exist: the
+            // window opens as an editor, and a session list is a place a person
+            // asked for rather than one the launch assumed.
+            MenuRow {
+                label: "Select Agent…",
+                keys: "",
+                action: MenuAction::SelectAgent,
+            },
             // `n` and `c` are the sessions pane's, and `n` is also the deny key on a
             // permission card. A chord in this bar promises it works from wherever the
             // keyboard is, so a pane's key is named nowhere.
@@ -445,6 +459,18 @@ pub const MENUS: &[MenuDef] = &[
                 label: "New Session",
                 keys: "",
                 action: MenuAction::NewSession,
+            },
+            MenuRow {
+                label: "Close Assistant",
+                keys: "",
+                action: MenuAction::CloseAssistant,
+            },
+            // The lab is P4.5: the row is the way to it, not a promise that it is
+            // here, and a profile with no `agents.toml` finds it from this menu.
+            MenuRow {
+                label: "Build an Agent in the Model Lab…",
+                keys: "",
+                action: MenuAction::ModelLab,
             },
             MenuRow {
                 label: "Cancel Turn",
@@ -1759,6 +1785,17 @@ pub struct App {
     /// Panels menu, and a window that opened with the panes somewhere other than
     /// where they were left would be a window that hid itself.
     pub panels: Panels,
+    /// Whether the assistant's panes are on screen.
+    ///
+    /// A launch opens as an editor, so the session list, the transcript and the
+    /// composer do not exist until a person chooses an agent. [`Panels`] still says
+    /// where the assistant would go: an arrangement and a decision to show it are
+    /// different questions, and closing the agent must not move it.
+    pub show_assistant: bool,
+    /// Whether the agent picker is asking which declared agent to run.
+    pub agent_picker: bool,
+    /// Which row of that picker `Enter` chooses.
+    pub agent_selected: usize,
     /// Whether the outline panel is on screen.
     ///
     /// Apart from the side it is on: a panel that is put away has not moved, and the
@@ -2606,9 +2643,26 @@ pub fn first_visible(selected: usize, len: usize, height: usize) -> usize {
 }
 
 impl App {
-    /// A TUI pointed at `daemon`, with nothing loaded yet.
+    /// The whole shell, pointed at `daemon`, with nothing loaded yet.
+    ///
+    /// Every pane exists here, which is what the design pass and the tests drive.
+    /// `acpilot tui` starts with [`App::editor_first`] instead: a launch is an
+    /// editor before it is an agent client.
     #[must_use]
     pub fn new(daemon: impl Into<String>) -> Self {
+        Self::assembled(daemon, true)
+    }
+
+    /// A launch: the text has the keyboard and the assistant is not on screen.
+    ///
+    /// The assistant is not hidden by a setting — it is absent until a person
+    /// chooses an agent, and [`App::start_agent`] is what brings it into being.
+    #[must_use]
+    pub fn editor_first(daemon: impl Into<String>) -> Self {
+        Self::assembled(daemon, false)
+    }
+
+    fn assembled(daemon: impl Into<String>, assistant: bool) -> Self {
         Self {
             daemon: daemon.into(),
             profile: String::new(),
@@ -2618,6 +2672,9 @@ impl App {
             file_selected: 0,
             show_ignored: false,
             panels: Panels::default(),
+            show_assistant: assistant,
+            agent_picker: false,
+            agent_selected: 0,
             show_outline: false,
             outline: Vec::new(),
             outline_selected: 0,
@@ -2697,7 +2754,13 @@ impl App {
             layout_saved: Layout::default(),
             keymap: Keymap::default(),
             pane_size: None,
-            focus: Focus::Sessions,
+            // The assistant's panes are the shell's other half, and a state built
+            // with them is a state that starts in them; a launch starts in the text.
+            focus: if assistant {
+                Focus::Sessions
+            } else {
+                Focus::Editor
+            },
             status: "connecting".to_owned(),
             should_quit: false,
         }
@@ -2713,6 +2776,9 @@ impl App {
     pub fn demo(demo: &acpilot_demo::Demo) -> Self {
         let mut app = Self::new(demo.daemon.clone());
         app.demo = true;
+        // The design pass draws the whole shell, because arguing about a layout
+        // with one of its columns missing is arguing about a different layout.
+        app.show_assistant = true;
         app.profile = demo.profile.clone();
         app.workspace = demo.workspace.clone();
         app.connected = true;
@@ -3148,6 +3214,14 @@ impl App {
     /// scrolled where nobody is reading would be live output that stopped
     /// following the conversation.
     fn set_focus(&mut self, focus: Focus) {
+        // The assistant's panes are not on screen until an agent is chosen, and an
+        // update that arrives first — a session opening for another client, a
+        // permission — must not put the keyboard in a pane nobody can see.
+        if !self.show_assistant
+            && matches!(focus, Focus::Sessions | Focus::Transcript | Focus::Prompt)
+        {
+            return;
+        }
         self.focus = focus;
         if focus != Focus::Transcript {
             self.transcript.view = CopyView::new((0, 0));
@@ -3161,6 +3235,10 @@ impl App {
     /// pane is scrolled and selected by line, and the cursor starts where a session
     /// was left — at the end of it.
     fn focus_transcript(&mut self) {
+        if !self.show_assistant {
+            self.notice("choose an agent before reading its transcript");
+            return;
+        }
         if !self.readable_transcript() {
             if self.terminal.is_some() {
                 self.notice("ctrl-t leaves the terminal before the transcript");
@@ -3355,7 +3433,17 @@ impl App {
                 self.connected = true;
                 self.status = format!("connected · acpilotd {version}");
             }
-            Update::Agents(agents) => self.agents = agents,
+            Update::Agents(agents) => {
+                self.agents = agents;
+                // The roster can shrink under a picker that is already up, and a
+                // selection past the end would be an index nothing opens.
+                if self.agent_selected >= self.agents.len() {
+                    self.agent_selected = self.agents.len().saturating_sub(1);
+                }
+                if self.agents.is_empty() {
+                    self.agent_picker = false;
+                }
+            }
             Update::Stats(stats) => {
                 // The status line's total comes from the same readings the bar draws,
                 // so the two cannot disagree about what a conversation costs.
@@ -3983,6 +4071,12 @@ impl App {
             return self.toggle_terminal();
         }
 
+        // Choosing an agent is a question with a list of answers, and the panes it
+        // would reveal are not on screen yet: every key belongs to the answer.
+        if self.agent_picker {
+            return self.agent_picker_key(key);
+        }
+
         // The picker is modal in the same way the permission card is: it is a
         // question with a list of answers, and a keystroke aimed at a program that
         // is not on screen yet would be lost.
@@ -4233,7 +4327,10 @@ impl App {
                 Focus::Outline => Focus::Editor,
                 Focus::References => Focus::Editor,
                 Focus::ProjectMap => Focus::Editor,
-                Focus::Editor => Focus::Sessions,
+                Focus::Editor if self.show_assistant => Focus::Sessions,
+                // A cycle goes round what is on screen: with no agent chosen, the
+                // tree and the editor are the whole window.
+                Focus::Editor => Focus::Files,
                 Focus::Sessions if self.readable_transcript() => Focus::Transcript,
                 Focus::Sessions => Focus::Prompt,
                 Focus::Transcript => Focus::Prompt,
@@ -5305,9 +5402,7 @@ impl App {
                 self.set_focus(Focus::Prompt);
             }
             Some(Action::NewSession) => {
-                if let Some(agent) = self.agents.first() {
-                    return Some(Request::New(agent.id.clone()));
-                }
+                return self.start_first_agent();
             }
             Some(Action::EndSession) => {
                 if let Some(session) = self.selected_session() {
@@ -5827,7 +5922,15 @@ impl App {
             }
             MenuAction::Files => self.set_focus(Focus::Files),
             MenuAction::Editor => self.set_focus(Focus::Editor),
-            MenuAction::Sessions => self.set_focus(Focus::Sessions),
+            MenuAction::Sessions => {
+                if self.show_assistant {
+                    self.set_focus(Focus::Sessions);
+                } else {
+                    // The row is a place, and the place does not exist until an
+                    // agent does: revealing an empty list would look like a bug.
+                    self.notice("no agent · Session → Select Agent…");
+                }
+            }
             MenuAction::Transcript => self.focus_transcript(),
             MenuAction::SourceControl => return self.toggle_source(),
             MenuAction::Terminal => return self.toggle_terminal(),
@@ -5867,11 +5970,11 @@ impl App {
             }
             MenuAction::FindReferences => return self.find_references(),
             MenuAction::NewSession => {
-                return self
-                    .agents
-                    .first()
-                    .map(|agent| Request::New(agent.id.clone()));
+                return self.start_first_agent();
             }
+            MenuAction::SelectAgent => return self.select_agent(),
+            MenuAction::CloseAssistant => self.close_assistant(),
+            MenuAction::ModelLab => self.planned("P4.5", "the model lab"),
             MenuAction::Cancel => return Some(Request::Cancel),
             MenuAction::AnswerPermission => self.reopen_permission(),
             MenuAction::Quit => {
@@ -6336,10 +6439,8 @@ impl App {
             CommandAction::Run(action) => action,
         };
         match action {
-            Run::NewSession => self
-                .agents
-                .first()
-                .map(|agent| Request::New(agent.id.clone())),
+            Run::NewSession => self.start_first_agent(),
+            Run::SelectAgent => self.select_agent(),
             Run::Terminal => self.toggle_terminal(),
             Run::CopyMode => {
                 if let Some(pane) = &mut self.terminal {
@@ -7043,6 +7144,106 @@ impl App {
         Request::NewTerminal { workspace, size }
     }
 
+    /// Ask which declared agent the assistant should run.
+    ///
+    /// The rows are the daemon's roster, not a list compiled into this window: an
+    /// agent is a manifest entry on the machine the daemon serves. A profile with
+    /// no `agents.toml` has no rows, so the answer is the task that writes one
+    /// rather than a picker with nothing in it.
+    fn select_agent(&mut self) -> Option<Request> {
+        match self.agents.len() {
+            0 => {
+                self.planned("P4.5", "no agent is declared · build one in the model lab");
+                None
+            }
+            1 => {
+                let id = self.agents[0].id.clone();
+                self.start_agent(&id)
+            }
+            count => {
+                self.agent_picker = true;
+                self.agent_selected = self.agent_selected.min(count - 1);
+                self.status = format!("{count} agents · Enter chooses · Esc closes");
+                None
+            }
+        }
+    }
+
+    /// Start a session with the first declared agent, or say there is none.
+    fn start_first_agent(&mut self) -> Option<Request> {
+        match self.agents.first().map(|agent| agent.id.clone()) {
+            Some(id) => self.start_agent(&id),
+            None => {
+                self.planned("P4.5", "no agent is declared · build one in the model lab");
+                None
+            }
+        }
+    }
+
+    /// Choose `id`: the assistant appears, and its newest conversation is opened
+    /// rather than a second one started beside it.
+    ///
+    /// Revealing first is the point of the ticket: the panel is the answer to the
+    /// choice, and a request sent from a window that still looked like an editor
+    /// would leave a person wondering whether anything had happened.
+    fn start_agent(&mut self, id: &str) -> Option<Request> {
+        self.show_assistant = true;
+        self.set_focus(Focus::Sessions);
+        if let Some(index) = self
+            .sessions
+            .iter()
+            .rposition(|session| session.agent_id == id)
+        {
+            let session = self.sessions[index].id.clone();
+            self.selected = index;
+            self.chose = true;
+            self.status = "assistant · reopening its conversation".to_owned();
+            return Some(Request::Select(session));
+        }
+        self.status = "assistant · starting a session…".to_owned();
+        Some(Request::New(id.to_owned()))
+    }
+
+    /// Put the assistant away, leaving the editor and its document open.
+    fn close_assistant(&mut self) {
+        if !self.show_assistant {
+            self.notice("the assistant is not on screen");
+            return;
+        }
+        self.show_assistant = false;
+        // A pane that is gone cannot keep the keyboard. The editor is what the
+        // window is, and closing the agent is not closing the file.
+        self.set_focus(Focus::Editor);
+        self.status = "assistant closed · the editor is still open".to_owned();
+    }
+
+    /// The keys the agent picker answers to, in the same dialect as the terminal's.
+    fn agent_picker_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.agent_picker = false;
+                self.status = "never mind".to_owned();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.agent_selected = self.agent_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.agent_selected + 1 < self.agents.len() {
+                    self.agent_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(agent) = self.agents.get(self.agent_selected) {
+                    let id = agent.id.clone();
+                    self.agent_picker = false;
+                    return self.start_agent(&id);
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     /// The keys the terminal picker answers to.
     ///
     /// `j`/`k` as well as the arrows, because the picker is a list and the TUI's
@@ -7426,6 +7627,100 @@ mod tests {
         let mut app = App::new("daemon");
         app.apply(Update::Theme(theme("acpilot.paper")));
         assert_eq!(app.theme.name(), "Paper");
+    }
+
+    fn agent(id: &str, name: &str) -> AgentSummary {
+        AgentSummary {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            transport: acpilot_proto::agent::AgentTransport::AcpStdio,
+            status: acpilot_proto::agent::AgentStatus::Available,
+            command: id.to_owned(),
+            protocol_version: None,
+        }
+    }
+
+    #[test]
+    fn a_launch_is_an_editor_until_an_agent_is_chosen() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        assert_eq!(app.focus, Focus::Editor, "the keyboard starts in the text");
+        assert!(!app.show_assistant, "no assistant panel before a choice");
+
+        // Tab cycles round what is on screen: with no agent, that is the tree and
+        // the editor, not a stop in panes nobody can see.
+        let _ = app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Files);
+        let _ = app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Editor);
+
+        // View → Assistant is a place, and a place that does not exist says why.
+        let _ = app.run_menu(MenuAction::Sessions);
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(app.status.contains("Select Agent"), "{}", app.status);
+    }
+
+    #[test]
+    fn an_update_cannot_put_the_keyboard_in_a_panel_nobody_can_see() {
+        // A session opening for another client is not a reason to take the keys out
+        // of the editor this person is typing in.
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Opened {
+            id: "s1".to_owned(),
+        });
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn choosing_an_agent_reveals_the_assistant_and_opens_its_conversation() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![agent("mock", "Mock")]));
+        app.apply(Update::Sessions(vec![session("s1", "one")]));
+
+        // One agent needs no picker, and the conversation it already has is opened
+        // rather than a second one started beside it.
+        assert_eq!(
+            app.run_menu(MenuAction::SelectAgent),
+            Some(Request::Select("s1".to_owned()))
+        );
+        assert!(
+            app.show_assistant,
+            "choosing an agent is what shows the panel"
+        );
+        assert_eq!(app.focus, Focus::Sessions);
+
+        // Closing it leaves the document open and the keyboard back in it.
+        let _ = app.run_menu(MenuAction::CloseAssistant);
+        assert!(!app.show_assistant);
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn several_agents_ask_which_one() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![
+            agent("one", "One"),
+            agent("two", "Two"),
+        ]));
+
+        assert_eq!(app.run_menu(MenuAction::SelectAgent), None);
+        assert!(app.agent_picker, "a question, not a guess");
+
+        let _ = app.handle_key(key(KeyCode::Down));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::New("two".to_owned()))
+        );
+        assert!(!app.agent_picker);
+        assert!(app.show_assistant);
+    }
+
+    #[test]
+    fn an_empty_roster_names_the_model_lab() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        assert_eq!(app.run_menu(MenuAction::SelectAgent), None);
+        assert!(!app.show_assistant, "no agents is not a panel");
+        let toast = app.toast.as_ref().expect("a task, not a dead end");
+        assert_eq!(toast.task, "P4.5");
     }
 
     fn session(id: &str, title: &str) -> SessionSummary {

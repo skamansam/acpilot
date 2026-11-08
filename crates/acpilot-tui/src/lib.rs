@@ -88,6 +88,11 @@ const KEYMAP_FILE: &str = "keymap.toml";
 /// click-drag selection, which some people would rather keep than have a menu bar
 /// answer a pointer.
 ///
+/// `initial` is the file a launch named, relative to the workspace root. It is read
+/// through the same request the tree's `Enter` sends, so a command that named a file
+/// opens it as an editor rather than as a session list; the daemon reads it, because
+/// the client may not be on the machine the file is.
+///
 /// The terminal is restored on the way out, including when a draw fails: a TUI
 /// that leaves the cursor hidden and the screen in raw mode is worse than the
 /// crash that caused it.
@@ -96,6 +101,7 @@ pub fn run(
     token: Option<&str>,
     theme: Theme,
     files: ThemeFiles,
+    initial: Option<&str>,
     mouse: bool,
 ) -> io::Result<()> {
     // Asked before the screen is taken over and before the loop owns the terminal's
@@ -126,7 +132,9 @@ pub fn run(
         updates,
     );
     watch_theme(files, changes);
-    let mut app = App::new(daemon);
+    // A launch is an editor: the assistant's panes are the answer to choosing an
+    // agent, not the surface the command starts on.
+    let mut app = App::editor_first(daemon);
     // A width the dividers were dragged to is remembered per machine, in the data
     // directory rather than in `config.toml`: it is the client's memory of itself,
     // not a setting a person writes.
@@ -137,6 +145,12 @@ pub fn run(
         eprintln!("acpilot tui: {error} · starting on the default keys");
     }
     app.set_theme(theme);
+    // The answer arrives as `Update::File`, which puts the keyboard in the editor
+    // and says which file was opened. Until it does, the window is already an
+    // editor: a launch must not wait for a pane it has decided not to show.
+    if let Some(path) = initial {
+        worker.send(backend::Request::OpenFile(path.to_owned()));
+    }
     drive(app, worker, inbox, mouse)
 }
 

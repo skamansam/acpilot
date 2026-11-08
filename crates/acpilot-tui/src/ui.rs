@@ -80,6 +80,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.about {
         draw_about(frame, app, body);
     }
+    if app.agent_picker {
+        draw_agent_picker(frame, app, body);
+    }
     if app.terminal_picker {
         draw_terminal_picker(frame, app, body);
     }
@@ -164,7 +167,9 @@ fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
         if wide && app.show_map && app.panels.on(Panel::ProjectMap, side) {
             width = width.max(PROJECT_MAP_WIDTH);
         }
-        if app.panels.on(Panel::Assistant, side) {
+        // The assistant has a place in the arrangement from the first frame, but
+        // no column until agents are chosen: the window is an editor first.
+        if app.show_assistant && app.panels.on(Panel::Assistant, side) {
             width = width.max(assistant_width);
         }
         width
@@ -778,6 +783,7 @@ fn panels_on(app: &App, column: Rect, side: Side, wide: bool) -> Vec<(Rect, Pane
         .filter(|panel| app.show_outline || *panel != Panel::Outline)
         .filter(|panel| app.show_references || *panel != Panel::References)
         .filter(|panel| app.show_map || *panel != Panel::ProjectMap)
+        .filter(|panel| app.show_assistant || *panel != Panel::Assistant)
         .collect();
     if stack.is_empty() {
         return Vec::new();
@@ -2895,6 +2901,52 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
+/// The list of declared agents, when the menu asks which one to run.
+///
+/// A profile with no roster never reaches this card: `Select Agent` answers with
+/// the model lab instead, because a picker with no rows is a question with no
+/// answers.
+fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let mut lines: Vec<Line> = app
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| {
+            let chosen = index == app.agent_selected;
+            let marker = if chosen { "▸ " } else { "  " };
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let id = if chosen {
+                Style::default().fg(app.theme.text())
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            Line::from(vec![
+                Span::styled(format!("{marker}{}", agent.name), row),
+                Span::styled(format!("  {}", agent.id), id),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter chooses · j/k choose · Esc closes",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Agents · {} ", app.agents.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
 /// The middle of the screen, two thirds across and half as tall.
 fn centred(area: Rect) -> Rect {
     middle(area, 70, 50)
@@ -2968,6 +3020,7 @@ fn status_colour(status: SessionStatus, theme: &Theme) -> Color {
 mod tests {
     use super::*;
     use crate::app::Entry;
+    use acpilot_proto::agent::{AgentStatus, AgentSummary, AgentTransport};
     use acpilot_proto::permission::{PermissionKind, PermissionOption};
     use acpilot_proto::session::SessionSummary;
     use crossterm::event::{
@@ -2998,6 +3051,25 @@ mod tests {
         text
     }
 
+    #[test]
+    fn a_window_with_no_agent_draws_the_editor_and_no_assistant() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.connected = true;
+        let text = render(&mut app);
+        assert!(
+            !text.contains("Assistant ·"),
+            "no assistant column before a choice"
+        );
+
+        // The panel is the answer to a choice, not a column the window opens with.
+        app.show_assistant = true;
+        let text = render(&mut app);
+        assert!(
+            text.contains("Assistant ·"),
+            "the panel is there once chosen"
+        );
+    }
+
     fn permission(
         id: &str,
         kind: PermissionKind,
@@ -3013,6 +3085,35 @@ mod tests {
             options,
             created_at: "2026-10-24T00:00:00Z".to_owned(),
         }
+    }
+
+    #[test]
+    fn the_agent_picker_lists_the_declared_agents() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.agents = vec![
+            AgentSummary {
+                id: "one".to_owned(),
+                name: "One".to_owned(),
+                transport: AgentTransport::AcpStdio,
+                status: AgentStatus::Available,
+                command: "one".to_owned(),
+                protocol_version: None,
+            },
+            AgentSummary {
+                id: "two".to_owned(),
+                name: "Two".to_owned(),
+                transport: AgentTransport::AcpStdio,
+                status: AgentStatus::Available,
+                command: "two".to_owned(),
+                protocol_version: None,
+            },
+        ];
+        app.agent_picker = true;
+        app.agent_selected = 1;
+
+        let text = render(&mut app);
+        assert!(text.contains("Agents · 2"), "{text}");
+        assert!(text.contains("▸ Two"), "the chosen row is marked: {text}");
     }
 
     fn app_with_session() -> App {

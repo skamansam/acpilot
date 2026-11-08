@@ -251,6 +251,8 @@ hatch for anything not yet wrapped.
 ### TUI — `acpilot tui`
 
 Terminal-native editor + agent panes. Works over SSH into a box with no display server.
+It opens as an editor: `acpilot tui README.md` shows the file immediately, and the agent
+panes appear when one is chosen from **Session → Select Agent…**.
 Split editor / transcript / tool timeline / permission prompt; inline diffs; PTY
 attachments for program-agents. Diagnostics gutter, hover and completion popups come from
 the daemon's language servers, so the terminal and the GUI agree about what is broken. The

@@ -10,6 +10,8 @@
 pub enum Run {
     /// Open a new session with the first available agent.
     NewSession,
+    /// Choose which declared agent the assistant runs.
+    SelectAgent,
     /// Open, or leave, the session's terminal pane.
     Terminal,
     /// Read the open terminal backwards and copy from it.
@@ -96,6 +98,7 @@ const fn planned(title: &'static str, keys: &'static str, task: &'static str) ->
 pub fn commands() -> Vec<Command> {
     vec![
         run("New session", "n", Run::NewSession),
+        run("Select agent…", "", Run::SelectAgent),
         run("Terminal pane", "ctrl-t", Run::Terminal),
         run("Copy from the terminal", "f2", Run::CopyMode),
         run("Refresh", "ctrl-r", Run::Refresh),

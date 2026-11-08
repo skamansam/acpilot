@@ -1991,7 +1991,7 @@
           },
           {
             "column": 18,
-            "text": "┌ Commands · 22 ───────────────────────────────────────────────────────────────────┐",
+            "text": "┌ Commands · 23 ───────────────────────────────────────────────────────────────────┐",
             "style": 13
           },
           {
@@ -2097,13 +2097,8 @@
           },
           {
             "column": 19,
-            "text": "Terminal pane",
+            "text": "Select agent…                                                                     ",
             "style": 1
-          },
-          {
-            "column": 32,
-            "text": "  ctrl-t",
-            "style": 3
           },
           {
             "column": 101,
@@ -2139,12 +2134,12 @@
           },
           {
             "column": 19,
-            "text": "Copy from the terminal",
+            "text": "Terminal pane",
             "style": 1
           },
           {
-            "column": 41,
-            "text": "  f2",
+            "column": 32,
+            "text": "  ctrl-t",
             "style": 3
           },
           {
@@ -2181,12 +2176,12 @@
           },
           {
             "column": 19,
-            "text": "Refresh",
+            "text": "Copy from the terminal",
             "style": 1
           },
           {
-            "column": 26,
-            "text": "  ctrl-r",
+            "column": 41,
+            "text": "  f2",
             "style": 3
           },
           {
@@ -2223,12 +2218,12 @@
           },
           {
             "column": 19,
-            "text": "Show keys",
+            "text": "Refresh",
             "style": 1
           },
           {
-            "column": 28,
-            "text": "  ?",
+            "column": 26,
+            "text": "  ctrl-r",
             "style": 3
           },
           {
@@ -2260,12 +2255,12 @@
           },
           {
             "column": 19,
-            "text": "Command palette",
+            "text": "Show keys",
             "style": 1
           },
           {
-            "column": 34,
-            "text": "  ctrl-p",
+            "column": 28,
+            "text": "  ?",
             "style": 3
           },
           {
@@ -2302,12 +2297,12 @@
           },
           {
             "column": 19,
-            "text": "Answer a permission",
+            "text": "Command palette",
             "style": 1
           },
           {
-            "column": 38,
-            "text": "  y",
+            "column": 34,
+            "text": "  ctrl-p",
             "style": 3
           },
           {
@@ -2344,6 +2339,43 @@
           },
           {
             "column": 19,
+            "text": "Answer a permission",
+            "style": 1
+          },
+          {
+            "column": 38,
+            "text": "  y",
+            "style": 3
+          },
+          {
+            "column": 101,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 102,
+            "text": " app, not in the",
+            "style": 16
+          },
+          {
+            "column": 119,
+            "text": "│",
+            "style": 3
+          }
+        ],
+        [
+          {
+            "column": 0,
+            "text": "│",
+            "style": 3
+          },
+          {
+            "column": 18,
+            "text": "│",
+            "style": 13
+          },
+          {
+            "column": 19,
             "text": "Find in file",
             "style": 1
           },
@@ -2356,11 +2388,6 @@
             "column": 101,
             "text": "│",
             "style": 13
-          },
-          {
-            "column": 102,
-            "text": " app, not in the",
-            "style": 16
           },
           {
             "column": 119,
@@ -2393,6 +2420,11 @@
             "column": 101,
             "text": "│",
             "style": 13
+          },
+          {
+            "column": 102,
+            "text": "-C included",
+            "style": 16
           },
           {
             "column": 119,
@@ -2428,7 +2460,7 @@
           },
           {
             "column": 102,
-            "text": "-C included",
+            "text": "ne's size",
             "style": 16
           },
           {
@@ -2465,8 +2497,8 @@
           },
           {
             "column": 102,
-            "text": "ne's size",
-            "style": 16
+            "text": "e same socket the",
+            "style": 1
           },
           {
             "column": 119,
@@ -2502,7 +2534,7 @@
           },
           {
             "column": 102,
-            "text": "e same socket the",
+            "text": " a person sees   ",
             "style": 1
           },
           {
@@ -2539,7 +2571,7 @@
           },
           {
             "column": 102,
-            "text": " a person sees   ",
+            "text": "cannot disagree. ",
             "style": 1
           },
           {
@@ -2576,7 +2608,7 @@
           },
           {
             "column": 102,
-            "text": "cannot disagree. ",
+            "text": " a shell is an   ",
             "style": 1
           },
           {
@@ -2605,38 +2637,6 @@
             "column": 39,
             "text": "  ctrl-shift-f",
             "style": 3
-          },
-          {
-            "column": 101,
-            "text": "│",
-            "style": 13
-          },
-          {
-            "column": 102,
-            "text": " a shell is an   ",
-            "style": 1
-          },
-          {
-            "column": 119,
-            "text": "│",
-            "style": 3
-          }
-        ],
-        [
-          {
-            "column": 0,
-            "text": "│",
-            "style": 3
-          },
-          {
-            "column": 18,
-            "text": "│",
-            "style": 13
-          },
-          {
-            "column": 19,
-            "text": "LSP status                                                                        ",
-            "style": 1
           },
           {
             "column": 101,
@@ -2677,18 +2677,8 @@
           },
           {
             "column": 19,
-            "text": "Go to definition",
+            "text": "LSP status                                                                        ",
             "style": 1
-          },
-          {
-            "column": 35,
-            "text": "  f12",
-            "style": 3
-          },
-          {
-            "column": 40,
-            "text": "  · P7-4",
-            "style": 6
           },
           {
             "column": 101,
@@ -2714,17 +2704,17 @@
           },
           {
             "column": 19,
-            "text": "Rename symbol",
+            "text": "Go to definition",
             "style": 1
           },
           {
-            "column": 32,
-            "text": "  f2",
+            "column": 35,
+            "text": "  f12",
             "style": 3
           },
           {
-            "column": 36,
-            "text": "  · P7-5",
+            "column": 40,
+            "text": "  · P7-4",
             "style": 6
           },
           {
@@ -2903,7 +2893,7 @@
           },
           {
             "column": 58,
-            "text": "22 commands · type to filter",
+            "text": "23 commands · type to filter",
             "style": 1
           },
           {
@@ -4509,7 +4499,7 @@
           },
           {
             "column": 61,
-            "text": "22 commands · type to filter",
+            "text": "23 commands · type to filter",
             "style": 1
           },
           {
@@ -6265,7 +6255,7 @@
           },
           {
             "column": 61,
-            "text": "22 commands · type to filter",
+            "text": "23 commands · type to filter",
             "style": 1
           },
           {
@@ -7396,7 +7386,7 @@
           },
           {
             "column": 61,
-            "text": "22 commands · type to filter",
+            "text": "23 commands · type to filter",
             "style": 1
           },
           {

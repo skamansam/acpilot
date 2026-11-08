@@ -435,6 +435,9 @@ fn run_tui(flags: TuiFlags) -> u8 {
         }
     };
     let workspace = workspace.unwrap_or_else(|| root.root().to_path_buf());
+    // What the command was pointed at, before the workspace became a daemon
+    // argument: a file is opened in the editor, and a directory names only a place.
+    let initial = initial_file(path.as_deref(), &workspace);
     // The settings are read once, here: the profile they name and the theme they
     // name come from the same cascade, and reading it twice is how two keys end up
     // resolved from two different files.
@@ -528,6 +531,7 @@ fn run_tui(flags: TuiFlags) -> u8 {
         token.as_deref(),
         theme,
         theme_files,
+        initial.as_deref(),
         mouse,
     ) {
         Ok(()) => exit::SUCCESS,
@@ -535,6 +539,31 @@ fn run_tui(flags: TuiFlags) -> u8 {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
         }
+    }
+}
+
+/// The file a launch named, relative to the workspace root.
+///
+/// The daemon addresses files by workspace-relative path, so an argument from the
+/// shell has to be translated before it can be read: an absolute path and a relative
+/// one are two spellings of one file. A directory names no file, and a file outside
+/// the workspace — possible when `--workspace` names another tree — is not one this
+/// launch can open.
+fn initial_file(named: Option<&std::path::Path>, root: &std::path::Path) -> Option<String> {
+    let named = named?;
+    if named.is_dir() {
+        return None;
+    }
+    let file = std::fs::canonicalize(named).ok()?;
+    let relative = file.strip_prefix(root).ok()?;
+    let parts: Vec<String> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
     }
 }
 
@@ -1056,6 +1085,28 @@ fn fail(error: &ExtensionError) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_file_is_opened_relative_to_the_workspace() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let nested = directory.path().join("src");
+        std::fs::create_dir(&nested).expect("src");
+        let file = nested.join("main.rs");
+        std::fs::write(&file, "fn main() {}").expect("file");
+        let root = std::fs::canonicalize(directory.path()).expect("root");
+
+        assert_eq!(
+            initial_file(Some(&file), &root).as_deref(),
+            Some("src/main.rs"),
+            "the daemon addresses files by workspace-relative path"
+        );
+        assert_eq!(
+            initial_file(Some(&root), &root),
+            None,
+            "a directory names no file"
+        );
+        assert_eq!(initial_file(None, &root), None);
+    }
 
     #[test]
     fn a_wildcard_bind_is_printed_as_a_host_a_browser_can_open() {

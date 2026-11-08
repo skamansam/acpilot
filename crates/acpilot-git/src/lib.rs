@@ -1171,6 +1171,10 @@ mod tests {
             fixture.git(&["init", "-q", "-b", "main"]);
             fixture.git(&["config", "user.email", "test@example.com"]);
             fixture.git(&["config", "user.name", "Test User"]);
+            // Checking out on Windows can turn these test files into CRLF. The
+            // assertions are about which revision the bytes came from, not the
+            // host's line-ending policy, so keep the fixture's bytes literal.
+            fixture.git(&["config", "core.autocrlf", "false"]);
             fixture
         }
 

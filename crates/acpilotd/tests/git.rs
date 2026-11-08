@@ -59,6 +59,9 @@ fn repository() -> tempfile::TempDir {
     git(root, &["init", "-q", "-b", "main"]);
     git(root, &["config", "user.email", "test@example.com"]);
     git(root, &["config", "user.name", "Test User"]);
+    // Restores are asserted byte-for-byte; a Windows checkout must not turn the
+    // fixture's LF into CRLF and make the assertion about the host instead.
+    git(root, &["config", "core.autocrlf", "false"]);
     fs::write(root.join("one.txt"), "one\n").expect("one");
     fs::write(root.join("two.txt"), "two\n").expect("two");
     git(root, &["add", "-A"]);

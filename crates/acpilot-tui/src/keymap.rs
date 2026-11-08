@@ -7,10 +7,10 @@
 //!
 //! Two presets ship: **vim**, which is the table this crate grew (motions on
 //! `hjkl`, insert mode behind `i`), and **vscode**, which moves with the arrows and
-//! Home/End instead and puts the palette on `Ctrl-Shift-P` as well. The difference
-//! is the table, not the editor: a preset changes which key means `move-down`, not
-//! what `move-down` does. A modeless editor would be a different pane, not a
-//! different row.
+//! Home/End instead, puts the palette on `Ctrl-Shift-P` as well, and is modeless:
+//! its editor opens in insert and `Esc` clears a selection instead of entering
+//! normal mode. The preset chooses both the table and the editing model, so there
+//! is no second setting that could disagree with the keys.
 //!
 //! The file is read from `<config>/keymap.toml` beside `config.toml`:
 //!
@@ -1040,6 +1040,12 @@ impl Keymap {
         self.preset.name()
     }
 
+    /// Whether the preset's editor has a normal mode.
+    #[must_use]
+    pub fn vim_mode(&self) -> bool {
+        self.preset == Preset::Vim
+    }
+
     /// What a key means in a context.
     #[must_use]
     pub fn action(&self, context: Context, key: KeyEvent) -> Option<Action> {
@@ -1356,7 +1362,9 @@ mod tests {
             vim.action(Context::Editor, key(KeyCode::Char('j'))),
             Some(Action::MoveDown)
         );
+        assert!(vim.vim_mode(), "the vim preset is modal");
         let code = Keymap::preset(Preset::VsCode);
+        assert!(!code.vim_mode(), "the vscode preset is modeless");
         assert_eq!(code.action(Context::Editor, key(KeyCode::Char('j'))), None);
         assert_eq!(
             code.action(Context::Editor, key(KeyCode::Down)),
@@ -1380,6 +1388,7 @@ mod tests {
     fn a_file_can_choose_a_preset() {
         let keymap = Keymap::from_toml("preset = \"vscode\"\n").expect("a keymap");
         assert_eq!(keymap.preset_name(), "vscode");
+        assert!(!keymap.vim_mode(), "choosing vscode turns Vim mode off");
         assert_eq!(
             keymap.action(Context::Editor, key(KeyCode::Char('h'))),
             None

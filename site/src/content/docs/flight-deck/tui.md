@@ -271,9 +271,10 @@ from across a short line. Shift-click extends the selection from its start.
 
 The keys are a file, not a build. `keymap.toml` beside `config.toml` chooses
 `preset = "vim"` — the table above — or `"vscode"`, which moves with the arrows and
-`Home`/`End` instead of `hjkl` and `0`/`$` and puts the palette on `Ctrl-Shift-P` as
-well as `Ctrl-P`, and rebinds any of the client's keys or the editor's normal and
-visual verbs by name under `[keys]`: `palette = ["ctrl-p", "f1"]`,
+`Home`/`End` instead of `hjkl` and `0`/`$`, puts the palette on `Ctrl-Shift-P` as
+well as `Ctrl-P`, and turns Vim mode off: the editor opens in insert and `Esc`
+clears a selection rather than entering normal mode. Either preset rebinds any of
+the client's keys or the editor's normal and visual verbs by name under `[keys]`: `palette = ["ctrl-p", "f1"]`,
 `move-down = ["down", "j", "ctrl-n"]`, an empty list to unbind. A name that is not
 a verb, a key that is not a key, and one key given two verbs in one context are
 refused with the word that was wrong; a swap of two keys is legal, because the

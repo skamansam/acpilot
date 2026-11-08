@@ -161,6 +161,12 @@ pub struct EditorPane {
     anchor: Option<usize>,
     /// Which mode the keys are in.
     mode: Mode,
+    /// Whether the pane is modal at all.
+    ///
+    /// `Mode` says which set of keys is live; this says whether there is another
+    /// set to move to. A modeless pane is always in [`Mode::Insert`], and `Esc`
+    /// clears a selection instead of taking the keys away from the text.
+    vim_mode: bool,
     /// The column a run of Up and Down keeps trying to reach.
     ///
     /// A property of the key sequence rather than of the caret: Vim and every
@@ -242,6 +248,7 @@ impl EditorPane {
             bracket: None,
             anchor: None,
             mode: Mode::Normal,
+            vim_mode: true,
             goal: None,
             command: None,
             etag: None,
@@ -759,6 +766,45 @@ impl EditorPane {
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Whether the pane is modal.
+    #[must_use]
+    pub fn vim_mode(&self) -> bool {
+        self.vim_mode
+    }
+
+    /// Put the pane in the editing model the keymap preset names.
+    ///
+    /// The mode is the pane's, but whether there is a normal mode at all is the
+    /// preset's: a buffer opened under `vscode` starts typing immediately, and a
+    /// buffer opened under `vim` starts with commands. Called when the keymap is
+    /// read and when a file opens, so the two cannot disagree about the model.
+    pub fn set_vim_mode(&mut self, vim: bool) {
+        self.vim_mode = vim;
+        if vim {
+            if self.mode == Mode::Visual {
+                self.leave_visual();
+            }
+            self.set_mode(Mode::Normal);
+        } else {
+            if self.mode == Mode::Visual {
+                self.leave_visual();
+            }
+            self.clear_selection();
+            self.set_mode(Mode::Insert);
+            self.message = "insert · vim mode is off".to_owned();
+        }
+    }
+
+    /// The Esc key: leave a visual run, or leave the keys to the text when this
+    /// pane is modeless.
+    pub fn escape(&mut self) {
+        if self.vim_mode {
+            self.set_mode(Mode::Normal);
+        } else {
+            self.clear_selection();
+        }
     }
 
     /// Change mode, and say so.

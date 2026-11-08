@@ -141,8 +141,9 @@ touching the editor's `l`, and `permission-deny = ["x"]` moves the answer withou
 touching the composer's `x`. `keymap.toml` beside `config.toml` chooses a preset and
 rebinds any of those verbs by name. `preset = "vim"` is the table above;
 `preset = "vscode"` moves with the arrows and `Home`/`End` instead of
-`h`/`j`/`k`/`l` and `0`/`$`, and puts the palette on `Ctrl-Shift-P` as well as
-`Ctrl-P`. Under `[keys]`, `palette = ["ctrl-p", "f1"]` replaces the keys for that
+`h`/`j`/`k`/`l` and `0`/`$`, puts the palette on `Ctrl-Shift-P` as well as
+`Ctrl-P`, and turns Vim mode off: the editor opens in insert and `Esc` clears a
+selection rather than entering normal mode. Under `[keys]`, `palette = ["ctrl-p", "f1"]` replaces the keys for that
 verb, an empty list unbinds it, and `move-down = ["down", "j", "ctrl-n"]` is how a
 motion gains a third spelling. A name that is not a verb, a key that is not a key,
 and one key bound to two verbs in one context are refused with the word that was

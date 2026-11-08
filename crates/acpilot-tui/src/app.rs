@@ -2728,6 +2728,7 @@ impl App {
         // the review and the marks are then the same edit, parsed once.
         let marks = acpilot_git::line_changes(&demo.diff.patch(), &demo.editor.path);
         app.editor = Some(EditorPane::seeded(&demo.editor, marks, &mut app.grammars));
+        app.apply_vim_mode();
         app.diff = Some(demo.diff.clone());
         // The seeded rows go through the same conversion the daemon's do: a design
         // pass that drew a different bar from the product's would be a screenshot
@@ -3709,6 +3710,7 @@ impl App {
                 let mut pane = EditorPane::from_text(&path, &text, marks, &mut self.grammars);
                 pane.set_etag(etag);
                 self.editor = Some(pane);
+                self.apply_vim_mode();
                 self.refresh_outline();
                 // A different document has not been checked: the previous file's
                 // problems are not this one's, and this one is asked about now.
@@ -5109,7 +5111,7 @@ impl App {
         // keys that are commands in normal mode.
         if editor.mode() == Mode::Insert {
             match key.code {
-                KeyCode::Esc => editor.set_mode(Mode::Normal),
+                KeyCode::Esc => editor.escape(),
                 KeyCode::Enter => {
                     editor.type_text("\n", std::time::Instant::now());
                 }
@@ -5937,9 +5939,22 @@ impl App {
         match Keymap::load(&path) {
             Ok(keymap) => {
                 self.keymap = keymap;
+                self.apply_vim_mode();
                 None
             }
             Err(error) => Some(error),
+        }
+    }
+
+    /// Put the open pane in the editing model the keymap's preset names.
+    ///
+    /// A file can open before the table is read, and a table can be read after the
+    /// pane exists. Both paths call this, so a modeless preset cannot leave a
+    /// buffer in Vim's normal mode because of the order it was built in.
+    pub fn apply_vim_mode(&mut self) {
+        let vim = self.keymap.vim_mode();
+        if let Some(editor) = &mut self.editor {
+            editor.set_vim_mode(vim);
         }
     }
 
@@ -9068,6 +9083,41 @@ mod tests {
         assert_eq!(mode(&app), Mode::Normal, "`v` is not a verb any more");
         app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
         assert_eq!(mode(&app), Mode::Visual);
+    }
+
+    #[test]
+    fn a_modeless_preset_types_without_an_insert_command() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.set_focus(Focus::Editor);
+        app.keymap = Keymap::from_toml("preset = \"vscode\"\n").expect("a keymap");
+        app.apply_vim_mode();
+
+        let mode = |app: &App| app.editor.as_ref().expect("a buffer").mode();
+        assert_eq!(mode(&app), Mode::Insert, "the pane opens ready to type");
+        let before = app.editor.as_ref().expect("a buffer").document().text();
+        app.handle_key(key(KeyCode::Char('j')));
+        let after = app.editor.as_ref().expect("a buffer").document().text();
+        assert_ne!(before, after, "`j` is text, not a motion");
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(mode(&app), Mode::Insert, "Esc does not enter normal mode");
+    }
+
+    #[test]
+    fn opening_a_file_keeps_the_modeless_preset() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.keymap = Keymap::from_toml("preset = \"vscode\"\n").expect("a keymap");
+        app.apply_vim_mode();
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        assert_eq!(
+            app.editor.as_ref().expect("a buffer").mode(),
+            Mode::Insert,
+            "a file opened after the preset is read still types immediately"
+        );
     }
 
     #[test]

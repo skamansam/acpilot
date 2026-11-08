@@ -20,7 +20,7 @@
 //! the kernel; an id is a key both ends spell the same way.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 
 use crate::Failure;
 use crate::base64;
+use crate::output::Output;
 
 /// How much one `lsp.data` notification carries.
 ///
@@ -56,10 +57,9 @@ struct Server {
 /// Every language server this helper owns, and the pipe it reports them on.
 pub struct Sessions {
     servers: Mutex<BTreeMap<u32, Server>>,
-    /// The one stdout, behind a lock: responses and notifications are written by
-    /// different threads, and two lines interleaved mid-JSON would be a protocol that
-    /// fails at random.
-    out: Mutex<io::Stdout>,
+    /// The process's stdout, shared with every other session: two lines interleaved
+    /// mid-JSON is a protocol that fails at random.
+    out: Arc<Output>,
     next: AtomicU32,
 }
 
@@ -78,10 +78,10 @@ impl std::fmt::Debug for Sessions {
 impl Sessions {
     /// No server has been started yet.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(out: Arc<Output>) -> Self {
         Self {
             servers: Mutex::new(BTreeMap::new()),
-            out: Mutex::new(io::stdout()),
+            out,
             next: AtomicU32::new(1),
         }
     }
@@ -91,8 +91,7 @@ impl Sessions {
     /// A failed write is not reported: the daemon is the only reader, so a closed pipe
     /// means it is gone and the next read of stdin ends the process anyway.
     pub fn send(&self, value: &Value) {
-        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = writeln!(out, "{value}").and_then(|()| out.flush());
+        self.out.send(value);
     }
 
     /// Start `program` on the host and answer with the id it is known by.
@@ -327,7 +326,7 @@ mod tests {
 
     #[test]
     fn closing_an_unknown_server_says_so_rather_than_failing() {
-        let sessions = Arc::new(Sessions::new());
+        let sessions = Arc::new(Sessions::new(Arc::new(Output::new())));
         let answer = sessions.close(&json!({ "id": 99 })).unwrap();
         assert_eq!(answer, json!({ "id": 99, "closed": false }));
     }

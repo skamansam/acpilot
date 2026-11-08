@@ -44,6 +44,7 @@
 
 mod base64;
 mod lsp;
+mod output;
 mod pty;
 
 use std::io::{self, BufRead, Write};
@@ -105,9 +106,11 @@ impl Failure {
 fn main() {
     // Terminals and servers outlive any one request, and the reader thread of each
     // needs the map it was registered in, so the sessions are shared rather than
-    // borrowed.
-    let sessions = Arc::new(pty::Sessions::new());
-    let servers = Arc::new(lsp::Sessions::new());
+    // borrowed. Their output is shared too: a reply and a notification are two
+    // threads writing one pipe, and one line is one message.
+    let out = Arc::new(output::Output::new());
+    let sessions = Arc::new(pty::Sessions::new(Arc::clone(&out)));
+    let servers = Arc::new(lsp::Sessions::new(Arc::clone(&out)));
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -115,7 +118,7 @@ fn main() {
             continue;
         }
         let response = answer(&line, &sessions, &servers);
-        sessions.send(&response);
+        out.send(&response);
     }
     // The daemon closed the pipe: the shells and servers it started have nobody left to
     // talk to, and a process whose helper died is one nobody can name, attach to, or

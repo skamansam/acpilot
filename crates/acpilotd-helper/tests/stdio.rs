@@ -84,7 +84,10 @@ impl Helper {
         writeln!(self.stdin, "{request}").expect("write");
         self.stdin.flush().expect("flush");
         loop {
-            let value = self.line();
+            // A held notification belongs to a later `line()`, not to this call. Asking
+            // `line()` here would hand the same notification back on every pass and
+            // starve the response behind it.
+            let value = self.next_line();
             if value.get("id").is_some() {
                 return value;
             }
@@ -93,14 +96,19 @@ impl Helper {
     }
 
     /// One line, held notifications first so a test sees the stream in order.
-    ///
-    /// Panics, rather than waiting forever, when the helper has nothing to say: a helper
-    /// that is stuck and one that is merely slow look identical to a blocked read, and
-    /// only one of them is worth waiting a gate for.
     fn line(&mut self) -> Value {
         if !self.pending.is_empty() {
             return self.pending.remove(0);
         }
+        self.next_line()
+    }
+
+    /// One new line from the helper, ignoring notifications held for a test.
+    ///
+    /// Panics, rather than waiting forever, when the helper has nothing to say: a helper
+    /// that is stuck and one that is merely slow look identical to a blocked read, and
+    /// only one of them is worth waiting a gate for.
+    fn next_line(&mut self) -> Value {
         let line = match self.lines.recv_timeout(self.deadline) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => panic!(

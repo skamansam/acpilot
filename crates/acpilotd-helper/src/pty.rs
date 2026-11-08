@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 
 use crate::Failure;
 use crate::base64;
+use crate::output::Output;
 
 /// How much one `pty.data` notification carries.
 ///
@@ -45,10 +46,9 @@ struct Terminal {
 /// Every terminal this helper owns, and the pipe it reports them on.
 pub struct Sessions {
     terminals: Mutex<BTreeMap<u32, Terminal>>,
-    /// The one stdout, behind a lock: a response and a notification are written by
-    /// different threads, and two lines interleaved mid-JSON would be a protocol that
-    /// fails at random.
-    out: Mutex<io::Stdout>,
+    /// The process's stdout, shared with every other session: two lines interleaved
+    /// mid-JSON is a protocol that fails at random.
+    out: Arc<Output>,
     next: AtomicU32,
 }
 
@@ -67,10 +67,10 @@ impl std::fmt::Debug for Sessions {
 impl Sessions {
     /// No terminal has been opened yet.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(out: Arc<Output>) -> Self {
         Self {
             terminals: Mutex::new(BTreeMap::new()),
-            out: Mutex::new(io::stdout()),
+            out,
             next: AtomicU32::new(0),
         }
     }
@@ -80,8 +80,7 @@ impl Sessions {
     /// A failed write is not reported: the daemon is the only reader, so a closed pipe
     /// means it is gone, and the next read of stdin ends the process anyway.
     pub fn send(&self, value: &Value) {
-        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = writeln!(out, "{value}").and_then(|()| out.flush());
+        self.out.send(value);
     }
 
     /// Start a program on a new terminal.

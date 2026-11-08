@@ -84,6 +84,16 @@ pub enum Request {
     Grep(String),
     /// Read the source-control pane: branch state and the whole diff.
     Git,
+    /// Put one repository-relative path in the index.
+    Stage {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Remove one repository-relative path from the index.
+    Unstage {
+        /// The path selected in the pane.
+        path: String,
+    },
     /// Ask the open session to draft a commit message from the staged index.
     GenerateCommit {
         /// The session whose agent writes it.
@@ -648,6 +658,58 @@ async fn run(
                         let _ = updates.send(Update::GitError(describe(&error)));
                     }
                 },
+                Some(Request::Stage { path }) => {
+                    match client.stage(std::slice::from_ref(&path)).await {
+                        Ok(_) => match client.git_status().await {
+                            Ok(status) => match client.git_diff("all").await {
+                                Ok(diff) => {
+                                    let _ = updates.send(Update::Git { status, diff });
+                                }
+                                Err(error) => {
+                                    let _ = updates.send(Update::GitError(format!(
+                                        "staged {path}, but could not read the diff again: {}",
+                                        describe(&error)
+                                    )));
+                                }
+                            },
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "staged {path}, but could not read the index again: {}",
+                                    describe(&error)
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Unstage { path }) => {
+                    match client.unstage(std::slice::from_ref(&path)).await {
+                        Ok(_) => match client.git_status().await {
+                            Ok(status) => match client.git_diff("all").await {
+                                Ok(diff) => {
+                                    let _ = updates.send(Update::Git { status, diff });
+                                }
+                                Err(error) => {
+                                    let _ = updates.send(Update::GitError(format!(
+                                        "unstaged {path}, but could not read the diff again: {}",
+                                        describe(&error)
+                                    )));
+                                }
+                            },
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "unstaged {path}, but could not read the index again: {}",
+                                    describe(&error)
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::GenerateCommit { session_id }) => {
                     match client.commit_message(&session_id).await {
                         Ok(draft) => {
@@ -1215,6 +1277,11 @@ async fn run_demo(
             Request::Git => {
                 let _ = updates.send(Update::Status(
                     "design pass · the changed file is the fixture's".to_owned(),
+                ));
+            }
+            Request::Stage { .. } | Request::Unstage { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the index is the fixture's".to_owned(),
                 ));
             }
             Request::GenerateCommit { session_id } => {

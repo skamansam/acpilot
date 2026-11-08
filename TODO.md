@@ -1366,6 +1366,24 @@ what needs an editor shell waits for the editor shell.
     TUI, because its one write needs the confirmation.
 - [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
   generation exercised without a network call.
+- [x] **P6.5-7 · Stage and unstage from the panes** — `POST /v1/git/stage` and
+  `POST /v1/git/unstage` take `GitIndexRequest { workspace?, paths[] }` and answer the new
+  `GitStatus`, so preparing the index no longer sends a person to a terminal.
+  - `Repo::stage` runs `git add -A -- <paths>`. `Repo::unstage` runs `git reset -q HEAD --
+    <paths>`, and falls back to `git rm --cached --ignore-unmatch` before the first commit.
+    The daemon validates every path before git sees it: empty, absolute and `..` components are
+    `400`, and git's own refusal is `409`. A staged rename contributes both its old and new
+    paths, so one selected row moves both halves.
+  - The TUI's source pane binds `s`/`u` and the desktop overlay binds `SourceStage`/
+    `SourceUnstage`; both ask for status and the whole diff again after the write. The browser's
+    panel has **Stage** and **Unstage** for the selected path. Each surface refuses a path with
+    nothing on that side of the index and says why, rather than sending an empty operation.
+  - **Tests:** three `acpilot-git` tests (stage a working-tree edit, unstage back to the working
+    tree, refuse empty and escaping paths), four route tests including rename expansion and the
+    OpenAPI operations, one TUI state test, and one browser test over the two new calls.
+  - **Open:** checkout, discard and config changes remain separate actions. The browser panel has
+    buttons rather than a global keymap. `--demo` keeps its seeded index and refuses the writes,
+    because there is no repository behind the fixture.
 
 ---
 

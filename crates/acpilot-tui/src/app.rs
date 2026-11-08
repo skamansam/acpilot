@@ -2143,10 +2143,10 @@ pub struct GrepSearch {
 /// The source-control pane: what changed, and the diff of the selected path.
 ///
 /// Modal rather than a panel because it is about the repository rather than the
-/// open buffer, and the write it can lead to is a decision. It reads status and a
-/// diff; it never stages. `loading` is what separates "the index is empty" from
-/// "the daemon has not answered yet", which is the difference between a clean tree
-/// and a pane that has not looked.
+/// open buffer, and the writes it can lead to are decisions. It reads status and a
+/// diff, and `s`/`u` move the selected path across the index through the daemon.
+/// `loading` is what separates "the index is empty" from "the daemon has not answered
+/// yet", which is the difference between a clean tree and a pane that has not looked.
 #[derive(Debug)]
 pub struct SourceControl {
     /// Branch state and every changed path.
@@ -2230,6 +2230,34 @@ impl SourceControl {
             .iter()
             .filter(|entry| staged_kind(entry.index))
             .count()
+    }
+
+    /// The selected row, when there is one.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<&acpilot_proto::git::GitStatusEntry> {
+        self.status.files.get(self.selected)
+    }
+
+    /// Whether the selected path has a working-tree change to add.
+    ///
+    /// An untracked file is stageable: `git add` is how it enters the index at all.
+    /// A path whose only change is already in the index has nothing left to add.
+    #[must_use]
+    pub fn can_stage_selected(&self) -> bool {
+        self.selected_entry().is_some_and(|entry| {
+            !matches!(
+                entry.worktree,
+                acpilot_proto::git::GitChangeKind::Unmodified
+                    | acpilot_proto::git::GitChangeKind::Ignored
+            )
+        })
+    }
+
+    /// Whether the selected path is in the next commit and can be removed.
+    #[must_use]
+    pub fn can_unstage_selected(&self) -> bool {
+        self.selected_entry()
+            .is_some_and(|entry| staged_kind(entry.index))
     }
 
     /// The path whose diff is on the right.
@@ -6239,9 +6267,9 @@ impl App {
         Some(Request::Git)
     }
 
-    /// The source-control pane's keys: choose a file, scroll its diff, or open the
-    /// composer. `r` asks again because staging happens in another window and the
-    /// index this pane drew is already out of date.
+    /// The source-control pane's keys: choose a file, scroll its diff, move it across
+    /// the index, or open the composer. `r` asks again because another client may have
+    /// changed the index since this pane drew it.
     fn source_key(&mut self, key: KeyEvent) -> Option<Request> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -6251,6 +6279,8 @@ impl App {
                 None
             }
             KeyCode::Char('r') => Some(Request::Git),
+            KeyCode::Char('s') => self.set_selected_staged(true),
+            KeyCode::Char('u') => self.set_selected_staged(false),
             KeyCode::Char('c') => self.open_commit(false),
             KeyCode::Char('g') => self.open_commit(true),
             KeyCode::Down | KeyCode::Char('j') => {
@@ -6277,6 +6307,49 @@ impl App {
         }
     }
 
+    /// Ask the daemon to stage or unstage the selected path.
+    ///
+    /// The request carries one path; the daemon answers with the new status, and the
+    /// pane then reads status and diff together the same way a refresh does. A path
+    /// with nothing on that side of the index is a notice, not a request: a person
+    /// pressing `s` on an already-staged file should learn why nothing happened.
+    fn set_selected_staged(&mut self, staged: bool) -> Option<Request> {
+        let Some(source) = &self.source else {
+            return None;
+        };
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            self.notice("source control · no changed file is selected");
+            return None;
+        };
+        let available = if staged {
+            source.can_stage_selected()
+        } else {
+            source.can_unstage_selected()
+        };
+        if !available {
+            let message = if staged {
+                format!("{path} has no working-tree change to stage")
+            } else {
+                format!("{path} is not in the index")
+            };
+            self.notice(&message);
+            return None;
+        }
+        if let Some(source) = &mut self.source {
+            source.error = None;
+        }
+        self.status = if staged {
+            format!("staging {path}…")
+        } else {
+            format!("unstaging {path}…")
+        };
+        Some(if staged {
+            Request::Stage { path }
+        } else {
+            Request::Unstage { path }
+        })
+    }
+
     fn step_source(&mut self, delta: isize) {
         let Some(source) = &mut self.source else {
             return;
@@ -6297,7 +6370,7 @@ impl App {
     fn open_commit(&mut self, generate: bool) -> Option<Request> {
         let staged = self.source.as_ref().map_or(0, SourceControl::staged);
         if staged == 0 {
-            self.notice("nothing is staged · git add the files first");
+            self.notice("nothing is staged · stage a path with s first");
             return None;
         }
         self.commit = Some(CommitComposer {
@@ -10957,6 +11030,52 @@ mod tests {
             "g opens the composer and asks the session that is open"
         );
         assert!(app.commit.is_some_and(|commit| commit.generating));
+    }
+
+    #[test]
+    fn s_stages_and_u_unstages_the_selected_path() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        let path = app
+            .source
+            .as_ref()
+            .and_then(SourceControl::selected_path)
+            .expect("the fixture selects its changed path")
+            .to_owned();
+
+        // The fixture starts with its only change in the index. A working-tree
+        // change is what `s` has to add, so make one without moving the selection.
+        app.source.as_mut().expect("the pane is open").status.files[0].worktree =
+            acpilot_proto::git::GitChangeKind::Modified;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('s'))),
+            Some(Request::Stage { path: path.clone() }),
+            "s asks the daemon to put the selected path in the index"
+        );
+        assert!(app.status.contains("staging"), "{}", app.status);
+
+        let source = app.source.as_mut().expect("the pane is open");
+        source.status.files[0].index = acpilot_proto::git::GitChangeKind::Unmodified;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('u'))),
+            None,
+            "a path the index does not have is not sent to unstage"
+        );
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('s'))),
+            Some(Request::Stage { path: path.clone() }),
+            "the working-tree change can still be staged"
+        );
+
+        let source = app.source.as_mut().expect("the pane is open");
+        source.status.files[0].index = acpilot_proto::git::GitChangeKind::Modified;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('u'))),
+            Some(Request::Unstage { path }),
+            "u asks the daemon to take the selected path out of the index"
+        );
+        assert!(app.status.contains("unstaging"), "{}", app.status);
     }
 
     #[test]

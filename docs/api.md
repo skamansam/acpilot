@@ -98,6 +98,7 @@ GET    /v1/files/list
 GET    /v1/git/status?workspace=          GET    /v1/git/diff?workspace=&scope=
 GET    /v1/git/tree?workspace=            GET    /v1/git/log?workspace=&limit=
 GET    /v1/git/commit/prompt              POST   /v1/git/commit-message
+POST   /v1/git/stage                     POST   /v1/git/unstage
 
 GET    /v1/terminals?session=             POST   /v1/terminals
 DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
@@ -644,7 +645,7 @@ zero-length name is `400`.
 
 ## Git
 
-The source-control pane's read half, served from the host's own `git` through
+The source-control pane's read and index half, served from the host's own `git` through
 `acpilot-git`, so what a pane says is staged agrees with the command line. The
 repository is discovered from the workspace root; a workspace opened inside a
 monorepo is still about the repository that contains it.
@@ -675,6 +676,17 @@ that lists a filesystem directory and marks hidden rows.
 topological order, each `{ id, parents[], author, email, authored_at, subject }`.
 `limit` defaults to 50 and is capped at 500 rather than refused; `limit=0` is an
 empty history, as it is for a repository with no commits.
+
+The index half is two routes. `POST /v1/git/stage` and `POST /v1/git/unstage`
+take `GitIndexRequest { workspace?, paths[] }` and answer the new `GitStatus`.
+Paths are relative to the repository root, as they are in every other git answer.
+An empty list is `400` with `details.field: "paths"`, and so is a path with a `..`
+or an absolute component: the daemon validates before git sees it, so a pane cannot
+stage outside the repository. Stage runs `git add -A -- <paths>`; unstage runs
+`git reset -q HEAD -- <paths>`, or `git rm --cached` before the first commit,
+where there is no `HEAD` to reset to. A staged rename carries its old path too,
+so both halves of the rename move together. Git's refusal is `409` with its words,
+not a daemon fault.
 
 **Paths in every answer are relative to the repository root**, because that is
 what git reports and the one spelling a status row and a patch header can share.
@@ -718,20 +730,22 @@ a session that fails or does not answer inside two minutes is
 
 `POST /v1/git/commit` takes `GitCommitRequest { workspace?, message }` and commits
 the staged index with the whole message, returning the `GitCommit` git made. It is
-the one git route that writes, and it writes only after a person has confirmed the
-message. It never stages: an unstaged edit is not in the commit. An empty message
+one of the git routes that writes, and it commits only after a person has confirmed
+the message. It never stages: an unstaged edit is not in the commit, and the pane's
+stage/unstage controls are how it gets there. An empty message
 is `400` with `details.field: "message"`, and an empty index is `409` before git
 runs. Git's own refusal — a failing hook, an unresolved merge, a missing identity —
 is also `409`, with git's words in the message and in `details.field: "message"`,
 because it is something the person can fix rather than a daemon fault. A missing
 `git` is still `502`.
 
-Staging, checking out and config changes remain separate, unbuilt actions. All three
-surfaces read these routes: the TUI opens with `F6`, and the desktop overlay with
-`F6`; both draft and edit in a composer and call `/commit` only after `Ctrl-S`
-followed by `y`. The served page's **Source control** panel reads only when opened,
-and writes only after `Review commit` and then `Commit staged index`. None of them
-stages.
+Checking out and config changes remain separate, unbuilt actions. All three
+surfaces read these routes and prepare the index through `/stage` and `/unstage`:
+the TUI opens with `F6` and uses `s`/`u`; the desktop overlay uses the same `F6`
+and `s`/`u`; both draft and edit in a composer and call `/commit` only after
+`Ctrl-S` followed by `y`. The served page's **Source control** panel reads only
+when opened, stages the selected path with **Stage** or **Unstage**, and writes a
+commit only after `Review commit` and then `Commit staged index`.
 
 ## Project map
 

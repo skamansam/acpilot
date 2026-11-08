@@ -272,6 +272,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put repository paths in the index */
+        post: operations["git_stage_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/git/status": {
         parameters: {
             query?: never;
@@ -300,6 +317,23 @@ export interface paths {
         get: operations["git_tree_doc"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/unstage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove repository paths from the index */
+        post: operations["git_unstage_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1215,6 +1249,19 @@ export interface components {
             old_path?: string | null;
             /** @description Path after the change, relative to the repository root. */
             path: string;
+        };
+        /**
+         * @description A request to stage or unstage repository-relative paths.
+         *
+         *     The paths are the ones `GET /v1/git/status` reports, so a client never has to
+         *     translate a workspace path into the repository's spelling. The answer is the new
+         *     status, read after git ran, rather than the request echoed back.
+         */
+        GitIndexRequest: {
+            /** @description Paths relative to the repository root. */
+            paths: string[];
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
         };
         /** @description Branch state and every changed path. */
         GitStatus: {
@@ -2951,6 +2998,66 @@ export interface operations {
             };
         };
     };
+    git_stage_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description The status read after git staged the paths; paths are repository-relative */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description No paths, or one that is not repository-relative */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, one on another host, or git refused the index write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     git_status_doc: {
         parameters: {
             query?: {
@@ -3032,6 +3139,66 @@ export interface operations {
                 };
             };
             /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_unstage_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description The status read after git unstaged the paths; the working tree is untouched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description No paths, or one that is not repository-relative */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, one on another host, or git refused the index write */
             409: {
                 headers: {
                     [name: string]: unknown;

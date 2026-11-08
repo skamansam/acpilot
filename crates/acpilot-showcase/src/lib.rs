@@ -514,6 +514,8 @@ fn action_name(action: acpilot_gui::keymap::Action) -> &'static str {
         Action::SourcePageDown => "SourcePageDown",
         Action::SourcePageUp => "SourcePageUp",
         Action::SourceRefresh => "SourceRefresh",
+        Action::SourceStage => "SourceStage",
+        Action::SourceUnstage => "SourceUnstage",
         Action::SourceCompose => "SourceCompose",
         Action::SourceGenerate => "SourceGenerate",
         Action::CloseSource => "CloseSource",

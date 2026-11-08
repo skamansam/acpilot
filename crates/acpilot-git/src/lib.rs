@@ -7,9 +7,10 @@
 //! integration at all. The cost is that `git` must be on the host, which it
 //! already is for anyone with a repository to open.
 //!
-//! One method writes: [`Repo::commit`] commits the index, and only a caller that
-//! has confirmed the message calls it. Nothing here stages, checks out or changes
-//! config; the index is the person's to prepare.
+//! The writes are narrow and named: [`Repo::stage`] and [`Repo::unstage`] move
+//! paths across the index, and [`Repo::commit`] commits it. Nothing checks out, resets
+//! the working tree or changes config. A source-control pane stages through these so
+//! its answer and the command line's cannot disagree about what the next commit holds.
 //!
 //! Parsing is confined to stable porcelain/plumbing output:
 //! `status --porcelain=v2 -z`, `diff --name-status -z`, `ls-files -z`, and a
@@ -17,7 +18,7 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 /// Which changes a diff should cover.
@@ -364,6 +365,15 @@ pub enum GitError {
     /// A commit was asked for with no message.
     #[error("a commit message cannot be empty")]
     EmptyMessage,
+    /// No path was named for an index operation.
+    #[error("no paths were named")]
+    NoPaths,
+    /// A path was not relative to the repository root.
+    #[error("not a repository-relative path: {path:?}")]
+    InvalidPath {
+        /// The path the caller supplied.
+        path: String,
+    },
     /// Output did not have the documented shape.
     #[error("could not parse git {what}: {reason}")]
     Parse {
@@ -562,10 +572,71 @@ impl Repo {
         parse_log(&output)
     }
 
+    /// Put `paths` in the index, including an untracked file or a deletion.
+    ///
+    /// The path spelling is the one [`Self::status`] reports, relative to the
+    /// repository root. `--` ends option parsing, and the path check refuses an
+    /// absolute or parent-traversing path before git sees it: a caller with the
+    /// daemon token should not be able to stage a file outside the workspace because
+    /// it wrote `../` in a request.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::InvalidPath`], or [`GitError::Command`]
+    /// when git refuses a path or the index is locked.
+    pub fn stage(&self, paths: &[String]) -> Result<(), GitError> {
+        self.change_index(paths, true)
+    }
+
+    /// Remove `paths` from the next commit without touching the working tree.
+    ///
+    /// A repository with no commit has no `HEAD` to reset to, so its index is
+    /// emptied with `git rm --cached`; the file stays on disk either way.
+    ///
+    /// # Errors
+    ///
+    /// The same failures as [`Self::stage`].
+    pub fn unstage(&self, paths: &[String]) -> Result<(), GitError> {
+        self.change_index(paths, false)
+    }
+
+    fn change_index(&self, paths: &[String], staged: bool) -> Result<(), GitError> {
+        if paths.is_empty() {
+            return Err(GitError::NoPaths);
+        }
+        for path in paths {
+            if !is_repository_path(path) {
+                return Err(GitError::InvalidPath { path: path.clone() });
+            }
+        }
+
+        let mut args = if staged {
+            vec!["add".to_owned(), "-A".to_owned(), "--".to_owned()]
+        } else if self.has_head()? {
+            vec![
+                "reset".to_owned(),
+                "-q".to_owned(),
+                "HEAD".to_owned(),
+                "--".to_owned(),
+            ]
+        } else {
+            vec![
+                "rm".to_owned(),
+                "--cached".to_owned(),
+                "-q".to_owned(),
+                "--ignore-unmatch".to_owned(),
+                "--".to_owned(),
+            ]
+        };
+        args.extend(paths.iter().cloned());
+        self.run_owned(args).map(|_| ())
+    }
+
     /// Commit the index with `message`, and return the commit that was made.
     ///
-    /// This is the crate's one write, and it is deliberately narrow: the index is
-    /// staged already, so this neither adds nor cleans up. The whole message travels
+    /// It commits the index as it stands: [`Self::stage`] and [`Self::unstage`] are
+    /// the only methods that change what the index holds, so this neither adds nor
+    /// cleans up. The whole message travels
     /// as one argument, newlines included, because git takes the first paragraph as
     /// the subject and a client that split it would only have to join it again.
     ///
@@ -658,6 +729,19 @@ impl Repo {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
     }
+}
+
+/// Whether `path` can name something inside the repository.
+///
+/// `Path::components` is used rather than splitting on `/` because the daemon
+/// runs on Windows too: `..\\x` is a traversal there and an ordinary filename on
+/// Unix, and the platform's own parser is the one that knows which. A normal
+/// component is the only kind allowed; `.`, `..`, a root and a prefix are not.
+fn is_repository_path(path: &str) -> bool {
+    !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 fn split_nul(bytes: &[u8]) -> impl Iterator<Item = &str> {
@@ -983,6 +1067,95 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn staging_and_unstaging_move_a_path_across_the_index() {
+        let fixture = Fixture::new("stage");
+        fixture.write("one.txt", "one\n");
+        fixture.write("new.txt", "new\n");
+        fixture.commit("init");
+        fixture.write("one.txt", "changed\n");
+        fixture.write("new.txt", "changed too\n");
+
+        fixture
+            .repo()
+            .stage(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("staged");
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one");
+        assert!(one.is_staged());
+        assert!(!one.is_unstaged());
+        let new = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new");
+        assert_eq!(new.index, ChangeKind::Modified);
+        assert!(!new.is_unstaged());
+
+        fixture
+            .repo()
+            .unstage(&["one.txt".to_owned()])
+            .expect("unstaged");
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one");
+        assert!(!one.is_staged());
+        assert_eq!(one.worktree, ChangeKind::Modified);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("file"),
+            "changed\n",
+            "unstaging does not touch the working tree"
+        );
+    }
+
+    #[test]
+    fn an_unborn_repository_can_unstage_without_a_head() {
+        let fixture = Fixture::new("unborn-stage");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        fixture
+            .repo()
+            .unstage(&["new.txt".to_owned()])
+            .expect("unstaged without HEAD");
+        let status = fixture.repo().status().expect("status");
+        let new = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new");
+        assert_eq!(new.index, ChangeKind::Unmodified);
+        assert_eq!(new.worktree, ChangeKind::Untracked);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("new.txt")).expect("file"),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn a_path_outside_the_repository_is_refused_before_git_runs() {
+        let fixture = Fixture::new("stage-path");
+        let error = fixture
+            .repo()
+            .stage(&["../outside.txt".to_owned()])
+            .expect_err("a traversal is not a repository path");
+        assert!(
+            matches!(error, GitError::InvalidPath { ref path } if path == "../outside.txt"),
+            "{error}"
+        );
+        assert!(matches!(
+            fixture.repo().stage(&[]).expect_err("no path"),
+            GitError::NoPaths
+        ));
     }
 
     #[test]

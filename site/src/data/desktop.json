@@ -118,6 +118,22 @@
       ]
     },
     {
+      "keys": "s",
+      "action": "SourceStage",
+      "description": "Stage the selected path",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "u",
+      "action": "SourceUnstage",
+      "description": "Unstage the selected path",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
       "keys": "c",
       "action": "SourceCompose",
       "description": "Compose a commit message",

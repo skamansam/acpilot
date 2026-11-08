@@ -71,6 +71,10 @@ pub enum Action {
     SourcePageUp,
     /// Ask the daemon for the index again.
     SourceRefresh,
+    /// Put the selected path in the index.
+    SourceStage,
+    /// Remove the selected path from the index.
+    SourceUnstage,
     /// Open the commit composer.
     SourceCompose,
     /// Open it and ask the session for a draft.
@@ -188,6 +192,18 @@ pub const DEFAULT: &[Binding] = &[
         action: Action::SourceRefresh,
         contexts: &[Source],
         description: "Refresh the index",
+    },
+    Binding {
+        keys: "s",
+        action: Action::SourceStage,
+        contexts: &[Source],
+        description: "Stage the selected path",
+    },
+    Binding {
+        keys: "u",
+        action: Action::SourceUnstage,
+        contexts: &[Source],
+        description: "Unstage the selected path",
     },
     Binding {
         keys: "c",
@@ -309,6 +325,8 @@ mod tests {
             Action::SourcePageDown,
             Action::SourcePageUp,
             Action::SourceRefresh,
+            Action::SourceStage,
+            Action::SourceUnstage,
             Action::SourceCompose,
             Action::SourceGenerate,
             Action::CloseSource,

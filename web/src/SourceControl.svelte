@@ -2,11 +2,11 @@
   // The browser source-control pane.
   //
   // It reads `GET /v1/git/status` and `GET /v1/git/diff?scope=all`, draws the
-  // selected file's section of the daemon's patch, and opens a composer whose
-  // commit is a second, explicit click. Nothing here stages; the index is git's.
+  // selected file's section of the daemon's patch, stages or unstages that path,
+  // and opens a composer whose commit is a second, explicit click.
 
-  import { ApiError, commitMessage, gitDiff, gitStatus, commitStaged, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
-import { marks, patchSection, shortId, stagedCount } from './git';
+  import { ApiError, commitMessage, gitDiff, gitStatus, commitStaged, stagePaths, unstagePaths, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
+import { canStage, canUnstage, marks, patchSection, shortId, stagedCount } from './git';
 
 let { token, sessions, openSession }: {
   token: string;
@@ -28,12 +28,16 @@ let generating = $state(false);
 let committing = $state(false);
 let confirming = $state(false);
 let composerError = $state<string | null>(null);
+let indexing = $state(false);
 
 const files = $derived(status?.files ?? []);
 const section = $derived(
   diff && files[selected] ? patchSection(diff, files[selected]!.path) : [],
 );
 const stagedFiles = $derived(stagedCount(files));
+const selectedEntry = $derived(files[selected] ?? null);
+const stageable = $derived(canStage(selectedEntry));
+const unstageable = $derived(canUnstage(selectedEntry));
 const sessionId = $derived(openSession ?? sessions[0]?.id ?? '');
 
 function describe(failure: unknown): string {
@@ -68,9 +72,32 @@ function choose(index: number): void {
   selected = index;
 }
 
+async function index(staged: boolean): Promise<void> {
+  if (indexing || selectedEntry === null) {
+    return;
+  }
+  const path = selectedEntry.path;
+  indexing = true;
+  error = null;
+  try {
+    if (staged) {
+      await stagePaths([path], token);
+      note = `Staged ${path}.`;
+    } else {
+      await unstagePaths([path], token);
+      note = `Unstaged ${path}.`;
+    }
+    await load();
+  } catch (failure) {
+    error = describe(failure);
+  } finally {
+    indexing = false;
+  }
+}
+
 function compose(generate: boolean): void {
   if (stagedFiles === 0) {
-    error = 'nothing is staged · git add the files first';
+    error = 'nothing is staged · stage a path first';
     return;
   }
   composing = true;
@@ -179,10 +206,24 @@ async function commit(): Promise<void> {
                     ? 'hunk'
                     : line.startsWith('diff ')
                       ? 'meta'
-                      : 'text'}>{line}</span>{/each}{#if section.length === 0}<span class="note">No diff for this path yet · stage it with git first.</span>{/if}</pre>
+                      : 'text'}>{line}</span>{/each}{#if section.length === 0}<span class="note">No diff for this path yet · Stage puts it in the index.</span>{/if}</pre>
       </div>
 
       <div class="source-actions">
+        <button
+          type="button"
+          onclick={() => void index(true)}
+          disabled={!stageable || indexing}
+        >
+          {indexing ? 'Updating index…' : 'Stage'}
+        </button>
+        <button
+          type="button"
+          onclick={() => void index(false)}
+          disabled={!unstageable || indexing}
+        >
+          Unstage
+        </button>
         <button type="button" onclick={() => compose(false)} disabled={stagedFiles === 0}>
           Compose commit
         </button>

@@ -73,6 +73,21 @@ export function patchSection(diff: GitDiff, path: string): string[] {
   return lines;
 }
 
+/**
+ * Whether the selected path has a working-tree change to add.
+ *
+ * An untracked file is stageable: `git add` is how it enters the index at all.
+ * A path whose only change is already in the index has nothing left to add.
+ */
+export function canStage(entry: GitStatusEntry | null): boolean {
+  return entry !== null && entry.worktree !== 'unmodified' && entry.worktree !== 'ignored';
+}
+
+/** Whether the selected path is in the next commit and can be removed. */
+export function canUnstage(entry: GitStatusEntry | null): boolean {
+  return entry !== null && staged(entry.index);
+}
+
 /** The first seven characters of a commit id, or the whole id when shorter. */
 export function shortId(id: string): string {
   return [...id].slice(0, 7).join('');

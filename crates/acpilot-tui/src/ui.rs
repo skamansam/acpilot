@@ -2433,10 +2433,11 @@ fn permission_hint(request: &PermissionRequest, at: usize, total: usize) -> Stri
 /// The source-control pane: changed paths on the left, the selected file's diff
 /// on the right.
 ///
-/// Modal because it is about the repository rather than the buffer, and because the
-/// only write it leads to — a commit — is a decision that should not be one keystroke
-/// away from a pane that edits text. The pane itself is read-only: staging is git's,
-/// and a commit is the composer's confirmed action.
+/// Modal because it is about the repository rather than the buffer, and because its
+/// writes — moving a path across the index, then committing — are decisions that
+/// should not be one keystroke away from a pane that edits text. `s`/`u` stage and
+/// unstage the selected path through the daemon; the composer still confirms the
+/// commit.
 fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
     let Some(source) = &app.source else {
         return;
@@ -2531,7 +2532,7 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
         let section = source.section();
         if section.is_empty() {
             frame.render_widget(
-                Paragraph::new("no diff for this path yet · stage it with git first")
+                Paragraph::new("no diff for this path yet · s stages it")
                     .style(Style::default().fg(app.theme.text_muted()))
                     .wrap(Wrap { trim: false }),
                 patch,
@@ -2560,7 +2561,7 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
     };
     let footer_line = Line::from(Span::styled(
         format!(
-            " j/k files · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
+            " j/k files · s stage · u unstage · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
         ),
         Style::default().fg(app.theme.warning()),
     ));

@@ -427,6 +427,44 @@ impl Client {
         self.get(&format!("/v1/git/diff?scope={scope}")).await
     }
 
+    /// `POST /v1/git/stage`.
+    ///
+    /// Adds repository-relative paths to the index and answers with the status read
+    /// after git ran. The working tree is untouched.
+    pub async fn stage(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/stage"))
+            .json(&body);
+        self.send(request, "/v1/git/stage").await
+    }
+
+    /// `POST /v1/git/unstage`.
+    ///
+    /// Removes repository-relative paths from the index and leaves their working-tree
+    /// changes in place.
+    pub async fn unstage(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/unstage"))
+            .json(&body);
+        self.send(request, "/v1/git/unstage").await
+    }
+
     /// `POST /v1/git/commit-message`.
     ///
     /// Asks the named session to draft a message from the staged diff. The answer is
@@ -449,8 +487,8 @@ impl Client {
 
     /// `POST /v1/git/commit`.
     ///
-    /// Commits the index with a message the person confirmed. This is the only write
-    /// in the git client, and it does not stage anything first.
+    /// Commits the index with a message the person confirmed. It does not stage
+    /// anything first: the index is what the person prepared through [`Self::stage`].
     pub async fn commit(
         &self,
         message: &str,

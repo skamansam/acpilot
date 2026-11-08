@@ -22,8 +22,10 @@ GET /v1/events                  # text/event-stream: preferences, permission.req
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
-GET /v1/git/status              # status, diff, tree and log from the host's git; paths are repo-relativeGET    /v1/git/commit/prompt       # the profile's commit prompt; POST /v1/git/commit-message drafts from the index
-POST   /v1/git/commit              # commit the staged index with a confirmed message; nothing is staged here
+GET /v1/git/status              # status, diff, tree and log from the host's git; paths are repo-relative
+GET /v1/git/commit/prompt       # the profile's commit prompt; POST /v1/git/commit-message drafts from the index
+POST /v1/git/stage              # add paths to the index and answer the new status; /unstage reverses it
+POST /v1/git/commit             # commit the staged index with a confirmed message; the route does not stage
 GET /v1/stats                   # one row per integration: context usage, credits, and where each came from
 GET /v1/openapi.json            # the contract, generated from the types
 GET /docs                       # Swagger UI, only with --features docs; asks for the token

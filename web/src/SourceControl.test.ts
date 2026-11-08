@@ -66,6 +66,8 @@ let target: HTMLDivElement;
 let cleanups: (() => void)[];
 let commits: string[];
 let generated: string[];
+let staged: string[][];
+let unstaged: string[][];
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -74,6 +76,8 @@ beforeEach(() => {
   cleanups = [];
   commits = [];
   generated = [];
+  staged = [];
+  unstaged = [];
   vi.stubGlobal(
     'fetch',
     plainFetch(
@@ -98,6 +102,16 @@ beforeEach(() => {
             emoji: '✨',
             generator: 'session:session-1',
           });
+        }
+        if (route === '/v1/git/stage' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
+          staged.push(body.paths);
+          return json(STATUS);
+        }
+        if (route === '/v1/git/unstage' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
+          unstaged.push(body.paths);
+          return json(STATUS);
         }
         if (route === '/v1/git/commit' && init?.method === 'POST') {
           const body = JSON.parse(String(init.body ?? '{}')) as { message: string };
@@ -166,6 +180,22 @@ describe('the source-control pane', () => {
     await vi.waitFor(() =>
       expect(target.querySelector('.source-diff')?.textContent).toContain('+new file'),
     );
+  });
+
+  it('stages and unstages the selected path instead of sending the person to git', async () => {
+    render();
+    await click('Open source control');
+    await vi.waitFor(() => expect(target.textContent).toContain('Compose commit'));
+
+    await click('·? new.rs');
+    await click('Stage');
+    await vi.waitFor(() => expect(staged).toEqual([['new.rs']]));
+    await vi.waitFor(() => expect(target.textContent).toContain('Staged new.rs.'));
+
+    await click('M· src/main.rs');
+    await click('Unstage');
+    await vi.waitFor(() => expect(unstaged).toEqual([['src/main.rs']]));
+    await vi.waitFor(() => expect(target.textContent).toContain('Unstaged src/main.rs.'));
   });
 
   it('a generated message lands in an editable composer and commit asks first', async () => {

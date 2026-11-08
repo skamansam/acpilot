@@ -98,6 +98,9 @@ export type GitDiff = components['schemas']['GitDiff'];
 /** One commit, as `POST /v1/git/commit` answers it. */
 export type GitCommit = components['schemas']['GitCommit'];
 
+/** Paths to move across the index; each is workspace-relative. */
+export type GitIndexRequest = components['schemas']['GitIndexRequest'];
+
 /** A generated message the person can edit before committing. */
 export type CommitDraft = components['schemas']['CommitDraft'];
 
@@ -586,10 +589,41 @@ export async function commitMessage(sessionId: string, token: string): Promise<C
 }
 
 /**
- * `POST /v1/git/commit` — the one git write in the page.
+ * `POST /v1/git/stage` — put paths in the index and answer the new status.
  *
- * The caller has confirmed the whole message. Nothing is staged first: git's index
- * is what the route commits.
+ * The pane stages the selected path from here, so preparing a commit no longer
+ * sends the person to a terminal for `git add`. The paths that remain unstaged
+ * are still in the working tree, which is why the answer is a status rather than
+ * a commit.
+ */
+export async function stagePaths(paths: string[], token: string): Promise<GitStatus> {
+  return answered(
+    await client.POST('/v1/git/stage', {
+      body: { paths },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/unstage` — take paths out of the index and answer the new status.
+ *
+ * This is the opposite of stage, not a discard: the working-tree change stays.
+ */
+export async function unstagePaths(paths: string[], token: string): Promise<GitStatus> {
+  return answered(
+    await client.POST('/v1/git/unstage', {
+      body: { paths },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/commit` — commit the index the pane prepared.
+ *
+ * The caller has confirmed the whole message. Staging happens in this pane first;
+ * git's index is what the route commits.
  */
 export async function commitStaged(message: string, token: string): Promise<GitCommit> {
   return answered(

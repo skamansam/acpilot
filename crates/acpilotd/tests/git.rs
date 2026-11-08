@@ -106,6 +106,40 @@ async fn send(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     )
 }
 
+async fn post(
+    app: axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request");
+    let response = app.oneshot(request).await.expect("router is infallible");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// The paths `git diff --cached --name-only` reports.
+fn staged_paths(root: &Path) -> Vec<String> {
+    git(root, &["diff", "--cached", "--name-only"])
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// One status row by path.
 fn row<'a>(body: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
     body["files"]
@@ -196,6 +230,95 @@ async fn the_diff_answers_the_scope_it_was_asked_for() {
         default_files,
         ["one.txt"],
         "no scope is the working tree against the index: {default}"
+    );
+}
+
+#[tokio::test]
+async fn stage_puts_an_edit_and_an_untracked_file_in_the_index() {
+    let directory = repository();
+    let state = serving(directory.path());
+    let root = directory.path();
+
+    let (status, body) = post(
+        app(state),
+        "/v1/git/stage",
+        serde_json::json!({ "paths": ["one.txt", "three.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(row(&body, "one.txt")["index"], "modified");
+    assert_eq!(row(&body, "one.txt")["worktree"], "unmodified");
+    assert_eq!(row(&body, "three.txt")["index"], "added");
+    assert_eq!(row(&body, "three.txt")["worktree"], "unmodified");
+    let mut wrote = staged_paths(root);
+    wrote.sort();
+    assert_eq!(
+        wrote,
+        ["one.txt", "three.txt", "two.txt"],
+        "the response is the index git actually wrote, including the change already staged"
+    );
+}
+
+#[tokio::test]
+async fn unstage_removes_a_path_from_the_index_and_keeps_its_edit() {
+    let directory = repository();
+    let state = serving(directory.path());
+    let root = directory.path();
+
+    let (status, body) = post(
+        app(state),
+        "/v1/git/unstage",
+        serde_json::json!({ "paths": ["two.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(row(&body, "two.txt")["index"], "unmodified");
+    assert_eq!(row(&body, "two.txt")["worktree"], "modified");
+    assert!(
+        staged_paths(root).is_empty(),
+        "nothing remains in the next commit"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("two.txt")).expect("two"),
+        "two changed\n",
+        "unstaging is not a checkout"
+    );
+}
+
+#[tokio::test]
+async fn stage_refuses_a_path_outside_the_repository() {
+    let directory = repository();
+    let (status, body) = post(
+        app(serving(directory.path())),
+        "/v1/git/stage",
+        serde_json::json!({ "paths": ["../outside.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_request");
+    assert_eq!(body["details"][0]["field"], "paths");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("../outside.txt")),
+        "the refusal names the path: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_path_list_is_refused_rather_than_staging_everything() {
+    let directory = repository();
+    let (status, body) = post(
+        app(serving(directory.path())),
+        "/v1/git/stage",
+        serde_json::json!({ "paths": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["details"][0]["field"], "paths");
+    assert!(
+        staged_paths(directory.path()) == ["two.txt"],
+        "the fixture's staged edit is untouched"
     );
 }
 
@@ -332,7 +455,19 @@ async fn the_openapi_document_documents_the_git_routes() {
             "{path} is in the document"
         );
     }
-    for schema in ["GitStatus", "GitDiff", "GitTreeEntry", "GitCommit"] {
+    for path in ["/v1/git/stage", "/v1/git/unstage"] {
+        assert!(
+            document["paths"][path]["post"].is_object(),
+            "{path} is in the document"
+        );
+    }
+    for schema in [
+        "GitStatus",
+        "GitDiff",
+        "GitTreeEntry",
+        "GitCommit",
+        "GitIndexRequest",
+    ] {
         assert!(
             document["components"]["schemas"][schema].is_object(),
             "{schema} is in the components"

@@ -1278,6 +1278,29 @@
         ],
         "type": "object"
       },
+      "GitIndexRequest": {
+        "description": "A request to stage or unstage repository-relative paths.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
+        "properties": {
+          "paths": {
+            "description": "Paths relative to the repository root.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
       "GitStatus": {
         "description": "Branch state and every changed path.",
         "properties": {
@@ -3966,6 +3989,74 @@
         "summary": "Recent commits, newest first"
       }
     },
+    "/v1/git/stage": {
+      "post": {
+        "operationId": "git_stage_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStatus"
+                }
+              }
+            },
+            "description": "The status read after git staged the paths; paths are repository-relative"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No paths, or one that is not repository-relative"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, one on another host, or git refused the index write"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "Put repository paths in the index"
+      }
+    },
     "/v1/git/status": {
       "get": {
         "operationId": "git_status_doc",
@@ -4085,6 +4176,74 @@
           }
         },
         "summary": "Every path in the working tree, tracked or not"
+      }
+    },
+    "/v1/git/unstage": {
+      "post": {
+        "operationId": "git_unstage_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStatus"
+                }
+              }
+            },
+            "description": "The status read after git unstaged the paths; the working tree is untouched"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No paths, or one that is not repository-relative"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The workspace is not inside a git repository"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace, one on another host, or git refused the index write"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`git` is not installed on the host"
+          }
+        },
+        "summary": "Remove repository paths from the index"
       }
     },
     "/v1/lsp/servers": {

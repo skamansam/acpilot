@@ -1,4 +1,4 @@
-//! Git over the workspace: status, diff, tree and log.
+//! Git over the workspace: status, diff, tree, log, and the index's two writes.
 //!
 //! Every answer comes from the host's own `git`, through `acpilot-git`, so the
 //! source-control pane agrees with the command line about what is staged. The
@@ -8,11 +8,12 @@
 //! therefore sees the repository's paths, not just its own directory; the tree route
 //! is where a client asks what belongs to the workspace it is drawing.
 //!
-//! # What these routes deliberately do not do
+//! # What these routes write
 //!
-//! Nothing writes. Stage, commit, checkout and config are separate, confirmed actions
-//! with their own permission path (P6.5-3 and P6.5-4). The one thing a client can do
-//! here is read what git says.
+//! `stage` and `unstage` move paths across the index and answer with the status read
+//! after git ran. They do not touch the working tree, make a commit, check out or
+//! change config; those remain separate actions. The committed message is P6.5-3's,
+//! and the composer's confirmation is what reaches it.
 //!
 //! A workspace on another host is refused with `409`, like every other route that
 //! walks this machine's filesystem. Its tree still draws the letters through
@@ -25,16 +26,19 @@
 //! `404`: there is no repository to describe, which is the same answer a route that
 //! read one file would give.
 
+use std::collections::BTreeSet;
+
 use acpilot_core::AcpilotError;
-use acpilot_git::{ChangeKind, DiffScope, GitError, Repo};
+use acpilot_git::{ChangeKind, DiffScope, GitError, Repo, Status};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::git::{
-    GitChangeKind, GitCommit, GitDiff, GitDiffFile, GitStatus, GitStatusEntry, GitTreeEntry,
+    GitChangeKind, GitCommit, GitDiff, GitDiffFile, GitIndexRequest, GitStatus, GitStatusEntry,
+    GitTreeEntry,
 };
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde::Deserialize;
 use utoipa::openapi::path::{HttpMethod, Operation};
 
@@ -91,14 +95,76 @@ async fn status(
 ) -> Result<Json<GitStatus>, ApiError> {
     let repo = repository(&state, query.workspace.as_deref())?;
     let status = repo.status().map_err(git_error)?;
-    Ok(Json(GitStatus {
-        branch: status.branch,
-        upstream: status.upstream,
-        ahead: status.ahead,
-        behind: status.behind,
-        head: status.head,
-        files: status.files.into_iter().map(status_entry).collect(),
-    }))
+    Ok(Json(status_json(status)))
+}
+
+/// `POST /v1/git/stage`.
+///
+/// Adds each path to the index, including an untracked file or a deletion, and
+/// answers with the status read after git ran. The path check is in
+/// [`Repo::stage`], before git sees a `../` a client should not have sent.
+///
+/// # Errors
+///
+/// `400` for no paths or one that is not repository-relative; the path and host
+/// failures of [`status`]; `409` when git refuses a path or the index is locked.
+async fn stage(
+    State(state): State<AppState>,
+    Json(request): Json<GitIndexRequest>,
+) -> Result<Json<GitStatus>, ApiError> {
+    set_index(&state, request, true)
+}
+
+/// `POST /v1/git/unstage`.
+///
+/// Removes each path from the next commit and leaves the working tree alone. In a
+/// repository with no commit, the index is emptied with `git rm --cached` because
+/// there is no `HEAD` to reset to.
+///
+/// # Errors
+///
+/// The same failures as [`stage`].
+async fn unstage(
+    State(state): State<AppState>,
+    Json(request): Json<GitIndexRequest>,
+) -> Result<Json<GitStatus>, ApiError> {
+    set_index(&state, request, false)
+}
+
+/// Stage or unstage the request's paths, and answer with the new index.
+///
+/// A rename has two paths: the row names the new one and carries the old one beside
+/// it. Moving only the new path across the index would leave the other half staged,
+/// so the old path travels with the row the person selected.
+fn set_index(
+    state: &AppState,
+    request: GitIndexRequest,
+    staged: bool,
+) -> Result<Json<GitStatus>, ApiError> {
+    if request.paths.is_empty() {
+        return Err(ApiError::new(AcpilotError::invalid("`paths` is empty"))
+            .with_detail("paths", "at least one repository-relative path"));
+    }
+
+    let repo = repository(state, request.workspace.as_deref())?;
+    let before = repo.status().map_err(git_error)?;
+    let mut paths: BTreeSet<String> = request.paths.iter().cloned().collect();
+    for entry in &before.files {
+        if request.paths.iter().any(|path| path == &entry.path)
+            && let Some(old_path) = &entry.orig_path
+        {
+            paths.insert(old_path.clone());
+        }
+    }
+    let paths: Vec<String> = paths.into_iter().collect();
+
+    if staged {
+        repo.stage(&paths).map_err(index_error)?;
+    } else {
+        repo.unstage(&paths).map_err(index_error)?;
+    }
+    let after = repo.status().map_err(git_error)?;
+    Ok(Json(status_json(after)))
 }
 
 /// `GET /v1/git/diff?workspace=&scope=`.
@@ -212,6 +278,18 @@ fn log_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LOG_LIMIT).min(MAX_LOG_LIMIT)
 }
 
+/// A status in the wire's spelling.
+fn status_json(status: Status) -> GitStatus {
+    GitStatus {
+        branch: status.branch,
+        upstream: status.upstream,
+        ahead: status.ahead,
+        behind: status.behind,
+        head: status.head,
+        files: status.files.into_iter().map(status_entry).collect(),
+    }
+}
+
 /// One status row in the wire's spelling.
 fn status_entry(entry: acpilot_git::StatusEntry) -> GitStatusEntry {
     GitStatusEntry {
@@ -269,10 +347,41 @@ pub(crate) fn git_error(error: GitError) -> ApiError {
             ApiError::new(AcpilotError::invalid("a commit message cannot be empty"))
                 .with_detail("message", "a subject line, and a body when there is one")
         }
+        GitError::NoPaths => ApiError::new(AcpilotError::invalid("no paths were named"))
+            .with_detail("paths", "at least one repository-relative path"),
+        GitError::InvalidPath { path } => ApiError::new(AcpilotError::invalid(format!(
+            "not a repository-relative path: {path:?}"
+        )))
+        .with_detail(
+            "paths",
+            "a path from GET /v1/git/status, relative to the repository root",
+        ),
         GitError::Parse { what, reason } => ApiError::new(AcpilotError::Protocol {
             message: format!("could not parse git {what}: {reason}"),
         }),
         GitError::Io(source) => ApiError::new(AcpilotError::Io(source)),
+    }
+}
+
+/// A failure from an index write.
+///
+/// Git refusing an `add` or a `reset` is a conflict the person can fix — a locked
+/// index, a pathspec that does not match — rather than a daemon fault, so it gets
+/// the same `409` shape as a refused commit and git's own words in `details`.
+fn index_error(error: GitError) -> ApiError {
+    match error {
+        GitError::Command {
+            command,
+            status,
+            stderr,
+        } => {
+            let reason = stderr.trim();
+            ApiError::new(AcpilotError::conflict(format!(
+                "git {command} exited {status}: {reason}"
+            )))
+            .with_detail("paths", reason.to_owned())
+        }
+        other => git_error(other),
     }
 }
 
@@ -283,6 +392,8 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/git/diff", get(diff))
         .route("/v1/git/tree", get(tree))
         .route("/v1/git/log", get(log))
+        .route("/v1/git/stage", post(stage))
+        .route("/v1/git/unstage", post(unstage))
 }
 
 #[allow(dead_code)]
@@ -360,6 +471,40 @@ fn git_tree_doc() {}
 )]
 fn git_log_doc() {}
 
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/git/stage",
+    tag = "git",
+    summary = "Put repository paths in the index",
+    request_body = GitIndexRequest,
+    responses(
+        (status = 200, description = "The status read after git staged the paths; paths are repository-relative", body = GitStatus),
+        (status = 400, description = "No paths, or one that is not repository-relative", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "No workspace, one on another host, or git refused the index write", body = ErrorBody),
+        (status = 502, description = "`git` is not installed on the host", body = ErrorBody)
+    )
+)]
+fn git_stage_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/git/unstage",
+    tag = "git",
+    summary = "Remove repository paths from the index",
+    request_body = GitIndexRequest,
+    responses(
+        (status = 200, description = "The status read after git unstaged the paths; the working tree is untouched", body = GitStatus),
+        (status = 400, description = "No paths, or one that is not repository-relative", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "No workspace, one on another host, or git refused the index write", body = ErrorBody),
+        (status = 502, description = "`git` is not installed on the host", body = ErrorBody)
+    )
+)]
+fn git_unstage_doc() {}
+
 /// This module's operations, for the OpenAPI document.
 pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
     use utoipa::Path;
@@ -383,6 +528,16 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/git/log",
             HttpMethod::Get,
             <__path_git_log_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/stage",
+            HttpMethod::Post,
+            <__path_git_stage_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/unstage",
+            HttpMethod::Post,
+            <__path_git_unstage_doc as Path>::operation(),
         ),
     ]
 }

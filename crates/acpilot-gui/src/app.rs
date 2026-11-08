@@ -46,6 +46,8 @@ actions!(
         SourcePageDown,
         SourcePageUp,
         SourceRefresh,
+        SourceStage,
+        SourceUnstage,
         SourceCompose,
         SourceGenerate,
         CloseSource,
@@ -94,6 +96,8 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::SourcePageDown => KeyBinding::new(keys, SourcePageDown, Some(context)),
         KeyAction::SourcePageUp => KeyBinding::new(keys, SourcePageUp, Some(context)),
         KeyAction::SourceRefresh => KeyBinding::new(keys, SourceRefresh, Some(context)),
+        KeyAction::SourceStage => KeyBinding::new(keys, SourceStage, Some(context)),
+        KeyAction::SourceUnstage => KeyBinding::new(keys, SourceUnstage, Some(context)),
         KeyAction::SourceCompose => KeyBinding::new(keys, SourceCompose, Some(context)),
         KeyAction::SourceGenerate => KeyBinding::new(keys, SourceGenerate, Some(context)),
         KeyAction::CloseSource => KeyBinding::new(keys, CloseSource, Some(context)),
@@ -398,6 +402,57 @@ impl Shell {
         }
     }
 
+    fn source_stage(&mut self, _: &SourceStage, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selected_staged(true, cx);
+    }
+
+    fn source_unstage(&mut self, _: &SourceUnstage, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selected_staged(false, cx);
+    }
+
+    /// Ask the daemon to move the selected path across the index.
+    ///
+    /// A path with nothing on that side of the index is a message in the pane, not
+    /// a request: pressing `s` twice should say why the second press did nothing.
+    fn set_selected_staged(&mut self, staged: bool, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            if let Some(source) = &mut self.source {
+                source.error = Some("no changed file is selected".to_owned());
+            }
+            cx.notify();
+            return;
+        };
+        let available = if staged {
+            source.can_stage_selected()
+        } else {
+            source.can_unstage_selected()
+        };
+        if !available {
+            if let Some(source) = &mut self.source {
+                source.error = Some(if staged {
+                    format!("{path} has no working-tree change to stage")
+                } else {
+                    format!("{path} is not in the index")
+                });
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+        }
+        self.request_git(if staged {
+            GitCommand::Stage(path)
+        } else {
+            GitCommand::Unstage(path)
+        });
+        cx.notify();
+    }
+
     fn source_compose(&mut self, _: &SourceCompose, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_composer(false, cx);
     }
@@ -417,7 +472,7 @@ impl Shell {
         let staged = self.source.as_ref().map_or(0, Source::staged);
         if staged == 0 {
             if let Some(source) = &mut self.source {
-                source.error = Some("nothing is staged · git add the files first".to_owned());
+                source.error = Some("nothing is staged · stage a path with s first".to_owned());
             }
             cx.notify();
             return;
@@ -1025,7 +1080,7 @@ impl Render for Shell {
                 .child(div().text_size(px(18.0)).child(SharedString::from(title)))
                 .child(muted(
                     &theme,
-                    "The pane reads; only a confirmed commit writes. j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close",
+                    "s stages and u unstages the selected path · j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close",
                 ));
             if source.loading {
                 panel = panel.child(muted(&theme, "reading the index…"));
@@ -1036,7 +1091,49 @@ impl Render for Shell {
                         .child(SharedString::from(error.clone())),
                 );
             }
-            panel = panel.child(
+            let stage_bg = if source.can_stage_selected() {
+                theme.ui(UiToken::Accent)
+            } else {
+                theme.ui(UiToken::Border)
+            };
+            let unstage_bg = if source.can_unstage_selected() {
+                theme.ui(UiToken::Accent)
+            } else {
+                theme.ui(UiToken::Border)
+            };
+            panel = panel
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.0))
+                        .pt(px(8.0))
+                        .child(
+                            div()
+                                .id("source-stage")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(stage_bg))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Stage (s)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_stage(&SourceStage, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-unstage")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(unstage_bg))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Unstage (u)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_unstage(&SourceUnstage, window, cx);
+                                })),
+                        ),
+                )
+                .child(
                 div()
                     .flex()
                     .flex_row()
@@ -1249,6 +1346,8 @@ impl Render for Shell {
             .on_action(cx.listener(Self::source_page_down))
             .on_action(cx.listener(Self::source_page_up))
             .on_action(cx.listener(Self::source_refresh))
+            .on_action(cx.listener(Self::source_stage))
+            .on_action(cx.listener(Self::source_unstage))
             .on_action(cx.listener(Self::source_compose))
             .on_action(cx.listener(Self::source_generate))
             .on_action(cx.listener(Self::close_source))

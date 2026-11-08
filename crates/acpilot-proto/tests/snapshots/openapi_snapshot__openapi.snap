@@ -1282,6 +1282,29 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "GitIndexRequest": {
+        "description": "A request to stage or unstage repository-relative paths.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
+        "properties": {
+          "paths": {
+            "description": "Paths relative to the repository root.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
       "GitStatus": {
         "description": "Branch state and every changed path.",
         "properties": {

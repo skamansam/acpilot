@@ -3,9 +3,9 @@
 //! The desktop surface reads the same two routes as the terminal — `GET
 //! /v1/git/status` and `GET /v1/git/diff?scope=all` — and cuts the patch with
 //! [`acpilot_git::patch_section`], so the two panes cannot disagree about which
-//! lines belong to a file. The pane itself never stages. The only write it can
-//! lead to is [`Composer`], whose `confirming` state is what makes the commit a
-//! second decision rather than a keystroke.
+//! lines belong to a file. `s`/`u` move the selected path across the index through
+//! the daemon; [`Composer`]'s `confirming` state is what makes the commit a second
+//! decision rather than a keystroke.
 //!
 //! Plain data on purpose: the state a test needs to read is here, and [`crate::app`]
 //! only has to lay it out.
@@ -86,6 +86,30 @@ impl Source {
             .iter()
             .filter(|entry| staged_kind(entry.index))
             .count()
+    }
+
+    /// The selected row, when there is one.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<&GitStatusEntry> {
+        self.status.files.get(self.selected)
+    }
+
+    /// Whether the selected path has a working-tree change to add.
+    #[must_use]
+    pub fn can_stage_selected(&self) -> bool {
+        self.selected_entry().is_some_and(|entry| {
+            !matches!(
+                entry.worktree,
+                GitChangeKind::Unmodified | GitChangeKind::Ignored
+            )
+        })
+    }
+
+    /// Whether the selected path is in the next commit and can be removed.
+    #[must_use]
+    pub fn can_unstage_selected(&self) -> bool {
+        self.selected_entry()
+            .is_some_and(|entry| staged_kind(entry.index))
     }
 
     /// The path whose diff is on the right.
@@ -290,6 +314,11 @@ mod tests {
         assert_eq!(source.selected_path(), Some("a.rs"));
         assert_eq!(source.staged(), 1);
         assert_eq!(source.session(), Some("s1"));
+        assert!(
+            !source.can_stage_selected(),
+            "a path whose only change is in the index has nothing left to add"
+        );
+        assert!(source.can_unstage_selected());
 
         source.step(1);
         source.scroll = 3;
@@ -310,6 +339,24 @@ mod tests {
 
         source.step(9);
         assert_eq!(source.selected_path(), Some("b.rs"));
+        assert!(
+            !source.can_stage_selected(),
+            "an added path has nothing in the working tree left to stage"
+        );
+        source.apply(
+            status(vec![entry(
+                "new.rs",
+                GitChangeKind::Unmodified,
+                GitChangeKind::Untracked,
+            )]),
+            GitDiff::default(),
+            Vec::new(),
+        );
+        assert!(
+            source.can_stage_selected(),
+            "an untracked file can be staged"
+        );
+        assert!(!source.can_unstage_selected());
         source.apply(status(Vec::new()), GitDiff::default(), Vec::new());
         assert_eq!(source.selected_path(), None);
     }

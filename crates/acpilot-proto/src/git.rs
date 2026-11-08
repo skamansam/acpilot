@@ -10,9 +10,9 @@
 //! a source-control pane exists to answer, and a single letter would merge an edit
 //! that is in the index with one that is not.
 //!
-//! Nothing here is a write. Staging, committing and checking out are later, reviewed
-//! actions with their own permission path, and a type that could express one would
-//! be a wire shape the daemon cannot yet honour.
+//! The writes are named and narrow: staging and unstaging paths move the index, and
+//! committing writes the commit the person confirmed. Checking out, resetting the
+//! working tree and changing config remain outside this surface.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -160,6 +160,20 @@ pub struct CommitMessageRequest {
     pub prompt: Option<String>,
 }
 
+/// A request to stage or unstage repository-relative paths.
+///
+/// The paths are the ones `GET /v1/git/status` reports, so a client never has to
+/// translate a workspace path into the repository's spelling. The answer is the new
+/// status, read after git ran, rather than the request echoed back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GitIndexRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Paths relative to the repository root.
+    pub paths: Vec<String>,
+}
+
 /// A request to commit what the index holds.
 ///
 /// The message is the whole thing, subject and body, with the blank line between
@@ -241,6 +255,20 @@ mod tests {
         assert!(
             json.get("branch").is_none(),
             "a detached HEAD has no branch to name"
+        );
+    }
+
+    #[test]
+    fn an_index_request_names_the_paths_and_may_omit_the_workspace() {
+        let request: GitIndexRequest =
+            serde_json::from_value(serde_json::json!({ "paths": ["src/main.rs"] }))
+                .expect("paths are the required half");
+        assert_eq!(request.paths, ["src/main.rs"]);
+        assert!(request.workspace.is_none());
+        let json = serde_json::to_value(&request).expect("an index request is JSON");
+        assert!(
+            json.get("workspace").is_none(),
+            "the daemon's own workspace costs no bytes saying so"
         );
     }
 

@@ -42,6 +42,10 @@ pub const STATS_POLL: Duration = Duration::from_secs(15);
 pub enum GitCommand {
     /// Read status, the whole diff, and the sessions a draft may use.
     Load,
+    /// Put one repository-relative path in the index.
+    Stage(String),
+    /// Remove one repository-relative path from the index.
+    Unstage(String),
     /// Ask this session to draft a message from the staged index.
     Generate(String),
     /// Commit the index with a message the person confirmed.
@@ -93,22 +97,22 @@ pub fn follow_git(
         while let Ok(command) = requests.recv() {
             runtime.block_on(async {
                 match command {
-                    GitCommand::Load => match client.git_status().await {
-                        Ok(status) => match client.git_diff("all").await {
-                            Ok(diff) => {
-                                // A session list is an optional half: an old daemon with
-                                // no sessions still has a repository to show.
-                                let sessions = client.sessions().await.unwrap_or_default();
-                                sink(GitUpdate::Loaded {
-                                    status,
-                                    diff,
-                                    sessions,
-                                });
-                            }
+                    GitCommand::Load => sink(load(&client).await),
+                    GitCommand::Stage(path) => {
+                        match client.stage(std::slice::from_ref(&path)).await {
+                            // The route answers with the new status, but the pane also
+                            // needs the patch; one read of both after the write is the
+                            // same moment the refresh draws.
+                            Ok(_) => sink(load(&client).await),
                             Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
-                        },
-                        Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
-                    },
+                        }
+                    }
+                    GitCommand::Unstage(path) => {
+                        match client.unstage(std::slice::from_ref(&path)).await {
+                            Ok(_) => sink(load(&client).await),
+                            Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                        }
+                    }
                     GitCommand::Generate(session) => match client.commit_message(&session).await {
                         Ok(draft) => sink(GitUpdate::Draft(draft)),
                         Err(error) => sink(GitUpdate::GenerateFailed(error.to_string())),
@@ -121,6 +125,30 @@ pub fn follow_git(
             });
         }
     });
+}
+
+/// Read the two answers the source pane draws together.
+///
+/// Status and diff are one request each, but the pane treats them as one moment:
+/// asking for them back to back after a write is how the staged count and the patch
+/// describe the same index rather than two moments either side of it.
+async fn load(client: &acpilot_client::Client) -> GitUpdate {
+    match client.git_status().await {
+        Ok(status) => match client.git_diff("all").await {
+            Ok(diff) => {
+                // A session list is an optional half: an old daemon with no
+                // sessions still has a repository to show.
+                let sessions = client.sessions().await.unwrap_or_default();
+                GitUpdate::Loaded {
+                    status,
+                    diff,
+                    sessions,
+                }
+            }
+            Err(error) => GitUpdate::LoadFailed(error.to_string()),
+        },
+        Err(error) => GitUpdate::LoadFailed(error.to_string()),
+    }
 }
 
 /// `ACPILOT_API_URL` is the same variable `acpilot --api-url` fills, so a window

@@ -57,8 +57,10 @@ is an agent client — the session list, transcript and composer do not exist un
 **Session → Select Agent…** (or the palette's **Select agent…**) chooses one, at
 which point the agent's newest conversation opens or a new one starts and the
 panel appears beside the editor. A profile with no `agents.toml` has no agents to
-list, so that row says so and points at the model lab (P4.5); **Session → Close
-Assistant** puts the panel away and leaves the document open. When the daemon
+list, so that row names `agents.toml` and `acpilot doctor` rather than opening an
+empty picker, while **Session → Build an Agent in the Model Lab…** is the row that
+announces P4.5; **Session → Close Assistant** puts the panel away and leaves the
+document open. When the daemon
 reports no declared agents at all, a one-time **next** card names the two ways
 forward — **Session → Select Agent…** and `acpilot doctor` — and the next key or
 click dismisses it. Nothing is written to remember it was shown: it appears on

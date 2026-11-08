@@ -543,6 +543,14 @@ pub struct Toast {
     pub feature: String,
 }
 
+/// What an empty roster can actually do about it.
+///
+/// Not "open the picker" and not "the lab" — the picker would have no rows, and
+/// the lab is P4.5. An agent is a manifest entry, so the honest answer is the file
+/// and the command that lists what this machine could put in it.
+const NO_AGENTS: &str =
+    "no agent declared · add one to agents.toml · acpilot doctor lists what is installed";
+
 /// How a transcript line reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -5951,7 +5959,7 @@ impl App {
                 } else {
                     // The row is a place, and the place does not exist until an
                     // agent does: revealing an empty list would look like a bug.
-                    self.notice("no agent · Session → Select Agent…");
+                    self.notice(NO_AGENTS);
                 }
             }
             MenuAction::Transcript => self.focus_transcript(),
@@ -7179,7 +7187,7 @@ impl App {
     fn select_agent(&mut self) -> Option<Request> {
         match self.agents.len() {
             0 => {
-                self.planned("P4.5", "no agent is declared · build one in the model lab");
+                self.notice(NO_AGENTS);
                 None
             }
             1 => {
@@ -7200,7 +7208,7 @@ impl App {
         match self.agents.first().map(|agent| agent.id.clone()) {
             Some(id) => self.start_agent(&id),
             None => {
-                self.planned("P4.5", "no agent is declared · build one in the model lab");
+                self.notice(NO_AGENTS);
                 None
             }
         }
@@ -7682,7 +7690,7 @@ mod tests {
         // View → Assistant is a place, and a place that does not exist says why.
         let _ = app.run_menu(MenuAction::Sessions);
         assert_eq!(app.focus, Focus::Editor);
-        assert!(app.status.contains("Select Agent"), "{}", app.status);
+        assert!(app.status.contains("agents.toml"), "{}", app.status);
     }
 
     #[test]
@@ -7741,12 +7749,19 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_roster_names_the_model_lab() {
+    fn an_empty_roster_says_how_to_declare_one() {
         let mut app = App::editor_first("http://127.0.0.1:7777");
         assert_eq!(app.run_menu(MenuAction::SelectAgent), None);
         assert!(!app.show_assistant, "no agents is not a panel");
-        let toast = app.toast.as_ref().expect("a task, not a dead end");
-        assert_eq!(toast.task, "P4.5");
+        assert!(app.toast.is_none(), "not a task id: an answer");
+        assert!(app.status.contains("agents.toml"), "{}", app.status);
+        assert!(app.status.contains("acpilot doctor"), "{}", app.status);
+
+        // New Session with nobody declared gives the same answer, because it is
+        // the same question and "try again" would be a loop.
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        assert_eq!(app.run_menu(MenuAction::NewSession), None);
+        assert!(app.status.contains("acpilot doctor"), "{}", app.status);
     }
 
     #[test]

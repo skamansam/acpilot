@@ -33,8 +33,8 @@ use acpilot_core::AcpilotError;
 use acpilot_git::{ChangeKind, DiffScope, GitError, Repo, Status};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::git::{
-    GitChangeKind, GitCommit, GitDiff, GitDiffFile, GitIndexRequest, GitStatus, GitStatusEntry,
-    GitTreeEntry,
+    GitChangeKind, GitCommit, GitDiff, GitDiffFile, GitHunkRequest, GitIndexRequest, GitStatus,
+    GitStatusEntry, GitTreeEntry,
 };
 use axum::Json;
 use axum::Router;
@@ -114,6 +114,29 @@ async fn stage(
     Json(request): Json<GitIndexRequest>,
 ) -> Result<Json<GitStatus>, ApiError> {
     set_index(&state, request, true)
+}
+
+/// `POST /v1/git/stage-hunk`.
+///
+/// Applies one hunk from the path's **unstaged** diff to the index and answers
+/// with the status read afterwards. A hunk is named by its zero-based position in
+/// that diff, and the patch is cut from git's own output: the request never carries
+/// patch text that could stage something the working tree does not contain.
+///
+/// # Errors
+///
+/// `400` for a path that is not repository-relative; the path and host failures of
+/// [`status`]; `409` when the path has no unstaged hunk, the index is past the end
+/// of that diff, or git refuses the patch.
+async fn stage_hunk(
+    State(state): State<AppState>,
+    Json(request): Json<GitHunkRequest>,
+) -> Result<Json<GitStatus>, ApiError> {
+    let repo = repository(&state, request.workspace.as_deref())?;
+    repo.stage_hunk(&request.path, request.hunk)
+        .map_err(index_error)?;
+    let after = repo.status().map_err(git_error)?;
+    Ok(Json(status_json(after)))
 }
 
 /// `POST /v1/git/unstage`.
@@ -413,6 +436,17 @@ pub(crate) fn git_error(error: GitError) -> ApiError {
             "the named paths have no changes to restore",
         ))
         .with_detail("paths", "a path with a working-tree or index change"),
+        GitError::NoHunks { path } => ApiError::new(AcpilotError::conflict(format!(
+            "{path:?} has no unstaged hunks to stage"
+        )))
+        .with_detail("hunk", "a hunk in the path's unstaged diff"),
+        GitError::HunkNotFound { path, hunk } => ApiError::new(AcpilotError::conflict(format!(
+            "{path:?} has no unstaged hunk {hunk}"
+        )))
+        .with_detail(
+            "hunk",
+            "a zero-based index into the path's current unstaged diff",
+        ),
         GitError::NoHead => {
             ApiError::new(AcpilotError::conflict("there is no HEAD to check out from"))
                 .with_detail("paths", "commit something before checking a path out")
@@ -465,6 +499,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/git/tree", get(tree))
         .route("/v1/git/log", get(log))
         .route("/v1/git/stage", post(stage))
+        .route("/v1/git/stage-hunk", post(stage_hunk))
         .route("/v1/git/unstage", post(unstage))
         .route("/v1/git/discard", post(discard))
         .route("/v1/git/checkout", post(checkout))
@@ -565,6 +600,23 @@ fn git_stage_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     post,
+    path = "/v1/git/stage-hunk",
+    tag = "git",
+    summary = "Put one unstaged hunk in the index",
+    request_body = GitHunkRequest,
+    responses(
+        (status = 200, description = "The status read after git applied the hunk; other hunks stay unstaged", body = GitStatus),
+        (status = 400, description = "A path that is not repository-relative", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "No workspace, one on another host, no unstaged hunk at that index, or git refused the patch", body = ErrorBody),
+        (status = 502, description = "`git` is not installed on the host", body = ErrorBody)
+    )
+)]
+fn git_stage_hunk_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
     path = "/v1/git/unstage",
     tag = "git",
     summary = "Remove repository paths from the index",
@@ -641,6 +693,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/git/stage",
             HttpMethod::Post,
             <__path_git_stage_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/stage-hunk",
+            HttpMethod::Post,
+            <__path_git_stage_hunk_doc as Path>::operation(),
         ),
         (
             "/v1/git/unstage",

@@ -446,6 +446,27 @@ impl Client {
         self.send(request, "/v1/git/stage").await
     }
 
+    /// `POST /v1/git/stage-hunk`.
+    ///
+    /// Applies one zero-based hunk from the path's unstaged diff to the index. The
+    /// daemon cuts the hunk from git's own patch; the client names its position.
+    pub async fn stage_hunk(
+        &self,
+        path: &str,
+        hunk: usize,
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitHunkRequest {
+            workspace: None,
+            path: path.to_owned(),
+            hunk,
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/stage-hunk"))
+            .json(&body);
+        self.send(request, "/v1/git/stage-hunk").await
+    }
+
     /// `POST /v1/git/unstage`.
     ///
     /// Removes repository-relative paths from the index and leaves their working-tree

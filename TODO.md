@@ -1421,6 +1421,29 @@ what needs an editor shell waits for the editor shell.
     one path, because a button that resets everything is a second decision. A workspace on another
     host still needs a helper method for these writes. The browser has no keyboard route, as its
     panel has no global keymap.
+- [x] **P6.5-9 · Stage one hunk from the panes** — the three source-control surfaces can put a
+  single unstaged hunk in the index instead of staging the whole file.
+  - `POST /v1/git/stage-hunk` takes `GitHunkRequest { workspace?, path, hunk }`, where `hunk` is
+    zero-based inside that path's **current unstaged** diff. `acpilot-git::Repo::stage_hunk` cuts
+    the hunk from git's own patch and pipes it to `git apply --cached --whitespace=nowarn -`; no
+    client sends patch text. A missing path or an out-of-range hunk is `409`, because the patch
+    changed under the request; invalid paths remain `400`. `Client::stage_hunk` is the one client
+    method all three surfaces use.
+  - The panes show **Unstaged** and **Staged** sections separately and only the unstaged hunks are
+    selectable. The TUI and desktop app ask for both diff scopes, select with `h`/`l`, and stage
+    with `Shift-S`; the browser draws a **Stage hunk N of M** button beside each unstaged hunk. A
+    write re-reads status and both diffs, and the selection clamps when the file no longer has that
+    hunk.
+  - **Tests:** three `acpilot-git` tests (stage one of two hunks, refuse a hunk past the end, leave
+    an untracked path refused), a wire-contract case, two route tests (one hunk staged, out-of-range
+    `409`), one TUI state test, one desktop headless test, and one browser test over the new call.
+    The OpenAPI snapshot, the browser schema and the generated showcase keymap are regenerated.
+  - **Result:** `cargo xtask check` passes. The TUI, desktop and browser all read the same two diff
+    scopes and send the same `{ path, hunk }` request; the browser never builds a patch.
+  - **Open:** no line-level staging, and an unstaged hunk whose context has moved is refused by git
+    with `409` rather than re-found — reloading the pane is the recovery. An untracked path has no
+    unstaged diff to split, so it is still staged as a whole. The browser has buttons rather than a
+    keyboard route, as its panel has no global keymap.
 
 ---
 

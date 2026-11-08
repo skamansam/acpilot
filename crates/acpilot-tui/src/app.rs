@@ -2140,21 +2140,41 @@ pub struct GrepSearch {
     pub selected: usize,
 }
 
+/// A row the source-control pane draws: a section heading or one diff line.
+///
+/// The two halves are kept apart because only the unstaged half is a valid base for
+/// `git apply --cached`. A heading is not a diff line, and the selected hunk is a
+/// header rather than its body so the eye can find the one `S` would stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLine {
+    /// The text to draw.
+    pub text: String,
+    /// Whether this is `unstaged` or `staged`, rather than patch text.
+    pub heading: bool,
+    /// Whether this is the `@@` header of the hunk `S` would stage.
+    pub selected_hunk: bool,
+}
+
 /// The source-control pane: what changed, and the diff of the selected path.
 ///
 /// Modal rather than a panel because it is about the repository rather than the
-/// open buffer, and the writes it can lead to are decisions. It reads status and a
-/// diff, and `s`/`u` move the selected path across the index through the daemon.
-/// `loading` is what separates "the index is empty" from "the daemon has not answered
-/// yet", which is the difference between a clean tree and a pane that has not looked.
+/// open buffer, and the writes it can lead to are decisions. It reads status and
+/// both diff halves, and `s`/`u` move a path across the index while `h`/`l` choose
+/// an unstaged hunk and `S` stages it through the daemon. `loading` is what
+/// separates "the index is empty" from "the daemon has not answered yet", which is
+/// the difference between a clean tree and a pane that has not looked.
 #[derive(Debug)]
 pub struct SourceControl {
     /// Branch state and every changed path.
     pub status: acpilot_proto::git::GitStatus,
-    /// The whole uncommitted diff and its file list.
-    pub diff: acpilot_proto::git::GitDiff,
+    /// The working tree against the index: the hunks that can still be staged.
+    pub unstaged_diff: acpilot_proto::git::GitDiff,
+    /// The index against `HEAD`: the hunks the next commit already holds.
+    pub staged_diff: acpilot_proto::git::GitDiff,
     /// Which changed path the diff belongs to.
     pub selected: usize,
+    /// Which unstaged hunk `S` would stage, zero-based.
+    pub hunk: usize,
     /// The first diff line on screen.
     pub scroll: usize,
     /// Whether the daemon's answer has arrived.
@@ -2207,11 +2227,16 @@ impl SourceControl {
                 head: None,
                 files: Vec::new(),
             },
-            diff: acpilot_proto::git::GitDiff {
+            unstaged_diff: acpilot_proto::git::GitDiff {
+                patch: String::new(),
+                files: Vec::new(),
+            },
+            staged_diff: acpilot_proto::git::GitDiff {
                 patch: String::new(),
                 files: Vec::new(),
             },
             selected: 0,
+            hunk: 0,
             scroll: 0,
             loading: true,
             error: None,
@@ -2239,7 +2264,11 @@ impl SourceControl {
                     worktree: acpilot_proto::git::GitChangeKind::Unmodified,
                 }],
             },
-            diff: acpilot_proto::git::GitDiff {
+            unstaged_diff: acpilot_proto::git::GitDiff {
+                patch: String::new(),
+                files: Vec::new(),
+            },
+            staged_diff: acpilot_proto::git::GitDiff {
                 patch: diff.patch(),
                 files: vec![acpilot_proto::git::GitDiffFile {
                     path,
@@ -2248,6 +2277,7 @@ impl SourceControl {
                 }],
             },
             selected: 0,
+            hunk: 0,
             scroll: 0,
             loading: false,
             error: None,
@@ -2362,18 +2392,116 @@ impl SourceControl {
             .map(|entry| entry.path.as_str())
     }
 
-    /// The selected file's section of the patch, header included.
+    /// The selected file's unstaged section, header included.
     ///
-    /// Selecting a path is the whole navigation model: the right side is one file,
-    /// not a scroll through all of them, because a commit is reviewed a file at a
-    /// time. An untracked path has no section yet, and an empty answer is the truth
-    /// rather than an error.
+    /// This is the half `git apply --cached` can apply. An untracked path has no
+    /// section, and an empty answer is the truth rather than an error.
     #[must_use]
-    pub fn section(&self) -> Vec<&str> {
+    pub fn unstaged_section(&self) -> Vec<&str> {
         let Some(path) = self.selected_path() else {
             return Vec::new();
         };
-        acpilot_git::patch_section(&self.diff.patch, path)
+        acpilot_git::patch_section(&self.unstaged_diff.patch, path)
+    }
+
+    /// The selected file's staged section, the half already in the next commit.
+    #[must_use]
+    pub fn staged_section(&self) -> Vec<&str> {
+        let Some(path) = self.selected_path() else {
+            return Vec::new();
+        };
+        acpilot_git::patch_section(&self.staged_diff.patch, path)
+    }
+
+    /// How many unstaged hunks the selected file has.
+    #[must_use]
+    pub fn hunk_count(&self) -> usize {
+        self.unstaged_section()
+            .iter()
+            .filter(|line| line.starts_with("@@"))
+            .count()
+    }
+
+    /// The selected hunk, clamped to the current unstaged diff.
+    #[must_use]
+    pub fn selected_hunk(&self) -> usize {
+        self.hunk.min(self.hunk_count().saturating_sub(1))
+    }
+
+    /// Whether `S` has an unstaged hunk to stage.
+    #[must_use]
+    pub fn can_stage_hunk(&self) -> bool {
+        self.hunk_count() > 0
+    }
+
+    /// Move the hunk selection and put its header at the top of the view.
+    pub fn step_hunk(&mut self, delta: isize) {
+        let count = self.hunk_count();
+        if count == 0 {
+            self.hunk = 0;
+            return;
+        }
+        let last = count - 1;
+        self.hunk = if delta < 0 {
+            self.hunk.saturating_sub(delta.unsigned_abs())
+        } else {
+            (self.hunk + delta as usize).min(last)
+        };
+        if let Some(line) = self
+            .source_lines()
+            .iter()
+            .position(|line| line.selected_hunk)
+        {
+            self.scroll = line;
+        }
+    }
+
+    /// The rows the diff area draws: each non-empty half under its own heading.
+    ///
+    /// The headings are part of the scroll, so a person can tell a staged hunk from
+    /// an unstaged one without reading the status marks back on the left.
+    #[must_use]
+    pub fn source_lines(&self) -> Vec<SourceLine> {
+        let mut lines = Vec::new();
+        let unstaged = self.unstaged_section();
+        if !unstaged.is_empty() {
+            let hunks = self.hunk_count();
+            lines.push(SourceLine {
+                text: format!(
+                    " unstaged · {hunks} {} · h/l chooses · S stages ",
+                    if hunks == 1 { "hunk" } else { "hunks" }
+                ),
+                heading: true,
+                selected_hunk: false,
+            });
+            let chosen = self.selected_hunk();
+            let mut hunk = 0;
+            for line in unstaged {
+                let header = line.starts_with("@@");
+                lines.push(SourceLine {
+                    text: line.to_owned(),
+                    heading: false,
+                    selected_hunk: header && hunk == chosen,
+                });
+                if header {
+                    hunk += 1;
+                }
+            }
+        }
+        let staged = self.staged_section();
+        if !staged.is_empty() {
+            lines.push(SourceLine {
+                text: " staged · already in the next commit ".to_owned(),
+                heading: true,
+                selected_hunk: false,
+            });
+            lines.extend(staged.into_iter().map(|line| SourceLine {
+                text: line.to_owned(),
+                heading: false,
+                selected_hunk: false,
+            }));
+        }
+        lines
     }
 }
 
@@ -3479,24 +3607,30 @@ impl App {
                     };
                 }
             }
-            Update::Git { status, diff } => {
+            Update::Git {
+                status,
+                unstaged,
+                staged,
+            } => {
                 let changed = status.files.len();
-                let staged = status
+                let staged_count = status
                     .files
                     .iter()
                     .filter(|entry| staged_kind(entry.index))
                     .count();
                 if let Some(source) = &mut self.source {
                     source.status = status;
-                    source.diff = diff;
+                    source.unstaged_diff = unstaged;
+                    source.staged_diff = staged;
                     source.loading = false;
                     source.error = None;
                     source.pending = None;
                     source.selected = source
                         .selected
                         .min(source.status.files.len().saturating_sub(1));
+                    source.hunk = source.hunk.min(source.hunk_count().saturating_sub(1));
                 }
-                self.status = format!("source control · {changed} changed · {staged} staged");
+                self.status = format!("source control · {changed} changed · {staged_count} staged");
             }
             Update::GitError(message) => {
                 if let Some(source) = &mut self.source {
@@ -6381,6 +6515,7 @@ impl App {
                 None
             }
             KeyCode::Char('r') => Some(Request::Git),
+            KeyCode::Char('S') => self.stage_selected_hunk(),
             KeyCode::Char('s') => self.set_selected_staged(true),
             KeyCode::Char('u') => self.set_selected_staged(false),
             KeyCode::Char('d') => self.arm_source_restore(Restore::Discard),
@@ -6393,6 +6528,18 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step_source(-1);
+                None
+            }
+            KeyCode::Char('h') => {
+                if let Some(source) = &mut self.source {
+                    source.step_hunk(-1);
+                }
+                None
+            }
+            KeyCode::Char('l') => {
+                if let Some(source) = &mut self.source {
+                    source.step_hunk(1);
+                }
                 None
             }
             KeyCode::PageDown => {
@@ -6463,6 +6610,32 @@ impl App {
         }
     }
 
+    /// Ask the daemon to stage the selected unstaged hunk.
+    ///
+    /// The request names the path and the zero-based hunk in its unstaged diff;
+    /// the daemon cuts the patch from git's own output. A path with no unstaged
+    /// hunk — an untracked file, a fully staged file, a binary change — is a notice,
+    /// not a request.
+    fn stage_selected_hunk(&mut self) -> Option<Request> {
+        let Some(source) = &self.source else {
+            return None;
+        };
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            self.notice("source control · no changed file is selected");
+            return None;
+        };
+        if !source.can_stage_hunk() {
+            self.notice(&format!("{path} has no unstaged hunk to stage"));
+            return None;
+        }
+        let hunk = source.selected_hunk();
+        if let Some(source) = &mut self.source {
+            source.error = None;
+        }
+        self.status = format!("staging {path} hunk {}…", hunk + 1);
+        Some(Request::StageHunk { path, hunk })
+    }
+
     /// Ask the daemon to stage or unstage the selected path.
     ///
     /// The request carries one path; the daemon answers with the new status, and the
@@ -6517,6 +6690,7 @@ impl App {
             (source.selected + delta as usize).min(last)
         };
         source.scroll = 0;
+        source.hunk = 0;
     }
 
     /// Open the composer, and optionally ask the session for a first draft.
@@ -11232,6 +11406,51 @@ mod tests {
             "u asks the daemon to take the selected path out of the index"
         );
         assert!(app.status.contains("unstaging"), "{}", app.status);
+    }
+
+    #[test]
+    fn h_and_l_choose_an_unstaged_hunk_and_shift_s_stages_it() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        let source = app.source.as_mut().expect("the pane is open");
+        let path = source.selected_path().expect("a changed path").to_owned();
+        source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+        source.staged_diff.patch.clear();
+        source.unstaged_diff.patch = format!(
+            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-one\n+one changed\n@@ -18 +18 @@\n-eighteen\n+eighteen changed\n"
+        );
+        assert_eq!(source.hunk_count(), 2);
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('l'))), None);
+        assert_eq!(
+            app.source.as_ref().map(SourceControl::selected_hunk),
+            Some(1),
+            "l chooses the next unstaged hunk"
+        );
+        assert_eq!(app.handle_key(key(KeyCode::Char('h'))), None);
+        assert_eq!(
+            app.source.as_ref().map(SourceControl::selected_hunk),
+            Some(0),
+            "h chooses the previous one"
+        );
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('S'))),
+            Some(Request::StageHunk {
+                path: path.clone(),
+                hunk: 0,
+            }),
+            "shift-s stages the selected hunk, not the whole path"
+        );
+        assert!(app.status.contains("hunk 1"), "{}", app.status);
+
+        let source = app.source.as_mut().expect("the pane is open");
+        source.unstaged_diff.patch.clear();
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('S'))),
+            None,
+            "a path with no unstaged hunk is not sent to the daemon"
+        );
+        assert!(app.status.contains("no unstaged hunk"), "{}", app.status);
     }
 
     #[test]

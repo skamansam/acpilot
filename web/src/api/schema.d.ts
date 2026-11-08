@@ -323,6 +323,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/stage-hunk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put one unstaged hunk in the index */
+        post: operations["git_stage_hunk_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/git/status": {
         parameters: {
             query?: never;
@@ -1283,6 +1300,22 @@ export interface components {
             old_path?: string | null;
             /** @description Path after the change, relative to the repository root. */
             path: string;
+        };
+        /**
+         * @description A request to stage one hunk from a path's unstaged diff.
+         *
+         *     `hunk` is zero-based in the path's **unstaged** diff, not the combined diff
+         *     against `HEAD`: the index is the base `git apply --cached` writes to, and a
+         *     combined hunk stops describing that base as soon as part of the file is staged.
+         *     A client names a hunk; the daemon cuts git's own patch for it and applies that.
+         */
+        GitHunkRequest: {
+            /** @description The zero-based hunk index in that path's unstaged diff. */
+            hunk: number;
+            /** @description The path whose unstaged hunk should move into the index. */
+            path: string;
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
         };
         /**
          * @description A request to move repository-relative paths across the index or restore them.
@@ -3193,6 +3226,66 @@ export interface operations {
                 };
             };
             /** @description No workspace, one on another host, or git refused the index write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_stage_hunk_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHunkRequest"];
+            };
+        };
+        responses: {
+            /** @description The status read after git applied the hunk; other hunks stay unstaged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description A path that is not repository-relative */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, one on another host, no unstaged hunk at that index, or git refused the patch */
             409: {
                 headers: {
                     [name: string]: unknown;

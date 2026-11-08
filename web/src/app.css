@@ -1237,6 +1237,37 @@ a:focus-visible {
   color: var(--bg);
 }
 
+.source-sections {
+  display: grid;
+  gap: 1rem;
+}
+
+.source-half h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.source-hunk + .source-hunk {
+  margin-top: 0.5rem;
+}
+
+.source-hunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.source-hunk-head button {
+  font-size: 0.8rem;
+}
+
 .source-diff {
   max-height: 22rem;
   margin: 0;

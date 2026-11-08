@@ -94,6 +94,22 @@
       ]
     },
     {
+      "keys": "h",
+      "action": "SourcePreviousHunk",
+      "description": "Previous unstaged hunk",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "l",
+      "action": "SourceNextHunk",
+      "description": "Next unstaged hunk",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
       "keys": "pagedown",
       "action": "SourcePageDown",
       "description": "Scroll the diff down",
@@ -121,6 +137,14 @@
       "keys": "s",
       "action": "SourceStage",
       "description": "Stage the selected path",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "shift-s",
+      "action": "SourceStageHunk",
+      "description": "Stage the selected unstaged hunk",
       "contexts": [
         "Source"
       ]

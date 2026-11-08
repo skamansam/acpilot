@@ -44,6 +44,13 @@ pub enum GitCommand {
     Load,
     /// Put one repository-relative path in the index.
     Stage(String),
+    /// Put one unstaged hunk of a path in the index.
+    StageHunk {
+        /// The path selected in the pane.
+        path: String,
+        /// The zero-based hunk in that path's unstaged diff.
+        hunk: usize,
+    },
     /// Remove one repository-relative path from the index.
     Unstage(String),
     /// Restore one path's working-tree half from the index.
@@ -59,12 +66,14 @@ pub enum GitCommand {
 /// What the git worker tells a window.
 #[derive(Debug, Clone)]
 pub enum GitUpdate {
-    /// Status, diff and sessions, read at the same moment.
+    /// Status, both diff halves and sessions, read at the same moment.
     Loaded {
         /// Branch state and every changed path.
         status: GitStatus,
-        /// The patch and its file list.
-        diff: GitDiff,
+        /// Working tree against the index: the hunks that can still be staged.
+        unstaged: GitDiff,
+        /// Index against `HEAD`: the hunks the next commit already holds.
+        staged: GitDiff,
         /// The sessions a draft may be generated from.
         sessions: Vec<SessionSummary>,
     },
@@ -111,6 +120,12 @@ pub fn follow_git(
                             Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
                         }
                     }
+                    GitCommand::StageHunk { path, hunk } => {
+                        match client.stage_hunk(&path, hunk).await {
+                            Ok(_) => sink(load(&client).await),
+                            Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                        }
+                    }
                     GitCommand::Unstage(path) => {
                         match client.unstage(std::slice::from_ref(&path)).await {
                             Ok(_) => sink(load(&client).await),
@@ -150,17 +165,21 @@ pub fn follow_git(
 /// describe the same index rather than two moments either side of it.
 async fn load(client: &acpilot_client::Client) -> GitUpdate {
     match client.git_status().await {
-        Ok(status) => match client.git_diff("all").await {
-            Ok(diff) => {
-                // A session list is an optional half: an old daemon with no
-                // sessions still has a repository to show.
-                let sessions = client.sessions().await.unwrap_or_default();
-                GitUpdate::Loaded {
-                    status,
-                    diff,
-                    sessions,
+        Ok(status) => match client.git_diff("unstaged").await {
+            Ok(unstaged) => match client.git_diff("staged").await {
+                Ok(staged) => {
+                    // A session list is an optional half: an old daemon with no
+                    // sessions still has a repository to show.
+                    let sessions = client.sessions().await.unwrap_or_default();
+                    GitUpdate::Loaded {
+                        status,
+                        unstaged,
+                        staged,
+                        sessions,
+                    }
                 }
-            }
+                Err(error) => GitUpdate::LoadFailed(error.to_string()),
+            },
             Err(error) => GitUpdate::LoadFailed(error.to_string()),
         },
         Err(error) => GitUpdate::LoadFailed(error.to_string()),

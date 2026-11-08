@@ -1,13 +1,13 @@
-// The source-control pane against a mocked daemon: the read, the file's section of
-// the patch, a generated draft, and the confirmation that stands between the
-// composer and the one git write.
+// The source-control pane against a mocked daemon: both diff halves, staging one
+// hunk, a generated draft, and the confirmation that stands between the composer
+// and the one git write.
 
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SourceControl from './SourceControl.svelte';
 import type { SessionSummary } from './api';
-import { canCheckout, canDiscard, patchSection, stagedCount } from './git';
+import { canCheckout, canDiscard, hunksOf, patchSection, stagedCount } from './git';
 import { plainFetch, type PlainFetch } from './test-fetch';
 
 const STATUS = {
@@ -27,6 +27,11 @@ const STATUS = {
       index: 'unmodified' as const,
       worktree: 'untracked' as const,
     },
+    {
+      path: 'src/lib.rs',
+      index: 'unmodified' as const,
+      worktree: 'modified' as const,
+    },
   ],
 };
 
@@ -37,11 +42,30 @@ const PATCH = [
   '@@ -1 +1 @@',
   '-old',
   '+new',
+  'diff --git a/src/lib.rs b/src/lib.rs',
+  '--- a/src/lib.rs',
+  '+++ b/src/lib.rs',
+  '@@ -1 +1 @@',
+  '-one',
+  '+first',
+  '@@ -20 +20 @@',
+  '-two',
+  '+second',
   'diff --git a/new.rs b/new.rs',
   '--- /dev/null',
   '+++ b/new.rs',
   '@@ -0,0 +1 @@',
   '+new file',
+  '',
+].join('\n');
+
+const STAGED_PATCH = [
+  'diff --git a/src/main.rs b/src/main.rs',
+  '--- a/src/main.rs',
+  '+++ b/src/main.rs',
+  '@@ -1 +1 @@',
+  '-before',
+  '+staged',
   '',
 ].join('\n');
 
@@ -70,6 +94,7 @@ let staged: string[][];
 let unstaged: string[][];
 let discarded: string[][];
 let checkedOut: string[][];
+let hunkRequests: { path: string; hunk: number }[];
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -82,6 +107,7 @@ beforeEach(() => {
   unstaged = [];
   discarded = [];
   checkedOut = [];
+  hunkRequests = [];
   vi.stubGlobal(
     'fetch',
     plainFetch(
@@ -90,8 +116,11 @@ beforeEach(() => {
         if (route === '/v1/git/status') {
           return json(STATUS);
         }
-        if (route === '/v1/git/diff?scope=all') {
+        if (route === '/v1/git/diff?scope=unstaged') {
           return json({ patch: PATCH, files: [] });
+        }
+        if (route === '/v1/git/diff?scope=staged') {
+          return json({ patch: STAGED_PATCH, files: [] });
         }
         if (route === '/v1/git/commit-message' && init?.method === 'POST') {
           const body = JSON.parse(String(init.body ?? '{}')) as { session_id: string };
@@ -110,6 +139,11 @@ beforeEach(() => {
         if (route === '/v1/git/stage' && init?.method === 'POST') {
           const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
           staged.push(body.paths);
+          return json(STATUS);
+        }
+        if (route === '/v1/git/stage-hunk' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { path: string; hunk: number };
+          hunkRequests.push(body);
           return json(STATUS);
         }
         if (route === '/v1/git/unstage' && init?.method === 'POST') {
@@ -183,6 +217,7 @@ describe('the source-control pane', () => {
     expect(target.textContent).toContain('main');
     expect(target.textContent).toContain('1 staged');
     expect(target.textContent).toContain('+new');
+    expect(target.textContent).toContain('+staged');
     expect(target.textContent).not.toContain('+new file');
 
     (await findButton('M· src/main.rs')).click();
@@ -202,7 +237,7 @@ describe('the source-control pane', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('Compose commit'));
 
     await click('·? new.rs');
-    await click('Stage');
+    await click('Stage path');
     await vi.waitFor(() => expect(staged).toEqual([['new.rs']]));
     await vi.waitFor(() => expect(target.textContent).toContain('Staged new.rs.'));
 
@@ -210,6 +245,26 @@ describe('the source-control pane', () => {
     await click('Unstage');
     await vi.waitFor(() => expect(unstaged).toEqual([['src/main.rs']]));
     await vi.waitFor(() => expect(target.textContent).toContain('Unstaged src/main.rs.'));
+  });
+
+  it('stages one hunk by its unstaged number', async () => {
+    render();
+    await click('Open source control');
+    await vi.waitFor(() => expect(target.textContent).toContain('Compose commit'));
+
+    await click('·M src/lib.rs');
+    await vi.waitFor(() => expect(target.textContent).toContain('Stage hunk 2 of 2'));
+    expect(target.textContent).toContain('+first');
+    expect(target.textContent).toContain('+second');
+
+    await click('Stage hunk 2 of 2');
+    await vi.waitFor(() =>
+      expect(hunkRequests).toEqual([{ path: 'src/lib.rs', hunk: 1 }]),
+    );
+    await vi.waitFor(() =>
+      expect(target.textContent).toContain('Staged hunk 2 of src/lib.rs.'),
+    );
+    expect(staged, 'a hunk is not the whole path').toEqual([]);
   });
 
   it('asks before discarding an unstaged path or checking one out from HEAD', async () => {
@@ -277,6 +332,16 @@ describe('the patch section', () => {
     expect(one[0]).toBe('diff --git a/src/main.rs b/src/main.rs');
     expect(one.join('\n')).not.toContain('new.rs');
     expect(patchSection({ patch: PATCH, files: [] }, 'missing.rs')).toEqual([]);
+  });
+
+  it('numbers the hunks of one file and leaves the file header out', () => {
+    const hunks = hunksOf({ patch: PATCH, files: [] }, 'src/lib.rs');
+    expect(hunks).toHaveLength(2);
+    expect(hunks[1]!.index).toBe(1);
+    expect(hunks[1]!.header).toBe('@@ -20 +20 @@');
+    expect(hunks[1]!.lines).toEqual(['@@ -20 +20 @@', '-two', '+second']);
+    expect(hunks[0]!.lines).not.toContain('diff --git a/src/lib.rs b/src/lib.rs');
+    expect(hunksOf({ patch: PATCH, files: [] }, 'missing.rs')).toEqual([]);
   });
 
   it('counts only the index, not an untracked working-tree row', () => {

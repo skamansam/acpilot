@@ -174,6 +174,23 @@ pub struct GitIndexRequest {
     pub paths: Vec<String>,
 }
 
+/// A request to stage one hunk from a path's unstaged diff.
+///
+/// `hunk` is zero-based in the path's **unstaged** diff, not the combined diff
+/// against `HEAD`: the index is the base `git apply --cached` writes to, and a
+/// combined hunk stops describing that base as soon as part of the file is staged.
+/// A client names a hunk; the daemon cuts git's own patch for it and applies that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GitHunkRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The path whose unstaged hunk should move into the index.
+    pub path: String,
+    /// The zero-based hunk index in that path's unstaged diff.
+    pub hunk: usize,
+}
+
 /// A request to commit what the index holds.
 ///
 /// The message is the whole thing, subject and body, with the blank line between

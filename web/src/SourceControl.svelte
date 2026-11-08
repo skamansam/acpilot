@@ -1,13 +1,13 @@
 <script lang="ts">
   // The browser source-control pane.
   //
-  // It reads `GET /v1/git/status` and `GET /v1/git/diff?scope=all`, draws the
-  // selected file's section of the daemon's patch, stages or unstages that path,
-  // discards or checks it out after a confirmation, and opens a composer whose
-  // commit is a second, explicit click.
+  // It reads `GET /v1/git/status` and both halves of the diff, draws the selected
+  // file's unstaged and staged hunks, stages one hunk or the whole path, discards
+  // or checks a path out after a confirmation, and opens a composer whose commit
+  // is a second, explicit click.
 
-  import { ApiError, checkoutPaths, commitMessage, discardPaths, gitDiff, gitStatus, commitStaged, stagePaths, unstagePaths, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
-import { canCheckout, canDiscard, canStage, canUnstage, marks, patchSection, shortId, stagedCount } from './git';
+  import { ApiError, checkoutPaths, commitMessage, discardPaths, gitDiff, gitStatus, commitStaged, stageHunk, stagePaths, unstagePaths, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
+import { canCheckout, canDiscard, canStage, canUnstage, hunksOf, marks, shortId, stagedCount } from './git';
 
 let { token, sessions, openSession }: {
   token: string;
@@ -18,7 +18,8 @@ let { token, sessions, openSession }: {
 let open = $state(false);
 let loading = $state(false);
 let status = $state<GitStatus | null>(null);
-let diff = $state<GitDiff | null>(null);
+let unstagedDiff = $state<GitDiff | null>(null);
+let stagedDiff = $state<GitDiff | null>(null);
 let error = $state<string | null>(null);
 let note = $state<string | null>(null);
 let selected = $state(0);
@@ -34,11 +35,14 @@ let restoring = $state<'discard' | 'checkout' | null>(null);
 let confirmingRestore = $state<{ kind: 'discard' | 'checkout'; path: string } | null>(null);
 
 const files = $derived(status?.files ?? []);
-const section = $derived(
-  diff && files[selected] ? patchSection(diff, files[selected]!.path) : [],
-);
 const stagedFiles = $derived(stagedCount(files));
 const selectedEntry = $derived(files[selected] ?? null);
+const unstagedHunks = $derived(
+  unstagedDiff && selectedEntry ? hunksOf(unstagedDiff, selectedEntry.path) : [],
+);
+const stagedHunks = $derived(
+  stagedDiff && selectedEntry ? hunksOf(stagedDiff, selectedEntry.path) : [],
+);
 const stageable = $derived(canStage(selectedEntry));
 const unstageable = $derived(canUnstage(selectedEntry));
 const discardable = $derived(canDiscard(selectedEntry));
@@ -56,9 +60,14 @@ async function load(): Promise<void> {
   error = null;
   confirmingRestore = null;
   try {
-    const [nextStatus, nextDiff] = await Promise.all([gitStatus(token), gitDiff(token)]);
+    const [nextStatus, nextUnstaged, nextStaged] = await Promise.all([
+      gitStatus(token),
+      gitDiff('unstaged', token),
+      gitDiff('staged', token),
+    ]);
     status = nextStatus;
-    diff = nextDiff;
+    unstagedDiff = nextUnstaged;
+    stagedDiff = nextStaged;
     selected = Math.min(selected, Math.max(0, nextStatus.files.length - 1));
   } catch (failure) {
     error = describe(failure);
@@ -76,6 +85,23 @@ async function toggle(): Promise<void> {
 
 function choose(index: number): void {
   selected = index;
+}
+
+async function stageOneHunk(path: string, hunk: number): Promise<void> {
+  if (indexing) {
+    return;
+  }
+  indexing = true;
+  error = null;
+  try {
+    await stageHunk(path, hunk, token);
+    note = `Staged hunk ${hunk + 1} of ${path}.`;
+    await load();
+  } catch (failure) {
+    error = describe(failure);
+  } finally {
+    indexing = false;
+  }
 }
 
 async function index(staged: boolean): Promise<void> {
@@ -244,15 +270,60 @@ async function commit(): Promise<void> {
             <li class="note">No changed files.</li>
           {/each}
         </ul>
-        <pre class="source-diff" aria-label="Diff for the selected file">{#each section as line, index (index)}<span class="diff-line" data-kind={line.startsWith('+')
-                ? 'add'
-                : line.startsWith('-')
-                  ? 'del'
-                  : line.startsWith('@')
-                    ? 'hunk'
-                    : line.startsWith('diff ')
-                      ? 'meta'
-                      : 'text'}>{line}</span>{/each}{#if section.length === 0}<span class="note">No diff for this path yet · Stage puts it in the index.</span>{/if}</pre>
+        {#if selectedEntry}
+          <div class="source-sections">
+            <section class="source-half" aria-labelledby="unstaged-title">
+              <h4 id="unstaged-title">
+                Unstaged {#if unstagedHunks.length}· {unstagedHunks.length} {unstagedHunks.length === 1 ? 'hunk' : 'hunks'}{/if}
+              </h4>
+              {#each unstagedHunks as hunk (hunk.index)}
+                <div class="source-hunk">
+                  <div class="source-hunk-head">
+                    <span>Hunk {hunk.index + 1} of {unstagedHunks.length}</span>
+                    <button
+                      type="button"
+                      aria-label={`Stage hunk ${hunk.index + 1} of ${unstagedHunks.length} in ${selectedEntry.path}`}
+                      onclick={() => void stageOneHunk(selectedEntry!.path, hunk.index)}
+                      disabled={indexing}
+                    >
+                      Stage hunk {hunk.index + 1} of {unstagedHunks.length}
+                    </button>
+                  </div>
+                  <pre class="source-diff" aria-label={`Unstaged hunk ${hunk.index + 1} of ${selectedEntry.path}`}>{#each hunk.lines as line, index (index)}<span class="diff-line" data-kind={line.startsWith('+')
+                        ? 'add'
+                        : line.startsWith('-')
+                          ? 'del'
+                          : line.startsWith('@')
+                            ? 'hunk'
+                            : line.startsWith('diff ')
+                              ? 'meta'
+                              : 'text'}>{line}</span>{/each}</pre>
+                </div>
+              {:else}
+                <p class="note">No unstaged hunk for this path.</p>
+              {/each}
+            </section>
+
+            <section class="source-half" aria-labelledby="staged-title">
+              <h4 id="staged-title">
+                Staged {#if stagedHunks.length}· {stagedHunks.length} {stagedHunks.length === 1 ? 'hunk' : 'hunks'}{/if}
+              </h4>
+              {#each stagedHunks as hunk (hunk.index)}
+                <pre class="source-diff" aria-label={`Staged hunk ${hunk.index + 1} of ${selectedEntry.path}`}>{#each hunk.lines as line, index (index)}<span class="diff-line" data-kind={line.startsWith('+')
+                      ? 'add'
+                      : line.startsWith('-')
+                        ? 'del'
+                        : line.startsWith('@')
+                          ? 'hunk'
+                          : line.startsWith('diff ')
+                            ? 'meta'
+                            : 'text'}>{line}</span>{/each}</pre>
+              {:else}
+                <p class="note">No staged hunk for this path.</p>
+              {/each}
+            </section>
+          </div>
+        {/if}
       </div>
 
       <div class="source-actions">
@@ -261,7 +332,7 @@ async function commit(): Promise<void> {
           onclick={() => void index(true)}
           disabled={!stageable || indexing}
         >
-          {indexing ? 'Updating index…' : 'Stage'}
+          {indexing ? 'Updating index…' : 'Stage path'}
         </button>
         <button
           type="button"

@@ -280,6 +280,70 @@ async fn stage_puts_an_edit_and_an_untracked_file_in_the_index() {
 }
 
 #[tokio::test]
+async fn stage_hunk_moves_one_hunk_and_leaves_the_other_unstaged() {
+    let directory = tempfile::tempdir().expect("a dir");
+    let root = directory.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "Test User"]);
+    let original = (1..=20)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    fs::write(root.join("many.txt"), &original).expect("many");
+    git(root, &["add", "many.txt"]);
+    git(root, &["commit", "-q", "-m", "first"]);
+    let changed = original
+        .replace("line 2\n", "line 2 changed\n")
+        .replace("line 18\n", "line 18 changed\n");
+    fs::write(root.join("many.txt"), &changed).expect("many changed");
+
+    let (status, body) = post(
+        app(serving(root)),
+        "/v1/git/stage-hunk",
+        serde_json::json!({ "path": "many.txt", "hunk": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(row(&body, "many.txt")["index"], "modified");
+    assert_eq!(
+        row(&body, "many.txt")["worktree"],
+        "modified",
+        "the second hunk is still in the working tree"
+    );
+    let index = git(root, &["show", ":many.txt"]);
+    assert!(index.contains("line 2 changed"), "{index}");
+    assert!(
+        !index.contains("line 18 changed"),
+        "only the named hunk reached the index: {index}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("many.txt")).expect("file"),
+        changed,
+        "the working tree is untouched"
+    );
+}
+
+#[tokio::test]
+async fn a_hunk_past_the_unstaged_diff_is_a_conflict() {
+    let directory = repository();
+    let (status, body) = post(
+        app(serving(directory.path())),
+        "/v1/git/stage-hunk",
+        serde_json::json!({ "path": "one.txt", "hunk": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "conflict");
+    assert_eq!(body["details"][0]["field"], "hunk");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("one.txt")),
+        "the refusal names the path: {body}"
+    );
+}
+
+#[tokio::test]
 async fn unstage_removes_a_path_from_the_index_and_keeps_its_edit() {
     let directory = repository();
     let state = serving(directory.path());
@@ -595,6 +659,7 @@ async fn the_openapi_document_documents_the_git_routes() {
     }
     for path in [
         "/v1/git/stage",
+        "/v1/git/stage-hunk",
         "/v1/git/unstage",
         "/v1/git/discard",
         "/v1/git/checkout",
@@ -610,6 +675,7 @@ async fn the_openapi_document_documents_the_git_routes() {
         "GitTreeEntry",
         "GitCommit",
         "GitIndexRequest",
+        "GitHunkRequest",
     ] {
         assert!(
             document["components"]["schemas"][schema].is_object(),

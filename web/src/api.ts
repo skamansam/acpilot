@@ -95,6 +95,9 @@ export type GitStatus = components['schemas']['GitStatus'];
 /** A unified diff and the files it touches. */
 export type GitDiff = components['schemas']['GitDiff'];
 
+/** Which two trees a diff compares. */
+export type GitDiffScope = 'all' | 'unstaged' | 'staged';
+
 /** One commit, as `POST /v1/git/commit` answers it. */
 export type GitCommit = components['schemas']['GitCommit'];
 
@@ -562,11 +565,22 @@ export async function gitStatus(
   return answered(await client.GET('/v1/git/status', { headers: auth(token), signal }));
 }
 
-/** `GET /v1/git/diff?scope=all` — the patch and its file list, from one moment. */
-export async function gitDiff(token: string, signal?: AbortSignal): Promise<GitDiff> {
+/**
+ * `GET /v1/git/diff?scope=` — the patch and its file list, from one moment.
+ *
+ * `unstaged` is what can still be added to the index; `staged` is what the next
+ * commit already holds. The browser asks for the two halves separately because a
+ * hunk is numbered inside the unstaged diff, and a combined patch numbers hunks
+ * differently.
+ */
+export async function gitDiff(
+  scope: GitDiffScope,
+  token: string,
+  signal?: AbortSignal,
+): Promise<GitDiff> {
   return answered(
     await client.GET('/v1/git/diff', {
-      params: { query: { scope: 'all' } },
+      params: { query: { scope } },
       headers: auth(token),
       signal,
     }),
@@ -600,6 +614,25 @@ export async function stagePaths(paths: string[], token: string): Promise<GitSta
   return answered(
     await client.POST('/v1/git/stage', {
       body: { paths },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/stage-hunk` — put one unstaged hunk in the index.
+ *
+ * `hunk` is zero-based inside the path's current unstaged diff. The daemon cuts
+ * the hunk from git's own patch, so the page never sends patch text of its own.
+ */
+export async function stageHunk(
+  path: string,
+  hunk: number,
+  token: string,
+): Promise<GitStatus> {
+  return answered(
+    await client.POST('/v1/git/stage-hunk', {
+      body: { path, hunk },
       headers: auth(token),
     }),
   );

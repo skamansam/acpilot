@@ -98,8 +98,9 @@ GET    /v1/files/list
 GET    /v1/git/status?workspace=          GET    /v1/git/diff?workspace=&scope=
 GET    /v1/git/tree?workspace=            GET    /v1/git/log?workspace=&limit=
 GET    /v1/git/commit/prompt              POST   /v1/git/commit-message
-POST   /v1/git/stage                     POST   /v1/git/unstage
-POST   /v1/git/discard                   POST   /v1/git/checkout
+POST   /v1/git/stage                     POST   /v1/git/stage-hunk
+POST   /v1/git/unstage                   POST   /v1/git/discard
+POST   /v1/git/checkout
 
 GET    /v1/terminals?session=             POST   /v1/terminals
 DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
@@ -690,6 +691,16 @@ Stage runs `git add -A -- <paths>`; unstage runs `git reset -q HEAD -- <paths>`,
 or `git rm --cached` before the first commit, where there is no `HEAD` to reset
 to. A staged rename carries its old path too, so both halves move together.
 
+`POST /v1/git/stage-hunk` takes `GitHunkRequest { workspace?, path, hunk }` and
+answers the new `GitStatus`. `hunk` is zero-based inside that path's **current
+unstaged** diff — the patch from the index to the working tree, not the combined
+`HEAD`-to-worktree patch. The daemon cuts the selected hunk out of git's own
+output and applies it with `git apply --cached --whitespace=nowarn -`; a client
+never sends patch text. A path with no unstaged hunk, or a number past the end,
+is `409` because the patch moved under the request; an invalid path is still
+`400`. Staging one hunk leaves the rest of the file in the working tree, and the
+next status shows the staged and unstaged halves separately.
+
 Discard puts the working tree back to the index: tracked paths go through
 `git restore --worktree -q -- <paths>`, while an untracked path has no index
 version and is removed with `git clean -f -q --`. A staged edit stays staged,
@@ -759,14 +770,17 @@ because it is something the person can fix rather than a daemon fault. A missing
 `git` is still `502`.
 
 Config changes remain a separate, unbuilt action. All three surfaces read these
-routes and prepare or restore the index: the TUI opens with `F6`, uses `s`/`u` for
-the index and `d`/`x` for discard/checkout, with `y` confirming and `n` cancelling
-the destructive pair; the desktop overlay uses the same `F6` and the same keys;
-both draft and edit in a composer and call `/commit` only after `Ctrl-S` followed
-by `y`. The served page's **Source control** panel reads only when opened, stages
-the selected path with **Stage** or **Unstage**, arms **Discard** or **Checkout**
-behind an inline confirmation, and writes a commit only after `Review commit` and
-then `Commit staged index`.
+routes and prepare or restore the index: the TUI opens with `F6`, shows separate
+**Unstaged** and **Staged** sections, uses `h`/`l` to choose an unstaged hunk and
+`Shift-S` to stage it, and uses `s`/`u` for the whole path and `d`/`x` for
+discard/checkout, with `y` confirming and `n` cancelling the destructive pair;
+the desktop overlay uses the same `F6`, sections and keys; both draft and edit in a
+composer and call `/commit` only after `Ctrl-S` followed by `y`. The served page's
+**Source control** panel reads only when opened, shows both halves with one mark
+per hunk, stages a hunk with **Stage hunk N of M** or the whole path with
+**Stage path**/**Unstage**, arms **Discard** or **Checkout** behind an inline
+confirmation, and writes a commit only after **Review commit** and then **Commit
+staged index**.
 
 ## Project map
 

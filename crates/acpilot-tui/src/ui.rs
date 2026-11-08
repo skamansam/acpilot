@@ -2529,8 +2529,8 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
             patch,
         );
     } else {
-        let section = source.section();
-        if section.is_empty() {
+        let lines = source.source_lines();
+        if lines.is_empty() {
             frame.render_widget(
                 Paragraph::new("no diff for this path yet · s stages it")
                     .style(Style::default().fg(app.theme.text_muted()))
@@ -2539,17 +2539,31 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
             );
         } else {
             let height = usize::from(patch.height);
-            let lines: Vec<Line<'static>> = section
-                .iter()
+            let rows: Vec<Line<'static>> = lines
+                .into_iter()
                 .skip(source.scroll)
                 .take(height)
-                .map(|line| diff_line(line, &app.theme))
+                .map(|line| {
+                    if line.heading {
+                        Line::from(Span::styled(
+                            line.text,
+                            Style::default()
+                                .fg(app.theme.accent())
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                    } else if line.selected_hunk {
+                        diff_line(&line.text, &app.theme)
+                            .style(Style::default().bg(app.theme.bg_panel()))
+                    } else {
+                        diff_line(&line.text, &app.theme)
+                    }
+                })
                 .collect();
-            frame.render_widget(Paragraph::new(lines), patch);
+            frame.render_widget(Paragraph::new(rows), patch);
         }
     }
 
-    let total = source.section().len();
+    let total = source.source_lines().len();
     let position = if total > 0 {
         format!(
             " · lines {}-{}",
@@ -2562,7 +2576,7 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
     let footer_text = source.pending.as_ref().map_or_else(
         || {
             format!(
-                " j/k files · s stage · u unstage · d discard · x checkout · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
+                " j/k file · h/l hunk · S stage hunk · s/u index · d discard · x checkout · c compose · g draft · esc{position} "
             )
         },
         |pending| {
@@ -4235,6 +4249,11 @@ mod tests {
         assert!(text.contains("diff --git"), "{text}");
         assert!(text.contains("d discard"), "{text}");
         assert!(text.contains("x checkout"), "{text}");
+        assert!(text.contains("S stage hunk"), "{text}");
+        assert!(
+            text.contains("staged"),
+            "the already-staged half has its own heading: {text}"
+        );
         assert!(
             text.contains("c compose"),
             "the footer names the composer: {text}"

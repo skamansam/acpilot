@@ -138,10 +138,12 @@ was measured by instead of what it is. The window asks the daemon for these ever
 fifteen seconds; with no daemon behind it the bar says so rather than failing a
 launch over a footer.
 
-The source-control overlay is real too: `F6` reads the changed paths and the
-selected file's diff, `s`/`u` stage and unstage a path, and `d`/`x` arm a discard
-or checkout that `y` confirms (`n` cancels). Discard keeps the staged half;
-checkout resets both halves to `HEAD` and is unavailable before the first commit.
+The source-control overlay is real too: `F6` reads the changed paths and both
+halves of the selected file's diff, `h`/`l` choose an unstaged hunk and
+`Shift-S` stages just that hunk, `s`/`u` stage and unstage a whole path, and
+`d`/`x` arm a discard or checkout that `y` confirms (`n` cancels). Discard keeps
+the staged half; checkout resets both halves to `HEAD` and is unavailable before
+the first commit.
 `c` opens the commit composer. `Tab`/`Shift-Tab` there chooses which listed session drafts the message,
 so a window with no session pane can still ask the agent working on that part of
 the repository; the first session is only the default. `Ctrl-G` asks it for a

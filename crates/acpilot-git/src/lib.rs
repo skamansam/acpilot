@@ -7,12 +7,13 @@
 //! integration at all. The cost is that `git` must be on the host, which it
 //! already is for anyone with a repository to open.
 //!
-//! The writes are narrow and named: [`Repo::stage`] and [`Repo::unstage`] move
-//! paths across the index, [`Repo::discard`] restores the working tree from the
-//! index, [`Repo::checkout`] restores both from `HEAD`, and [`Repo::commit`]
-//! commits the index. Changes config remain outside this surface. A source-control
-//! pane stages and restores through these so its answer and the command line's
-//! cannot disagree about what the next commit holds.
+//! The writes are narrow and named: [`Repo::stage`], [`Repo::stage_hunk`] and
+//! [`Repo::unstage`] move paths or one unstaged hunk across the index,
+//! [`Repo::discard`] restores the working tree from the index, [`Repo::checkout`]
+//! restores both from `HEAD`, and [`Repo::commit`] commits the index. Changes
+//! config remain outside this surface. A source-control pane stages and restores
+//! through these so its answer and the command line's cannot disagree about what
+//! the next commit holds.
 //!
 //! Parsing is confined to stable porcelain/plumbing output:
 //! `status --porcelain=v2 -z`, `diff --name-status -z`, `ls-files -z`, and a
@@ -20,8 +21,9 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Which changes a diff should cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -373,6 +375,20 @@ pub enum GitError {
     /// The named paths have nothing to restore.
     #[error("the named paths have no changes to restore")]
     NoChanges,
+    /// The path has no unstaged hunk to stage.
+    #[error("{path:?} has no unstaged hunks")]
+    NoHunks {
+        /// The path the caller supplied.
+        path: String,
+    },
+    /// The requested hunk is not in the path's unstaged diff.
+    #[error("{path:?} has no unstaged hunk {hunk}")]
+    HunkNotFound {
+        /// The path the caller supplied.
+        path: String,
+        /// The zero-based hunk index.
+        hunk: usize,
+    },
     /// A repository with no commit has no `HEAD` to check a path out from.
     #[error("there is no HEAD to check out from")]
     NoHead,
@@ -584,6 +600,58 @@ impl Repo {
             "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e",
         ])?;
         parse_log(&output)
+    }
+
+    /// Put one unstaged hunk of `path` in the index.
+    ///
+    /// `hunk` is zero-based in the path's **unstaged** diff, which is the half
+    /// that can be applied to the index: the working tree against the index. The
+    /// combined `HEAD` diff cannot be used once part of the file is already staged,
+    /// because its removals and context describe `HEAD` rather than the index.
+    ///
+    /// The hunk is cut from git's own diff by this crate before `git apply` sees
+    /// it, so a client names a hunk rather than supplying patch text. A path with
+    /// no unstaged hunks — an untracked file, a binary change, a path whose change
+    /// is already staged — is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::InvalidPath`], [`GitError::NoHunks`],
+    /// [`GitError::HunkNotFound`], or [`GitError::Command`] when git refuses the
+    /// patch or the index is locked.
+    pub fn stage_hunk(&self, path: &str, hunk: usize) -> Result<(), GitError> {
+        validate_paths(&[path.to_owned()])?;
+        let patch = self.diff_patch_for(DiffScope::Unstaged, Some(path))?;
+        let section = patch_section(&patch, path);
+        let mut header = Vec::new();
+        let mut hunks: Vec<Vec<String>> = Vec::new();
+        for line in section {
+            if line.starts_with("@@") {
+                hunks.push(vec![line.to_owned()]);
+            } else if let Some(current) = hunks.last_mut() {
+                current.push(line.to_owned());
+            } else {
+                header.push(line.to_owned());
+            }
+        }
+        if hunks.is_empty() {
+            return Err(GitError::NoHunks {
+                path: path.to_owned(),
+            });
+        }
+        let Some(lines) = hunks.get(hunk) else {
+            return Err(GitError::HunkNotFound {
+                path: path.to_owned(),
+                hunk,
+            });
+        };
+        let mut patch = header.join("\n");
+        if !patch.is_empty() {
+            patch.push('\n');
+        }
+        patch.push_str(&lines.join("\n"));
+        patch.push('\n');
+        self.apply_cached(&patch)
     }
 
     /// Put `paths` in the index, including an untracked file or a deletion.
@@ -816,6 +884,10 @@ impl Repo {
     }
 
     fn diff_patch(&self, scope: DiffScope) -> Result<String, GitError> {
+        self.diff_patch_for(scope, None)
+    }
+
+    fn diff_patch_for(&self, scope: DiffScope, path: Option<&str>) -> Result<String, GitError> {
         let mut args = vec![
             "diff".to_owned(),
             "--no-color".to_owned(),
@@ -828,6 +900,9 @@ impl Repo {
             DiffScope::Unstaged => {}
         }
         args.push("--".to_owned());
+        if let Some(path) = path {
+            args.push(path.to_owned());
+        }
         let output = self.run_owned(args)?;
         Ok(String::from_utf8_lossy(&output).into_owned())
     }
@@ -872,6 +947,56 @@ impl Repo {
             status: output.status.code().unwrap_or(-1),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
+    }
+
+    /// Run git with a patch on stdin.
+    ///
+    /// `git apply` reads the patch from its standard input; a temporary file would
+    /// need a name, permissions and cleanup for no benefit. The output is read
+    /// after the write because `--cached` is quiet and cannot fill a pipe.
+    fn run_input(&self, args: Vec<String>, input: &[u8]) -> Result<Vec<u8>, GitError> {
+        let mut child = git_command()
+            .arg("-C")
+            .arg(&self.root)
+            .args(args.iter().map(OsStr::new))
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => GitError::GitMissing(error),
+                _ => GitError::Io(error),
+            })?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(input)
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitError::Io(error));
+        }
+        let output = child.wait_with_output()?;
+        if output.status.success() {
+            return Ok(output.stdout);
+        }
+        Err(GitError::Command {
+            command: args.join(" "),
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
+    }
+
+    fn apply_cached(&self, patch: &str) -> Result<(), GitError> {
+        self.run_input(
+            vec![
+                "apply".to_owned(),
+                "--cached".to_owned(),
+                "--whitespace=nowarn".to_owned(),
+                "-".to_owned(),
+            ],
+            patch.as_bytes(),
+        )
+        .map(|_| ())
     }
 }
 
@@ -1275,6 +1400,103 @@ mod tests {
             "changed\n",
             "unstaging does not touch the working tree"
         );
+    }
+
+    #[test]
+    fn one_hunk_can_be_staged_without_the_other() {
+        let fixture = Fixture::new("stage-hunk");
+        let original = (1..=20)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        fixture.write("many.txt", &original);
+        fixture.commit("init");
+
+        let changed = original
+            .replace("line 2\n", "line 2 changed\n")
+            .replace("line 18\n", "line 18 changed\n");
+        fixture.write("many.txt", &changed);
+        let diff = fixture.repo().diff(DiffScope::Unstaged).expect("diff");
+        assert_eq!(
+            diff.patch
+                .lines()
+                .filter(|line| line.starts_with("@@"))
+                .count(),
+            2,
+            "the fixture has two separate hunks: {}",
+            diff.patch
+        );
+
+        fixture
+            .repo()
+            .stage_hunk("many.txt", 0)
+            .expect("first hunk staged");
+
+        let index = fixture.git(&["show", ":many.txt"]);
+        assert!(
+            index.contains("line 2 changed"),
+            "the selected hunk is in the index: {index}"
+        );
+        assert!(
+            !index.contains("line 18 changed"),
+            "the other hunk is still only in the working tree: {index}"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("many.txt")).expect("file"),
+            changed,
+            "staging a hunk does not rewrite the working tree"
+        );
+        let status = fixture.repo().status().expect("status");
+        let row = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "many.txt")
+            .expect("many.txt changed");
+        assert_eq!(row.index, ChangeKind::Modified);
+        assert_eq!(row.worktree, ChangeKind::Modified);
+    }
+
+    #[test]
+    fn a_hunk_index_past_the_unstaged_diff_is_refused() {
+        let fixture = Fixture::new("stage-hunk-missing");
+        fixture.write("one.txt", "one\ntwo\n");
+        fixture.commit("init");
+        fixture.write("one.txt", "one\ntwo changed\n");
+
+        let error = fixture
+            .repo()
+            .stage_hunk("one.txt", 1)
+            .expect_err("there is one hunk");
+        assert!(
+            matches!(error, GitError::HunkNotFound { ref path, hunk: 1 } if path == "one.txt"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("file"),
+            "one\ntwo changed\n",
+            "a refused hunk writes nothing"
+        );
+    }
+
+    #[test]
+    fn an_untracked_file_has_no_hunk_to_stage() {
+        let fixture = Fixture::new("stage-hunk-untracked");
+        fixture.write("new.txt", "new\n");
+
+        let error = fixture
+            .repo()
+            .stage_hunk("new.txt", 0)
+            .expect_err("an untracked file has no unstaged diff");
+        assert!(
+            matches!(error, GitError::NoHunks { ref path } if path == "new.txt"),
+            "{error}"
+        );
+        let status = fixture.repo().status().expect("status");
+        let row = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new.txt is still listed");
+        assert_eq!(row.worktree, ChangeKind::Untracked);
     }
 
     #[test]

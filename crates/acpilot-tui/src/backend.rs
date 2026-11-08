@@ -89,6 +89,13 @@ pub enum Request {
         /// The path selected in the pane.
         path: String,
     },
+    /// Put one unstaged hunk of a path in the index.
+    StageHunk {
+        /// The path selected in the pane.
+        path: String,
+        /// The zero-based hunk in that path's unstaged diff.
+        hunk: usize,
+    },
     /// Remove one repository-relative path from the index.
     Unstage {
         /// The path selected in the pane.
@@ -236,12 +243,14 @@ pub enum Update {
         /// The lines that contain it, sorted by path and line.
         matches: Vec<acpilot_proto::file::GrepMatch>,
     },
-    /// The source-control pane's answer: status and the uncommitted diff.
+    /// The source-control pane's answer: status and both diff halves.
     Git {
         /// Branch state and every changed path.
         status: acpilot_proto::git::GitStatus,
-        /// The patch and its file list, read at the same moment.
-        diff: acpilot_proto::git::GitDiff,
+        /// Working tree against the index: the hunks that can still be staged.
+        unstaged: acpilot_proto::git::GitDiff,
+        /// Index against `HEAD`: the hunks the next commit already holds.
+        staged: acpilot_proto::git::GitDiff,
     },
     /// The source-control read failed, with a message the pane can show.
     GitError(String),
@@ -655,37 +664,41 @@ async fn run(
                         }
                     }
                 }
-                Some(Request::Git) => match client.git_status().await {
-                    Ok(status) => match client.git_diff("all").await {
-                        Ok(diff) => {
-                            let _ = updates.send(Update::Git { status, diff });
-                        }
-                        Err(error) => {
-                            let _ = updates.send(Update::GitError(describe(&error)));
-                        }
-                    },
+                Some(Request::Git) => match read_source(&client).await {
+                    Ok(update) => {
+                        let _ = updates.send(update);
+                    }
                     Err(error) => {
-                        let _ = updates.send(Update::GitError(describe(&error)));
+                        let _ = updates.send(Update::GitError(error));
                     }
                 },
                 Some(Request::Stage { path }) => {
                     match client.stage(std::slice::from_ref(&path)).await {
-                        Ok(_) => match client.git_status().await {
-                            Ok(status) => match client.git_diff("all").await {
-                                Ok(diff) => {
-                                    let _ = updates.send(Update::Git { status, diff });
-                                }
-                                Err(error) => {
-                                    let _ = updates.send(Update::GitError(format!(
-                                        "staged {path}, but could not read the diff again: {}",
-                                        describe(&error)
-                                    )));
-                                }
-                            },
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
                             Err(error) => {
                                 let _ = updates.send(Update::GitError(format!(
-                                    "staged {path}, but could not read the index again: {}",
-                                    describe(&error)
+                                    "staged {path}, but could not read the index again: {error}"
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::StageHunk { path, hunk }) => {
+                    match client.stage_hunk(&path, hunk).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "staged {path} hunk {}, but could not read the index again: {error}",
+                                    hunk + 1
                                 )));
                             }
                         },
@@ -696,22 +709,13 @@ async fn run(
                 }
                 Some(Request::Unstage { path }) => {
                     match client.unstage(std::slice::from_ref(&path)).await {
-                        Ok(_) => match client.git_status().await {
-                            Ok(status) => match client.git_diff("all").await {
-                                Ok(diff) => {
-                                    let _ = updates.send(Update::Git { status, diff });
-                                }
-                                Err(error) => {
-                                    let _ = updates.send(Update::GitError(format!(
-                                        "unstaged {path}, but could not read the diff again: {}",
-                                        describe(&error)
-                                    )));
-                                }
-                            },
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
                             Err(error) => {
                                 let _ = updates.send(Update::GitError(format!(
-                                    "unstaged {path}, but could not read the index again: {}",
-                                    describe(&error)
+                                    "unstaged {path}, but could not read the index again: {error}"
                                 )));
                             }
                         },
@@ -722,22 +726,13 @@ async fn run(
                 }
                 Some(Request::Discard { path }) => {
                     match client.discard(std::slice::from_ref(&path)).await {
-                        Ok(_) => match client.git_status().await {
-                            Ok(status) => match client.git_diff("all").await {
-                                Ok(diff) => {
-                                    let _ = updates.send(Update::Git { status, diff });
-                                }
-                                Err(error) => {
-                                    let _ = updates.send(Update::GitError(format!(
-                                        "discarded {path}, but could not read the diff again: {}",
-                                        describe(&error)
-                                    )));
-                                }
-                            },
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
                             Err(error) => {
                                 let _ = updates.send(Update::GitError(format!(
-                                    "discarded {path}, but could not read the status again: {}",
-                                    describe(&error)
+                                    "discarded {path}, but could not read the status again: {error}"
                                 )));
                             }
                         },
@@ -748,22 +743,13 @@ async fn run(
                 }
                 Some(Request::Checkout { path }) => {
                     match client.checkout(std::slice::from_ref(&path)).await {
-                        Ok(_) => match client.git_status().await {
-                            Ok(status) => match client.git_diff("all").await {
-                                Ok(diff) => {
-                                    let _ = updates.send(Update::Git { status, diff });
-                                }
-                                Err(error) => {
-                                    let _ = updates.send(Update::GitError(format!(
-                                        "checked out {path}, but could not read the diff again: {}",
-                                        describe(&error)
-                                    )));
-                                }
-                            },
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
                             Err(error) => {
                                 let _ = updates.send(Update::GitError(format!(
-                                    "checked out {path}, but could not read the status again: {}",
-                                    describe(&error)
+                                    "checked out {path}, but could not read the status again: {error}"
                                 )));
                             }
                         },
@@ -1341,7 +1327,7 @@ async fn run_demo(
                     "design pass · the changed file is the fixture's".to_owned(),
                 ));
             }
-            Request::Stage { .. } | Request::Unstage { .. } => {
+            Request::Stage { .. } | Request::StageHunk { .. } | Request::Unstage { .. } => {
                 let _ = updates.send(Update::Status(
                     "design pass · the index is the fixture's".to_owned(),
                 ));
@@ -1602,6 +1588,29 @@ fn language_servers_line(servers: &[acpilot_proto::lsp::LspServerSummary]) -> St
 }
 
 /// A failure as a status line, with its code when the daemon sent one.
+/// Read the source pane's three answers at one moment: status and both halves of
+/// the diff. The two diff calls are separate because staging a hunk needs the
+/// index-to-working-tree patch, while the pane also shows what is already staged.
+async fn read_source(client: &Client) -> Result<Update, String> {
+    let status = client
+        .git_status()
+        .await
+        .map_err(|error| describe(&error))?;
+    let unstaged = client
+        .git_diff("unstaged")
+        .await
+        .map_err(|error| describe(&error))?;
+    let staged = client
+        .git_diff("staged")
+        .await
+        .map_err(|error| describe(&error))?;
+    Ok(Update::Git {
+        status,
+        unstaged,
+        staged,
+    })
+}
+
 fn describe(error: &ClientError) -> String {
     match error.code() {
         Some(code) => format!("{code}: {error}"),

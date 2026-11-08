@@ -1282,6 +1282,32 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "GitHunkRequest": {
+        "description": "A request to stage one hunk from a path's unstaged diff.\n\n`hunk` is zero-based in the path's **unstaged** diff, not the combined diff\nagainst `HEAD`: the index is the base `git apply --cached` writes to, and a\ncombined hunk stops describing that base as soon as part of the file is staged.\nA client names a hunk; the daemon cuts git's own patch for it and applies that.",
+        "properties": {
+          "hunk": {
+            "description": "The zero-based hunk index in that path's unstaged diff.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The path whose unstaged hunk should move into the index.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "hunk"
+        ],
+        "type": "object"
+      },
       "GitIndexRequest": {
         "description": "A request to move repository-relative paths across the index or restore them.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
         "properties": {

@@ -364,6 +364,19 @@ fn lsp_documents() {
 }
 
 #[test]
+fn git_hunk_documents() {
+    round_trip::<acpilot_proto::git::GitHunkRequest>(json!({
+        "path": "src/main.rs",
+        "hunk": 1
+    }));
+    round_trip::<acpilot_proto::git::GitHunkRequest>(json!({
+        "workspace": "ws-1",
+        "path": "src/main.rs",
+        "hunk": 0
+    }));
+}
+
+#[test]
 fn model_documents() {
     round_trip::<acpilot_proto::model::ProviderSummary>(json!({
         "id": "lmstudio",

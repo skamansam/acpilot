@@ -73,6 +73,35 @@ export function patchSection(diff: GitDiff, path: string): string[] {
   return lines;
 }
 
+/** One hunk of a file's patch, numbered inside that file. */
+export interface Hunk {
+  /** Zero-based, the number `POST /v1/git/stage-hunk` expects. */
+  index: number;
+  /** The `@@ … @@` line, kept as the hunk's first line. */
+  header: string;
+  /** The header and every body line, in patch order. */
+  lines: string[];
+}
+
+/**
+ * One file's hunks, in patch order.
+ *
+ * The file's `diff --git`, `---` and `+++` lines belong to the section rather than
+ * to any hunk, so they are not part of a stageable block. A file with no `@@`
+ * line — a binary change, or an untracked path with no patch yet — has no hunks.
+ */
+export function hunksOf(diff: GitDiff, path: string): Hunk[] {
+  const hunks: Hunk[] = [];
+  for (const line of patchSection(diff, path)) {
+    if (line.startsWith('@@')) {
+      hunks.push({ index: hunks.length, header: line, lines: [line] });
+    } else if (hunks.length > 0) {
+      hunks[hunks.length - 1]!.lines.push(line);
+    }
+  }
+  return hunks;
+}
+
 /**
  * Whether the selected path has a working-tree change to add.
  *

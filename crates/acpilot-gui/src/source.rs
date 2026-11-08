@@ -1,11 +1,12 @@
 //! The source-control pane's state, without a window.
 //!
-//! The desktop surface reads the same two routes as the terminal — `GET
-//! /v1/git/status` and `GET /v1/git/diff?scope=all` — and cuts the patch with
+//! The desktop surface reads the same routes as the terminal — `GET
+//! /v1/git/status` plus the unstaged and staged diffs — and cuts the patch with
 //! [`acpilot_git::patch_section`], so the two panes cannot disagree about which
 //! lines belong to a file. `s`/`u` move the selected path across the index through
-//! the daemon, `d`/`x` arm a discard or checkout, and [`Composer`]'s `confirming`
-//! state is what makes a write a second decision rather than a keystroke.
+//! the daemon, `h`/`l` choose an unstaged hunk and `shift-s` stages it, `d`/`x` arm
+//! a discard or checkout, and [`Composer`]'s `confirming` state is what makes a
+//! write a second decision rather than a keystroke.
 //!
 //! Plain data on purpose: the state a test needs to read is here, and [`crate::app`]
 //! only has to lay it out.
@@ -13,18 +14,33 @@
 use acpilot_proto::git::{GitChangeKind, GitCommit, GitDiff, GitStatus, GitStatusEntry};
 use acpilot_proto::session::SessionSummary;
 
+/// A row the source pane draws: a section heading or one diff line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLine {
+    /// The text to draw.
+    pub text: String,
+    /// Whether this is an `unstaged` or `staged` heading.
+    pub heading: bool,
+    /// Whether this is the header of the hunk `shift-s` would stage.
+    pub selected_hunk: bool,
+}
+
 /// What the pane knows about the repository right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     /// Branch state and every changed path.
     pub status: GitStatus,
-    /// The whole uncommitted diff, as the daemon served it.
-    pub diff: GitDiff,
+    /// Working tree against the index: the hunks that can still be staged.
+    pub unstaged_diff: GitDiff,
+    /// Index against `HEAD`: the hunks the next commit already holds.
+    pub staged_diff: GitDiff,
     /// The sessions a generated message may be asked of, in the daemon's order.
     /// The first is the default; the composer can choose another.
     pub sessions: Vec<SessionSummary>,
     /// Which changed path is selected.
     pub selected: usize,
+    /// Which unstaged hunk `shift-s` would stage, zero-based.
+    pub hunk: usize,
     /// The first diff line on screen.
     pub scroll: usize,
     /// Whether the first answer has arrived.
@@ -79,12 +95,17 @@ impl Source {
                 head: None,
                 files: Vec::new(),
             },
-            diff: GitDiff {
+            unstaged_diff: GitDiff {
+                patch: String::new(),
+                files: Vec::new(),
+            },
+            staged_diff: GitDiff {
                 patch: String::new(),
                 files: Vec::new(),
             },
             sessions: Vec::new(),
             selected: 0,
+            hunk: 0,
             scroll: 0,
             loading: true,
             error: None,
@@ -92,18 +113,27 @@ impl Source {
         }
     }
 
-    /// Keep the selected path across a refresh, and clamp a path that vanished.
-    pub fn apply(&mut self, status: GitStatus, diff: GitDiff, sessions: Vec<SessionSummary>) {
+    /// Keep the selected path and hunk across a refresh, and clamp them when the
+    /// diff changed underneath the pane.
+    pub fn apply(
+        &mut self,
+        status: GitStatus,
+        unstaged: GitDiff,
+        staged: GitDiff,
+        sessions: Vec<SessionSummary>,
+    ) {
         let chosen = self.selected_path().map(str::to_owned);
         self.selected = chosen
             .and_then(|path| status.files.iter().position(|entry| entry.path == path))
             .unwrap_or_else(|| self.selected.min(status.files.len().saturating_sub(1)));
         self.status = status;
-        self.diff = diff;
+        self.unstaged_diff = unstaged;
+        self.staged_diff = staged;
         self.sessions = sessions;
         self.loading = false;
         self.error = None;
         self.scroll = 0;
+        self.hunk = self.hunk.min(self.hunk_count().saturating_sub(1));
         self.pending = None;
     }
 
@@ -224,13 +254,110 @@ impl Source {
             .map(|entry| entry.path.as_str())
     }
 
-    /// The selected file's section of the patch, header included.
+    /// The selected file's unstaged section, header included.
     #[must_use]
-    pub fn section(&self) -> Vec<&str> {
+    pub fn unstaged_section(&self) -> Vec<&str> {
         let Some(path) = self.selected_path() else {
             return Vec::new();
         };
-        acpilot_git::patch_section(&self.diff.patch, path)
+        acpilot_git::patch_section(&self.unstaged_diff.patch, path)
+    }
+
+    /// The selected file's staged section, header included.
+    #[must_use]
+    pub fn staged_section(&self) -> Vec<&str> {
+        let Some(path) = self.selected_path() else {
+            return Vec::new();
+        };
+        acpilot_git::patch_section(&self.staged_diff.patch, path)
+    }
+
+    /// How many unstaged hunks the selected file has.
+    #[must_use]
+    pub fn hunk_count(&self) -> usize {
+        self.unstaged_section()
+            .iter()
+            .filter(|line| line.starts_with("@@"))
+            .count()
+    }
+
+    /// The selected hunk, clamped to the current unstaged diff.
+    #[must_use]
+    pub fn selected_hunk(&self) -> usize {
+        self.hunk.min(self.hunk_count().saturating_sub(1))
+    }
+
+    /// Whether `shift-s` has an unstaged hunk to stage.
+    #[must_use]
+    pub fn can_stage_hunk(&self) -> bool {
+        self.hunk_count() > 0
+    }
+
+    /// Move the hunk selection and put its header at the top of the view.
+    pub fn step_hunk(&mut self, delta: isize) {
+        let count = self.hunk_count();
+        if count == 0 {
+            self.hunk = 0;
+            return;
+        }
+        let last = count - 1;
+        self.hunk = if delta < 0 {
+            self.hunk.saturating_sub(delta.unsigned_abs())
+        } else {
+            (self.hunk + delta as usize).min(last)
+        };
+        if let Some(line) = self
+            .source_lines()
+            .iter()
+            .position(|line| line.selected_hunk)
+        {
+            self.scroll = line;
+        }
+    }
+
+    /// The rows the diff area draws: each non-empty half under its own heading.
+    #[must_use]
+    pub fn source_lines(&self) -> Vec<SourceLine> {
+        let mut lines = Vec::new();
+        let unstaged = self.unstaged_section();
+        if !unstaged.is_empty() {
+            let hunks = self.hunk_count();
+            lines.push(SourceLine {
+                text: format!(
+                    "unstaged · {hunks} {} · h/l chooses · shift-s stages",
+                    if hunks == 1 { "hunk" } else { "hunks" }
+                ),
+                heading: true,
+                selected_hunk: false,
+            });
+            let chosen = self.selected_hunk();
+            let mut hunk = 0;
+            for line in unstaged {
+                let header = line.starts_with("@@");
+                lines.push(SourceLine {
+                    text: line.to_owned(),
+                    heading: false,
+                    selected_hunk: header && hunk == chosen,
+                });
+                if header {
+                    hunk += 1;
+                }
+            }
+        }
+        let staged = self.staged_section();
+        if !staged.is_empty() {
+            lines.push(SourceLine {
+                text: "staged · already in the next commit".to_owned(),
+                heading: true,
+                selected_hunk: false,
+            });
+            lines.extend(staged.into_iter().map(|line| SourceLine {
+                text: line.to_owned(),
+                heading: false,
+                selected_hunk: false,
+            }));
+        }
+        lines
     }
 
     /// Move the changed-file selection and put the diff back at its top.
@@ -242,11 +369,12 @@ impl Source {
             (self.selected + delta as usize).min(last)
         };
         self.scroll = 0;
+        self.hunk = 0;
     }
 
     /// Scroll the diff by a page, stopping at its end.
     pub fn page(&mut self, delta: isize) {
-        let total = self.section().len();
+        let total = self.source_lines().len();
         let next = if delta < 0 {
             self.scroll.saturating_sub(delta.unsigned_abs())
         } else {
@@ -441,6 +569,7 @@ mod tests {
                 patch: "diff --git a/a.rs b/a.rs\n@@ -1 +1 @@\n-a\n+b\n".to_owned(),
                 files: Vec::new(),
             },
+            GitDiff::default(),
             vec![session("s1")],
         );
         assert_eq!(source.selected_path(), Some("a.rs"));
@@ -462,6 +591,7 @@ mod tests {
                 entry("a.rs", GitChangeKind::Modified, GitChangeKind::Unmodified),
                 entry("b.rs", GitChangeKind::Added, GitChangeKind::Unmodified),
             ]),
+            GitDiff::default(),
             GitDiff::default(),
             Vec::new(),
         );
@@ -485,6 +615,7 @@ mod tests {
                 GitChangeKind::Untracked,
             )]),
             GitDiff::default(),
+            GitDiff::default(),
             Vec::new(),
         );
         assert!(
@@ -492,7 +623,12 @@ mod tests {
             "an untracked file can be staged"
         );
         assert!(!source.can_unstage_selected());
-        source.apply(status(Vec::new()), GitDiff::default(), Vec::new());
+        source.apply(
+            status(Vec::new()),
+            GitDiff::default(),
+            GitDiff::default(),
+            Vec::new(),
+        );
         assert_eq!(source.selected_path(), None);
     }
 
@@ -501,6 +637,7 @@ mod tests {
         let mut source = Source::loading();
         source.apply(
             status(Vec::new()),
+            GitDiff::default(),
             GitDiff::default(),
             vec![session("one"), session("two"), session("three")],
         );
@@ -534,6 +671,7 @@ mod tests {
         source.apply(
             status(Vec::new()),
             GitDiff::default(),
+            GitDiff::default(),
             vec![session("three"), session("one"), session("two")],
         );
         assert_eq!(
@@ -552,9 +690,48 @@ mod tests {
             Some("three"),
             "a vanished choice falls back to the first still listed"
         );
-        source.apply(status(Vec::new()), GitDiff::default(), Vec::new());
+        source.apply(
+            status(Vec::new()),
+            GitDiff::default(),
+            GitDiff::default(),
+            Vec::new(),
+        );
         composer.step_session(&source, 1);
         assert_eq!(composer.session_id, None);
+    }
+
+    #[test]
+    fn hunk_navigation_is_bounded_by_the_unstaged_diff() {
+        let mut source = Source::loading();
+        source.apply(
+            status(vec![entry(
+                "a.rs",
+                GitChangeKind::Modified,
+                GitChangeKind::Modified,
+            )]),
+            GitDiff {
+                patch: "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-a\n+b\n@@ -20 +20 @@\n-c\n+d\n"
+                    .to_owned(),
+                files: Vec::new(),
+            },
+            GitDiff::default(),
+            Vec::new(),
+        );
+        assert_eq!(source.hunk_count(), 2);
+        assert_eq!(source.selected_hunk(), 0);
+        source.step_hunk(1);
+        assert_eq!(source.selected_hunk(), 1);
+        assert!(
+            source
+                .source_lines()
+                .iter()
+                .any(|line| line.selected_hunk && line.text.starts_with("@@ -20")),
+            "the second hunk's header is the selected one"
+        );
+        source.step_hunk(9);
+        assert_eq!(source.selected_hunk(), 1, "the selection clamps at the end");
+        source.step_hunk(-9);
+        assert_eq!(source.selected_hunk(), 0, "and at the start");
     }
 
     #[test]

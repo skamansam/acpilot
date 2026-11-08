@@ -43,10 +43,13 @@ actions!(
         ToggleSource,
         SourceNext,
         SourcePrevious,
+        SourceNextHunk,
+        SourcePreviousHunk,
         SourcePageDown,
         SourcePageUp,
         SourceRefresh,
         SourceStage,
+        SourceStageHunk,
         SourceUnstage,
         SourceDiscard,
         SourceCheckout,
@@ -99,10 +102,13 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::ToggleSource => KeyBinding::new(keys, ToggleSource, Some(context)),
         KeyAction::SourceNext => KeyBinding::new(keys, SourceNext, Some(context)),
         KeyAction::SourcePrevious => KeyBinding::new(keys, SourcePrevious, Some(context)),
+        KeyAction::SourceNextHunk => KeyBinding::new(keys, SourceNextHunk, Some(context)),
+        KeyAction::SourcePreviousHunk => KeyBinding::new(keys, SourcePreviousHunk, Some(context)),
         KeyAction::SourcePageDown => KeyBinding::new(keys, SourcePageDown, Some(context)),
         KeyAction::SourcePageUp => KeyBinding::new(keys, SourcePageUp, Some(context)),
         KeyAction::SourceRefresh => KeyBinding::new(keys, SourceRefresh, Some(context)),
         KeyAction::SourceStage => KeyBinding::new(keys, SourceStage, Some(context)),
+        KeyAction::SourceStageHunk => KeyBinding::new(keys, SourceStageHunk, Some(context)),
         KeyAction::SourceUnstage => KeyBinding::new(keys, SourceUnstage, Some(context)),
         KeyAction::SourceDiscard => KeyBinding::new(keys, SourceDiscard, Some(context)),
         KeyAction::SourceCheckout => KeyBinding::new(keys, SourceCheckout, Some(context)),
@@ -306,11 +312,12 @@ impl Shell {
         match update {
             GitUpdate::Loaded {
                 status,
-                diff,
+                unstaged,
+                staged,
                 sessions,
             } => {
                 if let Some(source) = &mut self.source {
-                    source.apply(status, diff, sessions);
+                    source.apply(status, unstaged, staged, sessions);
                 }
             }
             GitUpdate::LoadFailed(message) => {
@@ -394,6 +401,30 @@ impl Shell {
         }
     }
 
+    fn source_next_hunk(
+        &mut self,
+        _: &SourceNextHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step_hunk(1);
+            cx.notify();
+        }
+    }
+
+    fn source_previous_hunk(
+        &mut self,
+        _: &SourcePreviousHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step_hunk(-1);
+            cx.notify();
+        }
+    }
+
     fn source_page_down(
         &mut self,
         _: &SourcePageDown,
@@ -425,6 +456,15 @@ impl Shell {
 
     fn source_stage(&mut self, _: &SourceStage, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_selected_staged(true, cx);
+    }
+
+    fn source_stage_hunk(
+        &mut self,
+        _: &SourceStageHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_selected_hunk(cx);
     }
 
     fn source_unstage(&mut self, _: &SourceUnstage, _window: &mut Window, cx: &mut Context<Self>) {
@@ -478,6 +518,45 @@ impl Shell {
             source.error = None;
             cx.notify();
         }
+    }
+
+    /// Ask the daemon to put the selected unstaged hunk in the index.
+    ///
+    /// Like `s`, a path with nothing on that side is a message rather than a
+    /// request. The request names a zero-based hunk and lets the daemon cut git's
+    /// own patch; the window never sends patch text.
+    fn stage_selected_hunk(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        if source.pending.is_some() {
+            if let Some(source) = &mut self.source {
+                source.error = Some("confirm or cancel the restore first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            if let Some(source) = &mut self.source {
+                source.error = Some("no changed file is selected".to_owned());
+            }
+            cx.notify();
+            return;
+        };
+        if !source.can_stage_hunk() {
+            if let Some(source) = &mut self.source {
+                source.error = Some(format!("{path} has no unstaged hunk to stage"));
+            }
+            cx.notify();
+            return;
+        }
+        let hunk = source.selected_hunk();
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+        }
+        self.request_git(GitCommand::StageHunk { path, hunk });
+        cx.notify();
     }
 
     /// Ask the daemon to move the selected path across the index.
@@ -1192,13 +1271,13 @@ impl Render for Shell {
                 .enumerate()
                 .map(|(index, entry)| (index, source::row(entry), index == source.selected))
                 .collect();
-            let section = source.section();
-            let lines: Vec<(usize, String)> = section
-                .iter()
+            let lines: Vec<(usize, String, bool, bool)> = source
+                .source_lines()
+                .into_iter()
                 .skip(source.scroll)
                 .take(40)
                 .enumerate()
-                .map(|(offset, line)| (offset, (*line).to_owned()))
+                .map(|(offset, line)| (offset, line.text, line.heading, line.selected_hunk))
                 .collect();
             let mut panel = div()
                 .id("source")
@@ -1211,7 +1290,7 @@ impl Render for Shell {
                 .child(muted(
                     &theme,
                     source.pending.as_ref().map_or_else(
-                        || "s stages · u unstages · d discards · x checks out · j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close".to_owned(),
+                        || "j/k file · h/l hunk · shift-s stage hunk · s/u path · d discard · x checkout · c compose · g draft · r refresh · esc close".to_owned(),
                         |pending| format!(
                             "{} {}? y confirms · n cancels",
                             pending.restore.verb(),
@@ -1343,22 +1422,32 @@ impl Render for Shell {
                             .flex_1()
                             .flex()
                             .flex_col()
-                            .children(lines.into_iter().map(|(index, line)| {
-                                let colour = if line.starts_with('+') {
-                                    theme.ui(UiToken::Success)
-                                } else if line.starts_with('-') {
-                                    theme.ui(UiToken::Danger)
-                                } else if line.starts_with('@') || line.starts_with("diff ") {
-                                    theme.ui(UiToken::Accent)
-                                } else {
-                                    theme.ui(UiToken::TextMuted)
-                                };
-                                div()
-                                    .id(("source-diff", index))
-                                    .text_size(px(11.0))
-                                    .text_color(rgb(colour))
-                                    .child(SharedString::from(line))
-                            })),
+                            .children(lines.into_iter().map(
+                                |(index, line, heading, selected_hunk)| {
+                                    let colour = if heading || selected_hunk {
+                                        theme.ui(UiToken::Bg)
+                                    } else if line.starts_with('+') {
+                                        theme.ui(UiToken::Success)
+                                    } else if line.starts_with('-') {
+                                        theme.ui(UiToken::Danger)
+                                    } else if line.starts_with('@') || line.starts_with("diff ") {
+                                        theme.ui(UiToken::Accent)
+                                    } else {
+                                        theme.ui(UiToken::TextMuted)
+                                    };
+                                    let background = if heading || selected_hunk {
+                                        theme.ui(UiToken::Accent)
+                                    } else {
+                                        theme.ui(UiToken::BgPanel)
+                                    };
+                                    div()
+                                        .id(("source-diff", index))
+                                        .text_size(px(11.0))
+                                        .bg(rgb(background))
+                                        .text_color(rgb(colour))
+                                        .child(SharedString::from(line))
+                                },
+                            )),
                     ),
             );
             panel.into_any_element()
@@ -1541,10 +1630,13 @@ impl Render for Shell {
             .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::source_next))
             .on_action(cx.listener(Self::source_previous))
+            .on_action(cx.listener(Self::source_next_hunk))
+            .on_action(cx.listener(Self::source_previous_hunk))
             .on_action(cx.listener(Self::source_page_down))
             .on_action(cx.listener(Self::source_page_up))
             .on_action(cx.listener(Self::source_refresh))
             .on_action(cx.listener(Self::source_stage))
+            .on_action(cx.listener(Self::source_stage_hunk))
             .on_action(cx.listener(Self::source_unstage))
             .on_action(cx.listener(Self::source_discard))
             .on_action(cx.listener(Self::source_checkout))
@@ -1859,6 +1951,7 @@ mod drawn {
                 }],
             },
             acpilot_proto::git::GitDiff::default(),
+            acpilot_proto::git::GitDiff::default(),
             vec![session_summary("s1", "one"), session_summary("s2", "two")],
         );
         source
@@ -1966,6 +2059,49 @@ mod drawn {
         assert_eq!(
             sent.try_recv().expect("a checkout request"),
             GitCommand::Checkout("src/main.rs".to_owned())
+        );
+    }
+
+    #[gpui::test]
+    async fn hunk_actions_choose_and_stage_one_unstaged_hunk(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, _cx| {
+                shell.set_git_sender(requests);
+                let mut source = staged_source();
+                source.status.files[0].index = acpilot_proto::git::GitChangeKind::Unmodified;
+                source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+                source.unstaged_diff.patch = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-a\n+b\n@@ -20 +20 @@\n-c\n+d\n".to_owned();
+                shell.source = Some(source);
+            });
+        });
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_next_hunk(&SourceNextHunk, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell.read(cx).source().map(Source::selected_hunk)),
+            Some(1),
+            "l chooses the second unstaged hunk"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_stage_hunk(&SourceStageHunk, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a stage-hunk request"),
+            GitCommand::StageHunk {
+                path: "src/main.rs".to_owned(),
+                hunk: 1,
+            },
+            "shift-s sends the selected hunk, not the path"
         );
     }
 

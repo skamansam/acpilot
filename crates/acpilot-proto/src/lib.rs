@@ -101,6 +101,7 @@ pub const API_PREFIX: &str = "/v1";
         git::CommitPromptSource,
         git::CommitMessageRequest,
         git::GitIndexRequest,
+        git::GitHunkRequest,
         git::GitCommitRequest,
         git::CommitDraft,
         project::ProjectMap,

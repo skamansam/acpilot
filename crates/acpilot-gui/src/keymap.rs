@@ -65,6 +65,10 @@ pub enum Action {
     SourceNext,
     /// Choose the previous changed file.
     SourcePrevious,
+    /// Choose the next unstaged hunk.
+    SourceNextHunk,
+    /// Choose the previous unstaged hunk.
+    SourcePreviousHunk,
     /// Scroll the selected file's diff down a page.
     SourcePageDown,
     /// Scroll it up a page.
@@ -73,6 +77,8 @@ pub enum Action {
     SourceRefresh,
     /// Put the selected path in the index.
     SourceStage,
+    /// Put the selected unstaged hunk in the index.
+    SourceStageHunk,
     /// Remove the selected path from the index.
     SourceUnstage,
     /// Arm a discard of the selected path's unstaged changes.
@@ -188,6 +194,18 @@ pub const DEFAULT: &[Binding] = &[
         description: "Previous changed file",
     },
     Binding {
+        keys: "h",
+        action: Action::SourcePreviousHunk,
+        contexts: &[Source],
+        description: "Previous unstaged hunk",
+    },
+    Binding {
+        keys: "l",
+        action: Action::SourceNextHunk,
+        contexts: &[Source],
+        description: "Next unstaged hunk",
+    },
+    Binding {
         keys: "pagedown",
         action: Action::SourcePageDown,
         contexts: &[Source],
@@ -210,6 +228,12 @@ pub const DEFAULT: &[Binding] = &[
         action: Action::SourceStage,
         contexts: &[Source],
         description: "Stage the selected path",
+    },
+    Binding {
+        keys: "shift-s",
+        action: Action::SourceStageHunk,
+        contexts: &[Source],
+        description: "Stage the selected unstaged hunk",
     },
     Binding {
         keys: "u",
@@ -370,10 +394,13 @@ mod tests {
             Action::ToggleSource,
             Action::SourceNext,
             Action::SourcePrevious,
+            Action::SourceNextHunk,
+            Action::SourcePreviousHunk,
             Action::SourcePageDown,
             Action::SourcePageUp,
             Action::SourceRefresh,
             Action::SourceStage,
+            Action::SourceStageHunk,
             Action::SourceUnstage,
             Action::SourceDiscard,
             Action::SourceCheckout,

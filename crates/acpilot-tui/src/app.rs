@@ -2252,20 +2252,7 @@ impl SourceControl {
         let Some(path) = self.selected_path() else {
             return Vec::new();
         };
-        let suffix = format!(" b/{path}");
-        let mut lines = Vec::new();
-        let mut inside = false;
-        for line in self.diff.patch.lines() {
-            if line.starts_with("diff --git ") {
-                inside = line.ends_with(&suffix);
-                if inside {
-                    lines.push(line);
-                }
-            } else if inside {
-                lines.push(line);
-            }
-        }
-        lines
+        acpilot_git::patch_section(&self.diff.patch, path)
     }
 }
 

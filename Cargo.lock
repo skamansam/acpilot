@@ -114,6 +114,7 @@ dependencies = [
  "acpilot-client",
  "acpilot-core",
  "acpilot-extensions",
+ "acpilot-git",
  "acpilot-profile",
  "acpilot-proto",
  "acpilot-stats",

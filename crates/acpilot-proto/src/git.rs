@@ -94,7 +94,7 @@ pub struct GitDiffFile {
 /// The patch is colour-free and external-diff-free, because a person reads it in a
 /// pane rather than in a terminal that would render either. The file list is what a
 /// commit composer iterates without parsing headers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct GitDiff {
     /// The unified diff text.
     pub patch: String,

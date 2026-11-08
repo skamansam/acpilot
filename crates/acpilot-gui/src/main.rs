@@ -144,6 +144,45 @@ fn measure_on_stats(
     .detach();
 }
 
+/// Push git answers at every open window, the same shape as the other two polls.
+/// A source read, a draft and a commit are commands rather than a clock, but the
+/// window still applies them on its own timer so the worker never touches gpui.
+fn apply_git_updates(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<acpilot_gui::daemon::GitUpdate>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let mut updates = Vec::new();
+            while let Ok(update) = changed.try_recv() {
+                updates.push(update);
+            }
+            if updates.is_empty() {
+                continue;
+            }
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                for update in updates.clone() {
+                    if cx
+                        .update(|cx| shell.update(cx, |shell, cx| shell.apply_git(update, cx)))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    })
+    .detach();
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -205,6 +244,14 @@ fn main() -> ExitCode {
         let _ = stats.send(rows);
     });
 
+    // The source-control pane's worker: one thread, commands in, answers out. The
+    // sender reaches every window; the receiver is the worker's.
+    let (git_requests, git_commands) = std::sync::mpsc::channel();
+    let (git_updates, git_changed) = std::sync::mpsc::channel();
+    daemon::follow_git(daemon::endpoint(), git_commands, move |update| {
+        let _ = git_updates.send(update);
+    });
+
     // The claim is taken before the runtime starts, so a launch that is only
     // handing over never pays for a renderer. It is also taken after the profiles
     // and theme are validated: a second instance with a typo in `--profile`
@@ -232,12 +279,14 @@ fn main() -> ExitCode {
         let shells: Arc<Mutex<Vec<Entity<Shell>>>> = Arc::default();
         let opened = app::open_window(cx, profiles.clone(), theme.clone())
             .expect("the platform accepted a window");
+        opened.update(cx, |shell, _cx| shell.set_git_sender(git_requests.clone()));
         shells
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(opened);
         recolour_on_settings(cx, Arc::clone(&shells), changed);
         measure_on_stats(cx, Arc::clone(&shells), stats_changed);
+        apply_git_updates(cx, Arc::clone(&shells), git_changed);
 
         let Some(mut requests) = requests else {
             return;
@@ -255,6 +304,8 @@ fn main() -> ExitCode {
                     let opened = app::open_window(cx, profiles, theme);
                     cx.activate(true);
                     if let Ok(shell) = &opened {
+                        let git = git_requests.clone();
+                        shell.update(cx, |shell, _cx| shell.set_git_sender(git));
                         shells
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)

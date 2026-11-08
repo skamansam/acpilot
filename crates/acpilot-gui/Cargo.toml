@@ -46,6 +46,9 @@ required-features = ["gui"]
 acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
+# The source-control pane cuts the daemon's patch with the same helper the TUI
+# uses, so two surfaces cannot disagree about where one file's diff ends.
+acpilot-git = { workspace = true }
 acpilot-profile = { workspace = true }
 # The preferences the launch reads: which theme this surface draws with is a
 # protocol type, shared with the daemon's settings cascade.

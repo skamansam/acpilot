@@ -83,6 +83,24 @@ export type LineMark = components['schemas']['LineMark'];
 /** One row of `GET /v1/workspaces`: a directory this daemon may serve. */
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 
+/** What happened to a path on one side of the index. */
+export type GitChangeKind = components['schemas']['GitChangeKind'];
+
+/** One changed path, with the index's answer and the working tree's. */
+export type GitStatusEntry = components['schemas']['GitStatusEntry'];
+
+/** Branch state and every changed path. */
+export type GitStatus = components['schemas']['GitStatus'];
+
+/** A unified diff and the files it touches. */
+export type GitDiff = components['schemas']['GitDiff'];
+
+/** One commit, as `POST /v1/git/commit` answers it. */
+export type GitCommit = components['schemas']['GitCommit'];
+
+/** A generated message the person can edit before committing. */
+export type CommitDraft = components['schemas']['CommitDraft'];
+
 /** One profile, as `GET /v1/profiles` will list it (P4-8). */
 export type ProfileSummary = components['schemas']['ProfileSummary'];
 
@@ -528,6 +546,55 @@ export async function renameFile(
   return answered(
     await client.POST('/v1/files/rename', {
       body: { path, to },
+      headers: auth(token),
+    }),
+  );
+}
+
+/** `GET /v1/git/status` — branch state and every changed path. */
+export async function gitStatus(
+  token: string,
+  signal?: AbortSignal,
+): Promise<GitStatus> {
+  return answered(await client.GET('/v1/git/status', { headers: auth(token), signal }));
+}
+
+/** `GET /v1/git/diff?scope=all` — the patch and its file list, from one moment. */
+export async function gitDiff(token: string, signal?: AbortSignal): Promise<GitDiff> {
+  return answered(
+    await client.GET('/v1/git/diff', {
+      params: { query: { scope: 'all' } },
+      headers: auth(token),
+      signal,
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/commit-message` — a session drafts from the staged index.
+ *
+ * A draft is not a commit: the daemon stages and writes nothing, and the answer is
+ * text the page puts in an editable box.
+ */
+export async function commitMessage(sessionId: string, token: string): Promise<CommitDraft> {
+  return answered(
+    await client.POST('/v1/git/commit-message', {
+      body: { session_id: sessionId },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/commit` — the one git write in the page.
+ *
+ * The caller has confirmed the whole message. Nothing is staged first: git's index
+ * is what the route commits.
+ */
+export async function commitStaged(message: string, token: string): Promise<GitCommit> {
+  return answered(
+    await client.POST('/v1/git/commit', {
+      body: { message },
       headers: auth(token),
     }),
   );

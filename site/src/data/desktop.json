@@ -46,6 +46,102 @@
       ]
     },
     {
+      "keys": "f6",
+      "action": "ToggleSource",
+      "description": "Source control",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
+      "keys": "escape",
+      "action": "CloseSource",
+      "description": "Close source control",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "down",
+      "action": "SourceNext",
+      "description": "Next changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "j",
+      "action": "SourceNext",
+      "description": "Next changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "up",
+      "action": "SourcePrevious",
+      "description": "Previous changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "k",
+      "action": "SourcePrevious",
+      "description": "Previous changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "pagedown",
+      "action": "SourcePageDown",
+      "description": "Scroll the diff down",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "pageup",
+      "action": "SourcePageUp",
+      "description": "Scroll the diff up",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "r",
+      "action": "SourceRefresh",
+      "description": "Refresh the index",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "c",
+      "action": "SourceCompose",
+      "description": "Compose a commit message",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "g",
+      "action": "SourceGenerate",
+      "description": "Generate a commit message",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "escape",
+      "action": "CloseComposer",
+      "description": "Close the composer",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
       "keys": "down",
       "action": "PaletteDown",
       "description": "Next command",
@@ -86,6 +182,10 @@
     {
       "label": "Where the stats came from",
       "detail": "Each figure's source, instead of its numbers"
+    },
+    {
+      "label": "Source control",
+      "detail": "Changed files, their diff, and a confirmed commit"
     },
     {
       "label": "Quit Acpilot",

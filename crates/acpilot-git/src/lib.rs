@@ -196,6 +196,31 @@ impl FromIterator<(usize, LineChange)> for LineChanges {
     }
 }
 
+/// One path's section of a unified patch, its `diff --git` header included.
+///
+/// A source-control pane shows one file at a time, and every surface must cut the
+/// same patch at the same place: a client that reimplemented the split would draw
+/// a different diff from the one the daemon served. The section ends at the next
+/// `diff --git` header, so a rename or a new file is one answer rather than a
+/// header and a stray hunk.
+#[must_use]
+pub fn patch_section<'a>(patch: &'a str, path: &str) -> Vec<&'a str> {
+    let suffix = format!(" b/{path}");
+    let mut lines = Vec::new();
+    let mut inside = false;
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") {
+            inside = line.ends_with(&suffix);
+            if inside {
+                lines.push(line);
+            }
+        } else if inside {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
 /// The line changes in a patch, for one path.
 ///
 /// The patch is unified diff text — what `git diff` prints, or what a permission
@@ -1223,6 +1248,25 @@ mod tests {
         let two = line_changes(&both, "two.rs");
         assert_eq!(two.get(3), Some(LineChange::Added), "its own line numbers");
         assert!(line_changes(&both, "three.rs").is_empty());
+    }
+
+    #[test]
+    fn a_file_section_stops_at_the_next_header() {
+        let both = format!(
+            "{}{}",
+            patch("one.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            patch("two.rs", "@@ -1,1 +3,2 @@\n c\n+d\n"),
+        );
+        let one = patch_section(&both, "one.rs");
+        assert_eq!(one[0], "diff --git a/one.rs b/one.rs");
+        assert!(
+            one.iter().all(|line| !line.contains("two.rs")),
+            "the next file's header and hunk are not part of this section: {one:?}"
+        );
+        assert!(
+            patch_section(&both, "three.rs").is_empty(),
+            "a path the patch does not touch has no section"
+        );
     }
 
     #[test]

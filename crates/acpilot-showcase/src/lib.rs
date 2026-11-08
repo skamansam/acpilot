@@ -508,6 +508,16 @@ fn action_name(action: acpilot_gui::keymap::Action) -> &'static str {
         Action::NextProfile => "NextProfile",
         Action::PreviousProfile => "PreviousProfile",
         Action::ToggleStatsSources => "ToggleStatsSources",
+        Action::ToggleSource => "ToggleSource",
+        Action::SourceNext => "SourceNext",
+        Action::SourcePrevious => "SourcePrevious",
+        Action::SourcePageDown => "SourcePageDown",
+        Action::SourcePageUp => "SourcePageUp",
+        Action::SourceRefresh => "SourceRefresh",
+        Action::SourceCompose => "SourceCompose",
+        Action::SourceGenerate => "SourceGenerate",
+        Action::CloseSource => "CloseSource",
+        Action::CloseComposer => "CloseComposer",
         Action::Quit => "Quit",
     }
 }

@@ -1344,8 +1344,26 @@ what needs an editor shell waits for the editor shell.
     write it leads to needs the confirmation. A commit is not added to the transcript; the status
     line and the refreshed index are the TUI's record, and the daemon's git output is only the
     answer.
-- [ ] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
+- [x] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
   no second diff implementation.
+  - The desktop shell opens the pane over the window with `F6`: `j`/`k` choose a changed path,
+    `PgUp`/`PgDn` scroll its section, `r` re-reads, and `c` opens the composer. There, `Ctrl-G`
+    asks the first session the daemon lists for a draft (the desktop shell has no session pane yet),
+    `Ctrl-S` asks for confirmation, and `y` sends the whole message to `POST /v1/git/commit`.
+  - The served page's **Source control** panel is lazy: it requests nothing until a person opens it,
+    then reads the same status and whole diff. A path button selects its section; `Review commit`
+    shows the confirmation, and only `Commit staged index` writes.
+  - `acpilot_git::patch_section` now cuts the header-to-next-header section for both the TUI and the
+    desktop shell. The browser's `patchSection` only selects the daemon's text by the same headers;
+    it does not compute a diff, so all three show the same lines for a path.
+  - **Tests:** four desktop state tests (refresh keeps or clamps the selected path, both status marks,
+    a message and confirmation, a refusal clearing every in-flight flag), five browser tests (lazy
+    read and one file's section, a generated draft and the two-step commit, an empty message stopped
+    before the daemon, the shared header rule, index-only staging), plus the `acpilot-git` helper test.
+  - **Open:** the desktop shell has no session pane, so generation names the first listed session
+    rather than a person's choice; the browser panel does not do the `F6`/keyboard route (it has no
+    global keymap), and neither client stages. The pane remains modal in the desktop app, as in the
+    TUI, because its one write needs the confirmation.
 - [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
   generation exercised without a network call.
 

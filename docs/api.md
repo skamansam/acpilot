@@ -726,9 +726,12 @@ is also `409`, with git's words in the message and in `details.field: "message"`
 because it is something the person can fix rather than a daemon fault. A missing
 `git` is still `502`.
 
-Staging, checking out and config changes remain separate, unbuilt actions. The TUI
-reads the routes with `F6`, drafts and edits in a composer, and calls `/commit` only
-after `Ctrl-S` followed by `y`; desktop and web clients are P6.5-5.
+Staging, checking out and config changes remain separate, unbuilt actions. All three
+surfaces read these routes: the TUI opens with `F6`, and the desktop overlay with
+`F6`; both draft and edit in a composer and call `/commit` only after `Ctrl-S`
+followed by `y`. The served page's **Source control** panel reads only when opened,
+and writes only after `Review commit` and then `Commit staged index`. None of them
+stages.
 
 ## Project map
 

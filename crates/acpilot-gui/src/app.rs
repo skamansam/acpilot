@@ -19,9 +19,11 @@ use gpui::{
 use acpilot_extensions::UiToken;
 use acpilot_stats::{Row, Track};
 
+use crate::daemon::{GitCommand, GitUpdate};
 use crate::keymap::{self, Action as KeyAction, Context as KeyContext};
 use crate::palette::{self, Command, CommandId};
 use crate::profiles::ShellProfile;
+use crate::source::{self, Composer, Source};
 use crate::stats;
 use crate::theme::GuiTheme;
 
@@ -38,6 +40,16 @@ actions!(
         ShowAbout,
         DismissAbout,
         ToggleStatsSources,
+        ToggleSource,
+        SourceNext,
+        SourcePrevious,
+        SourcePageDown,
+        SourcePageUp,
+        SourceRefresh,
+        SourceCompose,
+        SourceGenerate,
+        CloseSource,
+        CloseComposer,
         Quit,
     ]
 );
@@ -76,6 +88,16 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::NextProfile => KeyBinding::new(keys, NextProfile, Some(context)),
         KeyAction::PreviousProfile => KeyBinding::new(keys, PreviousProfile, Some(context)),
         KeyAction::ToggleStatsSources => KeyBinding::new(keys, ToggleStatsSources, Some(context)),
+        KeyAction::ToggleSource => KeyBinding::new(keys, ToggleSource, Some(context)),
+        KeyAction::SourceNext => KeyBinding::new(keys, SourceNext, Some(context)),
+        KeyAction::SourcePrevious => KeyBinding::new(keys, SourcePrevious, Some(context)),
+        KeyAction::SourcePageDown => KeyBinding::new(keys, SourcePageDown, Some(context)),
+        KeyAction::SourcePageUp => KeyBinding::new(keys, SourcePageUp, Some(context)),
+        KeyAction::SourceRefresh => KeyBinding::new(keys, SourceRefresh, Some(context)),
+        KeyAction::SourceCompose => KeyBinding::new(keys, SourceCompose, Some(context)),
+        KeyAction::SourceGenerate => KeyBinding::new(keys, SourceGenerate, Some(context)),
+        KeyAction::CloseSource => KeyBinding::new(keys, CloseSource, Some(context)),
+        KeyAction::CloseComposer => KeyBinding::new(keys, CloseComposer, Some(context)),
         KeyAction::Quit => KeyBinding::new(keys, Quit, Some(context)),
     }
 }
@@ -122,6 +144,8 @@ pub fn menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Next Profile", NextProfile),
                 MenuItem::action("Previous Profile", PreviousProfile),
+                MenuItem::separator(),
+                MenuItem::action("Source Control…", ToggleSource),
             ],
         },
     ]
@@ -147,6 +171,13 @@ pub struct Shell {
     integrations: Vec<Row>,
     /// Whether the bar shows each figure's source instead of its numbers.
     stats_sources: bool,
+    /// The source-control pane, when it is up.
+    source: Option<Source>,
+    /// The commit composer, when it is over the pane.
+    commit: Option<Composer>,
+    /// Where git requests go. Absent in a window with no daemon, which is the same
+    /// state as a daemon that does not answer.
+    git: Option<std::sync::mpsc::Sender<GitCommand>>,
     focus: FocusHandle,
     focused: bool,
 }
@@ -163,6 +194,9 @@ impl Shell {
             about: false,
             integrations: Vec::new(),
             stats_sources: false,
+            source: None,
+            commit: None,
+            git: None,
             focus: cx.focus_handle(),
             focused: false,
         }
@@ -220,6 +254,218 @@ impl Shell {
         self.stats_sources
     }
 
+    /// Where this window's git requests go.
+    pub fn set_git_sender(&mut self, sender: std::sync::mpsc::Sender<GitCommand>) {
+        self.git = Some(sender);
+    }
+
+    /// Whether source control is up, for a test or a caller drawing ahead of time.
+    #[must_use]
+    pub fn showing_source(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Whether the composer is over it.
+    #[must_use]
+    pub fn showing_composer(&self) -> bool {
+        self.commit.is_some()
+    }
+
+    /// The pane, as the daemon last answered it.
+    #[must_use]
+    pub fn source(&self) -> Option<&Source> {
+        self.source.as_ref()
+    }
+
+    /// The composer, while it is up.
+    #[must_use]
+    pub fn composer(&self) -> Option<&Composer> {
+        self.commit.as_ref()
+    }
+
+    /// Apply an answer from the git worker.
+    pub fn apply_git(&mut self, update: GitUpdate, cx: &mut Context<Self>) {
+        match update {
+            GitUpdate::Loaded {
+                status,
+                diff,
+                sessions,
+            } => {
+                if let Some(source) = &mut self.source {
+                    source.apply(status, diff, sessions);
+                }
+            }
+            GitUpdate::LoadFailed(message) => {
+                if let Some(source) = &mut self.source {
+                    source.failed(message);
+                }
+            }
+            GitUpdate::Draft(draft) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.draft(&draft);
+                }
+            }
+            GitUpdate::GenerateFailed(message) | GitUpdate::CommitFailed(message) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.failed(message);
+                }
+            }
+            GitUpdate::Committed(commit) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.committed(&commit);
+                }
+                self.commit = None;
+                // The index just moved under the pane. Ask for the new one rather
+                // than leave a path on screen that is already in history.
+                self.request_git(GitCommand::Load);
+            }
+        }
+        cx.notify();
+    }
+
+    fn request_git(&self, command: GitCommand) {
+        if let Some(git) = &self.git {
+            let _ = git.send(command);
+        }
+    }
+
+    fn toggle_source(&mut self, _: &ToggleSource, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_source_now(cx);
+    }
+
+    fn toggle_source_now(&mut self, cx: &mut Context<Self>) {
+        if self.source.take().is_some() {
+            self.commit = None;
+        } else {
+            self.commit = None;
+            self.source = Some(Source::loading());
+            self.request_git(GitCommand::Load);
+        }
+        cx.notify();
+    }
+
+    fn close_source(&mut self, _: &CloseSource, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.source.take().is_some() {
+            self.commit = None;
+            cx.notify();
+        }
+    }
+
+    fn source_next(&mut self, _: &SourceNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.step(1);
+            cx.notify();
+        }
+    }
+
+    fn source_previous(
+        &mut self,
+        _: &SourcePrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step(-1);
+            cx.notify();
+        }
+    }
+
+    fn source_page_down(
+        &mut self,
+        _: &SourcePageDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.page(10);
+            cx.notify();
+        }
+    }
+
+    fn source_page_up(&mut self, _: &SourcePageUp, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.page(-10);
+            cx.notify();
+        }
+    }
+
+    fn source_refresh(&mut self, _: &SourceRefresh, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+            self.request_git(GitCommand::Load);
+            cx.notify();
+        }
+    }
+
+    fn source_compose(&mut self, _: &SourceCompose, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_composer(false, cx);
+    }
+
+    fn source_generate(
+        &mut self,
+        _: &SourceGenerate,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_composer(true, cx);
+    }
+
+    /// Open the composer, refusing before the index is empty: a message describes
+    /// the next commit, and there is nothing for a model to read with nothing staged.
+    fn open_composer(&mut self, generate: bool, cx: &mut Context<Self>) {
+        let staged = self.source.as_ref().map_or(0, Source::staged);
+        if staged == 0 {
+            if let Some(source) = &mut self.source {
+                source.error = Some("nothing is staged · git add the files first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+        self.commit = Some(Composer::default());
+        if generate {
+            self.generate_draft(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn generate_draft(&mut self, cx: &mut Context<Self>) {
+        let session = self.source.as_ref().and_then(Source::session);
+        let Some(session) = session.map(str::to_owned) else {
+            if let Some(composer) = &mut self.commit {
+                composer.failed("no session is open · start one to generate a message");
+            }
+            cx.notify();
+            return;
+        };
+        if let Some(composer) = &mut self.commit {
+            composer.generating = true;
+            composer.error = None;
+        }
+        self.request_git(GitCommand::Generate(session));
+        cx.notify();
+    }
+
+    fn close_composer(&mut self, _: &CloseComposer, _window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .commit
+            .as_ref()
+            .is_some_and(|composer| composer.committing)
+        {
+            return;
+        }
+        if let Some(composer) = &mut self.commit {
+            if composer.confirming {
+                composer.confirming = false;
+                cx.notify();
+                return;
+            }
+        }
+        self.commit = None;
+        cx.notify();
+    }
+
     /// Run a palette command.
     fn run(&mut self, command: CommandId, cx: &mut Context<Self>) {
         match command {
@@ -245,6 +491,10 @@ impl Shell {
                 self.palette = None;
                 self.stats_sources = !self.stats_sources;
                 cx.notify();
+            }
+            CommandId::SourceControl => {
+                self.palette = None;
+                self.toggle_source_now(cx);
             }
             CommandId::Quit => cx.quit(),
         }
@@ -377,6 +627,10 @@ impl Shell {
     /// `escape` arrive as bound actions, and handling them twice would move the
     /// selection twice per key.
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.commit.is_some() {
+            self.composer_key(event, cx);
+            return;
+        }
         if self.palette.is_none() {
             return;
         }
@@ -408,6 +662,82 @@ impl Shell {
             // A new query means a new best row: keeping the old index would run
             // whatever happens to sit third in a list the user just narrowed.
             palette.selected = 0;
+            cx.notify();
+        }
+    }
+
+    /// The composer's keys. Text is edited locally; `ctrl-s` then `y` is the only
+    /// path to a write, and the second key is the confirmation.
+    fn composer_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let Some(composer) = self.commit.as_mut() else {
+            return;
+        };
+        if composer.committing {
+            return;
+        }
+        if composer.confirming {
+            match keystroke.key.as_str() {
+                "y" | "enter" => {
+                    let Some(message) = composer.message().map(str::to_owned) else {
+                        composer.confirming = false;
+                        composer.error = Some("a commit needs a message".to_owned());
+                        cx.notify();
+                        return;
+                    };
+                    composer.confirming = false;
+                    composer.committing = true;
+                    composer.error = None;
+                    self.request_git(GitCommand::Commit(message));
+                }
+                "n" => composer.confirming = false,
+                _ => return,
+            }
+            cx.notify();
+            return;
+        }
+        if keystroke.modifiers.control || keystroke.modifiers.platform {
+            match keystroke.key.as_str() {
+                "g" => self.generate_draft(cx),
+                "s" => {
+                    let Some(composer) = &mut self.commit else {
+                        return;
+                    };
+                    if composer.message().is_none() {
+                        composer.error = Some("write a message, or ctrl-g to draft one".to_owned());
+                    } else {
+                        composer.confirming = true;
+                        composer.error = None;
+                    }
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if keystroke.modifiers.alt {
+            return;
+        }
+        let changed = if keystroke.key == "backspace" {
+            composer.text.pop().is_some()
+        } else if keystroke.key == "enter" {
+            composer.text.push('\n');
+            true
+        } else if keystroke.key == "space" {
+            composer.text.push(' ');
+            true
+        } else if let Some(text) = keystroke.key_char.as_deref() {
+            if text.is_empty() {
+                false
+            } else {
+                composer.text.push_str(text);
+                true
+            }
+        } else {
+            false
+        };
+        if changed {
+            composer.error = None;
             cx.notify();
         }
     }
@@ -467,7 +797,13 @@ impl Render for Shell {
         let theme = self.theme.clone();
         let heading = SharedString::from(format!("Acpilot · {}", theme.name()));
         let palette_open = self.palette.is_some();
-        let context = if palette_open {
+        let source_open = self.source.is_some();
+        let composer_open = self.commit.is_some();
+        let context = if composer_open {
+            KeyContext::Commit.name()
+        } else if source_open {
+            KeyContext::Source.name()
+        } else if palette_open {
             KeyContext::Palette.name()
         } else {
             KeyContext::Shell.name()
@@ -521,6 +857,8 @@ impl Render for Shell {
         );
         let empty_palette = palette_open && palette_rows.is_empty();
         let about_open = self.about;
+        let source_view = self.source.clone();
+        let composer_view = self.commit.clone();
 
         let header = div()
             .h(px(40.0))
@@ -655,6 +993,184 @@ impl Render for Shell {
             .text_size(px(11.0))
             .children(stats_children);
 
+        let source_panel = source_view.map(|source| {
+            let branch = source.status.branch.as_deref().unwrap_or("(detached)");
+            let title = format!(
+                "Source control · {branch} · {} changed · {} staged",
+                source.status.files.len(),
+                source.staged()
+            );
+            let rows: Vec<(usize, String, bool)> = source
+                .status
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (index, source::row(entry), index == source.selected))
+                .collect();
+            let section = source.section();
+            let lines: Vec<(usize, String)> = section
+                .iter()
+                .skip(source.scroll)
+                .take(40)
+                .enumerate()
+                .map(|(offset, line)| (offset, (*line).to_owned()))
+                .collect();
+            let mut panel = div()
+                .id("source")
+                .p(px(16.0))
+                .bg(rgb(theme.ui(UiToken::BgPanel)))
+                .border(px(1.0))
+                .border_color(rgb(theme.ui(UiToken::Accent)))
+                .text_color(rgb(theme.ui(UiToken::Text)))
+                .child(div().text_size(px(18.0)).child(SharedString::from(title)))
+                .child(muted(
+                    &theme,
+                    "The pane reads; only a confirmed commit writes. j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close",
+                ));
+            if source.loading {
+                panel = panel.child(muted(&theme, "reading the index…"));
+            } else if let Some(error) = &source.error {
+                panel = panel.child(
+                    div()
+                        .text_color(rgb(theme.ui(UiToken::Danger)))
+                        .child(SharedString::from(error.clone())),
+                );
+            }
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .w(px(260.0))
+                            .flex()
+                            .flex_col()
+                            .children(rows.into_iter().map(|(index, label, chosen)| {
+                                let background = if chosen {
+                                    theme.ui(UiToken::Accent)
+                                } else {
+                                    theme.ui(UiToken::Bg)
+                                };
+                                let colour = if chosen {
+                                    theme.ui(UiToken::Bg)
+                                } else {
+                                    theme.ui(UiToken::Text)
+                                };
+                                div()
+                                    .id(("source-file", index))
+                                    .p(px(5.0))
+                                    .bg(rgb(background))
+                                    .text_color(rgb(colour))
+                                    .child(SharedString::from(label))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        if let Some(source) = &mut this.source {
+                                            source.selected = index;
+                                            source.scroll = 0;
+                                            cx.notify();
+                                        }
+                                    }))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .children(lines.into_iter().map(|(index, line)| {
+                                let colour = if line.starts_with('+') {
+                                    theme.ui(UiToken::Success)
+                                } else if line.starts_with('-') {
+                                    theme.ui(UiToken::Danger)
+                                } else if line.starts_with('@') || line.starts_with("diff ") {
+                                    theme.ui(UiToken::Accent)
+                                } else {
+                                    theme.ui(UiToken::TextMuted)
+                                };
+                                div()
+                                    .id(("source-diff", index))
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(colour))
+                                    .child(SharedString::from(line))
+                            })),
+                    ),
+            );
+            panel.into_any_element()
+        });
+
+        let composer_panel = composer_view.map(|composer| {
+            let staged = self.source.as_ref().map_or(0, Source::staged);
+            let state = if composer.generating {
+                "drafting"
+            } else if composer.committing {
+                "committing"
+            } else if composer.confirming {
+                "confirm"
+            } else {
+                "edit"
+            };
+            let footer = if let Some(error) = &composer.error {
+                (error.clone(), theme.ui(UiToken::Danger))
+            } else if composer.generating {
+                (
+                    "the session is drafting from the staged diff…".to_owned(),
+                    theme.ui(UiToken::Warning),
+                )
+            } else if composer.committing {
+                (
+                    "committing the staged index…".to_owned(),
+                    theme.ui(UiToken::Warning),
+                )
+            } else if composer.confirming {
+                (
+                    format!("commit {staged} staged? y confirms · n cancels"),
+                    theme.ui(UiToken::Warning),
+                )
+            } else {
+                (
+                    "ctrl-g generates from the first session · ctrl-s reviews the commit · esc closes"
+                        .to_owned(),
+                    theme.ui(UiToken::TextMuted),
+                )
+            };
+            div()
+                .id("composer")
+                .p(px(16.0))
+                .bg(rgb(theme.ui(UiToken::BgPanel)))
+                .border(px(1.0))
+                .border_color(rgb(if composer.confirming {
+                    theme.ui(UiToken::Warning)
+                } else {
+                    theme.ui(UiToken::Accent)
+                }))
+                .text_color(rgb(theme.ui(UiToken::Text)))
+                .child(
+                    div()
+                        .text_size(px(18.0))
+                        .child(SharedString::from(format!(
+                            "Commit message · {staged} staged · {state}"
+                        ))),
+                )
+                .child(
+                    div()
+                        .p(px(8.0))
+                        .bg(rgb(theme.ui(UiToken::Bg)))
+                        .text_size(px(13.0))
+                        .child(SharedString::from(if composer.text.is_empty() {
+                            "Type the message, or ctrl-g to draft one".to_owned()
+                        } else {
+                            composer.text.clone()
+                        })),
+                )
+                .child(
+                    div()
+                        .pt(px(8.0))
+                        .text_color(rgb(footer.1))
+                        .child(SharedString::from(footer.0)),
+                )
+                .into_any_element()
+        });
+
         let about_panel = about_open.then(|| {
             let lines: Vec<(usize, String, String)> = about_lines()
                 .into_iter()
@@ -727,11 +1243,25 @@ impl Render for Shell {
             .on_action(cx.listener(Self::show_about))
             .on_action(cx.listener(Self::dismiss_about))
             .on_action(cx.listener(Self::toggle_stats_sources))
+            .on_action(cx.listener(Self::toggle_source))
+            .on_action(cx.listener(Self::source_next))
+            .on_action(cx.listener(Self::source_previous))
+            .on_action(cx.listener(Self::source_page_down))
+            .on_action(cx.listener(Self::source_page_up))
+            .on_action(cx.listener(Self::source_refresh))
+            .on_action(cx.listener(Self::source_compose))
+            .on_action(cx.listener(Self::source_generate))
+            .on_action(cx.listener(Self::close_source))
+            .on_action(cx.listener(Self::close_composer))
             .on_action(cx.listener(Self::quit))
             .on_key_down(cx.listener(Self::key_down))
             .child(header)
             .children(palette_panel)
-            .child(if let Some(about) = about_panel {
+            .child(if let Some(composer) = composer_panel {
+                composer
+            } else if let Some(source) = source_panel {
+                source
+            } else if let Some(about) = about_panel {
                 about
             } else if empty_palette {
                 div()
@@ -750,7 +1280,7 @@ impl Render for Shell {
                     .text_size(px(11.0))
                     .child(SharedString::from(footer))
                     .child(SharedString::from(
-                        "secondary-shift-p — command palette · down/up — profile · f4 — where the stats came from · escape — close about · secondary-q — quit",
+                        "secondary-shift-p — command palette · down/up — profile · f4 — where the stats came from · f6 — source control · escape — close · secondary-q — quit",
                     )),
             )
     }

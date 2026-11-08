@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use acpilot_extensions::loader::LoadedExtension;
 use acpilot_extensions::theme::ThemeError;
+use acpilot_proto::git::{CommitDraft, GitCommit, GitDiff, GitStatus};
 use acpilot_proto::profile::{Preferences, ThemeSurface};
+use acpilot_proto::session::SessionSummary;
 use acpilot_stats::Row;
 
 use crate::theme::GuiTheme;
@@ -35,6 +37,92 @@ pub const STATS_POLL: Duration = Duration::from_secs(15);
 
 /// Where the daemon is, when the caller did not say.
 ///
+/// What the source-control pane asks the daemon for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitCommand {
+    /// Read status, the whole diff, and the sessions a draft may use.
+    Load,
+    /// Ask this session to draft a message from the staged index.
+    Generate(String),
+    /// Commit the index with a message the person confirmed.
+    Commit(String),
+}
+
+/// What the git worker tells a window.
+#[derive(Debug, Clone)]
+pub enum GitUpdate {
+    /// Status, diff and sessions, read at the same moment.
+    Loaded {
+        /// Branch state and every changed path.
+        status: GitStatus,
+        /// The patch and its file list.
+        diff: GitDiff,
+        /// The sessions a draft may be generated from.
+        sessions: Vec<SessionSummary>,
+    },
+    /// The read failed, with the daemon's message.
+    LoadFailed(String),
+    /// A session's draft, for the composer to edit.
+    Draft(CommitDraft),
+    /// A draft was refused.
+    GenerateFailed(String),
+    /// The index was committed.
+    Committed(GitCommit),
+    /// A commit was refused by git or the daemon.
+    CommitFailed(String),
+}
+
+/// Work the source-control requests one at a time, off the window's executor.
+///
+/// A thread of its own, like [`follow_stats`] and [`follow`]. The request channel is
+/// blocking on purpose: a refresh, a draft and a commit are commands from a person,
+/// not a poll, and each is answered on the same thread so two commits cannot race.
+pub fn follow_git(
+    endpoint: String,
+    requests: std::sync::mpsc::Receiver<GitCommand>,
+    sink: impl Fn(GitUpdate) + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        let client = acpilot_client::Client::new(endpoint);
+        while let Ok(command) = requests.recv() {
+            runtime.block_on(async {
+                match command {
+                    GitCommand::Load => match client.git_status().await {
+                        Ok(status) => match client.git_diff("all").await {
+                            Ok(diff) => {
+                                // A session list is an optional half: an old daemon with
+                                // no sessions still has a repository to show.
+                                let sessions = client.sessions().await.unwrap_or_default();
+                                sink(GitUpdate::Loaded {
+                                    status,
+                                    diff,
+                                    sessions,
+                                });
+                            }
+                            Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                        },
+                        Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                    },
+                    GitCommand::Generate(session) => match client.commit_message(&session).await {
+                        Ok(draft) => sink(GitUpdate::Draft(draft)),
+                        Err(error) => sink(GitUpdate::GenerateFailed(error.to_string())),
+                    },
+                    GitCommand::Commit(message) => match client.commit(&message).await {
+                        Ok(commit) => sink(GitUpdate::Committed(commit)),
+                        Err(error) => sink(GitUpdate::CommitFailed(error.to_string())),
+                    },
+                }
+            });
+        }
+    });
+}
+
 /// `ACPILOT_API_URL` is the same variable `acpilot --api-url` fills, so a window
 /// and a terminal started from one shell talk to one daemon. Otherwise the
 /// platform's default endpoint: the per-user socket, or loopback HTTP on a

@@ -27,6 +27,7 @@
   import { DEFAULT_PROFILE, parseRoute, routePath, scopeSessions, type Route } from './routes';
   import Editor from './Editor.svelte';
   import Session from './Session.svelte';
+  import SourceControl from './SourceControl.svelte';
   import Terminal from './Terminal.svelte';
   import { paneWhere, panesFor } from './terminals';
 
@@ -710,6 +711,8 @@
         <h3 id="editor-title">Editor</h3>
         <Editor {token} />
       </section>
+
+      <SourceControl {token} sessions={rows} openSession={openSession} />
 
       <section class="terminals" aria-labelledby="terminals-title">
         <div class="stats-head">

@@ -19,6 +19,10 @@ pub enum Context {
     Shell,
     /// The command palette is open.
     Palette,
+    /// The source-control pane has the keys.
+    Source,
+    /// The commit composer is over it.
+    Commit,
 }
 
 impl Context {
@@ -28,6 +32,8 @@ impl Context {
         match self {
             Self::Shell => "Shell",
             Self::Palette => "Palette",
+            Self::Source => "Source",
+            Self::Commit => "Commit",
         }
     }
 }
@@ -53,6 +59,26 @@ pub enum Action {
     PreviousProfile,
     /// Swap the stats bar's figures for the source behind each one.
     ToggleStatsSources,
+    /// Open or close the source-control pane.
+    ToggleSource,
+    /// Choose the next changed file.
+    SourceNext,
+    /// Choose the previous changed file.
+    SourcePrevious,
+    /// Scroll the selected file's diff down a page.
+    SourcePageDown,
+    /// Scroll it up a page.
+    SourcePageUp,
+    /// Ask the daemon for the index again.
+    SourceRefresh,
+    /// Open the commit composer.
+    SourceCompose,
+    /// Open it and ask the session for a draft.
+    SourceGenerate,
+    /// Close the source-control pane.
+    CloseSource,
+    /// Close the composer without writing.
+    CloseComposer,
     /// Leave the app.
     Quit,
 }
@@ -71,7 +97,7 @@ pub struct Binding {
     pub description: &'static str,
 }
 
-use Context::{Palette, Shell};
+use Context::{Commit, Palette, Shell, Source};
 
 /// The shell's keys.
 pub const DEFAULT: &[Binding] = &[
@@ -106,6 +132,80 @@ pub const DEFAULT: &[Binding] = &[
         action: Action::ToggleStatsSources,
         contexts: &[Shell],
         description: "Where the stats came from",
+    },
+    // The same function key the terminal uses. It is not a printable key, so a
+    // pane that will later take text cannot want it.
+    Binding {
+        keys: "f6",
+        action: Action::ToggleSource,
+        contexts: &[Shell],
+        description: "Source control",
+    },
+    Binding {
+        keys: "escape",
+        action: Action::CloseSource,
+        contexts: &[Source],
+        description: "Close source control",
+    },
+    Binding {
+        keys: "down",
+        action: Action::SourceNext,
+        contexts: &[Source],
+        description: "Next changed file",
+    },
+    Binding {
+        keys: "j",
+        action: Action::SourceNext,
+        contexts: &[Source],
+        description: "Next changed file",
+    },
+    Binding {
+        keys: "up",
+        action: Action::SourcePrevious,
+        contexts: &[Source],
+        description: "Previous changed file",
+    },
+    Binding {
+        keys: "k",
+        action: Action::SourcePrevious,
+        contexts: &[Source],
+        description: "Previous changed file",
+    },
+    Binding {
+        keys: "pagedown",
+        action: Action::SourcePageDown,
+        contexts: &[Source],
+        description: "Scroll the diff down",
+    },
+    Binding {
+        keys: "pageup",
+        action: Action::SourcePageUp,
+        contexts: &[Source],
+        description: "Scroll the diff up",
+    },
+    Binding {
+        keys: "r",
+        action: Action::SourceRefresh,
+        contexts: &[Source],
+        description: "Refresh the index",
+    },
+    Binding {
+        keys: "c",
+        action: Action::SourceCompose,
+        contexts: &[Source],
+        description: "Compose a commit message",
+    },
+    Binding {
+        keys: "g",
+        action: Action::SourceGenerate,
+        contexts: &[Source],
+        description: "Generate a commit message",
+    },
+    Binding {
+        keys: "escape",
+        action: Action::CloseComposer,
+        contexts: &[Commit],
+        description: "Close the composer",
     },
     Binding {
         keys: "down",
@@ -203,6 +303,16 @@ mod tests {
             Action::NextProfile,
             Action::PreviousProfile,
             Action::ToggleStatsSources,
+            Action::ToggleSource,
+            Action::SourceNext,
+            Action::SourcePrevious,
+            Action::SourcePageDown,
+            Action::SourcePageUp,
+            Action::SourceRefresh,
+            Action::SourceCompose,
+            Action::SourceGenerate,
+            Action::CloseSource,
+            Action::CloseComposer,
             Action::Quit,
         ] {
             assert!(

@@ -117,6 +117,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.commit.is_some() {
         draw_commit_composer(frame, app, body);
     }
+    if app.first_run {
+        draw_first_run(frame, &app.theme, body);
+    }
     if let Some(toast) = &app.toast {
         draw_toast(frame, toast, body, &app.theme);
     }
@@ -2145,6 +2148,49 @@ fn draw_toast(frame: &mut Frame, toast: &Toast, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
+/// The first launch's next steps, shown once when the profile declares no agent.
+///
+/// A card rather than a modal: the editor behind it is already usable, the next
+/// key dismisses it, and the two commands it names are the two real ways forward.
+/// The design pass never draws it, because its seeded profile has agents.
+fn draw_first_run(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let width = area.width.min(60);
+    let height = 5.min(area.height);
+    if width < 28 || height < 4 {
+        return;
+    }
+    let card = Rect {
+        x: area.x + area.width.saturating_sub(width),
+        y: area.y + area.height.saturating_sub(height + 2),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, card);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" next · no agent required ")
+        .border_style(Style::default().fg(theme.accent()));
+    let key = Style::default()
+        .fg(theme.accent_high())
+        .add_modifier(Modifier::BOLD);
+    let lines = vec![
+        Line::from(Span::styled(
+            "The editor works without an agent.",
+            Style::default().fg(theme.text_muted()),
+        )),
+        Line::from(vec![
+            Span::styled("Session → Select Agent…", key),
+            Span::raw("  ·  "),
+            Span::styled("acpilot doctor", key),
+        ]),
+        Line::from(Span::styled(
+            "any key closes this",
+            Style::default().fg(theme.text_muted()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
 /// The keys the pane with the keyboard answers to, and what to call it.
 ///
 /// Every pane that has moved into `Keymap` asks the table, then appends the
@@ -3067,6 +3113,28 @@ mod tests {
         assert!(
             text.contains("Assistant ·"),
             "the panel is there once chosen"
+        );
+    }
+
+    #[test]
+    fn a_launch_with_no_agents_says_what_to_do_next() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(crate::backend::Update::Agents(Vec::new()));
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("The editor works without an agent."),
+            "{text}"
+        );
+        assert!(text.contains("Select Agent"), "the menu path: {text}");
+        assert!(text.contains("acpilot doctor"), "the other way: {text}");
+
+        // A note, not a modal: the next key dismisses it and still acts.
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert!(
+            !text.contains("The editor works without an agent."),
+            "{text}"
         );
     }
 

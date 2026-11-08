@@ -1949,6 +1949,14 @@ pub struct App {
     pub sidebar_width: u16,
     /// The notice the last planned action raised.
     pub toast: Option<Toast>,
+    /// Whether the launch's "no agent required" card is on screen.
+    ///
+    /// Shown once per launch, when the first roster is empty, and dismissed by the
+    /// next key or click. Not a setting and not a memory: it says what the window
+    /// already is, and nothing is written to remember that it was read.
+    pub first_run: bool,
+    /// Whether this launch has already offered that card.
+    first_run_seen: bool,
     /// The stats bar's rows, measured for drawing.
     ///
     /// `acpilot_stats::Row` rather than the wire type: the ratio and the words are
@@ -2718,6 +2726,8 @@ impl App {
             files_width: Layout::default().files,
             sidebar_width: Layout::default().sidebar,
             toast: None,
+            first_run: false,
+            first_run_seen: false,
             integrations: Vec::new(),
             stats_sources: false,
             commands: acpilot_demo::palette::commands(),
@@ -3442,6 +3452,16 @@ impl App {
                 }
                 if self.agents.is_empty() {
                     self.agent_picker = false;
+                    // The first answer of a launch that declares nothing is the
+                    // moment to say what to do next. Once per launch: a roster
+                    // that empties later is not a first run.
+                    if !self.first_run_seen && !self.demo && !self.show_assistant {
+                        self.first_run = true;
+                    }
+                    self.first_run_seen = true;
+                } else {
+                    self.first_run = false;
+                    self.first_run_seen = true;
                 }
             }
             Update::Stats(stats) => {
@@ -3996,6 +4016,9 @@ impl App {
         // A notice is for the keystroke that raised it: the next one means it was
         // read and the person moved on.
         self.toast = None;
+        // The first-run card is a note, not a modal: the key that dismisses it
+        // still does its job, so ignoring the card never costs a keystroke.
+        self.first_run = false;
 
         // The About card is a page, not a question: any key turns it. It comes
         // before the palette and the menus because nothing behind it is visible.
@@ -6113,6 +6136,9 @@ impl App {
     /// is also a key: the mouse is a second way to do what the keyboard already
     /// does, and never the only way.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Option<Request> {
+        if matches!(event.kind, MouseEventKind::Down(_)) {
+            self.first_run = false;
+        }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(request) = self.click_menu(event.column, event.row) {
@@ -7721,6 +7747,30 @@ mod tests {
         assert!(!app.show_assistant, "no agents is not a panel");
         let toast = app.toast.as_ref().expect("a task, not a dead end");
         assert_eq!(toast.task, "P4.5");
+    }
+
+    #[test]
+    fn a_launch_with_no_agents_offers_next_steps_once() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        assert!(!app.first_run, "nothing to say before the daemon answers");
+
+        app.apply(Update::Agents(Vec::new()));
+        assert!(app.first_run, "no agents is where the card belongs");
+
+        // The key that dismisses it still does its job.
+        let _ = app.handle_key(key(KeyCode::Char('j')));
+        assert!(!app.first_run);
+
+        // A later refresh with the same empty roster is not a second first run.
+        app.apply(Update::Agents(Vec::new()));
+        assert!(!app.first_run);
+    }
+
+    #[test]
+    fn a_declared_agent_is_not_a_first_run() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![agent("mock", "Mock")]));
+        assert!(!app.first_run);
     }
 
     fn session(id: &str, title: &str) -> SessionSummary {

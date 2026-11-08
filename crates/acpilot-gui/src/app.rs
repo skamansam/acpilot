@@ -455,12 +455,12 @@ impl Shell {
         {
             return;
         }
-        if let Some(composer) = &mut self.commit {
-            if composer.confirming {
-                composer.confirming = false;
-                cx.notify();
-                return;
-            }
+        if let Some(composer) = &mut self.commit
+            && composer.confirming
+        {
+            composer.confirming = false;
+            cx.notify();
+            return;
         }
         self.commit = None;
         cx.notify();

@@ -38,7 +38,7 @@ pub use keyring::{CredentialStore, KeyringResolver, OsKeyring, SERVICE as KEYRIN
 pub use manifest::{
     AgentDefinition, AgentSpec, CommandSpec, DEFAULT_IDLE_TIMEOUT, DEFAULT_SUBMIT_DELAY, EnvValue,
     MANIFEST_FILE, Parser, PtyProfile, Restart, SCHEMA_PATH, SCHEMA_URL, SCHEMA_VERSION, Transport,
-    TransportDefinition, initial_manifest, json_schema, parse_definitions, schema_json_text,
+    TransportDefinition, json_schema, parse_definitions, schema_json_text,
 };
 pub use permission::{
     ASK_TIMEOUT, Answer, AuditEntry, Broker, Case, DecidedBy, Decision, Pattern, Policy,

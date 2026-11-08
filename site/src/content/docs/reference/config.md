@@ -185,7 +185,7 @@ Recipes live one directory over, one file per model-plus-prompt:
 profiles/work/
   config.toml
   providers.toml
-  agents.toml
+  agents.toml                    # optional: no file means no agents
   extensions.toml                  # activated extensions (install is global)
   recipes/corpus-scraper.toml      # see Flight test → Recipes
 ```

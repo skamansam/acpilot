@@ -179,6 +179,10 @@ url       = "https://devin.internal/acp"
 auth      = "keyring:devin"
 ```
 
+`agents.toml` is optional. A profile with no file serves the workspace with no agents,
+and Acpilot does not create one on startup: opening a file is not a reason to write
+configuration. Add the file when you have an agent to declare.
+
 `transport = "acp-stdio"` is the native path and the one implemented first. `pty` is the
 "run any program as an agent" path: launch it in a PTY, stream the screen, detect turns,
 and expose it through the same session/turn API. `http-jsonrpc` covers hosted agents.
@@ -198,7 +202,7 @@ silently is the failure mode with the worst consequences.
 └── profiles/
     ├── work/
     │   ├── profile.toml     # preferences: editor, theme, keymap, ui
-    │   ├── agents.toml      # per-profile agents and keyring references
+    │   ├── agents.toml      # optional: agents and their keyring references
     │   ├── lsp.toml         # per-profile language servers and their settings
     │   ├── policy.toml      # permission rules, workspace trust
     │   ├── theme.toml

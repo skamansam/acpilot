@@ -60,25 +60,14 @@ pub const SCHEMA_URL: &str = "https://rudeboy.dev/acpilot/schema/agents-v1.json"
 /// where the artifact is committed.
 pub const SCHEMA_PATH: &str = "site/public/schema/agents-v1.json";
 
-/// The presets this build ships, embedded so a new profile can be written with a
-/// usable manifest before any extension store exists.
+/// The presets this build ships, embedded so the parser test reads the same
+/// bytes the `acpilot.agents` built-in serves.
 ///
-/// The same bytes are the `acpilot.agents` built-in, which is why a fresh profile
-/// and `ext why` agree until the user edits the copy. The path is relative to
-/// this file, and `include_str!` makes a moved preset a build error.
+/// The path is relative to this file, and `include_str!` makes a moved preset a
+/// build error. Only the test reads it now: a profile without an `agents.toml`
+/// has no agents, and no code path writes the presets into one.
+#[cfg(test)]
 const SHIPPED_PRESETS: &str = include_str!("../../../extensions/acpilot.agents/agents.toml");
-
-/// The manifest a new profile starts with: the `$schema` line, then the presets.
-///
-/// The schema key comes first because TOML would file a bare key under the last
-/// `[[agents]]` table, and it points at the published document so an editor can
-/// complete the file a person is about to edit. Writers use this rather than an
-/// empty template: `agents = []` is refused, and "delete the file instead of
-/// emptying it" is not a useful first instruction.
-#[must_use]
-pub fn initial_manifest() -> String {
-    format!("\"$schema\" = \"{SCHEMA_URL}\"\n\n{SHIPPED_PRESETS}")
-}
 
 /// Gap between typing a prompt and pressing Enter in a PTY agent.
 ///
@@ -1278,26 +1267,6 @@ mod tests {
             args: vec![r#"-c"#.to_owned(), r#"echo "hi""#.to_owned()],
         };
         assert_eq!(command.command_line(), r#"sh -c "echo \"hi\"""#);
-    }
-
-    #[test]
-    fn a_new_manifest_points_at_the_published_schema_and_still_parses() {
-        // The presets we ship, through the same parser a user's file goes
-        // through: the first test of the schema, and the text a new profile is
-        // written with. If `acpilot.agents` stops parsing, the build fails
-        // rather than a user's first run.
-        let text = initial_manifest();
-        let first = text.lines().next().expect("at least one line");
-        assert_eq!(first, format!("\"$schema\" = \"{SCHEMA_URL}\""));
-
-        let agents = parse(
-            Path::new("agents.toml"),
-            &text,
-            &crate::secret::MapResolver::new(),
-        )
-        .expect("a new profile's manifest loads");
-        assert_eq!(agents.len(), 5, "the five shipped presets");
-        assert_eq!(agents[0].id, "claude-code");
     }
 
     #[test]

@@ -67,9 +67,9 @@ each key, and every agent whose command is missing. It is the first thing to run
 when something is wrong, and the first command worth building well.
 </Aside>
 
-A fresh install launches with the shipped presets. The first use of a profile
-writes that profile's `agents.toml` — starting with its `$schema` line — once,
-and never over a file that already exists; `doctor` then answers what a machine is
+A fresh install needs no profile and no `agents.toml`. With no agents file the
+daemon serves the workspace with no agents, so the editor is usable immediately;
+the file appears only when you declare one. `doctor` then answers what a machine is
 missing.
 
 ## What it looks like today

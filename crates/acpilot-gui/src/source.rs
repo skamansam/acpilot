@@ -20,8 +20,8 @@ pub struct Source {
     pub status: GitStatus,
     /// The whole uncommitted diff, as the daemon served it.
     pub diff: GitDiff,
-    /// The sessions a generated message may be asked of. The open one is preferred;
-    /// a window with no session pane uses the first one the daemon lists.
+    /// The sessions a generated message may be asked of, in the daemon's order.
+    /// The first is the default; the composer can choose another.
     pub sessions: Vec<SessionSummary>,
     /// Which changed path is selected.
     pub selected: usize,
@@ -152,11 +152,24 @@ impl Source {
         self.scroll = next.min(total.saturating_sub(1));
     }
 
-    /// The session a draft may be generated from: the first one listed, because a
-    /// window with no session pane has no other way to name one.
+    /// The session a draft may be generated from.
+    ///
+    /// A chosen id wins while it is still listed; otherwise the first session the
+    /// daemon sent is the default. The first is not a policy, only how a composer
+    /// opens before someone chooses another with Tab.
     #[must_use]
-    pub fn session(&self) -> Option<&str> {
-        self.sessions.first().map(|session| session.id.as_str())
+    pub fn session(&self, chosen: Option<&str>) -> Option<&SessionSummary> {
+        self.session_index(chosen)
+            .and_then(|index| self.sessions.get(index))
+    }
+
+    /// Where the chosen session sits in the daemon's list, or the first row's
+    /// index when nothing was chosen.
+    #[must_use]
+    pub fn session_index(&self, chosen: Option<&str>) -> Option<usize> {
+        chosen
+            .and_then(|id| self.sessions.iter().position(|session| session.id == id))
+            .or_else(|| (!self.sessions.is_empty()).then_some(0))
     }
 }
 
@@ -204,6 +217,9 @@ pub struct Composer {
     /// The whole message, subject and body: git takes one string, and splitting it
     /// into fields is how the two disagree.
     pub text: String,
+    /// The session that drafts the next message, by id. `None` means the first
+    /// session the daemon listed — the default until Tab makes it a choice.
+    pub session_id: Option<String>,
     /// Whether a session is drafting.
     pub generating: bool,
     /// Whether the commit request is in flight.
@@ -229,6 +245,19 @@ impl Composer {
     #[must_use]
     pub fn subject(&self) -> &str {
         self.text.lines().next().unwrap_or("")
+    }
+
+    /// Move the draft's session by `delta`, wrapping at either end.
+    ///
+    /// An empty list clears the choice; the next draft then reports that no
+    /// session is open rather than asking a session that has gone away.
+    pub fn step_session(&mut self, source: &Source, delta: isize) {
+        let Some(current) = source.session_index(self.session_id.as_deref()) else {
+            self.session_id = None;
+            return;
+        };
+        let next = (current as isize + delta).rem_euclid(source.sessions.len() as isize) as usize;
+        self.session_id = Some(source.sessions[next].id.clone());
     }
 
     /// Apply the daemon's answer to a draft.
@@ -313,7 +342,10 @@ mod tests {
         );
         assert_eq!(source.selected_path(), Some("a.rs"));
         assert_eq!(source.staged(), 1);
-        assert_eq!(source.session(), Some("s1"));
+        assert_eq!(
+            source.session(None).map(|session| session.id.as_str()),
+            Some("s1")
+        );
         assert!(
             !source.can_stage_selected(),
             "a path whose only change is in the index has nothing left to add"
@@ -359,6 +391,67 @@ mod tests {
         assert!(!source.can_unstage_selected());
         source.apply(status(Vec::new()), GitDiff::default(), Vec::new());
         assert_eq!(source.selected_path(), None);
+    }
+
+    #[test]
+    fn a_draft_can_be_asked_of_any_listed_session() {
+        let mut source = Source::loading();
+        source.apply(
+            status(Vec::new()),
+            GitDiff::default(),
+            vec![session("one"), session("two"), session("three")],
+        );
+        let mut composer = Composer::default();
+        assert_eq!(
+            source
+                .session(composer.session_id.as_deref())
+                .map(|session| session.id.as_str()),
+            Some("one"),
+            "the first listed is the default, not the only choice"
+        );
+
+        composer.step_session(&source, 1);
+        assert_eq!(composer.session_id.as_deref(), Some("two"));
+        composer.step_session(&source, 1);
+        assert_eq!(composer.session_id.as_deref(), Some("three"));
+        composer.step_session(&source, 1);
+        assert_eq!(
+            composer.session_id.as_deref(),
+            Some("one"),
+            "tab wraps around the daemon's list"
+        );
+        composer.step_session(&source, -1);
+        assert_eq!(
+            composer.session_id.as_deref(),
+            Some("three"),
+            "shift-tab wraps the other way"
+        );
+
+        composer.session_id = Some("two".to_owned());
+        source.apply(
+            status(Vec::new()),
+            GitDiff::default(),
+            vec![session("three"), session("one"), session("two")],
+        );
+        assert_eq!(
+            source
+                .session(composer.session_id.as_deref())
+                .map(|session| session.id.as_str()),
+            Some("two"),
+            "the choice follows the id, not the row"
+        );
+
+        composer.session_id = Some("gone".to_owned());
+        assert_eq!(
+            source
+                .session(composer.session_id.as_deref())
+                .map(|session| session.id.as_str()),
+            Some("three"),
+            "a vanished choice falls back to the first still listed"
+        );
+        source.apply(status(Vec::new()), GitDiff::default(), Vec::new());
+        composer.step_session(&source, 1);
+        assert_eq!(composer.session_id, None);
     }
 
     #[test]

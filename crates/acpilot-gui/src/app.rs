@@ -51,6 +51,8 @@ actions!(
         SourceCompose,
         SourceGenerate,
         CloseSource,
+        ComposerNextSession,
+        ComposerPreviousSession,
         CloseComposer,
         Quit,
     ]
@@ -101,6 +103,10 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::SourceCompose => KeyBinding::new(keys, SourceCompose, Some(context)),
         KeyAction::SourceGenerate => KeyBinding::new(keys, SourceGenerate, Some(context)),
         KeyAction::CloseSource => KeyBinding::new(keys, CloseSource, Some(context)),
+        KeyAction::ComposerNextSession => KeyBinding::new(keys, ComposerNextSession, Some(context)),
+        KeyAction::ComposerPreviousSession => {
+            KeyBinding::new(keys, ComposerPreviousSession, Some(context))
+        }
         KeyAction::CloseComposer => KeyBinding::new(keys, CloseComposer, Some(context)),
         KeyAction::Quit => KeyBinding::new(keys, Quit, Some(context)),
     }
@@ -486,8 +492,18 @@ impl Shell {
     }
 
     fn generate_draft(&mut self, cx: &mut Context<Self>) {
-        let session = self.source.as_ref().and_then(Source::session);
-        let Some(session) = session.map(str::to_owned) else {
+        // Resolve the composer's choice before borrowing it again: the first
+        // session is only the default, and Tab may have named another.
+        let chosen = self
+            .commit
+            .as_ref()
+            .and_then(|composer| composer.session_id.clone());
+        let session = self
+            .source
+            .as_ref()
+            .and_then(|source| source.session(chosen.as_deref()))
+            .map(|session| session.id.clone());
+        let Some(session) = session else {
             if let Some(composer) = &mut self.commit {
                 composer.failed("no session is open · start one to generate a message");
             }
@@ -499,6 +515,45 @@ impl Shell {
             composer.error = None;
         }
         self.request_git(GitCommand::Generate(session));
+        cx.notify();
+    }
+
+    fn composer_next_session(
+        &mut self,
+        _: &ComposerNextSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_composer_session(1, cx);
+    }
+
+    fn composer_previous_session(
+        &mut self,
+        _: &ComposerPreviousSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_composer_session(-1, cx);
+    }
+
+    /// Tab and Shift-Tab choose which session a draft is asked of.
+    ///
+    /// A draft already in flight is not silently repointed at another session:
+    /// its answer would land under a name that did not write it.
+    fn step_composer_session(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let Some(composer) = self.commit.as_mut() else {
+            return;
+        };
+        if composer.generating {
+            composer.error = Some("the session is still drafting · wait for its draft".to_owned());
+            cx.notify();
+            return;
+        }
+        composer.step_session(source, delta);
+        composer.error = None;
         cx.notify();
     }
 
@@ -781,6 +836,10 @@ impl Shell {
         } else if keystroke.key == "space" {
             composer.text.push(' ');
             true
+        } else if keystroke.key == "tab" {
+            // Tab cycles the draft's session through a bound action; it is not
+            // text in a commit message.
+            false
         } else if let Some(text) = keystroke.key_char.as_deref() {
             if text.is_empty() {
                 false
@@ -1197,6 +1256,28 @@ impl Render for Shell {
 
         let composer_panel = composer_view.map(|composer| {
             let staged = self.source.as_ref().map_or(0, Source::staged);
+            let session = self.source.as_ref().and_then(|source| {
+                let index = source.session_index(composer.session_id.as_deref())?;
+                Some((index, source.sessions.len(), source.sessions.get(index)?))
+            });
+            let session_colour = if session.is_some() {
+                theme.ui(UiToken::TextMuted)
+            } else {
+                theme.ui(UiToken::Warning)
+            };
+            let session_line = match session {
+                Some((index, count, session)) if count > 1 => format!(
+                    "Draft session · {} · {} · {} of {} · tab/shift-tab chooses",
+                    session.agent_id,
+                    session.title,
+                    index + 1,
+                    count
+                ),
+                Some((_, _, session)) => {
+                    format!("Draft session · {} · {}", session.agent_id, session.title)
+                }
+                None => "No session is open · start one to draft".to_owned(),
+            };
             let state = if composer.generating {
                 "drafting"
             } else if composer.committing {
@@ -1225,7 +1306,7 @@ impl Render for Shell {
                 )
             } else {
                 (
-                    "ctrl-g generates from the first session · ctrl-s reviews the commit · esc closes"
+                    "tab/shift-tab chooses the session · ctrl-g drafts from it · ctrl-s reviews the commit · esc closes"
                         .to_owned(),
                     theme.ui(UiToken::TextMuted),
                 )
@@ -1247,6 +1328,13 @@ impl Render for Shell {
                         .child(SharedString::from(format!(
                             "Commit message · {staged} staged · {state}"
                         ))),
+                )
+                .child(
+                    div()
+                        .pt(px(4.0))
+                        .text_size(px(11.0))
+                        .text_color(rgb(session_colour))
+                        .child(SharedString::from(session_line)),
                 )
                 .child(
                     div()
@@ -1351,6 +1439,8 @@ impl Render for Shell {
             .on_action(cx.listener(Self::source_compose))
             .on_action(cx.listener(Self::source_generate))
             .on_action(cx.listener(Self::close_source))
+            .on_action(cx.listener(Self::composer_next_session))
+            .on_action(cx.listener(Self::composer_previous_session))
             .on_action(cx.listener(Self::close_composer))
             .on_action(cx.listener(Self::quit))
             .on_key_down(cx.listener(Self::key_down))
@@ -1623,6 +1713,86 @@ mod drawn {
             updated_at: "2026-10-30T12:00:00Z".to_owned(),
             stale: false,
         }]
+    }
+
+    fn session_summary(id: &str, title: &str) -> acpilot_proto::session::SessionSummary {
+        acpilot_proto::session::SessionSummary {
+            id: id.to_owned(),
+            workspace_id: "acpilot".to_owned(),
+            agent_id: "mock".to_owned(),
+            title: title.to_owned(),
+            status: acpilot_proto::session::SessionStatus::Idle,
+            created_at: "2026-11-07T12:00:00Z".to_owned(),
+            updated_at: "2026-11-07T12:00:00Z".to_owned(),
+        }
+    }
+
+    /// A repository with one staged path and two sessions to choose between.
+    fn staged_source() -> Source {
+        let mut source = Source::loading();
+        source.apply(
+            acpilot_proto::git::GitStatus {
+                branch: Some("main".to_owned()),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                head: None,
+                files: vec![acpilot_proto::git::GitStatusEntry {
+                    path: "src/main.rs".to_owned(),
+                    old_path: None,
+                    index: acpilot_proto::git::GitChangeKind::Modified,
+                    worktree: acpilot_proto::git::GitChangeKind::Unmodified,
+                }],
+            },
+            acpilot_proto::git::GitDiff::default(),
+            vec![session_summary("s1", "one"), session_summary("s2", "two")],
+        );
+        source
+    }
+
+    #[gpui::test]
+    async fn the_composer_drafts_from_the_session_it_shows(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_git_sender(requests);
+                shell.source = Some(staged_source());
+                shell.open_composer(false, cx);
+            });
+        });
+        assert!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .composer()
+                .is_some_and(|composer| composer.session_id.is_none())),
+            "the first listed session is the default"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.composer_next_session(&ComposerNextSession, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .composer()
+                .and_then(|composer| composer.session_id.clone())),
+            Some("s2".to_owned()),
+            "tab chooses the second session"
+        );
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.generate_draft(cx));
+        });
+        assert_eq!(
+            sent.try_recv().expect("a generate request"),
+            GitCommand::Generate("s2".to_owned()),
+            "ctrl-g asks the session the composer is showing"
+        );
     }
 
     /// The path that works on Linux and Windows, where gpui 0.2.2 draws no menu

@@ -81,6 +81,10 @@ pub enum Action {
     SourceGenerate,
     /// Close the source-control pane.
     CloseSource,
+    /// Choose the next session a draft may be asked of.
+    ComposerNextSession,
+    /// Choose the previous session a draft may be asked of.
+    ComposerPreviousSession,
     /// Close the composer without writing.
     CloseComposer,
     /// Leave the app.
@@ -218,6 +222,18 @@ pub const DEFAULT: &[Binding] = &[
         description: "Generate a commit message",
     },
     Binding {
+        keys: "tab",
+        action: Action::ComposerNextSession,
+        contexts: &[Commit],
+        description: "Next session for the draft",
+    },
+    Binding {
+        keys: "shift-tab",
+        action: Action::ComposerPreviousSession,
+        contexts: &[Commit],
+        description: "Previous session for the draft",
+    },
+    Binding {
         keys: "escape",
         action: Action::CloseComposer,
         contexts: &[Commit],
@@ -330,6 +346,8 @@ mod tests {
             Action::SourceCompose,
             Action::SourceGenerate,
             Action::CloseSource,
+            Action::ComposerNextSession,
+            Action::ComposerPreviousSession,
             Action::CloseComposer,
             Action::Quit,
         ] {

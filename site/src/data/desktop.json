@@ -150,6 +150,22 @@
       ]
     },
     {
+      "keys": "tab",
+      "action": "ComposerNextSession",
+      "description": "Next session for the draft",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
+      "keys": "shift-tab",
+      "action": "ComposerPreviousSession",
+      "description": "Previous session for the draft",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
       "keys": "escape",
       "action": "CloseComposer",
       "description": "Close the composer",

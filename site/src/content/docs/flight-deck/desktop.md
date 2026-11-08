@@ -138,6 +138,13 @@ was measured by instead of what it is. The window asks the daemon for these ever
 fifteen seconds; with no daemon behind it the bar says so rather than failing a
 launch over a footer.
 
+The source-control overlay is real too: `F6` reads the changed paths and the
+selected file's diff, `s`/`u` stage and unstage a path, and `c` opens the commit
+composer. `Tab`/`Shift-Tab` there chooses which listed session drafts the message,
+so a window with no session pane can still ask the agent working on that part of
+the repository; the first session is only the default. `Ctrl-G` asks it for a
+draft, and `Ctrl-S` then `y` commits the staged index.
+
 A launch names a path rather than a profile: `acpilot-gui` opens the project you
 are in, `acpilot-gui src/main.rs` the project that file belongs to, and the profile
 comes from those project settings. `--profile <dir>` remains for the case a path

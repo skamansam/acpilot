@@ -77,6 +77,9 @@ mod workspaces;
 
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
+// The language server table is the daemon's, not a client's: `doctor` reports what
+// this build would start and must not keep a second copy that drifts.
+pub use lsp::{SERVERS, installed};
 pub use platform::{Target, resolve_target, serve, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
 pub use terminals::{Output, Terminal, Terminals};

@@ -8,6 +8,7 @@
 use acpilot_core::AcpilotError;
 
 pub mod cli;
+pub mod doctor;
 pub mod ext;
 pub mod secret;
 

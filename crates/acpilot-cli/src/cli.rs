@@ -15,6 +15,7 @@ use acpilot_proto::API_PREFIX;
 use acpilot_proto::profile::ThemeSurface;
 use clap::{Args, Parser, Subcommand};
 
+use crate::doctor;
 use crate::ext::{self, Paths};
 use crate::secret;
 
@@ -155,6 +156,22 @@ pub enum Command {
         /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+    },
+    /// Report what this machine has, and what a project is missing.
+    ///
+    /// Reads `PATH`, the profile and the workspace; starts no daemon and writes
+    /// nothing. A machine with no profile and no agent is healthy — that is the
+    /// first-run state, and the editor works in it.
+    Doctor {
+        /// A directory, or a file inside one. Defaults to this directory.
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Profile to report on, by name under the config root.
+        ///
+        /// The profile need not exist: a missing one is reported as not created,
+        /// not as a failure.
+        #[arg(long, env = "ACPILOT_PROFILE", default_value = "default")]
+        profile: String,
     },
 }
 
@@ -342,6 +359,7 @@ pub fn run(cli: Cli) -> u8 {
             demo,
             mouse: !no_mouse,
         }),
+        Some(Command::Doctor { path, profile }) => run_doctor(path.as_deref(), &profile),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -351,6 +369,26 @@ pub fn run(cli: Cli) -> u8 {
             let _ = command.print_help();
             println!();
             exit::USAGE
+        }
+    }
+}
+
+/// Report what this machine has, and exit non-zero only when something that is
+/// configured cannot run.
+fn run_doctor(path: Option<&std::path::Path>, profile: &str) -> u8 {
+    let installed = |program: &str| acpilotd::installed(program);
+    match doctor::collect(path, profile, &installed) {
+        Ok(report) => {
+            print!("{}", report.render());
+            if report.ok() {
+                exit::SUCCESS
+            } else {
+                exit::FAILURE
+            }
+        }
+        Err(message) => {
+            eprintln!("acpilot doctor: {message}");
+            exit::FAILURE
         }
     }
 }

@@ -67,6 +67,32 @@ each key, and every agent whose command is missing. It is the first thing to run
 when something is wrong, and the first command worth building well.
 </Aside>
 
+```bash
+$ acpilot doctor
+acpilot 0.1.0 · api /v1
+config     /home/sam/.config/acpilot
+profile    default · /home/sam/.config/acpilot/profiles/default · not created yet (not required)
+workspace  /home/sam/code/thing
+project    none · temporary root, nothing is written
+
+Agents
+  declared   none · the editor works without one
+  on PATH    claude, codex
+  missing    gemini, freebuff
+
+Language servers
+  rust         rust-analyzer                  installed
+  python       pyright-langserver             missing
+  typescript   typescript-language-server     installed
+  javascript   typescript-language-server    installed
+```
+
+A machine with nothing set up exits `0`: that is the first-run state, not a fault.
+The only failure is a declaration that cannot run — a profile without a
+`config.toml`, a manifest that does not parse, or an agent whose command is not on
+`PATH`. `doctor` starts no daemon and writes no file, so it is safe on a machine
+that has never run Acpilot.
+
 A fresh install needs no profile and no `agents.toml`. With no agents file the
 daemon serves the workspace with no agents, so the editor is usable immediately;
 the file appears only when you declare one. `doctor` then answers what a machine is

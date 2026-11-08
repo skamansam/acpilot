@@ -210,6 +210,67 @@ fn help_is_stable() {
 }
 
 #[test]
+fn doctor_reports_a_fresh_machine_and_writes_nothing() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        // An empty PATH makes detection deterministic: no agent or language
+        // server is found, which is the fresh-machine answer this asserts.
+        .env("PATH", workspace.path())
+        .output()
+        .expect("run acpilot");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("default") && text.contains("not created yet (not required)"),
+        "{text}"
+    );
+    assert!(text.contains("declared   none"), "{text}");
+    assert!(
+        text.contains("temporary root, nothing is written"),
+        "{text}"
+    );
+    assert!(text.contains("Language servers"), "{text}");
+    assert!(
+        !config.path().join("profiles").exists(),
+        "doctor must not create a profile"
+    );
+}
+
+#[test]
+fn doctor_fails_only_when_a_declared_agent_cannot_run() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/default");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\nid = \"ghost\"\nname = \"Ghost\"\n\
+         transport = \"acp-stdio\"\ncommand = \"acpilot-doctor-no-such-program\"\n",
+    )
+    .expect("agent manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .env("PATH", workspace.path())
+        .output()
+        .expect("run acpilot");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Ghost"), "{text}");
+    assert!(text.contains("not on PATH"), "{text}");
+    assert!(text.contains("Problems"), "{text}");
+}
+
+#[test]
 fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
     // `acpilot()` pipes an empty stdin. The command must refuse that rather than
     // store a zero-length credential, and it must do so before any keyring call.

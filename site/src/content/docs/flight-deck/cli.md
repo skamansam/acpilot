@@ -63,8 +63,10 @@ acpilot doctor
 
 <Aside type="note" title="`doctor` earns its place">
 `acpilot doctor` prints the resolved profile, its roots, which config file won
-each key, and every agent whose command is missing. It is the first thing to run
-when something is wrong, and the first command worth building well.
+each key, and every agent whose command is missing. The first declared local
+agent is also asked to `initialize`, so the report says whether it speaks ACP,
+not only whether its command exists. It is the first thing to run when something
+is wrong, and the first command worth building well.
 </Aside>
 
 ```bash
@@ -89,9 +91,22 @@ Language servers
 
 A machine with nothing set up exits `0`: that is the first-run state, not a fault.
 The only failure is a declaration that cannot run — a profile without a
-`config.toml`, a manifest that does not parse, or an agent whose command is not on
-`PATH`. `doctor` starts no daemon and writes no file, so it is safe on a machine
-that has never run Acpilot.
+`config.toml`, a manifest that does not parse, an agent whose command is not on
+`PATH`, or a declared agent that never answers the handshake. `doctor` starts no
+daemon and writes no file, so it is safe on a machine that has never run Acpilot.
+
+When an agent is declared, its handshake appears under **Agents**:
+
+```
+Agents
+  declared   Claude · claude
+  handshake  Claude · Claude Agent 0.94.0 · ACP V1
+```
+
+That is the one process `doctor` starts: ACP `initialize`, with no workspace, no
+conversation and no prompt, killed when the answer arrives or after ten seconds.
+A program finds its way onto `PATH` more easily than it earns that answer, which
+is why the report distinguishes the two.
 
 A fresh install needs no profile and no `agents.toml`. With no agents file the
 daemon serves the workspace with no agents, so the editor is usable immediately;

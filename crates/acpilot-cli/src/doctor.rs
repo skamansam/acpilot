@@ -3,17 +3,20 @@
 //! First run is allowed to be empty. The editor opens a directory with no
 //! profile, no `agents.toml` and no language server, so this command's job is to
 //! say what is there rather than to demand setup. It starts no daemon, writes no
-//! file, and asks no keyring for a value: a report is a read.
+//! file, and asks no keyring for a value: a report is a read. The one process it
+//! may start is a declared `acp-stdio` agent, so the report can say whether it
+//! speaks ACP rather than merely whether its command exists.
 //!
 //! The one failure is a thing that is *declared* and cannot run — a profile that
-//! exists without a `config.toml`, a manifest that does not parse, or an agent
-//! whose command is not on `PATH`. A machine with none of those but nothing set up
-//! is healthy, which is the difference between a doctor and a toll booth.
+//! exists without a `config.toml`, a manifest that does not parse, an agent whose
+//! command is not on `PATH`, or an agent that never answers `initialize`. A
+//! machine with none of those but nothing set up is healthy, which is the
+//! difference between a doctor and a toll booth.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use acpilot_agent::{KeyringResolver, Registry};
+use acpilot_agent::{AgentSpec, KeyringResolver, Registry, Transport};
 use acpilot_profile::Profile;
 use acpilot_profile::project::Root;
 use acpilot_proto::API_PREFIX;
@@ -24,6 +27,60 @@ use acpilot_proto::API_PREFIX;
 /// list is what `doctor` looks for so a first-time user can see that the agent
 /// they already use is one `agents.toml` line away.
 pub const AGENT_PROGRAMS: &[&str] = &["claude", "codex", "gemini", "freebuff"];
+
+/// What one declared agent said when asked to `initialize`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handshake {
+    /// Display name from the manifest.
+    pub agent: String,
+    /// The command that was started.
+    pub command: String,
+    /// The answer, or why there was none.
+    pub outcome: HandshakeOutcome,
+}
+
+/// The answer to one ACP `initialize`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandshakeOutcome {
+    /// The agent completed the handshake.
+    Answered {
+        /// The name the agent reports for itself.
+        name: Option<String>,
+        /// The version the agent reports.
+        version: Option<String>,
+        /// The protocol version it agreed to.
+        protocol: String,
+    },
+    /// The agent did not complete the handshake.
+    Failed {
+        /// Why, in the transport's or the agent's words.
+        message: String,
+    },
+}
+
+impl HandshakeOutcome {
+    /// An agent that completed the handshake.
+    #[must_use]
+    pub fn answered(
+        name: Option<String>,
+        version: Option<String>,
+        protocol: impl Into<String>,
+    ) -> Self {
+        Self::Answered {
+            name,
+            version,
+            protocol: protocol.into(),
+        }
+    }
+
+    /// An agent that did not complete the handshake.
+    #[must_use]
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self::Failed {
+            message: message.into(),
+        }
+    }
+}
 
 /// What `doctor` found on one machine, as data so a test can read it without a
 /// terminal.
@@ -39,6 +96,8 @@ pub struct Report {
     pub project: Option<PathBuf>,
     /// Agents the profile declares, in file order.
     pub declared: Vec<Declared>,
+    /// The one declared agent that was asked to `initialize`, if there was one.
+    pub handshake: Option<Handshake>,
     /// Candidate agent programs found on `PATH`.
     pub on_path: Vec<&'static str>,
     /// Candidate agent programs not found on `PATH`.
@@ -121,6 +180,29 @@ impl Report {
                 }
             }
         }
+        if let Some(handshake) = &self.handshake {
+            match &handshake.outcome {
+                HandshakeOutcome::Answered {
+                    name,
+                    version,
+                    protocol,
+                } => {
+                    let identity = name.as_deref().unwrap_or("unnamed");
+                    let line = match version {
+                        Some(version) => format!("{identity} {version}"),
+                        None => identity.to_owned(),
+                    };
+                    out.push_str(&format!(
+                        "  handshake  {} · {line} · ACP {protocol}\n",
+                        handshake.agent
+                    ));
+                }
+                HandshakeOutcome::Failed { message } => out.push_str(&format!(
+                    "  handshake  {} · no answer: {message}\n",
+                    handshake.agent
+                )),
+            }
+        }
         if !self.on_path.is_empty() {
             out.push_str(&format!("  on PATH    {}\n", self.on_path.join(", ")));
         }
@@ -158,8 +240,10 @@ impl Report {
 /// Collect the report for `path` (or this directory) under `profile_name`.
 ///
 /// `installed` answers whether a program is on `PATH`; the binary passes the
-/// daemon's own lookup, and a test passes a table. Nothing else is injected: the
-/// filesystem answers the rest.
+/// daemon's own lookup, and a test passes a table. `probe` answers the one
+/// handshake: it is called at most once, for the first declared `acp-stdio`
+/// agent whose command is on `PATH`. The binary supplies a runtime; a test
+/// supplies a table. Nothing else is injected: the filesystem answers the rest.
 ///
 /// # Errors
 ///
@@ -170,6 +254,7 @@ pub fn collect(
     path: Option<&Path>,
     profile_name: &str,
     installed: &dyn Fn(&str) -> bool,
+    probe: &dyn Fn(&AgentSpec) -> HandshakeOutcome,
 ) -> Result<Report, String> {
     let root = Root::resolve(path).map_err(|error| error.to_string())?;
     let mut problems = Vec::new();
@@ -181,6 +266,7 @@ pub fn collect(
 
     let profile_dir = acpilot_profile::profiles_dir().join(profile_name);
     let mut declared = Vec::new();
+    let mut handshake = None;
     let profile = if !profile_dir.exists() {
         format!(
             "{profile_name} · {} · not created yet (not required)",
@@ -195,7 +281,9 @@ pub fn collect(
                         profile_name,
                         &manifest,
                         installed,
+                        probe,
                         &mut declared,
+                        &mut handshake,
                         &mut problems,
                     );
                 }
@@ -233,6 +321,7 @@ pub fn collect(
         workspace: root.root().to_path_buf(),
         project: root.project().map(|project| project.config_path()),
         declared,
+        handshake,
         on_path,
         missing,
         servers,
@@ -249,7 +338,9 @@ fn load_declared(
     profile_name: &str,
     manifest: &Path,
     installed: &dyn Fn(&str) -> bool,
+    probe: &dyn Fn(&AgentSpec) -> HandshakeOutcome,
     declared: &mut Vec<Declared>,
+    handshake: &mut Option<Handshake>,
     problems: &mut Vec<String>,
 ) {
     let resolver = Arc::new(KeyringResolver::new(profile_name));
@@ -266,9 +357,32 @@ fn load_declared(
                 }
                 declared.push(Declared {
                     name: spec.name.clone(),
-                    command,
+                    command: command.clone(),
                     installed: available,
                 });
+                // One handshake, not a roster of them: the question is whether
+                // this machine can start the agent it was told about, and the
+                // first declared local ACP agent answers it. A `pty` agent is
+                // driven by a screen parser rather than ACP, and a remote one
+                // has no local process to ask.
+                if handshake.is_none()
+                    && available
+                    && matches!(&spec.transport, Transport::AcpStdio { .. })
+                    && let Some(command) = &command
+                {
+                    let outcome = probe(spec.as_ref());
+                    if let HandshakeOutcome::Failed { message } = &outcome {
+                        problems.push(format!(
+                            "agent `{}` is on PATH but did not answer the ACP handshake: {message}",
+                            spec.name
+                        ));
+                    }
+                    *handshake = Some(Handshake {
+                        agent: spec.name.clone(),
+                        command: command.clone(),
+                        outcome,
+                    });
+                }
             }
         }
         Err(error) => problems.push(format!("{}: {error}", manifest.display())),
@@ -286,6 +400,7 @@ mod tests {
             workspace: PathBuf::from("/work"),
             project: None,
             declared: Vec::new(),
+            handshake: None,
             on_path: vec!["claude"],
             missing: vec!["codex"],
             servers: vec![Server {
@@ -345,5 +460,41 @@ mod tests {
             "reachability is a handshake fact, not a PATH fact"
         );
         assert!(report.render().contains("remote, no local command"));
+    }
+
+    #[test]
+    fn a_handshake_says_who_answered() {
+        let mut report = report();
+        report.handshake = Some(Handshake {
+            agent: "Claude".into(),
+            command: "claude".into(),
+            outcome: HandshakeOutcome::answered(
+                Some("Claude Agent".into()),
+                Some("0.94.0".into()),
+                "V1",
+            ),
+        });
+
+        let text = report.render();
+        assert!(
+            text.contains("handshake  Claude · Claude Agent 0.94.0 · ACP V1"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_handshake_that_failed_says_so_without_a_version() {
+        let mut report = report();
+        report.handshake = Some(Handshake {
+            agent: "Claude".into(),
+            command: "claude".into(),
+            outcome: HandshakeOutcome::failed("connection closed"),
+        });
+
+        let text = report.render();
+        assert!(
+            text.contains("handshake  Claude · no answer: connection closed"),
+            "{text}"
+        );
     }
 }

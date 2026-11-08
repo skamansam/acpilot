@@ -271,6 +271,42 @@ fn doctor_fails_only_when_a_declared_agent_cannot_run() {
 }
 
 #[test]
+fn doctor_reports_a_declared_agent_that_cannot_speak_acp() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/default");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+
+    // This binary is on disk but does not speak ACP: with no subcommand it
+    // prints help and exits. A handshake against it must fail, and that failure
+    // is a declared agent that cannot run — not a machine with nothing set up.
+    let program = env!("CARGO_BIN_EXE_acpilot");
+    fs::write(
+        profile.join("agents.toml"),
+        format!(
+            "schema_version = 1\n\n[[agents]]\nid = \"mute\"\nname = \"Mute\"\n\
+             transport = \"acp-stdio\"\ncommand = {program:?}\n"
+        ),
+    )
+    .expect("agent manifest");
+
+    let output = Command::new(program)
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .env("PATH", workspace.path())
+        .output()
+        .expect("run acpilot");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Mute"), "{text}");
+    assert!(text.contains("handshake"), "{text}");
+    assert!(text.contains("Problems"), "{text}");
+}
+
+#[test]
 fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
     // `acpilot()` pipes an empty stdin. The command must refuse that rather than
     // store a zero-length credential, and it must do so before any keyring call.

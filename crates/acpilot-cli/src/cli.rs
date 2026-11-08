@@ -160,8 +160,10 @@ pub enum Command {
     /// Report what this machine has, and what a project is missing.
     ///
     /// Reads `PATH`, the profile and the workspace; starts no daemon and writes
-    /// nothing. A machine with no profile and no agent is healthy — that is the
-    /// first-run state, and the editor works in it.
+    /// nothing. A declared local agent is started once to answer ACP
+    /// `initialize`, because a command on `PATH` is not proof that it speaks
+    /// the protocol. A machine with no profile and no agent is healthy — that is
+    /// the first-run state, and the editor works in it.
     Doctor {
         /// A directory, or a file inside one. Defaults to this directory.
         #[arg(value_name = "PATH")]
@@ -377,7 +379,7 @@ pub fn run(cli: Cli) -> u8 {
 /// configured cannot run.
 fn run_doctor(path: Option<&std::path::Path>, profile: &str) -> u8 {
     let installed = |program: &str| acpilotd::installed(program);
-    match doctor::collect(path, profile, &installed) {
+    match doctor::collect(path, profile, &installed, &probe_agent) {
         Ok(report) => {
             print!("{}", report.render());
             if report.ok() {
@@ -391,6 +393,55 @@ fn run_doctor(path: Option<&std::path::Path>, profile: &str) -> u8 {
             exit::FAILURE
         }
     }
+}
+
+/// Ask one declared agent to `initialize`.
+///
+/// This is the handshake half of first run: a command on `PATH` proves a file
+/// exists, not that it speaks ACP. The session is opened with no workspace, no
+/// broker and no terminals, so this client advertises none of them; `initialize`
+/// starts no conversation and sends no prompt. The child is killed when the
+/// session is dropped, including when the wait below expires.
+fn probe_agent(spec: &acpilot_agent::AgentSpec) -> doctor::HandshakeOutcome {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Long enough for `npx -y` to unpack on a cold cache, short enough that a
+    /// doctor run does not feel hung. There is no prompt to wait for.
+    const TIMEOUT: Duration = Duration::from_secs(10);
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return doctor::HandshakeOutcome::failed(error.to_string()),
+    };
+    runtime.block_on(async {
+        let process = match acpilot_agent::AgentProcess::spawn(Arc::new(spec.clone())) {
+            Ok(process) => process,
+            Err(error) => return doctor::HandshakeOutcome::failed(error.to_string()),
+        };
+        match tokio::time::timeout(
+            TIMEOUT,
+            acpilot_agent::Session::spawn(process, acpilot_agent::SessionOptions::new("doctor")),
+        )
+        .await
+        {
+            Ok(Ok(session)) => {
+                let (name, version) = session.agent_info().map_or((None, None), |info| {
+                    (Some(info.name.to_string()), Some(info.version.to_string()))
+                });
+                doctor::HandshakeOutcome::answered(
+                    name,
+                    version,
+                    format!("{:?}", session.protocol_version()),
+                )
+            }
+            Ok(Err(error)) => doctor::HandshakeOutcome::failed(error.to_string()),
+            Err(_) => doctor::HandshakeOutcome::failed("no answer within 10 seconds"),
+        }
+    })
 }
 
 /// What `acpilot tui` was asked for.

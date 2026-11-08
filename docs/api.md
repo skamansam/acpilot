@@ -99,6 +99,7 @@ GET    /v1/git/status?workspace=          GET    /v1/git/diff?workspace=&scope=
 GET    /v1/git/tree?workspace=            GET    /v1/git/log?workspace=&limit=
 GET    /v1/git/commit/prompt              POST   /v1/git/commit-message
 POST   /v1/git/stage                     POST   /v1/git/unstage
+POST   /v1/git/discard                   POST   /v1/git/checkout
 
 GET    /v1/terminals?session=             POST   /v1/terminals
 DELETE /v1/terminals/{id}                 POST   /v1/terminals/{id}/resize
@@ -677,16 +678,34 @@ topological order, each `{ id, parents[], author, email, authored_at, subject }`
 `limit` defaults to 50 and is capped at 500 rather than refused; `limit=0` is an
 empty history, as it is for a repository with no commits.
 
-The index half is two routes. `POST /v1/git/stage` and `POST /v1/git/unstage`
-take `GitIndexRequest { workspace?, paths[] }` and answer the new `GitStatus`.
-Paths are relative to the repository root, as they are in every other git answer.
-An empty list is `400` with `details.field: "paths"`, and so is a path with a `..`
-or an absolute component: the daemon validates before git sees it, so a pane cannot
-stage outside the repository. Stage runs `git add -A -- <paths>`; unstage runs
-`git reset -q HEAD -- <paths>`, or `git rm --cached` before the first commit,
-where there is no `HEAD` to reset to. A staged rename carries its old path too,
-so both halves of the rename move together. Git's refusal is `409` with its words,
-not a daemon fault.
+The index and working-tree writes are four routes. `POST /v1/git/stage`,
+`POST /v1/git/unstage`, `POST /v1/git/discard` and `POST /v1/git/checkout` take
+`GitIndexRequest { workspace?, paths[] }` and answer the new `GitStatus`. Paths
+are relative to the repository root, as they are in every other git answer. An
+empty list is `400` with `details.field: "paths"`, and so is a path with a `..` or
+an absolute component: the daemon validates before git sees it, so a pane cannot
+write outside the repository.
+
+Stage runs `git add -A -- <paths>`; unstage runs `git reset -q HEAD -- <paths>`,
+or `git rm --cached` before the first commit, where there is no `HEAD` to reset
+to. A staged rename carries its old path too, so both halves move together.
+
+Discard puts the working tree back to the index: tracked paths go through
+`git restore --worktree -q -- <paths>`, while an untracked path has no index
+version and is removed with `git clean -f -q --`. A staged edit stays staged,
+which is what makes this the lighter action. Checkout puts **both** halves back
+to `HEAD` with `git restore --source=HEAD --staged --worktree -q -- <paths>`; a
+path that only exists in the index — a staged addition or the new half of a
+rename — is removed with `git rm -f`, because `HEAD` does not have it. A staged
+rename restores its old name and removes the new one from a row that names only
+the new path.
+
+Both are refused with `409` when no named path has anything to restore. Checkout
+is also `409` before the first commit (there is no `HEAD`) and for an untracked
+path (there is no version to check out; discard is the action that removes it).
+Git's own refusal — a conflict, a locked index — is `409` with its words, not a
+daemon fault. The routes do not confirm anything themselves: each client arms the
+action and writes only after a second, explicit answer.
 
 **Paths in every answer are relative to the repository root**, because that is
 what git reports and the one spelling a status row and a patch header can share.
@@ -739,13 +758,15 @@ is also `409`, with git's words in the message and in `details.field: "message"`
 because it is something the person can fix rather than a daemon fault. A missing
 `git` is still `502`.
 
-Checking out and config changes remain separate, unbuilt actions. All three
-surfaces read these routes and prepare the index through `/stage` and `/unstage`:
-the TUI opens with `F6` and uses `s`/`u`; the desktop overlay uses the same `F6`
-and `s`/`u`; both draft and edit in a composer and call `/commit` only after
-`Ctrl-S` followed by `y`. The served page's **Source control** panel reads only
-when opened, stages the selected path with **Stage** or **Unstage**, and writes a
-commit only after `Review commit` and then `Commit staged index`.
+Config changes remain a separate, unbuilt action. All three surfaces read these
+routes and prepare or restore the index: the TUI opens with `F6`, uses `s`/`u` for
+the index and `d`/`x` for discard/checkout, with `y` confirming and `n` cancelling
+the destructive pair; the desktop overlay uses the same `F6` and the same keys;
+both draft and edit in a composer and call `/commit` only after `Ctrl-S` followed
+by `y`. The served page's **Source control** panel reads only when opened, stages
+the selected path with **Stage** or **Unstage**, arms **Discard** or **Checkout**
+behind an inline confirmation, and writes a commit only after `Review commit` and
+then `Commit staged index`.
 
 ## Project map
 

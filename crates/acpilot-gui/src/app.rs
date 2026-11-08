@@ -23,7 +23,7 @@ use crate::daemon::{GitCommand, GitUpdate};
 use crate::keymap::{self, Action as KeyAction, Context as KeyContext};
 use crate::palette::{self, Command, CommandId};
 use crate::profiles::ShellProfile;
-use crate::source::{self, Composer, Source};
+use crate::source::{self, Composer, Restore, Source};
 use crate::stats;
 use crate::theme::GuiTheme;
 
@@ -48,6 +48,10 @@ actions!(
         SourceRefresh,
         SourceStage,
         SourceUnstage,
+        SourceDiscard,
+        SourceCheckout,
+        SourceConfirm,
+        SourceCancel,
         SourceCompose,
         SourceGenerate,
         CloseSource,
@@ -100,6 +104,10 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::SourceRefresh => KeyBinding::new(keys, SourceRefresh, Some(context)),
         KeyAction::SourceStage => KeyBinding::new(keys, SourceStage, Some(context)),
         KeyAction::SourceUnstage => KeyBinding::new(keys, SourceUnstage, Some(context)),
+        KeyAction::SourceDiscard => KeyBinding::new(keys, SourceDiscard, Some(context)),
+        KeyAction::SourceCheckout => KeyBinding::new(keys, SourceCheckout, Some(context)),
+        KeyAction::SourceConfirm => KeyBinding::new(keys, SourceConfirm, Some(context)),
+        KeyAction::SourceCancel => KeyBinding::new(keys, SourceCancel, Some(context)),
         KeyAction::SourceCompose => KeyBinding::new(keys, SourceCompose, Some(context)),
         KeyAction::SourceGenerate => KeyBinding::new(keys, SourceGenerate, Some(context)),
         KeyAction::CloseSource => KeyBinding::new(keys, CloseSource, Some(context)),
@@ -355,6 +363,12 @@ impl Shell {
     }
 
     fn close_source(&mut self, _: &CloseSource, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source
+            && source.pending.take().is_some()
+        {
+            cx.notify();
+            return;
+        }
         if self.source.take().is_some() {
             self.commit = None;
             cx.notify();
@@ -403,6 +417,7 @@ impl Shell {
         if let Some(source) = &mut self.source {
             source.loading = true;
             source.error = None;
+            source.pending = None;
             self.request_git(GitCommand::Load);
             cx.notify();
         }
@@ -416,6 +431,55 @@ impl Shell {
         self.set_selected_staged(false, cx);
     }
 
+    fn source_discard(&mut self, _: &SourceDiscard, _window: &mut Window, cx: &mut Context<Self>) {
+        self.arm_restore(Restore::Discard, cx);
+    }
+
+    fn source_checkout(
+        &mut self,
+        _: &SourceCheckout,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.arm_restore(Restore::Checkout, cx);
+    }
+
+    /// Arm a destructive restore. It writes only after `y`, and the armed path is
+    /// held with the request so moving the selection cannot change what `y` means.
+    fn arm_restore(&mut self, restore: Restore, cx: &mut Context<Self>) {
+        let Some(source) = &mut self.source else {
+            return;
+        };
+        if let Err(message) = source.arm(restore) {
+            source.error = Some(message);
+        }
+        cx.notify();
+    }
+
+    fn source_confirm(&mut self, _: &SourceConfirm, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = &mut self.source else {
+            return;
+        };
+        let Some(pending) = source.confirm() else {
+            return;
+        };
+        source.loading = true;
+        source.error = None;
+        self.request_git(match pending.restore {
+            Restore::Discard => GitCommand::Discard(pending.path),
+            Restore::Checkout => GitCommand::Checkout(pending.path),
+        });
+        cx.notify();
+    }
+
+    fn source_cancel(&mut self, _: &SourceCancel, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.cancel();
+            source.error = None;
+            cx.notify();
+        }
+    }
+
     /// Ask the daemon to move the selected path across the index.
     ///
     /// A path with nothing on that side of the index is a message in the pane, not
@@ -424,6 +488,13 @@ impl Shell {
         let Some(source) = &self.source else {
             return;
         };
+        if source.pending.is_some() {
+            if let Some(source) = &mut self.source {
+                source.error = Some("confirm or cancel the restore first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
         let Some(path) = source.selected_path().map(str::to_owned) else {
             if let Some(source) = &mut self.source {
                 source.error = Some("no changed file is selected".to_owned());
@@ -1139,7 +1210,14 @@ impl Render for Shell {
                 .child(div().text_size(px(18.0)).child(SharedString::from(title)))
                 .child(muted(
                     &theme,
-                    "s stages and u unstages the selected path · j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close",
+                    source.pending.as_ref().map_or_else(
+                        || "s stages · u unstages · d discards · x checks out · j/k file · pgup/pgdn diff · c compose · g generate · r refresh · esc close".to_owned(),
+                        |pending| format!(
+                            "{} {}? y confirms · n cancels",
+                            pending.restore.verb(),
+                            pending.path
+                        ),
+                    ),
                 ));
             if source.loading {
                 panel = panel.child(muted(&theme, "reading the index…"));
@@ -1189,6 +1267,38 @@ impl Render for Shell {
                                 .child(SharedString::from("Unstage (u)"))
                                 .on_click(cx.listener(|this, _event, window, cx| {
                                     this.source_unstage(&SourceUnstage, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-discard")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(if source.can_discard_selected() {
+                                    theme.ui(UiToken::Warning)
+                                } else {
+                                    theme.ui(UiToken::Border)
+                                }))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Discard (d)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_discard(&SourceDiscard, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-checkout")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(if source.can_checkout_selected() {
+                                    theme.ui(UiToken::Danger)
+                                } else {
+                                    theme.ui(UiToken::Border)
+                                }))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Checkout (x)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_checkout(&SourceCheckout, window, cx);
                                 })),
                         ),
                 )
@@ -1436,6 +1546,10 @@ impl Render for Shell {
             .on_action(cx.listener(Self::source_refresh))
             .on_action(cx.listener(Self::source_stage))
             .on_action(cx.listener(Self::source_unstage))
+            .on_action(cx.listener(Self::source_discard))
+            .on_action(cx.listener(Self::source_checkout))
+            .on_action(cx.listener(Self::source_confirm))
+            .on_action(cx.listener(Self::source_cancel))
             .on_action(cx.listener(Self::source_compose))
             .on_action(cx.listener(Self::source_generate))
             .on_action(cx.listener(Self::close_source))
@@ -1792,6 +1906,66 @@ mod drawn {
             sent.try_recv().expect("a generate request"),
             GitCommand::Generate("s2".to_owned()),
             "ctrl-g asks the session the composer is showing"
+        );
+    }
+
+    #[gpui::test]
+    async fn restore_actions_are_armed_and_confirmed(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, _cx| {
+                shell.set_git_sender(requests);
+                let mut source = staged_source();
+                source.status.head = Some("0123456789abcdef".to_owned());
+                source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+                shell.source = Some(source);
+            });
+        });
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_discard(&SourceDiscard, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .source()
+                .and_then(|source| source.pending.clone())),
+            Some(source::PendingRestore {
+                restore: Restore::Discard,
+                path: "src/main.rs".to_owned(),
+            }),
+            "d arms the selected path instead of writing it"
+        );
+        assert!(sent.try_recv().is_err(), "arming sends no request");
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_confirm(&SourceConfirm, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a discard request"),
+            GitCommand::Discard("src/main.rs".to_owned())
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_checkout(&SourceCheckout, window, cx);
+            });
+        });
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_confirm(&SourceConfirm, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a checkout request"),
+            GitCommand::Checkout("src/main.rs".to_owned())
         );
     }
 

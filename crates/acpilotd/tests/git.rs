@@ -303,6 +303,124 @@ async fn unstage_removes_a_path_from_the_index_and_keeps_its_edit() {
 }
 
 #[tokio::test]
+async fn discard_restores_the_worktree_and_removes_an_untracked_file() {
+    let directory = repository();
+    let state = serving(directory.path());
+    let root = directory.path();
+
+    let (status, body) = post(
+        app(state),
+        "/v1/git/discard",
+        serde_json::json!({ "paths": ["one.txt", "three.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).expect("one"),
+        "one\n",
+        "the working-tree edit is gone"
+    );
+    assert!(
+        !root.join("three.txt").exists(),
+        "an untracked path is removed by discard"
+    );
+    assert_eq!(row(&body, "two.txt")["index"], "modified");
+    assert_eq!(
+        row(&body, "two.txt")["worktree"],
+        "unmodified",
+        "discard does not touch the staged half"
+    );
+    assert!(
+        body["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().all(|row| row["path"] != "one.txt")),
+        "the restored path is no longer changed: {body}"
+    );
+}
+
+#[tokio::test]
+async fn checkout_restores_both_halves_to_head() {
+    let directory = repository();
+    let state = serving(directory.path());
+    let root = directory.path();
+
+    let (status, body) = post(
+        app(state),
+        "/v1/git/checkout",
+        serde_json::json!({ "paths": ["one.txt", "two.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).expect("one"),
+        "one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("two.txt")).expect("two"),
+        "two\n",
+        "the staged edit is discarded as well"
+    );
+    assert_eq!(
+        body["files"],
+        serde_json::json!([{
+            "path": "three.txt",
+            "index": "unmodified",
+            "worktree": "untracked"
+        }]),
+        "the selected paths are clean and the unselected untracked path remains: {body}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("three.txt")).expect("three"),
+        "three\n",
+        "a path that was not selected is untouched"
+    );
+}
+
+#[tokio::test]
+async fn checkout_refuses_an_untracked_path_without_deleting_it() {
+    let directory = repository();
+    let root = directory.path();
+    let (status, body) = post(
+        app(serving(root)),
+        "/v1/git/checkout",
+        serde_json::json!({ "paths": ["three.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("untracked")),
+        "the refusal says which path has no HEAD version: {body}"
+    );
+    assert!(root.join("three.txt").exists());
+}
+
+#[tokio::test]
+async fn checkout_before_the_first_commit_is_a_conflict() {
+    let directory = tempfile::tempdir().expect("a dir");
+    let root = directory.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("new.txt"), "new\n").expect("new");
+    git(root, &["add", "new.txt"]);
+
+    let (status, body) = post(
+        app(serving(root)),
+        "/v1/git/checkout",
+        serde_json::json!({ "paths": ["new.txt"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("HEAD")),
+        "the refusal names what is missing: {body}"
+    );
+    assert!(root.join("new.txt").exists());
+}
+
+#[tokio::test]
 async fn stage_refuses_a_path_outside_the_repository() {
     let directory = repository();
     let (status, body) = post(
@@ -472,7 +590,12 @@ async fn the_openapi_document_documents_the_git_routes() {
             "{path} is in the document"
         );
     }
-    for path in ["/v1/git/stage", "/v1/git/unstage"] {
+    for path in [
+        "/v1/git/stage",
+        "/v1/git/unstage",
+        "/v1/git/discard",
+        "/v1/git/checkout",
+    ] {
         assert!(
             document["paths"][path]["post"].is_object(),
             "{path} is in the document"

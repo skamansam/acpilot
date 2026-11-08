@@ -160,7 +160,7 @@ pub struct CommitMessageRequest {
     pub prompt: Option<String>,
 }
 
-/// A request to stage or unstage repository-relative paths.
+/// A request to move repository-relative paths across the index or restore them.
 ///
 /// The paths are the ones `GET /v1/git/status` reports, so a client never has to
 /// translate a workspace path into the repository's spelling. The answer is the new

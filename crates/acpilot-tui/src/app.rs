@@ -2161,6 +2161,37 @@ pub struct SourceControl {
     pub loading: bool,
     /// Why there is no answer, when the request failed.
     pub error: Option<String>,
+    /// A destructive restore waiting for `y`, with the path it was armed on.
+    pub pending: Option<PendingRestore>,
+}
+
+/// Which destructive reset is waiting for confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restore {
+    /// Put the working tree back to the index, keeping staged changes.
+    Discard,
+    /// Put both the index and the working tree back to `HEAD`.
+    Checkout,
+}
+
+impl Restore {
+    /// The verb a confirmation prompt uses.
+    #[must_use]
+    pub const fn verb(self) -> &'static str {
+        match self {
+            Self::Discard => "discard",
+            Self::Checkout => "check out",
+        }
+    }
+}
+
+/// A restore that has been asked for but not confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRestore {
+    /// Which reset `y` will run.
+    pub restore: Restore,
+    /// The repository-relative path it was armed on.
+    pub path: String,
 }
 
 impl SourceControl {
@@ -2184,6 +2215,7 @@ impl SourceControl {
             scroll: 0,
             loading: true,
             error: None,
+            pending: None,
         }
     }
 
@@ -2219,6 +2251,7 @@ impl SourceControl {
             scroll: 0,
             loading: false,
             error: None,
+            pending: None,
         }
     }
 
@@ -2258,6 +2291,66 @@ impl SourceControl {
     pub fn can_unstage_selected(&self) -> bool {
         self.selected_entry()
             .is_some_and(|entry| staged_kind(entry.index))
+    }
+
+    /// Whether the selected path has an unstaged change, or is untracked.
+    #[must_use]
+    pub fn can_discard_selected(&self) -> bool {
+        self.selected_entry().is_some_and(|entry| {
+            !matches!(
+                entry.worktree,
+                acpilot_proto::git::GitChangeKind::Unmodified
+                    | acpilot_proto::git::GitChangeKind::Ignored
+            )
+        })
+    }
+
+    /// Whether the selected path has a version in `HEAD` to check out.
+    #[must_use]
+    pub fn can_checkout_selected(&self) -> bool {
+        self.status.head.is_some()
+            && self.selected_entry().is_some_and(|entry| {
+                staged_kind(entry.index)
+                    || !matches!(
+                        entry.worktree,
+                        acpilot_proto::git::GitChangeKind::Unmodified
+                            | acpilot_proto::git::GitChangeKind::Ignored
+                            | acpilot_proto::git::GitChangeKind::Untracked
+                    )
+            })
+    }
+
+    /// Arm a restore on the selected path, if it can run.
+    pub fn arm_restore(&mut self, restore: Restore) -> Result<(), String> {
+        let Some(path) = self.selected_path().map(str::to_owned) else {
+            return Err("no changed file is selected".to_owned());
+        };
+        let available = match restore {
+            Restore::Discard => self.can_discard_selected(),
+            Restore::Checkout => self.can_checkout_selected(),
+        };
+        if !available {
+            return Err(match restore {
+                Restore::Discard => format!("{path} has no unstaged change to discard"),
+                Restore::Checkout if self.status.head.is_none() => {
+                    format!("{path} cannot be checked out before the first commit")
+                }
+                Restore::Checkout => format!("{path} has no HEAD version to check out"),
+            });
+        }
+        self.error = None;
+        self.pending = Some(PendingRestore { restore, path });
+        Ok(())
+    }
+
+    /// Take the armed restore, if there is one.
+    pub fn confirm_restore(&mut self) -> Option<PendingRestore> {
+        self.pending.take()
+    }
+
+    /// Forget the armed restore without writing.
+    pub fn cancel_restore(&mut self) {
+        self.pending = None;
     }
 
     /// The path whose diff is on the right.
@@ -3398,6 +3491,7 @@ impl App {
                     source.diff = diff;
                     source.loading = false;
                     source.error = None;
+                    source.pending = None;
                     source.selected = source
                         .selected
                         .min(source.status.files.len().saturating_sub(1));
@@ -3408,6 +3502,7 @@ impl App {
                 if let Some(source) = &mut self.source {
                     source.loading = false;
                     source.error = Some(message.clone());
+                    source.pending = None;
                 }
                 self.status = message;
             }
@@ -6271,6 +6366,13 @@ impl App {
     /// the index, or open the composer. `r` asks again because another client may have
     /// changed the index since this pane drew it.
     fn source_key(&mut self, key: KeyEvent) -> Option<Request> {
+        if self
+            .source
+            .as_ref()
+            .is_some_and(|source| source.pending.is_some())
+        {
+            return self.confirm_source_restore(key);
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.source = None;
@@ -6281,6 +6383,8 @@ impl App {
             KeyCode::Char('r') => Some(Request::Git),
             KeyCode::Char('s') => self.set_selected_staged(true),
             KeyCode::Char('u') => self.set_selected_staged(false),
+            KeyCode::Char('d') => self.arm_source_restore(Restore::Discard),
+            KeyCode::Char('x') => self.arm_source_restore(Restore::Checkout),
             KeyCode::Char('c') => self.open_commit(false),
             KeyCode::Char('g') => self.open_commit(true),
             KeyCode::Down | KeyCode::Char('j') => {
@@ -6301,6 +6405,58 @@ impl App {
                 if let Some(source) = &mut self.source {
                     source.scroll = source.scroll.saturating_sub(10);
                 }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Arm a destructive restore; only `y` on the next key sends it.
+    fn arm_source_restore(&mut self, restore: Restore) -> Option<Request> {
+        let Some(source) = &mut self.source else {
+            return None;
+        };
+        match source.arm_restore(restore) {
+            Ok(()) => {
+                let path = source
+                    .pending
+                    .as_ref()
+                    .map_or("", |pending| pending.path.as_str());
+                self.status = format!("{} {path}? y confirms · n cancels", restore.verb());
+                None
+            }
+            Err(message) => {
+                self.notice(&message);
+                None
+            }
+        }
+    }
+
+    /// Answer the armed restore: `y` sends it, `n` or `Esc` puts it away.
+    fn confirm_source_restore(&mut self, key: KeyEvent) -> Option<Request> {
+        let Some(source) = &mut self.source else {
+            return None;
+        };
+        match key.code {
+            KeyCode::Char('y') => {
+                let pending = source.confirm_restore()?;
+                self.status = format!(
+                    "{} {}…",
+                    if pending.restore == Restore::Discard {
+                        "discarding"
+                    } else {
+                        "checking out"
+                    },
+                    pending.path
+                );
+                Some(match pending.restore {
+                    Restore::Discard => Request::Discard { path: pending.path },
+                    Restore::Checkout => Request::Checkout { path: pending.path },
+                })
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                source.cancel_restore();
+                self.status = "restore cancelled".to_owned();
                 None
             }
             _ => None,
@@ -11076,6 +11232,94 @@ mod tests {
             "u asks the daemon to take the selected path out of the index"
         );
         assert!(app.status.contains("unstaging"), "{}", app.status);
+    }
+
+    #[test]
+    fn d_and_x_arm_a_restore_that_y_confirms_and_n_cancels() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        let path = app
+            .source
+            .as_ref()
+            .and_then(SourceControl::selected_path)
+            .expect("the fixture selects its changed path")
+            .to_owned();
+        let source = app.source.as_mut().expect("the pane is open");
+        source.status.head = Some("0123456789abcdef".to_owned());
+        source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('d'))),
+            None,
+            "d asks before it writes"
+        );
+        assert_eq!(
+            app.source
+                .as_ref()
+                .and_then(|source| source.pending.as_ref())
+                .map(|pending| (pending.restore, pending.path.as_str())),
+            Some((Restore::Discard, path.as_str()))
+        );
+        assert!(
+            app.status.contains("y confirms"),
+            "the prompt says how to answer: {}",
+            app.status
+        );
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::Discard { path: path.clone() }),
+            "y is the only key that sends the discard"
+        );
+        assert!(app.status.contains("discarding"), "{}", app.status);
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('x'))),
+            None,
+            "x asks before checkout"
+        );
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('n'))),
+            None,
+            "n cancels without writing"
+        );
+        assert!(
+            app.source
+                .as_ref()
+                .is_some_and(|source| source.pending.is_none())
+        );
+        assert_eq!(app.status, "restore cancelled");
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('x'))),
+            None,
+            "x can be armed again after a cancel"
+        );
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::Checkout { path }),
+            "y sends the checkout that was armed"
+        );
+    }
+
+    #[test]
+    fn checkout_is_not_offered_before_the_first_commit() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(key(KeyCode::F(6)));
+        let source = app.source.as_mut().expect("the pane is open");
+        source.status.head = None;
+        source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('x'))), None);
+        assert!(
+            app.source
+                .as_ref()
+                .is_some_and(|source| source.pending.is_none())
+        );
+        assert!(
+            app.status.contains("first commit"),
+            "the refusal says what is missing: {}",
+            app.status
+        );
     }
 
     #[test]

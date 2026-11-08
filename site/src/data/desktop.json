@@ -134,6 +134,38 @@
       ]
     },
     {
+      "keys": "d",
+      "action": "SourceDiscard",
+      "description": "Discard the selected path's unstaged changes",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "x",
+      "action": "SourceCheckout",
+      "description": "Check the selected path out from HEAD",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "y",
+      "action": "SourceConfirm",
+      "description": "Confirm the armed restore",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "n",
+      "action": "SourceCancel",
+      "description": "Cancel the armed restore",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
       "keys": "c",
       "action": "SourceCompose",
       "description": "Compose a commit message",

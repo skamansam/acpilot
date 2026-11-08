@@ -286,6 +286,7 @@ GET    /v1/git/status?workspace=          GET    /v1/git/diff?scope=
 GET    /v1/git/tree?workspace=            GET    /v1/git/log?limit=
 GET    /v1/git/commit/prompt              POST   /v1/git/commit-message
 POST   /v1/git/stage                     POST   /v1/git/unstage
+POST   /v1/git/discard                   POST   /v1/git/checkout
                                           POST   /v1/git/commit
 GET    /v1/terminals?session=             POST   /v1/terminals
 WS     /v1/terminals/{id}/attach

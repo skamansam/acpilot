@@ -2434,10 +2434,10 @@ fn permission_hint(request: &PermissionRequest, at: usize, total: usize) -> Stri
 /// on the right.
 ///
 /// Modal because it is about the repository rather than the buffer, and because its
-/// writes — moving a path across the index, then committing — are decisions that
-/// should not be one keystroke away from a pane that edits text. `s`/`u` stage and
-/// unstage the selected path through the daemon; the composer still confirms the
-/// commit.
+/// writes — moving a path across the index, restoring the working tree, then
+/// committing — are decisions that should not be one keystroke away from a pane that
+/// edits text. `s`/`u` stage and unstage, `d`/`x` arm a discard or checkout that `y`
+/// confirms, and the composer still confirms the commit.
 fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
     let Some(source) = &app.source else {
         return;
@@ -2559,10 +2559,22 @@ fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         String::new()
     };
+    let footer_text = source.pending.as_ref().map_or_else(
+        || {
+            format!(
+                " j/k files · s stage · u unstage · d discard · x checkout · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
+            )
+        },
+        |pending| {
+            format!(
+                " {} {}? y confirms · n cancels ",
+                pending.restore.verb(),
+                pending.path
+            )
+        },
+    );
     let footer_line = Line::from(Span::styled(
-        format!(
-            " j/k files · s stage · u unstage · pgup/pgdn diff{position} · c compose · g generate · r refresh · esc close "
-        ),
+        footer_text,
         Style::default().fg(app.theme.warning()),
     ));
     frame.render_widget(Paragraph::new(footer_line), footer);
@@ -4221,6 +4233,8 @@ mod tests {
         assert!(text.contains("Source control"), "{text}");
         assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
         assert!(text.contains("diff --git"), "{text}");
+        assert!(text.contains("d discard"), "{text}");
+        assert!(text.contains("x checkout"), "{text}");
         assert!(
             text.contains("c compose"),
             "the footer names the composer: {text}"

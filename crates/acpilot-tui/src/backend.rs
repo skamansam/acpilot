@@ -94,6 +94,16 @@ pub enum Request {
         /// The path selected in the pane.
         path: String,
     },
+    /// Restore one path's working-tree half from the index.
+    Discard {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Restore one path's index and working tree from HEAD.
+    Checkout {
+        /// The path selected in the pane.
+        path: String,
+    },
     /// Ask the open session to draft a commit message from the staged index.
     GenerateCommit {
         /// The session whose agent writes it.
@@ -710,6 +720,58 @@ async fn run(
                         }
                     }
                 }
+                Some(Request::Discard { path }) => {
+                    match client.discard(std::slice::from_ref(&path)).await {
+                        Ok(_) => match client.git_status().await {
+                            Ok(status) => match client.git_diff("all").await {
+                                Ok(diff) => {
+                                    let _ = updates.send(Update::Git { status, diff });
+                                }
+                                Err(error) => {
+                                    let _ = updates.send(Update::GitError(format!(
+                                        "discarded {path}, but could not read the diff again: {}",
+                                        describe(&error)
+                                    )));
+                                }
+                            },
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "discarded {path}, but could not read the status again: {}",
+                                    describe(&error)
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Checkout { path }) => {
+                    match client.checkout(std::slice::from_ref(&path)).await {
+                        Ok(_) => match client.git_status().await {
+                            Ok(status) => match client.git_diff("all").await {
+                                Ok(diff) => {
+                                    let _ = updates.send(Update::Git { status, diff });
+                                }
+                                Err(error) => {
+                                    let _ = updates.send(Update::GitError(format!(
+                                        "checked out {path}, but could not read the diff again: {}",
+                                        describe(&error)
+                                    )));
+                                }
+                            },
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "checked out {path}, but could not read the status again: {}",
+                                    describe(&error)
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::GenerateCommit { session_id }) => {
                     match client.commit_message(&session_id).await {
                         Ok(draft) => {
@@ -1282,6 +1344,11 @@ async fn run_demo(
             Request::Stage { .. } | Request::Unstage { .. } => {
                 let _ = updates.send(Update::Status(
                     "design pass · the index is the fixture's".to_owned(),
+                ));
+            }
+            Request::Discard { .. } | Request::Checkout { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the working tree is the fixture's".to_owned(),
                 ));
             }
             Request::GenerateCommit { session_id } => {

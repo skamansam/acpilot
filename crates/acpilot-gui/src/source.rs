@@ -4,8 +4,8 @@
 //! /v1/git/status` and `GET /v1/git/diff?scope=all` — and cuts the patch with
 //! [`acpilot_git::patch_section`], so the two panes cannot disagree about which
 //! lines belong to a file. `s`/`u` move the selected path across the index through
-//! the daemon; [`Composer`]'s `confirming` state is what makes the commit a second
-//! decision rather than a keystroke.
+//! the daemon, `d`/`x` arm a discard or checkout, and [`Composer`]'s `confirming`
+//! state is what makes a write a second decision rather than a keystroke.
 //!
 //! Plain data on purpose: the state a test needs to read is here, and [`crate::app`]
 //! only has to lay it out.
@@ -31,6 +31,39 @@ pub struct Source {
     pub loading: bool,
     /// Why the answer did not arrive.
     pub error: Option<String>,
+    /// A destructive restore waiting for `y`, with the path it was armed on.
+    /// The path is held here rather than read again at confirmation, so moving
+    /// the selection cannot change what `y` writes.
+    pub pending: Option<PendingRestore>,
+}
+
+/// Which destructive reset is waiting for a confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restore {
+    /// Put the working tree back to the index, keeping staged changes.
+    Discard,
+    /// Put both the index and the working tree back to `HEAD`.
+    Checkout,
+}
+
+impl Restore {
+    /// The verb a confirmation prompt uses.
+    #[must_use]
+    pub const fn verb(self) -> &'static str {
+        match self {
+            Self::Discard => "discard",
+            Self::Checkout => "check out",
+        }
+    }
+}
+
+/// A restore that has been asked for but not confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRestore {
+    /// Which reset `y` will run.
+    pub restore: Restore,
+    /// The repository-relative path it was armed on.
+    pub path: String,
 }
 
 impl Source {
@@ -55,6 +88,7 @@ impl Source {
             scroll: 0,
             loading: true,
             error: None,
+            pending: None,
         }
     }
 
@@ -70,12 +104,14 @@ impl Source {
         self.loading = false;
         self.error = None;
         self.scroll = 0;
+        self.pending = None;
     }
 
     /// The daemon refused the read.
     pub fn failed(&mut self, message: impl Into<String>) {
         self.loading = false;
         self.error = Some(message.into());
+        self.pending = None;
     }
 
     /// How many paths the next commit would contain.
@@ -110,6 +146,73 @@ impl Source {
     pub fn can_unstage_selected(&self) -> bool {
         self.selected_entry()
             .is_some_and(|entry| staged_kind(entry.index))
+    }
+
+    /// Whether the selected path has an unstaged change, or is untracked.
+    #[must_use]
+    pub fn can_discard_selected(&self) -> bool {
+        self.selected_entry().is_some_and(|entry| {
+            !matches!(
+                entry.worktree,
+                GitChangeKind::Unmodified | GitChangeKind::Ignored
+            )
+        })
+    }
+
+    /// Whether the selected path has a version in `HEAD` to check out.
+    ///
+    /// An untracked path has neither an index nor a `HEAD` version, so checkout
+    /// refuses it and discard is the action that can remove it.
+    #[must_use]
+    pub fn can_checkout_selected(&self) -> bool {
+        self.status.head.is_some()
+            && self.selected_entry().is_some_and(|entry| {
+                staged_kind(entry.index)
+                    || !matches!(
+                        entry.worktree,
+                        GitChangeKind::Unmodified
+                            | GitChangeKind::Ignored
+                            | GitChangeKind::Untracked
+                    )
+            })
+    }
+
+    /// Arm a restore on the selected path, if it can run.
+    ///
+    /// Returns why nothing was armed as an error string, which the pane shows
+    /// without asking the daemon to refuse the same request again.
+    pub fn arm(&mut self, restore: Restore) -> Result<(), String> {
+        let Some(path) = self.selected_path().map(str::to_owned) else {
+            return Err("no changed file is selected".to_owned());
+        };
+        let available = match restore {
+            Restore::Discard => self.can_discard_selected(),
+            Restore::Checkout => self.can_checkout_selected(),
+        };
+        if !available {
+            return Err(match restore {
+                Restore::Discard => format!("{path} has no unstaged change to discard"),
+                Restore::Checkout if self.status.head.is_none() => {
+                    format!("{path} cannot be checked out before the first commit")
+                }
+                Restore::Checkout => {
+                    format!("{path} has no HEAD version to check out")
+                }
+            });
+        }
+        self.error = None;
+        self.pending = Some(PendingRestore { restore, path });
+        Ok(())
+    }
+
+    /// Take the armed restore, if there is one.
+    pub fn confirm(&mut self) -> Option<PendingRestore> {
+        self.pending.take()
+    }
+
+    /// Forget the armed restore without writing.
+    pub fn cancel(&mut self) {
+        self.pending = None;
     }
 
     /// The path whose diff is on the right.

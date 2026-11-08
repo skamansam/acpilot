@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SourceControl from './SourceControl.svelte';
 import type { SessionSummary } from './api';
-import { patchSection, stagedCount } from './git';
+import { canCheckout, canDiscard, patchSection, stagedCount } from './git';
 import { plainFetch, type PlainFetch } from './test-fetch';
 
 const STATUS = {
@@ -68,6 +68,8 @@ let commits: string[];
 let generated: string[];
 let staged: string[][];
 let unstaged: string[][];
+let discarded: string[][];
+let checkedOut: string[][];
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -78,6 +80,8 @@ beforeEach(() => {
   generated = [];
   staged = [];
   unstaged = [];
+  discarded = [];
+  checkedOut = [];
   vi.stubGlobal(
     'fetch',
     plainFetch(
@@ -111,6 +115,16 @@ beforeEach(() => {
         if (route === '/v1/git/unstage' && init?.method === 'POST') {
           const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
           unstaged.push(body.paths);
+          return json(STATUS);
+        }
+        if (route === '/v1/git/discard' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
+          discarded.push(body.paths);
+          return json(STATUS);
+        }
+        if (route === '/v1/git/checkout' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body ?? '{}')) as { paths: string[] };
+          checkedOut.push(body.paths);
           return json(STATUS);
         }
         if (route === '/v1/git/commit' && init?.method === 'POST') {
@@ -198,6 +212,30 @@ describe('the source-control pane', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('Unstaged src/main.rs.'));
   });
 
+  it('asks before discarding an unstaged path or checking one out from HEAD', async () => {
+    render();
+    await click('Open source control');
+    await vi.waitFor(() => expect(target.textContent).toContain('Compose commit'));
+
+    await click('·? new.rs');
+    await click('Discard');
+    expect(discarded, 'arming is not writing').toEqual([]);
+    expect(target.textContent).toContain('Discard the unstaged changes to new.rs?');
+    await click('Discard path');
+    await vi.waitFor(() => expect(discarded).toEqual([['new.rs']]));
+    await vi.waitFor(() => expect(target.textContent).toContain('Discarded new.rs.'));
+
+    await click('M· src/main.rs');
+    await click('Checkout');
+    expect(checkedOut, 'arming is not writing').toEqual([]);
+    expect(target.textContent).toContain('Check out src/main.rs from HEAD?');
+    await click('Checkout path');
+    await vi.waitFor(() => expect(checkedOut).toEqual([['src/main.rs']]));
+    await vi.waitFor(() =>
+      expect(target.textContent).toContain('Checked out src/main.rs from HEAD.'),
+    );
+  });
+
   it('a generated message lands in an editable composer and commit asks first', async () => {
     render();
     await click('Open source control');
@@ -243,5 +281,13 @@ describe('the patch section', () => {
 
   it('counts only the index, not an untracked working-tree row', () => {
     expect(stagedCount(STATUS.files)).toBe(1);
+  });
+
+  it('offers discard for an unstaged path and checkout only with a HEAD version', () => {
+    expect(canDiscard(STATUS.files[1]!)).toBe(true);
+    expect(canDiscard(STATUS.files[0]!)).toBe(false);
+    expect(canCheckout(STATUS.files[0]!, true)).toBe(true);
+    expect(canCheckout(STATUS.files[1]!, true)).toBe(false);
+    expect(canCheckout(STATUS.files[0]!, false)).toBe(false);
   });
 });

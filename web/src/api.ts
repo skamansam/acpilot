@@ -620,6 +620,36 @@ export async function unstagePaths(paths: string[], token: string): Promise<GitS
 }
 
 /**
+ * `POST /v1/git/discard` — put the working tree back to the index.
+ *
+ * A staged edit stays staged. An untracked path is removed, because the index
+ * has no version to restore it from.
+ */
+export async function discardPaths(paths: string[], token: string): Promise<GitStatus> {
+  return answered(
+    await client.POST('/v1/git/discard', {
+      body: { paths },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/git/checkout` — restore both halves of a path from HEAD.
+ *
+ * This is the stronger reset: a staged addition is removed, and an untracked path
+ * is refused because HEAD has no version to check out.
+ */
+export async function checkoutPaths(paths: string[], token: string): Promise<GitStatus> {
+  return answered(
+    await client.POST('/v1/git/checkout', {
+      body: { paths },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
  * `POST /v1/git/commit` — commit the index the pane prepared.
  *
  * The caller has confirmed the whole message. Staging happens in this pane first;

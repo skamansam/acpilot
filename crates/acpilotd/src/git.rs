@@ -10,10 +10,11 @@
 //!
 //! # What these routes write
 //!
-//! `stage` and `unstage` move paths across the index and answer with the status read
-//! after git ran. They do not touch the working tree, make a commit, check out or
-//! change config; those remain separate actions. The committed message is P6.5-3's,
-//! and the composer's confirmation is what reaches it.
+//! `stage` and `unstage` move paths across the index; `discard` restores the working
+//! tree from the index, and `checkout` restores both from `HEAD`. Every write answers
+//! with the status read after git ran. None of them makes a commit or changes config:
+//! the committed message is P6.5-3's, and the composer's confirmation is what reaches
+//! it. The destructive routes are reached only after a client's own confirmation.
 //!
 //! A workspace on another host is refused with `409`, like every other route that
 //! walks this machine's filesystem. Its tree still draws the letters through
@@ -131,6 +132,39 @@ async fn unstage(
     set_index(&state, request, false)
 }
 
+/// `POST /v1/git/discard`.
+///
+/// Restores each path's working-tree half from the index and answers the status read
+/// afterwards. A staged edit stays staged, and an untracked path is removed by git's
+/// clean because the index has no version to restore.
+///
+/// # Errors
+///
+/// `400` for no paths or one that is not repository-relative; the path and host
+/// failures of [`status`]; `409` when there is nothing to restore or git refuses.
+async fn discard(
+    State(state): State<AppState>,
+    Json(request): Json<GitIndexRequest>,
+) -> Result<Json<GitStatus>, ApiError> {
+    restore_paths(&state, request, false)
+}
+
+/// `POST /v1/git/checkout`.
+///
+/// Restores both the index and the working tree for each path from `HEAD`. A staged
+/// addition is removed, as is the new half of a rename; an untracked path is refused
+/// because it has no `HEAD` version.
+///
+/// # Errors
+///
+/// The same failures as [`discard`], plus `409` when there is no `HEAD`.
+async fn checkout(
+    State(state): State<AppState>,
+    Json(request): Json<GitIndexRequest>,
+) -> Result<Json<GitStatus>, ApiError> {
+    restore_paths(&state, request, true)
+}
+
 /// Stage or unstage the request's paths, and answer with the new index.
 ///
 /// A rename has two paths: the row names the new one and carries the old one beside
@@ -162,6 +196,32 @@ fn set_index(
         repo.stage(&paths).map_err(index_error)?;
     } else {
         repo.unstage(&paths).map_err(index_error)?;
+    }
+    let after = repo.status().map_err(git_error)?;
+    Ok(Json(status_json(after)))
+}
+
+/// Discard or check out the request's paths, and answer with the new status.
+///
+/// The repository resolves a rename's two halves itself: discarding only touches the
+/// working-tree path, while checking out restores the old name and removes the new
+/// one. The daemon does not expand `old_path` here, because the same expansion would
+/// ask `git restore` to name a path that is not in the working tree.
+fn restore_paths(
+    state: &AppState,
+    request: GitIndexRequest,
+    checkout: bool,
+) -> Result<Json<GitStatus>, ApiError> {
+    if request.paths.is_empty() {
+        return Err(ApiError::new(AcpilotError::invalid("`paths` is empty"))
+            .with_detail("paths", "at least one repository-relative path"));
+    }
+
+    let repo = repository(state, request.workspace.as_deref())?;
+    if checkout {
+        repo.checkout(&request.paths).map_err(index_error)?;
+    } else {
+        repo.discard(&request.paths).map_err(index_error)?;
     }
     let after = repo.status().map_err(git_error)?;
     Ok(Json(status_json(after)))
@@ -349,6 +409,18 @@ pub(crate) fn git_error(error: GitError) -> ApiError {
         }
         GitError::NoPaths => ApiError::new(AcpilotError::invalid("no paths were named"))
             .with_detail("paths", "at least one repository-relative path"),
+        GitError::NoChanges => ApiError::new(AcpilotError::conflict(
+            "the named paths have no changes to restore",
+        ))
+        .with_detail("paths", "a path with a working-tree or index change"),
+        GitError::NoHead => {
+            ApiError::new(AcpilotError::conflict("there is no HEAD to check out from"))
+                .with_detail("paths", "commit something before checking a path out")
+        }
+        GitError::NotInHead { path } => ApiError::new(AcpilotError::conflict(format!(
+            "{path:?} is untracked; discard it instead"
+        )))
+        .with_detail("paths", "checkout needs a version in HEAD"),
         GitError::InvalidPath { path } => ApiError::new(AcpilotError::invalid(format!(
             "not a repository-relative path: {path:?}"
         )))
@@ -394,6 +466,8 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/git/log", get(log))
         .route("/v1/git/stage", post(stage))
         .route("/v1/git/unstage", post(unstage))
+        .route("/v1/git/discard", post(discard))
+        .route("/v1/git/checkout", post(checkout))
 }
 
 #[allow(dead_code)]
@@ -505,6 +579,40 @@ fn git_stage_doc() {}
 )]
 fn git_unstage_doc() {}
 
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/git/discard",
+    tag = "git",
+    summary = "Restore repository paths' working-tree half from the index",
+    request_body = GitIndexRequest,
+    responses(
+        (status = 200, description = "The status read after git restored the paths; staged changes stay staged", body = GitStatus),
+        (status = 400, description = "No paths, or one that is not repository-relative", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "No workspace, one on another host, nothing to restore, or git refused the write", body = ErrorBody),
+        (status = 502, description = "`git` is not installed on the host", body = ErrorBody)
+    )
+)]
+fn git_discard_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/git/checkout",
+    tag = "git",
+    summary = "Restore repository paths' index and working tree from HEAD",
+    request_body = GitIndexRequest,
+    responses(
+        (status = 200, description = "The status read after git checked the paths out; staged additions are removed", body = GitStatus),
+        (status = 400, description = "No paths, or one that is not repository-relative", body = ErrorBody),
+        (status = 404, description = "The workspace is not inside a git repository", body = ErrorBody),
+        (status = 409, description = "No workspace, one on another host, no HEAD, an untracked path, or git refused the write", body = ErrorBody),
+        (status = 502, description = "`git` is not installed on the host", body = ErrorBody)
+    )
+)]
+fn git_checkout_doc() {}
+
 /// This module's operations, for the OpenAPI document.
 pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
     use utoipa::Path;
@@ -538,6 +646,16 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/git/unstage",
             HttpMethod::Post,
             <__path_git_unstage_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/discard",
+            HttpMethod::Post,
+            <__path_git_discard_doc as Path>::operation(),
+        ),
+        (
+            "/v1/git/checkout",
+            HttpMethod::Post,
+            <__path_git_checkout_doc as Path>::operation(),
         ),
     ]
 }

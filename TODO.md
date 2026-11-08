@@ -1393,9 +1393,34 @@ what needs an editor shell waits for the editor shell.
   - **Tests:** three `acpilot-git` tests (stage a working-tree edit, unstage back to the working
     tree, refuse empty and escaping paths), four route tests including rename expansion and the
     OpenAPI operations, one TUI state test, and one browser test over the two new calls.
-  - **Open:** checkout, discard and config changes remain separate actions. The browser panel has
-    buttons rather than a global keymap. `--demo` keeps its seeded index and refuses the writes,
-    because there is no repository behind the fixture.
+  - **Open:** P6.5-8 adds checkout and discard; config changes remain separate. The browser panel
+    has buttons rather than a global keymap. `--demo` keeps its seeded index and refuses the
+    writes, because there is no repository behind the fixture.
+- [x] **P6.5-8 · Discard and checkout from the panes** — the two destructive restores are named,
+  confirmed, and served by the daemon instead of sending a person to a terminal.
+  - `Repo::discard` restores the working tree from the index: tracked paths through `git restore
+    --worktree`, an untracked path through `git clean`. A staged edit stays staged. `Repo::checkout`
+    restores both halves from `HEAD` through `git restore --source=HEAD --staged --worktree`; a
+    staged addition — including the new half of a rename — is removed with `git rm`, because `HEAD`
+    does not have it. A rename's old half is restored from the one row that names the new path.
+  - `POST /v1/git/discard` and `/v1/git/checkout` take the same `GitIndexRequest` and answer the new
+    status. Nothing to restore, no `HEAD`, or an untracked checkout is `409` before a write; invalid
+    paths are still `400`. The client methods are `Client::discard` and `Client::checkout`.
+  - The TUI arms with `d`/`x`, confirms with `y`, and cancels with `n`/`Esc`; the desktop keymap has
+    `SourceDiscard`/`SourceCheckout`/`SourceConfirm`/`SourceCancel` on the same keys and the same
+    buttons. The browser has **Discard** and **Checkout** behind an inline confirmation. Every
+    surface refuses a path with nothing to restore and says why; checkout is unavailable before the
+    first commit and for an untracked path, where discard is the action that removes it.
+  - **Tests:** four `acpilot-git` tests (discard restores from the index and removes an untracked
+    file, checkout resets both halves and removes a staged addition, checkout restores a rename's
+    old half, checkout refuses an untracked path and an unborn repository), four route tests
+    (discard, checkout, untracked refusal, no-`HEAD` refusal), two TUI state tests plus the footer
+    drawing, one desktop headless test that arming sends nothing and `y` sends each command, and one
+    browser test over both confirmations. The OpenAPI operations and schema are regenerated.
+  - **Open:** config changes remain separate, and there is no whole-tree discard — a selection is
+    one path, because a button that resets everything is a second decision. A workspace on another
+    host still needs a helper method for these writes. The browser has no keyboard route, as its
+    panel has no global keymap.
 
 ---
 

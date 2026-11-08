@@ -187,6 +187,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/git/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore repository paths' index and working tree from HEAD */
+        post: operations["git_checkout_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/git/commit": {
         parameters: {
             query?: never;
@@ -249,6 +266,23 @@ export interface paths {
         get: operations["git_diff_doc"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/git/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore repository paths' working-tree half from the index */
+        post: operations["git_discard_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1251,7 +1285,7 @@ export interface components {
             path: string;
         };
         /**
-         * @description A request to stage or unstage repository-relative paths.
+         * @description A request to move repository-relative paths across the index or restore them.
          *
          *     The paths are the ones `GET /v1/git/status` reports, so a client never has to
          *     translate a workspace path into the repository's spelling. The answer is the new
@@ -2736,6 +2770,66 @@ export interface operations {
             };
         };
     };
+    git_checkout_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description The status read after git checked the paths out; staged additions are removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description No paths, or one that is not repository-relative */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, one on another host, no HEAD, an untracked path, or git refused the write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     commit_doc: {
         parameters: {
             query?: never;
@@ -2927,6 +3021,66 @@ export interface operations {
                 };
             };
             /** @description No workspace, or one on another host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `git` is not installed on the host */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    git_discard_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description The status read after git restored the paths; staged changes stay staged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatus"];
+                };
+            };
+            /** @description No paths, or one that is not repository-relative */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The workspace is not inside a git repository */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace, one on another host, nothing to restore, or git refused the write */
             409: {
                 headers: {
                     [name: string]: unknown;

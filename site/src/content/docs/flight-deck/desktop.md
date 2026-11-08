@@ -139,8 +139,10 @@ fifteen seconds; with no daemon behind it the bar says so rather than failing a
 launch over a footer.
 
 The source-control overlay is real too: `F6` reads the changed paths and the
-selected file's diff, `s`/`u` stage and unstage a path, and `c` opens the commit
-composer. `Tab`/`Shift-Tab` there chooses which listed session drafts the message,
+selected file's diff, `s`/`u` stage and unstage a path, and `d`/`x` arm a discard
+or checkout that `y` confirms (`n` cancels). Discard keeps the staged half;
+checkout resets both halves to `HEAD` and is unavailable before the first commit.
+`c` opens the commit composer. `Tab`/`Shift-Tab` there chooses which listed session drafts the message,
 so a window with no session pane can still ask the agent working on that part of
 the repository; the first session is only the default. `Ctrl-G` asks it for a
 draft, and `Ctrl-S` then `y` commits the staged index.

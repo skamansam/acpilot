@@ -88,6 +88,34 @@ export function canUnstage(entry: GitStatusEntry | null): boolean {
   return entry !== null && staged(entry.index);
 }
 
+/**
+ * Whether the selected path has an unstaged change, or is untracked.
+ *
+ * Discard restores from the index; an untracked file has no index version, so the
+ * daemon removes it instead.
+ */
+export function canDiscard(entry: GitStatusEntry | null): boolean {
+  return entry !== null && entry.worktree !== 'unmodified' && entry.worktree !== 'ignored';
+}
+
+/**
+ * Whether the selected path has a version in HEAD to check out.
+ *
+ * An untracked path has no HEAD version; discard is the action that can remove it.
+ * A staged path can be checked out even when the working tree matches the index.
+ */
+export function canCheckout(entry: GitStatusEntry | null, hasHead: boolean): boolean {
+  if (entry === null || !hasHead) {
+    return false;
+  }
+  return (
+    staged(entry.index) ||
+    (entry.worktree !== 'unmodified' &&
+      entry.worktree !== 'ignored' &&
+      entry.worktree !== 'untracked')
+  );
+}
+
 /** The first seven characters of a commit id, or the whole id when shorter. */
 export function shortId(id: string): string {
   return [...id].slice(0, 7).join('');

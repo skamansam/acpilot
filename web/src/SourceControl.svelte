@@ -3,10 +3,11 @@
   //
   // It reads `GET /v1/git/status` and `GET /v1/git/diff?scope=all`, draws the
   // selected file's section of the daemon's patch, stages or unstages that path,
-  // and opens a composer whose commit is a second, explicit click.
+  // discards or checks it out after a confirmation, and opens a composer whose
+  // commit is a second, explicit click.
 
-  import { ApiError, commitMessage, gitDiff, gitStatus, commitStaged, stagePaths, unstagePaths, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
-import { canStage, canUnstage, marks, patchSection, shortId, stagedCount } from './git';
+  import { ApiError, checkoutPaths, commitMessage, discardPaths, gitDiff, gitStatus, commitStaged, stagePaths, unstagePaths, type CommitDraft, type GitDiff, type GitStatus, type SessionSummary } from './api';
+import { canCheckout, canDiscard, canStage, canUnstage, marks, patchSection, shortId, stagedCount } from './git';
 
 let { token, sessions, openSession }: {
   token: string;
@@ -29,6 +30,8 @@ let committing = $state(false);
 let confirming = $state(false);
 let composerError = $state<string | null>(null);
 let indexing = $state(false);
+let restoring = $state<'discard' | 'checkout' | null>(null);
+let confirmingRestore = $state<{ kind: 'discard' | 'checkout'; path: string } | null>(null);
 
 const files = $derived(status?.files ?? []);
 const section = $derived(
@@ -38,6 +41,8 @@ const stagedFiles = $derived(stagedCount(files));
 const selectedEntry = $derived(files[selected] ?? null);
 const stageable = $derived(canStage(selectedEntry));
 const unstageable = $derived(canUnstage(selectedEntry));
+const discardable = $derived(canDiscard(selectedEntry));
+const checkoutable = $derived(canCheckout(selectedEntry, status?.head !== null));
 const sessionId = $derived(openSession ?? sessions[0]?.id ?? '');
 
 function describe(failure: unknown): string {
@@ -49,6 +54,7 @@ function describe(failure: unknown): string {
 async function load(): Promise<void> {
   loading = true;
   error = null;
+  confirmingRestore = null;
   try {
     const [nextStatus, nextDiff] = await Promise.all([gitStatus(token), gitDiff(token)]);
     status = nextStatus;
@@ -92,6 +98,46 @@ async function index(staged: boolean): Promise<void> {
     error = describe(failure);
   } finally {
     indexing = false;
+  }
+}
+
+function armRestore(kind: 'discard' | 'checkout'): void {
+  if (selectedEntry === null || restoring !== null) {
+    return;
+  }
+  if (kind === 'discard' && !discardable) {
+    error = `${selectedEntry.path} has no unstaged change to discard`;
+    return;
+  }
+  if (kind === 'checkout' && !checkoutable) {
+    error = `${selectedEntry.path} has no HEAD version to check out`;
+    return;
+  }
+  confirmingRestore = { kind, path: selectedEntry.path };
+  error = null;
+}
+
+async function restore(): Promise<void> {
+  if (confirmingRestore === null || restoring !== null) {
+    return;
+  }
+  const { kind, path } = confirmingRestore;
+  confirmingRestore = null;
+  restoring = kind;
+  error = null;
+  try {
+    if (kind === 'discard') {
+      await discardPaths([path], token);
+      note = `Discarded ${path}.`;
+    } else {
+      await checkoutPaths([path], token);
+      note = `Checked out ${path} from HEAD.`;
+    }
+    await load();
+  } catch (failure) {
+    error = describe(failure);
+  } finally {
+    restoring = null;
   }
 }
 
@@ -224,6 +270,20 @@ async function commit(): Promise<void> {
         >
           Unstage
         </button>
+        <button
+          type="button"
+          onclick={() => armRestore('discard')}
+          disabled={!discardable || indexing || restoring !== null}
+        >
+          {restoring === 'discard' ? 'Discarding…' : 'Discard'}
+        </button>
+        <button
+          type="button"
+          onclick={() => armRestore('checkout')}
+          disabled={!checkoutable || indexing || restoring !== null}
+        >
+          {restoring === 'checkout' ? 'Checking out…' : 'Checkout'}
+        </button>
         <button type="button" onclick={() => compose(false)} disabled={stagedFiles === 0}>
           Compose commit
         </button>
@@ -238,6 +298,20 @@ async function commit(): Promise<void> {
           <span class="note">Generation needs an open session.</span>
         {/if}
       </div>
+
+      {#if confirmingRestore}
+        <div class="source-confirm" role="alert">
+          <p>
+            {confirmingRestore.kind === 'discard'
+              ? `Discard the unstaged changes to ${confirmingRestore.path}? Staged changes stay.`
+              : `Check out ${confirmingRestore.path} from HEAD? Staged and unstaged changes will be discarded.`}
+          </p>
+          <button type="button" class="primary" onclick={() => void restore()}>
+            {confirmingRestore.kind === 'discard' ? 'Discard path' : 'Checkout path'}
+          </button>
+          <button type="button" onclick={() => (confirmingRestore = null)}>Cancel</button>
+        </div>
+      {/if}
 
       {#if composing}
         <div class="source-composer">

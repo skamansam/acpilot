@@ -8,9 +8,11 @@
 //! already is for anyone with a repository to open.
 //!
 //! The writes are narrow and named: [`Repo::stage`] and [`Repo::unstage`] move
-//! paths across the index, and [`Repo::commit`] commits it. Nothing checks out, resets
-//! the working tree or changes config. A source-control pane stages through these so
-//! its answer and the command line's cannot disagree about what the next commit holds.
+//! paths across the index, [`Repo::discard`] restores the working tree from the
+//! index, [`Repo::checkout`] restores both from `HEAD`, and [`Repo::commit`]
+//! commits the index. Changes config remain outside this surface. A source-control
+//! pane stages and restores through these so its answer and the command line's
+//! cannot disagree about what the next commit holds.
 //!
 //! Parsing is confined to stable porcelain/plumbing output:
 //! `status --porcelain=v2 -z`, `diff --name-status -z`, `ls-files -z`, and a
@@ -365,9 +367,21 @@ pub enum GitError {
     /// A commit was asked for with no message.
     #[error("a commit message cannot be empty")]
     EmptyMessage,
-    /// No path was named for an index operation.
+    /// No path was named for an index or working-tree operation.
     #[error("no paths were named")]
     NoPaths,
+    /// The named paths have nothing to restore.
+    #[error("the named paths have no changes to restore")]
+    NoChanges,
+    /// A repository with no commit has no `HEAD` to check a path out from.
+    #[error("there is no HEAD to check out from")]
+    NoHead,
+    /// An untracked path has no version to check out.
+    #[error("{path:?} is untracked; discard it instead")]
+    NotInHead {
+        /// The path the caller supplied.
+        path: String,
+    },
     /// A path was not relative to the repository root.
     #[error("not a repository-relative path: {path:?}")]
     InvalidPath {
@@ -600,15 +614,145 @@ impl Repo {
         self.change_index(paths, false)
     }
 
-    fn change_index(&self, paths: &[String], staged: bool) -> Result<(), GitError> {
-        if paths.is_empty() {
-            return Err(GitError::NoPaths);
-        }
-        for path in paths {
-            if !is_repository_path(path) {
-                return Err(GitError::InvalidPath { path: path.clone() });
+    /// Put the working tree back to the index for `paths`.
+    ///
+    /// A staged edit stays staged: this discards only the half a person has not
+    /// put in the next commit. An untracked path has no index version, so git's
+    /// own clean removes it rather than leaving a file no restore can name.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::NoChanges`], [`GitError::InvalidPath`],
+    /// or [`GitError::Command`] when git refuses a path.
+    pub fn discard(&self, paths: &[String]) -> Result<(), GitError> {
+        validate_paths(paths)?;
+        let status = self.status()?;
+        let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        let mut restore = BTreeSet::new();
+        let mut clean = BTreeSet::new();
+        for entry in &status.files {
+            if !wanted.contains(entry.path.as_str()) {
+                continue;
+            }
+            match entry.worktree {
+                ChangeKind::Untracked => {
+                    clean.insert(entry.path.clone());
+                }
+                ChangeKind::Unmodified | ChangeKind::Ignored => {}
+                _ => {
+                    restore.insert(entry.path.clone());
+                }
             }
         }
+        if restore.is_empty() && clean.is_empty() {
+            return Err(GitError::NoChanges);
+        }
+
+        if !restore.is_empty() {
+            let mut args = vec![
+                "restore".to_owned(),
+                "--worktree".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(restore);
+            self.run_owned(args)?;
+        }
+        if !clean.is_empty() {
+            let mut args = vec![
+                "clean".to_owned(),
+                "-f".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(clean);
+            self.run_owned(args)?;
+        }
+        Ok(())
+    }
+
+    /// Put both the index and the working tree back to `HEAD` for `paths`.
+    ///
+    /// This is the stronger reset: a staged edit and an unstaged one are both
+    /// discarded. A path that only exists in the index (a staged addition or the
+    /// new half of a rename) is removed, because `HEAD` does not have it. An
+    /// untracked path is refused instead: it has no version to check out, and
+    /// deleting it is [`Self::discard`]'s job.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::NoChanges`], [`GitError::NoHead`],
+    /// [`GitError::NotInHead`], [`GitError::InvalidPath`], or
+    /// [`GitError::Command`] when git refuses a conflict or a locked index.
+    pub fn checkout(&self, paths: &[String]) -> Result<(), GitError> {
+        validate_paths(paths)?;
+        if !self.has_head()? {
+            return Err(GitError::NoHead);
+        }
+
+        let status = self.status()?;
+        let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        let mut restore = BTreeSet::new();
+        let mut remove = BTreeSet::new();
+        for entry in &status.files {
+            if !wanted.contains(entry.path.as_str()) {
+                continue;
+            }
+            match entry.index {
+                ChangeKind::Added => {
+                    remove.insert(entry.path.clone());
+                }
+                ChangeKind::Renamed => {
+                    if let Some(old_path) = &entry.orig_path {
+                        restore.insert(old_path.clone());
+                    }
+                    remove.insert(entry.path.clone());
+                }
+                ChangeKind::Copied => {
+                    remove.insert(entry.path.clone());
+                }
+                _ if entry.worktree == ChangeKind::Untracked => {
+                    return Err(GitError::NotInHead {
+                        path: entry.path.clone(),
+                    });
+                }
+                _ => {
+                    restore.insert(entry.path.clone());
+                }
+            }
+        }
+        if restore.is_empty() && remove.is_empty() {
+            return Err(GitError::NoChanges);
+        }
+
+        if !restore.is_empty() {
+            let mut args = vec![
+                "restore".to_owned(),
+                "--source=HEAD".to_owned(),
+                "--staged".to_owned(),
+                "--worktree".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(restore);
+            self.run_owned(args)?;
+        }
+        if !remove.is_empty() {
+            let mut args = vec![
+                "rm".to_owned(),
+                "-f".to_owned(),
+                "-q".to_owned(),
+                "--ignore-unmatch".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(remove);
+            self.run_owned(args)?;
+        }
+        Ok(())
+    }
+
+    fn change_index(&self, paths: &[String], staged: bool) -> Result<(), GitError> {
+        validate_paths(paths)?;
 
         let mut args = if staged {
             vec!["add".to_owned(), "-A".to_owned(), "--".to_owned()]
@@ -737,6 +881,18 @@ impl Repo {
 /// runs on Windows too: `..\\x` is a traversal there and an ordinary filename on
 /// Unix, and the platform's own parser is the one that knows which. A normal
 /// component is the only kind allowed; `.`, `..`, a root and a prefix are not.
+fn validate_paths(paths: &[String]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Err(GitError::NoPaths);
+    }
+    for path in paths {
+        if !is_repository_path(path) {
+            return Err(GitError::InvalidPath { path: path.clone() });
+        }
+    }
+    Ok(())
+}
+
 fn is_repository_path(path: &str) -> bool {
     !path.is_empty()
         && Path::new(path)
@@ -1114,6 +1270,134 @@ mod tests {
             fs::read_to_string(fixture.root.join("one.txt")).expect("file"),
             "changed\n",
             "unstaging does not touch the working tree"
+        );
+    }
+
+    #[test]
+    fn discard_restores_the_working_tree_from_the_index_and_removes_untracked_files() {
+        let fixture = Fixture::new("discard");
+        fixture.write("one.txt", "one\n");
+        fixture.commit("init");
+
+        fixture.write("one.txt", "staged\n");
+        fixture.git(&["add", "one.txt"]);
+        fixture.write("one.txt", "worktree\n");
+        fixture.write("new.txt", "untracked\n");
+
+        fixture
+            .repo()
+            .discard(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("discarded");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("one"),
+            "staged\n",
+            "discard restores from the index, not from HEAD"
+        );
+        assert!(
+            !fixture.root.join("new.txt").exists(),
+            "an untracked path has no index version, so discarding it removes it"
+        );
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one is still staged");
+        assert_eq!(one.index, ChangeKind::Modified);
+        assert_eq!(one.worktree, ChangeKind::Unmodified);
+        assert!(
+            status.files.iter().all(|entry| entry.path != "new.txt"),
+            "the untracked path is gone from the status too"
+        );
+    }
+
+    #[test]
+    fn checkout_restores_both_sides_and_removes_a_staged_addition() {
+        let fixture = Fixture::new("checkout");
+        fixture.write("one.txt", "one\n");
+        fixture.commit("init");
+
+        fixture.write("one.txt", "staged\n");
+        fixture.git(&["add", "one.txt"]);
+        fixture.write("one.txt", "worktree\n");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        fixture
+            .repo()
+            .checkout(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("checked out");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("one"),
+            "one\n",
+            "both the index and the working tree go back to HEAD"
+        );
+        assert!(
+            !fixture.root.join("new.txt").exists(),
+            "a path HEAD does not have is removed, not restored"
+        );
+        assert!(
+            fixture.repo().status().expect("status").files.is_empty(),
+            "the tree is clean after checking the only changes out"
+        );
+    }
+
+    #[test]
+    fn checkout_restores_the_old_half_of_a_rename() {
+        let fixture = Fixture::new("checkout-rename");
+        fixture.write("old.txt", "content\n");
+        fixture.commit("init");
+        fixture.git(&["mv", "old.txt", "new.txt"]);
+        fixture.write("new.txt", "changed after the move\n");
+
+        fixture
+            .repo()
+            .checkout(&["new.txt".to_owned()])
+            .expect("checked out");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("old.txt")).expect("old"),
+            "content\n",
+            "the rename's old half is restored from HEAD"
+        );
+        assert!(!fixture.root.join("new.txt").exists());
+        assert!(
+            fixture.repo().status().expect("status").files.is_empty(),
+            "one row moves both halves of the rename"
+        );
+    }
+
+    #[test]
+    fn checkout_refuses_an_untracked_path_and_an_unborn_repository() {
+        let fixture = Fixture::new("checkout-refused");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        let error = fixture
+            .repo()
+            .checkout(&["new.txt".to_owned()])
+            .expect_err("an unborn repository has no HEAD");
+        assert!(matches!(error, GitError::NoHead), "{error}");
+        assert!(
+            fixture.root.join("new.txt").exists(),
+            "a refused checkout writes nothing"
+        );
+
+        fixture.commit("init");
+        fixture.write("untracked.txt", "untracked\n");
+        let error = fixture
+            .repo()
+            .checkout(&["untracked.txt".to_owned()])
+            .expect_err("an untracked path has no HEAD version");
+        assert!(
+            matches!(error, GitError::NotInHead { ref path } if path == "untracked.txt"),
+            "{error}"
+        );
+        assert!(
+            fixture.root.join("untracked.txt").exists(),
+            "checkout does not delete a file it cannot restore"
         );
     }
 

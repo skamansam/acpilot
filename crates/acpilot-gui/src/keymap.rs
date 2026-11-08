@@ -75,6 +75,14 @@ pub enum Action {
     SourceStage,
     /// Remove the selected path from the index.
     SourceUnstage,
+    /// Arm a discard of the selected path's unstaged changes.
+    SourceDiscard,
+    /// Arm a checkout of the selected path from HEAD.
+    SourceCheckout,
+    /// Confirm the armed discard or checkout.
+    SourceConfirm,
+    /// Cancel the armed discard or checkout.
+    SourceCancel,
     /// Open the commit composer.
     SourceCompose,
     /// Open it and ask the session for a draft.
@@ -210,6 +218,30 @@ pub const DEFAULT: &[Binding] = &[
         description: "Unstage the selected path",
     },
     Binding {
+        keys: "d",
+        action: Action::SourceDiscard,
+        contexts: &[Source],
+        description: "Discard the selected path's unstaged changes",
+    },
+    Binding {
+        keys: "x",
+        action: Action::SourceCheckout,
+        contexts: &[Source],
+        description: "Check the selected path out from HEAD",
+    },
+    Binding {
+        keys: "y",
+        action: Action::SourceConfirm,
+        contexts: &[Source],
+        description: "Confirm the armed restore",
+    },
+    Binding {
+        keys: "n",
+        action: Action::SourceCancel,
+        contexts: &[Source],
+        description: "Cancel the armed restore",
+    },
+    Binding {
         keys: "c",
         action: Action::SourceCompose,
         contexts: &[Source],
@@ -343,6 +375,10 @@ mod tests {
             Action::SourceRefresh,
             Action::SourceStage,
             Action::SourceUnstage,
+            Action::SourceDiscard,
+            Action::SourceCheckout,
+            Action::SourceConfirm,
+            Action::SourceCancel,
             Action::SourceCompose,
             Action::SourceGenerate,
             Action::CloseSource,

@@ -465,6 +465,45 @@ impl Client {
         self.send(request, "/v1/git/unstage").await
     }
 
+    /// `POST /v1/git/discard`.
+    ///
+    /// Restores the selected paths' working-tree half from the index and answers the
+    /// status read afterwards. Staged changes stay staged; an untracked path is
+    /// removed, because the index has no version to restore it from.
+    pub async fn discard(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/discard"))
+            .json(&body);
+        self.send(request, "/v1/git/discard").await
+    }
+
+    /// `POST /v1/git/checkout`.
+    ///
+    /// Restores both the index and the working tree for the selected paths from
+    /// `HEAD`. A staged addition is removed; an untracked path is refused.
+    pub async fn checkout(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/checkout"))
+            .json(&body);
+        self.send(request, "/v1/git/checkout").await
+    }
+
     /// `POST /v1/git/commit-message`.
     ///
     /// Asks the named session to draft a message from the staged diff. The answer is

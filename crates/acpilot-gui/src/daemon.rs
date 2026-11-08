@@ -46,6 +46,10 @@ pub enum GitCommand {
     Stage(String),
     /// Remove one repository-relative path from the index.
     Unstage(String),
+    /// Restore one path's working-tree half from the index.
+    Discard(String),
+    /// Restore one path's index and working tree from HEAD.
+    Checkout(String),
     /// Ask this session to draft a message from the staged index.
     Generate(String),
     /// Commit the index with a message the person confirmed.
@@ -109,6 +113,18 @@ pub fn follow_git(
                     }
                     GitCommand::Unstage(path) => {
                         match client.unstage(std::slice::from_ref(&path)).await {
+                            Ok(_) => sink(load(&client).await),
+                            Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                        }
+                    }
+                    GitCommand::Discard(path) => {
+                        match client.discard(std::slice::from_ref(&path)).await {
+                            Ok(_) => sink(load(&client).await),
+                            Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
+                        }
+                    }
+                    GitCommand::Checkout(path) => {
+                        match client.checkout(std::slice::from_ref(&path)).await {
                             Ok(_) => sink(load(&client).await),
                             Err(error) => sink(GitUpdate::LoadFailed(error.to_string())),
                         }

@@ -1283,7 +1283,7 @@ expression: canonical(document)
         "type": "object"
       },
       "GitIndexRequest": {
-        "description": "A request to stage or unstage repository-relative paths.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
+        "description": "A request to move repository-relative paths across the index or restore them.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
         "properties": {
           "paths": {
             "description": "Paths relative to the repository root.",

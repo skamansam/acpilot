@@ -210,6 +210,41 @@ fn help_is_stable() {
 }
 
 #[test]
+fn config_explain_names_the_winning_layer() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    fs::write(
+        config.path().join("config.toml"),
+        "[preferences]\ntab_width = 2\n",
+    )
+    .expect("global settings");
+    fs::create_dir_all(workspace.path().join(".acpilot")).expect("project marker");
+    fs::write(
+        workspace.path().join(".acpilot/config.toml"),
+        "[preferences]\ntab_width = 8\n",
+    )
+    .expect("project settings");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("config")
+        .arg("explain")
+        .arg("tab_width")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot config explain");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("preferences.tab_width = 8"), "{text}");
+    assert!(text.contains("from"), "{text}");
+    assert!(
+        text.contains(".acpilot/config.toml") || text.contains(".acpilot\\config.toml"),
+        "the project file is named as the winner: {text}"
+    );
+}
+
+#[test]
 fn doctor_reports_a_fresh_machine_and_writes_nothing() {
     let config = TempDir::new();
     let workspace = TempDir::new();

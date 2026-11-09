@@ -649,7 +649,18 @@ impl AppState {
     #[must_use]
     pub fn settings(&self) -> Option<acpilot_profile::settings::Settings> {
         let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
-        root.settings().ok()
+        // The profile the daemon was started with is a layer of the same cascade:
+        // its `config.toml` and `profile.toml` sit above the user's file and below
+        // the workspace's, which is why the path is used rather than its name — a
+        // `--profile` may live outside `<config>/profiles`.
+        let profile = self
+            .profile_root()
+            .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+            .or_else(|| {
+                self.profile_name()
+                    .and_then(|name| acpilot_profile::Profile::named(name).ok())
+            });
+        root.settings_with_profile(profile.as_ref()).ok()
     }
 
     /// The preferences a client of this daemon would draw with, resolved now.
@@ -686,6 +697,17 @@ impl AppState {
         let mut paths = vec![acpilot_profile::user_config_path()];
         if let Some(project) = root.project() {
             paths.push(project.config_path());
+        }
+        let profile = self
+            .profile_root()
+            .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+            .or_else(|| {
+                self.profile_name()
+                    .and_then(|name| acpilot_profile::Profile::named(name).ok())
+            });
+        if let Some(profile) = &profile {
+            paths.push(profile.config_path());
+            paths.push(profile.preferences_path());
         }
         let Some(changes) = acpilot_profile::watch::changes(paths) else {
             tracing::warn!(

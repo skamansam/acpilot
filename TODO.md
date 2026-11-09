@@ -703,8 +703,8 @@ Three rules:
     `Application Support/acpilot` because that is the root this crate already resolves through
     `directories`; the ticket's `Acpilot` spelling is not used anywhere else.
 
-- [ ] **P4-2 · Config cascade** (1.5d)
-  - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. Still open here: profile files, `ACPILOT_*` env, CLI flags, `extends`, the union rules for `disabled`/`deny`, the unknown-key warning, and `acpilot config explain`.
+- [x] **P4-2 · Config cascade** (1.5d) — **done 2026-11-09**
+  - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. The rest — profile files, `ACPILOT_*` env, flags, `extends`, the union rules, the warning and `explain` — is in the Result below.
   - Per-profile files: `profile.toml` (preferences), `agents.toml`, `lsp.toml`, `policy.toml`,
     `keymap.toml`, `theme.toml`.
   - `agents.toml` has **one reader**: `acpilot_agent::manifest::parse_definitions`, which
@@ -717,8 +717,29 @@ Three rules:
     `extends` merges beneath the child (max depth 4, cycles rejected).
   - Unknown keys warn once (so a newer config on an older binary still runs); invalid values
     fail with file, line, and key. `acpilot config explain <key>` prints the winner and its origin.
-  - [decide] D13: full `extends` inheritance vs copy-on-create. Recommend `extends` for
-    `agents`/`policy`/`lsp`, copy for preferences (easier to reason about, harder to surprise).
+  - **Result (2026-11-09):** the six layers are real. `acpilot_profile::settings::Cascade`
+    merges defaults < global `config.toml` < a profile's `config.toml` and `profile.toml` <
+    workspace `.acpilot/config.toml` < `ACPILOT_*` < flags, per key, and keeps the winning
+    origin for every leaf. `extends` is a layer order (parent first), capped at four profiles
+    with a named cycle refusal. Arrays replace except `disabled` and `deny`, which union. An
+    unknown key warns once and the read continues; a wrong type fails with the file, line and
+    key. `acpilot config explain <key>` prints the winner and its origin, and a bare key means
+    the same preference as `preferences.<key>`. `Settings::for_launch` is used by `Root`,
+    `acpilotd` and the TUI, so a launch under a profile reads and watches `profile.toml` as
+    well as `config.toml`. Environment overrides are `ACPILOT_PROFILE`,
+    `ACPILOT_PREFERENCES__TAB_WIDTH` and the bare `ACPILOT_TAB_WIDTH`; unrelated `ACPILOT_*`
+    variables are not settings. Seven new settings tests (41 in the crate) plus a CLI
+    integration test cover the order, inheritance, cycle/depth, union, warning and origin.
+  - **Open:** no command exposes a preference flag yet, so the flags layer is an API for P4-9.
+    `agents.toml`, `lsp.toml`, `policy.toml`, `keymap.toml` and `theme.toml` are still owned by
+    their readers; ADR 0012 chooses copy-on-create for those domains, so `extends` does not
+    merge them (P4-9's `profile new` copies them). `acpilot doctor` does not list unknown keys
+    or origins yet, and `acpilot profile diff` remains P4-9.
+  - [x] D13: **`extends` layers non-secret settings; security-sensitive files are copied when
+    a profile is created** (decided 2026-11-09, ADR 0012). The reverse — inheriting agents,
+    policy and language servers — was recommended in the plan, but it makes a child inherit a
+    credential reference or a permission rule it never named. Preferences are safe to layer and
+    surprising to copy, so the rule is the other way round.
 
 - [ ] **P4-3 · Resolution order + workspace marker** (0.5d)
   - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected. Still open here: `--profile`/`ACPILOT_PROFILE` precedence over the marker (today `--profile` simply wins), `active_profile` in the global file, auto-creating `default`, the `acpilot profile new` hint, and the precedence matrix as a test table.
@@ -2403,7 +2424,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D10 · Profile isolation: one daemon with N stores (recommended — profiles must run concurrently) vs one daemon per profile (stronger blast-radius, worse UX).
 - [ ] D11 · Profile storage: database per profile (recommended) vs single database with a `profile` column.
 - [ ] D12 · Language-server installation: detect-only in v0.1 (recommended) vs managed downloads with checksums.
-- [ ] D13 · Profile inheritance: `extends` merge vs copy-on-create only.
+- [x] D13 · Profile inheritance: **`extends` layers non-secret settings; security-sensitive files are copied when a profile is created** (decided 2026-11-09, ADR 0012). Inheriting `agents.toml`, `policy.toml` or `lsp.toml` would let a child run with a credential reference or permission rule it never wrote; preferences are safe to layer. `profile new` (P4-9) copies the domain files.
 - [x] D14 · Model adapter seam: **one `ChatBackend` trait, `LmStudio` native plus `OpenAiCompatible`, new variants only with their adapter** (decided 2026-10-20, ADR 0002). Anthropic/Gemini are not OpenAI-shaped and are explicitly out of v0.1.
 - [x] D15 · Remote driver trust: **ACP bridge with scopes, `answer_permissions` off by default, permission prompts route to a human** (decided 2026-10-20, ADR 0002). TLS termination is the operator's tunnel in v0.1.
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.

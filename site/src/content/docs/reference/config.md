@@ -135,8 +135,16 @@ tab_width = 2
 
 Settings are merged per key, in this order: the built-in defaults
 (`acpilot-profile/defaults.toml`), then `~/.config/acpilot/config.toml`, then the
-project's `.acpilot/config.toml`. A key nobody sets keeps the default; a project
-file that sets one key changes one key.
+profile's `config.toml` and `profile.toml` (a parent's beneath a child's when the
+registry says `extends`), then the project's `.acpilot/config.toml`, then
+`ACPILOT_*` variables, then command-line flags. A key nobody sets keeps the
+default; a project file that sets one key changes one key.
+
+Arrays replace, except `disabled` and `deny`, which union: a workspace adding one
+disabled agent must not silently re-enable the ones the profile disabled.
+`extends` walks at most four profiles and refuses a cycle. An unknown key is
+warned about once and the read continues, so a newer file still runs on an older
+binary; a value of the wrong type fails with the file, line and key.
 
 A path names the project: `acpilot tui src/main.rs` and `acpilot-gui src/main.rs`
 climb from the file to the nearest `.acpilot/config.toml`, while a directory is
@@ -146,6 +154,10 @@ to disk. That is what makes `acpilot notes.md` a text editor rather than a
 setup wizard.
 
 ## Profile config
+
+`config.toml` keeps the profile's policy and language servers. Preferences live
+in `profile.toml` beside it; both are layers of the same cascade, and a profile
+written before `profile.toml` existed keeps working.
 
 ```toml
 # ~/.config/acpilot/profiles/work/config.toml
@@ -158,6 +170,13 @@ outside_workspace = "deny"
 [lsp.rust]
 command = "rust-analyzer"
 args = []
+```
+
+```toml
+# ~/.config/acpilot/profiles/work/profile.toml
+[preferences]
+tab_width = 2
+theme = "acpilot.paper"
 ```
 
 ## Providers and recipes
@@ -212,28 +231,33 @@ an explicit profile allowlist, and a `404` for anything outside it — the same
 answer a local client gets.
 </Aside>
 
-<Aside type="note" title="Unknown keys are an error, not a shrug">
-A typo in a config file should be loud. `acpilot doctor` lists every unknown key
-with the file and line that produced it, and the daemon refuses to start with a
-config it cannot fully understand — a setting that silently does nothing is worse
-than no setting.
+<Aside type="note" title="Unknown keys are loud, but not fatal">
+A typo should not be silent. The cascade warns once per unknown key and names the
+file that wrote it, then keeps running, because a file written by a newer binary
+must still work on an older one. A value of the wrong type is different: it fails
+with the file, line and key, since running on a subset of what someone wrote is
+the setting that silently does nothing.
 </Aside>
 
 ## Precedence, not guessing
 
 ```bash
-acpilot profile diff work personal
+acpilot config explain tab_width
+acpilot config explain preferences.theme --profile work
 ```
 
-Prints the effective configuration with the winning file for each key. When the
-answer to "why is it doing that?" is a config file three layers deep, this is the
-command that ends the argument.
+Prints the winning value and the file, environment variable or flag that wrote
+it. A bare key is a preference, so `tab_width` and `preferences.tab_width` name
+the same value. When the answer to "why is it doing that?" is a config file three
+layers deep, this is the command that ends the argument; `acpilot profile diff`
+(P4-9) is the comparison across two profiles.
 
 ## Environment variables
 
 | Variable | Effect |
 | --- | --- |
 | `ACPILOT_PROFILE` | Selects the profile (after `--profile`, before the marker file) |
+| `ACPILOT_PREFERENCES__TAB_WIDTH` | A preference override; the double underscore separates the table from the key. `ACPILOT_TAB_WIDTH` also works for a bare preference name. |
 | `ACPILOT_ADDR` | Daemon bind address (used by `acpilotd` today) |
 | `ACPILOT_LOG` | `tracing` filter override |
 | `RUST_LOG` | Fallback for `ACPILOT_LOG` |

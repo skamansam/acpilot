@@ -138,6 +138,17 @@ impl Profile {
         self.root.join(CONFIG_FILE)
     }
 
+    /// Where this profile's preferences live.
+    ///
+    /// `config.toml` is still a layer below it, because profiles written before
+    /// this file existed have to keep working. The name belongs to the settings
+    /// cascade that reads it, so a watcher asks this path rather than spelling
+    /// `profile.toml` a second time.
+    #[must_use]
+    pub fn preferences_path(&self) -> PathBuf {
+        self.root.join(settings::PROFILE_SETTINGS_FILE)
+    }
+
     /// Where this profile keeps its state: transcripts, the database, caches.
     ///
     /// One directory per profile, under the platform's data root, so two profiles

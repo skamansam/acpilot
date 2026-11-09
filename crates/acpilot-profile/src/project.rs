@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::Profile;
 use crate::settings::{Settings, SettingsError};
 
 /// The directory that marks a project, and holds everything project-scoped.
@@ -156,23 +157,47 @@ impl Root {
         }
     }
 
-    /// The settings this root runs under: defaults, then the user's file, then the
-    /// project's — the project layer being absent for a temporary root.
+    /// The settings this root runs under: defaults, the user's file, the
+    /// profile's files, then the project's — the project layer being absent for a
+    /// temporary root.
     ///
     /// # Errors
     ///
     /// A config file that exists and does not parse, or does not hold the types it
     /// declares. Never a missing file: a person with no settings has the defaults.
     pub fn settings(&self) -> Result<Settings, SettingsError> {
+        self.settings_with_profile(None)
+    }
+
+    /// [`Root::settings`] with the profile layer made explicit.
+    ///
+    /// The profile is the directory a launch resolved, not a name this method
+    /// guesses: choosing it is the resolution order's job, and a second opinion
+    /// here is how a work launch reads a personal file. `None` is a profile-less
+    /// launch, which is the first-run state.
+    ///
+    /// # Errors
+    ///
+    /// A settings file that does not parse, or a profile inheritance chain that
+    /// does not resolve.
+    pub fn settings_with_profile(
+        &self,
+        profile: Option<&Profile>,
+    ) -> Result<Settings, SettingsError> {
         let user = crate::user_config_path();
-        self.settings_with(Some(user.as_path()))
+        Settings::for_launch(
+            Some(user.as_path()),
+            self.project().map(Project::config_path).as_deref(),
+            profile,
+        )
     }
 
     /// [`Root::settings`] with the user layer made explicit.
     ///
     /// A caller that owns the user file — a test, a portable install, `--config`
     /// when it lands — passes it here rather than letting the environment decide
-    /// what a launch reads.
+    /// what a launch reads. This is the file-only cascade; a launch that knows its
+    /// profile uses [`Root::settings_with_profile`].
     ///
     /// # Errors
     ///

@@ -57,6 +57,12 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Explain which settings file a value came from.
+    Config {
+        /// Which config verb.
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Open the terminal UI against a running daemon, or run one here.
     ///
     /// The TUI is a client, not a second engine: it opens sessions, sends
@@ -205,6 +211,27 @@ pub enum TokenCommand {
     Rotate,
 }
 
+/// Everything under `acpilot config`.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Print the value of one setting and the layer that won.
+    ///
+    /// The layers are the defaults, the global `config.toml`, the profile's
+    /// `config.toml` and `profile.toml`, the project's `.acpilot/config.toml`, the
+    /// `ACPILOT_*` environment, and the flags this command was given. A bare key
+    /// is a preference: `tab_width` means `preferences.tab_width`.
+    Explain {
+        /// Dotted key, for example `preferences.tab_width` or `profile`.
+        key: String,
+        /// A directory, or a file inside one. Defaults to this directory.
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Profile whose files are part of the cascade.
+        #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
+        profile: Option<String>,
+    },
+}
+
 /// Everything under `acpilot secret`.
 ///
 /// `set` reads the value from stdin; there is deliberately no `--value`, because
@@ -346,6 +373,7 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Ext { command }) => run_ext(command),
         Some(Command::Secret { command }) => run_secret(command),
         Some(Command::Token { command }) => run_token(command),
+        Some(Command::Config { command }) => run_config(command),
         Some(Command::Serve {
             http: _,
             bind,
@@ -426,6 +454,75 @@ fn run_doctor(
         }
         Err(message) => {
             eprintln!("acpilot doctor: {message}");
+            exit::FAILURE
+        }
+    }
+}
+
+/// Explain one setting's winner, from the same cascade a launch reads.
+fn run_config(command: ConfigCommand) -> u8 {
+    let ConfigCommand::Explain { key, path, profile } = command;
+    let root = match Root::resolve(path.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("acpilot config explain: {error}");
+            return exit::FAILURE;
+        }
+    };
+    // The flag first, then the name the project already chose. `active_profile`
+    // is the registry's answer for a launch that names none; it is read here
+    // rather than guessed so the explanation and the launch agree.
+    let named = match profile {
+        Some(name) => Some(name),
+        None => match root.settings() {
+            Ok(settings) => settings.profile,
+            Err(error) => {
+                eprintln!("acpilot config explain: {error}");
+                return exit::FAILURE;
+            }
+        },
+    };
+    let named = named.or_else(|| {
+        acpilot_profile::Registry::load(&acpilot_profile::user_config_path())
+            .ok()
+            .and_then(|registry| registry.active_profile.map(|id| id.as_str().to_owned()))
+    });
+    let profile = match named {
+        Some(name) => match Profile::named(&name) {
+            Ok(profile) => Some(profile),
+            Err(error) => {
+                eprintln!("acpilot config explain: {error}");
+                eprintln!(
+                    "acpilot config explain: create {} or pass --profile <name>",
+                    acpilot_profile::profiles_dir().join(&name).display()
+                );
+                return exit::CONFLICT;
+            }
+        },
+        None => None,
+    };
+    let user = acpilot_profile::user_config_path();
+    let cascade = match acpilot_profile::settings::Cascade::for_launch(
+        Some(user.as_path()),
+        root.project()
+            .map(acpilot_profile::project::Project::config_path)
+            .as_deref(),
+        profile.as_ref(),
+    ) {
+        Ok(cascade) => cascade,
+        Err(error) => {
+            eprintln!("acpilot config explain: {error}");
+            return exit::FAILURE;
+        }
+    };
+    match cascade.explain(&key) {
+        Ok(explanation) => {
+            println!("{} = {}", explanation.key, explanation.render_value());
+            println!("  from {}", explanation.origin);
+            exit::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("acpilot config explain: {error}");
             exit::FAILURE
         }
     }
@@ -625,13 +722,6 @@ fn run_tui(flags: TuiFlags) -> u8 {
             return exit::FAILURE;
         }
     };
-    let theme = match tui_theme(&settings) {
-        Ok(theme) => theme,
-        Err(message) => {
-            eprintln!("acpilot tui: {message}");
-            return exit::FAILURE;
-        }
-    };
     // The profile is the project's, unless the caller named one. A project that
     // names none means the daemon's default, which is a profile nobody has to
     // spell out on the command line.
@@ -641,6 +731,29 @@ fn run_tui(flags: TuiFlags) -> u8 {
             Ok(profile) => profile,
             Err(code) => return code,
         },
+    };
+    // The theme is resolved after the profile is known, because `profile.toml` is
+    // a layer of the same cascade: reading it before that would draw the global
+    // theme for the first frame and the profile's after a save.
+    let settings = match profile
+        .as_deref()
+        .and_then(|directory| Profile::open(directory).ok())
+    {
+        Some(profile) => match root.settings_with_profile(Some(&profile)) {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("acpilot tui: {error}");
+                return exit::FAILURE;
+            }
+        },
+        None => settings,
+    };
+    let theme = match tui_theme(&settings) {
+        Ok(theme) => theme,
+        Err(message) => {
+            eprintln!("acpilot tui: {message}");
+            return exit::FAILURE;
+        }
     };
     let implied = profile.is_some();
 
@@ -695,6 +808,7 @@ fn run_tui(flags: TuiFlags) -> u8 {
     // is the colours on screen rather than a note to restart.
     let theme_files = acpilot_tui::ThemeFiles {
         user: Some(acpilot_profile::user_config_path()),
+        profile: profile.clone(),
         project: root.project().map(|project| project.config_path()),
         // The terminal's own colours are asked for by the client, before it takes
         // the screen: one reader of one terminal.

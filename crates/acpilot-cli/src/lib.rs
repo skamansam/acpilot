@@ -12,7 +12,7 @@ pub mod doctor;
 pub mod ext;
 pub mod secret;
 
-pub use cli::{Cli, Command, ExtCommand, SecretCommand};
+pub use cli::{Cli, Command, ConfigCommand, ExtCommand, SecretCommand};
 
 /// Exit code for a failed command.
 ///

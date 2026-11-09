@@ -56,6 +56,7 @@ acpilot ext activate|deactivate <id> --profile <name>
 acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
+acpilot config explain <key> [PATH] [--profile <name>]
 acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
 acpilot serve [--bind <addr>] [--token <token>] [--profile <dir>] [--workspace <dir>]
 acpilot doctor [PATH] [--profile <name>] [--api-url <url|path>] [--token <token>]
@@ -185,6 +186,12 @@ next call and every client holding the old one is refused, with nothing restarti
 Both native clients resolve that file themselves: `acpilot tui` and `acpilot-gui`
 read it when `--token` (or `ACPILOT_TOKEN`) is absent, so a window or terminal
 opened against `acpilot serve` on this machine needs only its URL.
+
+`acpilot config explain <key>` reads the same cascade a launch does and prints
+the winning value with its origin — the defaults, the global file, a profile's
+`config.toml` or `profile.toml`, the project's `.acpilot/config.toml`, an
+`ACPILOT_*` variable, or a flag. A bare key is a preference (`tab_width` means
+`preferences.tab_width`).
 
 The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
 it is, and only silence starts one. The spawned daemon is detached from the

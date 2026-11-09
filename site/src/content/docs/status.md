@@ -46,7 +46,7 @@ instrument panel; if it says a thing works, it works in the repository today.
 | Foundation phase (P1) | Workspace skeleton, error model, CI, OpenAPI snapshot | **done** |
 | Engine phase (P2) | ACP engine, sessions, permission broker (headless, mock agent) | in progress — registry, supervisor, sessions, the filesystem callbacks and the permission broker done |
 | Service phase (P3) | Daemon API: SSE, files, terminals, SQLite | **done** — the routes `docs/api.md` freezes, the tower layers, `--token` on a TCP listener, sessions with their SSE transcript and replay, the files API (read/list/write/delete/mkdir, ETags, traversal guards), terminals with their attach socket, SQLite history with retention, hosts, and remote workspaces reached through `acpilotd-helper`: files, hidden rows and git letters are all asked of the host the code is on. Language servers run on the host too, through the same helper (P7-11); the browser half is P11-5. |
-| Profiles phase (P4) | Profiles and preferences | in progress — the settings cascade (defaults, user, project) with per-key merge is done; profile files and `ACPILOT_*` layers remain |
+| Profiles phase (P4) | Profiles and preferences | in progress — the six-layer settings cascade is done (defaults, global, inherited profile files, workspace, `ACPILOT_*`, flags), with origin tracking and `acpilot config explain`; the profile registry's CLI verbs and domain inheritance remain |
 | Models phase (P4.5) | Local models: LM Studio, the model lab, promotion, ACP bridge for remote drivers | contract only |
 | Mod shop phase (P4.6) | Extensions: declarative packs (themes, presets, grammars), signed index, per-profile activation | store + activation done |
 | Command line phase (P5) | CLI: full API coverage | |

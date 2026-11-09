@@ -25,6 +25,7 @@ fn main() -> ExitCode {
 
     let files = ThemeFiles {
         user: Some(config.into()),
+        profile: None,
         project: None,
         terminal: None,
     }

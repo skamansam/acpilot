@@ -164,6 +164,8 @@ pub fn run(
 pub struct ThemeFiles {
     /// The user's `config.toml`.
     pub user: Option<std::path::PathBuf>,
+    /// The profile directory whose `config.toml` and `profile.toml` are layers.
+    pub profile: Option<std::path::PathBuf>,
     /// The project's `.acpilot/config.toml`, when the launch is in a project.
     pub project: Option<std::path::PathBuf>,
     /// What the terminal said its own colours are, when it answered.
@@ -238,7 +240,16 @@ pub fn theme_for(
 
 /// The settings a launch resolved, when they load.
 fn settings(files: &ThemeFiles) -> Option<acpilot_profile::settings::Settings> {
-    acpilot_profile::settings::Settings::load(files.user.as_deref(), files.project.as_deref()).ok()
+    let profile = files
+        .profile
+        .as_deref()
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok());
+    acpilot_profile::settings::Settings::for_launch(
+        files.user.as_deref(),
+        files.project.as_deref(),
+        profile.as_ref(),
+    )
+    .ok()
 }
 
 /// Whether the settings ask for the terminal's own palette.
@@ -274,10 +285,23 @@ pub fn query_terminal_colours() -> Option<TerminalColours> {
 /// debounce policies and two answers to an editor that saves by rename. A client
 /// with no settings to watch — the design pass, the demo — simply has no thread.
 fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
-    let paths: Vec<std::path::PathBuf> = [files.user.clone(), files.project.clone()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let profile_files = files.profile.as_ref().map(|directory| {
+        [
+            directory.join(acpilot_profile::CONFIG_FILE),
+            directory.join(acpilot_profile::settings::PROFILE_SETTINGS_FILE),
+        ]
+    });
+    let paths: Vec<std::path::PathBuf> = [
+        files.user.clone(),
+        files.project.clone(),
+        profile_files
+            .as_ref()
+            .and_then(|paths| paths.first().cloned()),
+        profile_files.and_then(|paths| paths.get(1).cloned()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let Some(changes) = acpilot_profile::watch::changes(paths) else {
         return;
     };
@@ -460,6 +484,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user.clone()),
+            profile: None,
             project: None,
             terminal: None,
         };
@@ -492,6 +517,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user),
+            profile: None,
             project: Some(project),
             terminal: None,
         };
@@ -544,6 +570,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })
@@ -562,6 +589,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user),
+            profile: None,
             project: None,
             terminal: Some(TerminalColours {
                 background: acpilot_extensions::Color::from_rgb(0x1e, 0x1e, 0x1e),
@@ -594,6 +622,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })
@@ -612,6 +641,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(following),
+            profile: None,
             project: None,
             terminal: Some(TerminalColours {
                 background: acpilot_extensions::Color::from_rgb(0xf6, 0xf2, 0xe8),
@@ -647,6 +677,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })

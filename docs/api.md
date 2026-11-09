@@ -136,10 +136,11 @@ restarting a daemon that may be mid-turn (ADR 0004 §2).
 ## Profiles
 
 A daemon serves every profile directory under `<config>/profiles` plus the one
-`--profile` named. Each is opened once, with its own `agents.toml`, policy,
-database, sessions and language servers; a directory without a `config.toml` is
-not a profile, and one that fails to load costs its own row rather than the
-daemon. `GET /v1/profiles` lists them as `ProfileSummary`, `GET
+`--profile` named. Each is opened for its own `agents.toml`, policy, sessions and
+language servers; its `profile.sqlite` is opened on the first request that needs
+history, through a shared cache of at most four databases (least recently used
+evicted). A directory without a `config.toml` is not a profile, and one that
+fails to load costs its own row rather than the daemon. `GET /v1/profiles` lists them as `ProfileSummary`, `GET
 /v1/profiles/{id}` answers one, and `POST /v1/profiles/{id}/activate` makes a
 profile the one a request without `X-Acpilot-Profile` is about, for the life of
 the process. Persisting that choice is the settings cascade's `active_profile`,
@@ -319,10 +320,13 @@ WebSocket pings, which a browser answers without the page seeing anything.
 `GET /v1/sessions` lists every conversation this profile has, not only the ones
 this process started. A stored session is reported with `status: "closed"` —
 nothing is running it — and a prompt to it is `409`, because resuming a stopped
-conversation is not in v1. The rows live in one SQLite database per profile (the
-service phase's task P3-7), which is what makes yesterday's conversation reachable
-today; events older than 30 days are compacted out of it, while permission
-decisions are kept because they are the audit rather than the transcript.
+conversation is not in v1. The rows live in one SQLite database per profile —
+`<data>/profiles/<id>/profile.sqlite` — which is what makes yesterday's
+conversation reachable today; events older than 30 days are compacted out of it,
+while permission decisions are kept because they are the audit rather than the
+transcript. Transcripts are per profile too, under
+`<data>/profiles/<id>/sessions/<session>/session.jsonl`; `<data>/index.sqlite`
+only lists profiles and their workspaces and can be rebuilt.
 
 ## Event streams
 

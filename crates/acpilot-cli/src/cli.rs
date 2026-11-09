@@ -11,6 +11,7 @@ use acpilot_extensions::ExtensionError;
 use acpilot_profile::launch::ProfileResolver;
 use acpilot_profile::project::Root;
 use acpilot_profile::settings::Settings;
+use acpilot_profile::{ProfileId, ProfileRoots};
 use acpilot_proto::API_PREFIX;
 use acpilot_proto::profile::ThemeSurface;
 use clap::{Args, Parser, Subcommand};
@@ -62,6 +63,12 @@ pub enum Command {
         /// Which config verb.
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// Create, inspect, and remove profiles.
+    Profile {
+        /// Which profile verb.
+        #[command(subcommand)]
+        command: ProfileCommand,
     },
     /// Open the terminal UI against a running daemon, or run one here.
     ///
@@ -232,6 +239,29 @@ pub enum ConfigCommand {
     },
 }
 
+/// Everything under `acpilot profile`.
+///
+/// `new`, `list` and `use` are P4-9; `rm` is here because P4-4 owns deleting the
+/// state a profile created, and a removal that forgets the database is not one.
+#[derive(Debug, Subcommand)]
+pub enum ProfileCommand {
+    /// Move a profile and its state to the OS trash, or delete them with `--purge`.
+    ///
+    /// The config directory and every separate state root are moved, so the
+    /// database and transcripts do not outlive the identity they belonged to.
+    /// Without `--purge` the paths are recoverable from the platform trash.
+    Rm {
+        /// Profile name under `<config>/profiles`.
+        name: String,
+        /// Delete outright instead of moving to the OS trash.
+        #[arg(long)]
+        purge: bool,
+        /// Where profiles live, when it is not the default config root.
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+}
+
 /// Everything under `acpilot secret`.
 ///
 /// `set` reads the value from stdin; there is deliberately no `--value`, because
@@ -374,6 +404,7 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Secret { command }) => run_secret(command),
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Config { command }) => run_config(command),
+        Some(Command::Profile { command }) => run_profile(command),
         Some(Command::Serve {
             http: _,
             bind,
@@ -455,6 +486,86 @@ fn run_doctor(
         Err(message) => {
             eprintln!("acpilot doctor: {message}");
             exit::FAILURE
+        }
+    }
+}
+
+/// Remove a profile's config and state, or move them to the OS trash.
+fn run_profile(command: ProfileCommand) -> u8 {
+    match command {
+        ProfileCommand::Rm {
+            name,
+            purge,
+            config,
+        } => {
+            let id = match ProfileId::parse(&name) {
+                Ok(id) => id,
+                Err(error) => {
+                    eprintln!("acpilot profile rm: {error}");
+                    return exit::USAGE;
+                }
+            };
+            let root = config.config.unwrap_or_else(acpilot_profile::config_dir);
+            let directory = root.join("profiles").join(id.as_str());
+            let roots = ProfileRoots::for_id(&id);
+
+            // Config and data are separate on a platform that draws that line and
+            // the same directory under ACPILOT_HOME. Sorting and deduplicating is
+            // what stops the shared case from trying to remove one directory twice.
+            // The id is parsed rather than the config read: a profile whose
+            // `config.toml` is broken is exactly one a person may want gone.
+            let mut paths = vec![
+                directory.clone(),
+                roots.data,
+                roots.cache,
+                roots.state,
+                roots.runtime,
+            ];
+            paths.sort();
+            paths.dedup();
+            if !paths.iter().any(|path| path.exists()) {
+                eprintln!(
+                    "acpilot profile rm: {} does not exist",
+                    directory.join(acpilot_profile::CONFIG_FILE).display()
+                );
+                return exit::NOT_FOUND;
+            }
+
+            let mut removed = 0;
+            for path in paths.into_iter().filter(|path| path.exists()) {
+                let outcome = if purge {
+                    std::fs::remove_dir_all(&path).map_err(|error| error.to_string())
+                } else {
+                    trash::delete(&path).map_err(|error| error.to_string())
+                };
+                if let Err(error) = outcome {
+                    eprintln!("acpilot profile rm: {}: {error}", path.display());
+                    return exit::FAILURE;
+                }
+                removed += 1;
+                if purge {
+                    println!("removed {}", path.display());
+                } else {
+                    println!("moved {} to the trash", path.display());
+                }
+            }
+            if removed == 0 {
+                eprintln!("acpilot profile rm: {name} has no files to remove");
+                return exit::NOT_FOUND;
+            }
+
+            // The index is disposable, so a failure here is a warning rather than
+            // a failed removal: the profile is already gone, and discovery rebuilds
+            // the rows it needs from the directories that remain.
+            match acpilot_store::Index::open(acpilot_profile::index_path())
+                .and_then(|index| index.forget_profile(id.as_str()))
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("acpilot profile rm: the profile index was not updated: {error}")
+                }
+            }
+            exit::SUCCESS
         }
     }
 }

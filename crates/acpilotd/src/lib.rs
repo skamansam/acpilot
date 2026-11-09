@@ -9,6 +9,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -20,7 +22,7 @@ use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
 use acpilot_proto::profile::Preferences;
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
-use acpilot_store::Store;
+use acpilot_store::{Store, Stores};
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
@@ -262,6 +264,41 @@ pub struct Workspace {
     pub root: std::path::PathBuf,
 }
 
+/// Where a profile's database is, or how to open it when a request needs it.
+///
+/// `Ready` is the test and embedded seam: a caller that owns a store hands it to
+/// the state and the routes read exactly that one. `Lazy` is the daemon's path: a
+/// profile state is built without touching its database, and the shared [`Stores`]
+/// cache opens it on first use. The whole point is that a daemon serving ten
+/// profiles does not open ten SQLite files to answer `GET /v1/health`.
+#[derive(Debug, Clone)]
+enum StoreSlot {
+    /// No store was configured.
+    None,
+    /// A store the caller opened and owns.
+    Ready(Arc<Store>),
+    /// A path opened through the shared cache on first use.
+    Lazy {
+        stores: Arc<Stores>,
+        path: PathBuf,
+        warned: Arc<AtomicBool>,
+    },
+}
+
+impl StoreSlot {
+    fn ready(store: Arc<Store>) -> Self {
+        Self::Ready(store)
+    }
+
+    fn lazy(stores: Arc<Stores>, path: PathBuf) -> Self {
+        Self::Lazy {
+            stores,
+            path,
+            warned: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 /// [`Registry`], which is the same path the daemon will use once profiles land.
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -307,10 +344,11 @@ pub struct AppState {
     /// The SQLite record: sessions, their events and their decisions, kept after
     /// the process that streamed them is gone (the service phase's task P3-7).
     ///
-    /// `None` in a test or an embedded daemon that was given no path, for the same
-    /// reason transcripts are: a library value does not write into somebody's home
-    /// directory uninvited.
-    store: Option<Arc<Store>>,
+    /// A daemon opens it on first use through the shared cache; a test or an
+    /// embedded caller can hand over a store it already owns. `None` is a library
+    /// value that was given no path, for the same reason transcripts are: it does
+    /// not write into somebody's home directory uninvited.
+    store: StoreSlot,
     /// The terminals *agents* ask their client to open.
     ///
     /// A different store from [`Self::terminals`], which is the panes a client
@@ -415,7 +453,7 @@ impl Default for AppState {
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
-            store: None,
+            store: StoreSlot::None,
             cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
@@ -766,7 +804,19 @@ impl AppState {
             Ok(records) => self.hosts.seed(records),
             Err(error) => tracing::warn!(%error, "the recorded hosts could not be read"),
         }
-        self.store = Some(store);
+        self.store = StoreSlot::ready(store);
+        self
+    }
+
+    /// Open this profile's store through `stores` the first time a route asks.
+    ///
+    /// The cache is shared by every profile state in one daemon, so the four-store
+    /// limit is a fact about the daemon rather than a limit per profile. A path
+    /// that cannot be opened is one warning and no history for this profile; it is
+    /// not a reason to stop serving the others.
+    #[must_use]
+    pub fn with_lazy_store(mut self, stores: Arc<Stores>, path: impl Into<PathBuf>) -> Self {
+        self.store = StoreSlot::lazy(stores, path.into());
         self
     }
 
@@ -780,9 +830,73 @@ impl AppState {
         &self.workspaces
     }
 
-    /// The database behind the session routes, when the daemon opened one.
-    pub fn store(&self) -> Option<&Arc<Store>> {
-        self.store.as_ref()
+    /// The database behind the session routes, opening it on first use.
+    ///
+    /// The first open in this process is also where sessions a previous process
+    /// left open are marked closed and the recorded hosts are seeded. Doing that
+    /// again after an eviction would close conversations this process is running,
+    /// so the cache's `first` flag is the switch rather than the open itself.
+    pub fn store(&self) -> Option<Arc<Store>> {
+        match &self.store {
+            StoreSlot::None => None,
+            StoreSlot::Ready(store) => Some(Arc::clone(store)),
+            StoreSlot::Lazy {
+                stores,
+                path,
+                warned,
+            } => match stores.open(path) {
+                Ok((store, first)) => {
+                    if first {
+                        if let Some(workspace) = self.workspace()
+                            && let Err(error) = store.remember_workspace(
+                                &workspace.id,
+                                &workspace.root.to_string_lossy(),
+                            )
+                        {
+                            tracing::warn!(%error, "the workspace was not recorded");
+                        }
+                        match store.close_open_sessions() {
+                            Ok(0) => {}
+                            Ok(closed) => tracing::info!(
+                                closed,
+                                "sessions from a previous run are closed; nothing is running them"
+                            ),
+                            Err(error) => {
+                                tracing::warn!(%error, "the stored sessions were not closed")
+                            }
+                        }
+                        match store.hosts() {
+                            Ok(records) => self.hosts.seed(records),
+                            Err(error) => {
+                                tracing::warn!(%error, "the recorded hosts could not be read")
+                            }
+                        }
+                        tracing::info!(path = %path.display(), "sessions are kept in a database");
+                    }
+                    Some(store)
+                }
+                Err(error) => {
+                    if !warned.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            %error,
+                            "sessions will not outlive this process"
+                        );
+                    }
+                    None
+                }
+            },
+        }
+    }
+
+    /// The store only when it is already open. Used by the retention sweep, which
+    /// must not defeat the lazy open it is meant to live beside.
+    fn store_if_open(&self) -> Option<Arc<Store>> {
+        match &self.store {
+            StoreSlot::None => None,
+            StoreSlot::Ready(store) => Some(Arc::clone(store)),
+            StoreSlot::Lazy { stores, path, .. } => stores.peek(path),
+        }
     }
 
     /// Answer cross-origin requests.
@@ -806,13 +920,20 @@ impl AppState {
     ///
     /// If there is no tokio runtime, like every other `tokio::spawn`.
     pub fn compact_store_on_a_timer(&self) {
-        let Some(store) = self.store.clone() else {
+        // A clone of the state, not a clone of the store: a sweep that held an
+        // `Arc<Store>` would keep that profile open forever and turn the four-store
+        // cache into a five-store cache.
+        if matches!(self.store, StoreSlot::None) {
             return;
-        };
+        }
+        let state = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(COMPACT_INTERVAL);
             loop {
                 tick.tick().await;
+                let Some(store) = state.store_if_open() else {
+                    continue;
+                };
                 let before = jiff::Timestamp::now()
                     - jiff::SignedDuration::from_hours(acpilot_store::RETENTION_DAYS * 24);
                 match store.compact(before) {
@@ -1041,16 +1162,35 @@ pub fn startup(
     profile: Option<&std::path::Path>,
     workspace: &std::path::Path,
 ) -> Result<AppState, StateError> {
+    startup_with_stores(profile, workspace, Arc::new(Stores::default()))
+}
+
+/// [`startup`] with a store cache shared by several profiles in one daemon.
+///
+/// The cache is the P4-4 limit: four open databases, least recently used going
+/// first. A single-profile launch gets its own cache and the same behaviour; the
+/// multi-profile daemon passes one cache to every profile so the limit is about
+/// the process, not each identity in it.
+///
+/// # Errors
+///
+/// The profile or the workspace could not be read (see [`state_for`]).
+pub fn startup_with_stores(
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+    stores: Arc<Stores>,
+) -> Result<AppState, StateError> {
     let state = state_for(profile, workspace)
         // Conversations outlive the process that streamed them, which is the point
         // of a transcript: a client that reconnects after a restart can read what
-        // happened. Where that lives is the data directory, not the socket's.
-        .map(|state| state.with_transcripts(transcript_dir()))?;
-    // And the queryable half of the same record: a transcript a client cannot ask
-    // about by id is a file, not a history. A store that cannot be opened costs the
-    // history and one warning, not the daemon — a full disk is bad enough without
-    // taking today's sessions with it.
-    let state = open_store(state, profile);
+        // happened. A named profile keeps its transcripts under its own data
+        // directory, because two profiles may use the same session id.
+        .map(|state| state.with_transcripts(transcript_dir_for(profile)))?;
+    // The store is attached by path, not opened: a daemon serving every profile on
+    // the machine must not open every database to answer a health check. The first
+    // request that needs this profile's history opens it, and the shared cache
+    // closes the least recently used one when a fifth arrives.
+    let state = state.with_lazy_store(stores, store_path(profile));
     // Once at boot and then every six hours, because the first tick is immediate.
     state.compact_store_on_a_timer();
     // A terminal is a process; one an agent opened and never released has to end
@@ -1074,58 +1214,34 @@ pub fn startup(
     Ok(state)
 }
 
-/// Open the profile's database and attach it to `state`.
+/// The database path for a profile, or the shared root when there is none.
 ///
-/// The path decision is [`acpilot_profile::Profile::database_path`]'s for a named
-/// profile and the shared data directory's otherwise, so two ways of starting the
-/// daemon cannot disagree about where a conversation lives.
-///
-/// A session from a previous process is marked `closed` here: nothing is running it,
-/// and a list that says `busy` is a client waiting for a turn that will never come.
-fn open_store(state: AppState, profile: Option<&std::path::Path>) -> AppState {
-    let path = profile
+/// The decision is [`acpilot_profile::Profile::database_path`]'s for a named
+/// profile, so the daemon, the CLI and `--database`'s default cannot disagree
+/// about where a conversation lives.
+fn store_path(profile: Option<&std::path::Path>) -> PathBuf {
+    profile
         .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
         .map_or_else(
             || acpilot_profile::data_dir().join(acpilot_store::FILE_NAME),
             |profile| profile.database_path(),
-        );
-    let store = match Store::open(&path) {
-        Ok(store) => store,
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "sessions will not outlive this process"
-            );
-            return state;
-        }
-    };
-    if let Some(workspace) = state.workspace()
-        && let Err(error) =
-            store.remember_workspace(&workspace.id, &workspace.root.to_string_lossy())
-    {
-        tracing::warn!(%error, "the workspace was not recorded");
-    }
-    match store.close_open_sessions() {
-        Ok(0) => {}
-        Ok(closed) => tracing::info!(
-            closed,
-            "sessions from a previous run are closed; nothing is running them"
-        ),
-        Err(error) => tracing::warn!(%error, "the stored sessions were not closed"),
-    }
-    tracing::info!(path = %path.display(), "sessions are kept in a database");
-    state.with_store(Arc::new(store))
+        )
 }
 
-/// Where the daemon keeps the transcripts of its sessions.
+/// Where the daemon keeps the transcripts of a profile-less launch.
 ///
-/// `<data>/acpilot/transcripts`, moved with the rest of Acpilot's state by
-/// `ACPILOT_HOME`. A caller can point [`AppState::with_transcripts`] somewhere
-/// else; this is the answer for a daemon started by its own binary.
+/// `<data>/sessions`, moved with the rest of Acpilot's state by `ACPILOT_HOME`.
+/// A named profile uses its own data directory through [`transcript_dir_for`].
 #[must_use]
 pub fn transcript_dir() -> std::path::PathBuf {
-    acpilot_profile::data_dir().join("transcripts")
+    acpilot_profile::data_dir().join("sessions")
+}
+
+/// The transcript directory for `profile`, or the shared one when it has none.
+fn transcript_dir_for(profile: Option<&std::path::Path>) -> std::path::PathBuf {
+    profile
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+        .map_or_else(transcript_dir, |profile| profile.sessions_dir())
 }
 
 /// The root a daemon was started against, resolved and named once.
@@ -2103,6 +2219,24 @@ mod tests {
     #[test]
     fn a_daemon_with_no_workspace_serves_the_pages_own_palette() {
         assert!(AppState::new().web_palette().is_none());
+    }
+
+    #[test]
+    fn a_lazy_store_is_not_opened_until_a_route_asks() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("profile.sqlite");
+        let stores = Arc::new(Stores::default());
+        let state = AppState::new().with_lazy_store(Arc::clone(&stores), &path);
+
+        assert!(
+            !path.exists(),
+            "building a profile state creates no database"
+        );
+        assert!(stores.is_empty(), "and opens none in the shared cache");
+
+        assert!(state.store().is_some(), "the first request opens it");
+        assert!(path.exists(), "the database appears when it is needed");
+        assert_eq!(stores.len(), 1);
     }
 
     #[test]

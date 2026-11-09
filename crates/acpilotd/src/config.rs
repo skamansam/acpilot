@@ -184,7 +184,7 @@ fn profile_file(directory: &Path) -> PathBuf {
 
 /// Where a profile's database goes when no layer names one.
 ///
-/// A named profile gets `<data>/acpilot/profiles/<name>/acpilot.db`, so two profiles
+/// A named profile gets `<data>/profiles/<name>/profile.sqlite`, so two profiles
 /// cannot read each other's conversations; a daemon with no profile gets the shared
 /// root, which is the profile-less answer to the same question.
 fn default_database(profile: Option<&Path>) -> PathBuf {

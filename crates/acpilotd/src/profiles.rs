@@ -5,8 +5,8 @@
 //! now the daemon opened exactly the directory it was started with, so
 //! `X-Acpilot-Profile` was a header the page sent and the daemon ignored. That is
 //! the state this module ends: every profile under `<config>/profiles` is opened
-//! once at startup, each gets the state and router it would have had alone, and a
-//! request is dispatched to the one its header names.
+//! at startup for its settings and router, its database is opened lazily through
+//! the shared store cache, and a request is dispatched to the one its header names.
 //!
 //! # Why a router per profile rather than a field on `AppState`
 //!
@@ -37,6 +37,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use acpilot_core::AcpilotError;
 use acpilot_proto::profile::ProfileSummary;
+use acpilot_store::{Index, Stores};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path as UrlPath, Request, State};
@@ -45,7 +46,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower::ServiceExt;
 
-use crate::{ApiError, AppState, StateError, router_with, startup};
+use crate::{ApiError, AppState, StateError, router_with, startup_with_stores};
 
 /// The header a request names its profile in.
 ///
@@ -119,14 +120,34 @@ impl Profiles {
         workspace: &Path,
         cors: bool,
     ) -> Result<Self, StateError> {
-        Self::discover_in(&acpilot_profile::profiles_dir(), started, workspace, cors)
+        // The index is disposable. A file that cannot be opened costs the profile
+        // list's cross-session memory, not the daemon: directories are still the
+        // authority on which profiles exist.
+        let index = match Index::open(acpilot_profile::index_path()) {
+            Ok(index) => Some(index),
+            Err(error) => {
+                tracing::warn!(%error, "the profile index is not available");
+                None
+            }
+        };
+        Self::discover_in_with(
+            &acpilot_profile::profiles_dir(),
+            index.as_ref(),
+            started,
+            workspace,
+            cors,
+        )
     }
 
-    /// [`Self::discover`] over an explicit profiles root.
+    /// [`Self::discover`] over an explicit profiles root, without a global index.
     ///
     /// The root is a parameter so a test — or an embedded daemon serving a
     /// portable install — can point at its own directory without changing the
-    /// process's environment.
+    /// process's environment. The index is deliberately not opened here: a test
+    /// that wrote `<data>/index.sqlite` would be testing the machine's home
+    /// directory as much as the daemon. A profile's database is not opened here
+    /// either: each state attaches its path to the shared cache, which opens it on
+    /// the first request that needs history.
     ///
     /// # Errors
     ///
@@ -137,6 +158,17 @@ impl Profiles {
         workspace: &Path,
         cors: bool,
     ) -> Result<Self, StateError> {
+        Self::discover_in_with(root, None, started, workspace, cors)
+    }
+
+    fn discover_in_with(
+        root: &Path,
+        index: Option<&Index>,
+        started: Option<&Path>,
+        workspace: &Path,
+        cors: bool,
+    ) -> Result<Self, StateError> {
+        let stores = Arc::new(Stores::default());
         let mut directories = profile_directories(root);
         let started_name = started
             .and_then(|directory| directory.file_name())
@@ -148,7 +180,7 @@ impl Profiles {
         }
 
         if directories.is_empty() {
-            let state = startup(None, workspace)?.with_cors(cors);
+            let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
                 entries: BTreeMap::new(),
                 anonymous: Some(Entry::new("", state)),
@@ -158,8 +190,18 @@ impl Profiles {
 
         let mut entries = BTreeMap::new();
         for (name, directory) in &directories {
-            match startup(Some(directory), workspace) {
+            match startup_with_stores(Some(directory), workspace, Arc::clone(&stores)) {
                 Ok(state) => {
+                    if let Some(index) = index {
+                        if let Err(error) = index.remember_profile(name) {
+                            tracing::warn!(%error, profile = %name, "the profile was not indexed");
+                        }
+                        if let Err(error) =
+                            index.remember_workspace(name, &workspace.to_string_lossy())
+                        {
+                            tracing::warn!(%error, profile = %name, "the workspace was not indexed");
+                        }
+                    }
                     entries.insert(name.clone(), Entry::new(name, state.with_cors(cors)));
                 }
                 Err(error) if Some(name) == started_name.as_ref() => return Err(error),
@@ -174,7 +216,7 @@ impl Profiles {
             // daemon that serves nothing is worse than one that serves the root
             // it was given, so it falls back to the profile-less state.
             tracing::warn!("no profile loaded; serving the workspace without an identity");
-            let state = startup(None, workspace)?.with_cors(cors);
+            let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
                 entries: BTreeMap::new(),
                 anonymous: Some(Entry::new("", state)),

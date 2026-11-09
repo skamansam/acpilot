@@ -26,6 +26,7 @@
 //! defaults both off, and a foreign key that is only foreign when someone
 //! remembered is worse than none.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -36,7 +37,18 @@ use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 /// The database file's name inside a profile's data directory.
-pub const FILE_NAME: &str = "acpilot.db";
+pub const FILE_NAME: &str = "profile.sqlite";
+
+/// The name this database had before P4-4. A store opened at [`FILE_NAME`]
+/// adopts a sibling with this name when the new file does not exist yet, so an
+/// upgrade does not turn yesterday's conversations into an empty profile.
+pub const LEGACY_FILE_NAME: &str = "acpilot.db";
+
+/// The global index's file name, under the data root rather than a profile.
+pub const INDEX_FILE: &str = "index.sqlite";
+
+/// The schema the global index expects.
+pub const INDEX_SCHEMA_VERSION: u32 = 1;
 
 /// How long an event is kept before [`Store::compact`] drops it.
 ///
@@ -99,7 +111,26 @@ impl Store {
     /// The directory or file could not be created, the pragmas failed, or a
     /// migration failed. The message names the path for the first two.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_with_legacy(path.as_ref(), false)
+    }
+
+    /// Open a profile database, adopting the pre-P4-4 file name when needed.
+    ///
+    /// The rename happens before SQLite touches either file, and only when the
+    /// new name is absent: a database that already exists is never replaced by an
+    /// older sibling. The `-wal` and `-shm` files move with it, because a journal
+    /// left beside the old name would be applied to a database at the new one.
+    ///
+    /// # Errors
+    ///
+    /// The directory or file could not be created, the legacy file could not be
+    /// moved, the pragmas failed, or a migration failed.
+    pub fn open_profile(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_legacy(path.as_ref(), true)
+    }
+
+    fn open_with_legacy(path: &Path, adopt: bool) -> Result<Self, StoreError> {
+        let path = path.to_path_buf();
         if let Some(directory) = path.parent()
             && !directory.as_os_str().is_empty()
         {
@@ -107,6 +138,9 @@ impl Store {
                 path: directory.to_path_buf(),
                 source,
             })?;
+        }
+        if adopt {
+            adopt_legacy(&path)?;
         }
         let connection = Connection::open(&path)?;
         Self::prepare(connection, Some(path))
@@ -122,14 +156,7 @@ impl Store {
     }
 
     fn prepare(connection: Connection, path: Option<PathBuf>) -> Result<Self, StoreError> {
-        // WAL for concurrent readers while a turn writes; `foreign_keys` per
-        // connection, which is the only place SQLite will take it.
-        connection.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA foreign_keys = ON;
-             PRAGMA busy_timeout = 5000;",
-        )?;
+        prepare_connection(&connection)?;
         let mut connection = connection;
         migrate(&mut connection)?;
         Ok(Self {
@@ -613,16 +640,38 @@ impl Store {
 /// One transaction per step, with `user_version` bumped inside it: a crash between
 /// the `CREATE TABLE`s and the version bump would otherwise leave a database that
 /// claims to be older than it is and fails on the second step's first statement.
+fn prepare_connection(connection: &Connection) -> Result<(), StoreError> {
+    // WAL for concurrent readers while a turn writes; `foreign_keys` per
+    // connection, which is the only place SQLite will take it.
+    connection.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;",
+    )?;
+    Ok(())
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
+    migrate_with(connection, MIGRATIONS, SCHEMA_VERSION)
+}
+
+/// Bring a connection up to `supported`, or say why it cannot be.
+///
+/// Shared by the profile store and the global index: both need one transaction
+/// per step with the version bump inside it, and a second copy of that loop is a
+/// second place a crash can leave the version behind the schema.
+fn migrate_with(
+    connection: &mut Connection,
+    migrations: &[(u32, &str)],
+    supported: u32,
+) -> Result<(), StoreError> {
     let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let found = u32::try_from(found).unwrap_or(u32::MAX);
-    if found > SCHEMA_VERSION {
-        return Err(StoreError::Newer {
-            found,
-            supported: SCHEMA_VERSION,
-        });
+    if found > supported {
+        return Err(StoreError::Newer { found, supported });
     }
-    for (version, sql) in MIGRATIONS {
+    for (version, sql) in migrations {
         if *version <= found {
             continue;
         }
@@ -632,6 +681,299 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         transaction.commit()?;
     }
     Ok(())
+}
+
+/// Move `path`'s pre-P4-4 sibling into place, when `path` is absent.
+fn adopt_legacy(path: &Path) -> Result<(), StoreError> {
+    if path.file_name().and_then(std::ffi::OsStr::to_str) != Some(FILE_NAME) || path.exists() {
+        return Ok(());
+    }
+    let legacy = path.with_file_name(LEGACY_FILE_NAME);
+    if !legacy.exists() {
+        return Ok(());
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let from = with_suffix(&legacy, suffix);
+        if !from.exists() {
+            continue;
+        }
+        let to = with_suffix(path, suffix);
+        std::fs::rename(&from, &to).map_err(|source| StoreError::Adopt { from, to, source })?;
+    }
+    Ok(())
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+/// The schema of the global index, in order.
+const INDEX_MIGRATIONS: &[(u32, &str)] = &[(1, include_str!("../migrations/index_0001.sql"))];
+
+/// The small global index: profile ids and the workspaces they have seen.
+///
+/// A separate database from every profile's conversations, because its question
+/// is different: a client listing profiles must not open every profile database,
+/// and `profile rm` must be able to remove a row without loading the store it is
+/// deleting. The index is safe to lose and cheap to rebuild from directories.
+#[derive(Clone)]
+pub struct Index {
+    connection: Arc<Mutex<Connection>>,
+    path: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for Index {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Index")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Index {
+    /// Open the index at `path`, creating it and its directory if needed.
+    ///
+    /// # Errors
+    ///
+    /// The directory or file could not be created, the pragmas failed, or the
+    /// index schema is newer than this build.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(directory) = path.parent()
+            && !directory.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(directory).map_err(|source| StoreError::Directory {
+                path: directory.to_path_buf(),
+                source,
+            })?;
+        }
+        let mut connection = Connection::open(&path)?;
+        prepare_connection(&connection)?;
+        migrate_with(&mut connection, INDEX_MIGRATIONS, INDEX_SCHEMA_VERSION)?;
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+            path: Some(path),
+        })
+    }
+
+    /// An index in this process's memory, for tests.
+    ///
+    /// # Errors
+    ///
+    /// The index schema did not apply.
+    pub fn in_memory() -> Result<Self, StoreError> {
+        let mut connection = Connection::open_in_memory()?;
+        prepare_connection(&connection)?;
+        migrate_with(&mut connection, INDEX_MIGRATIONS, INDEX_SCHEMA_VERSION)?;
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+            path: None,
+        })
+    }
+
+    /// The file this index reads, when it is a file.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Note that `id` exists, without changing the first time it was seen.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn remember_profile(&self, id: &str) -> Result<(), StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "INSERT OR IGNORE INTO profiles (id, first_seen) VALUES (?1, ?2)",
+            params![id, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Note a workspace this profile has opened.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written. The profile is inserted first, so a caller
+    /// that only knows a name does not need a second call before the foreign key
+    /// can hold.
+    pub fn remember_workspace(&self, profile: &str, path: &str) -> Result<(), StoreError> {
+        self.remember_profile(profile)?;
+        let connection = self.lock();
+        connection.execute(
+            "INSERT OR IGNORE INTO workspaces (profile, path, first_seen) VALUES (?1, ?2, ?3)",
+            params![profile, path, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Every profile id, oldest first.
+    ///
+    /// Ordered by `rowid` rather than `first_seen` for the same reason the store's
+    /// lists are: a `jiff` timestamp's fractional width makes text order disagree
+    /// with time order.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn profiles(&self) -> Result<Vec<String>, StoreError> {
+        let connection = self.lock();
+        let mut statement = connection.prepare("SELECT id FROM profiles ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The workspaces recorded for `profile`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn workspaces(&self, profile: &str) -> Result<Vec<String>, StoreError> {
+        let connection = self.lock();
+        let mut statement =
+            connection.prepare("SELECT path FROM workspaces WHERE profile = ?1 ORDER BY rowid")?;
+        let rows = statement.query_map(params![profile], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Forget `profile` and every workspace recorded for it.
+    ///
+    /// # Errors
+    ///
+    /// The delete failed.
+    pub fn forget_profile(&self, profile: &str) -> Result<usize, StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "DELETE FROM workspaces WHERE profile = ?1",
+            params![profile],
+        )?;
+        let deleted = connection.execute("DELETE FROM profiles WHERE id = ?1", params![profile])?;
+        Ok(deleted)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// How many profile stores a daemon keeps open at once.
+///
+/// The daemon may serve every profile on the machine, but a request only touches
+/// one. Four is enough for a person switching between work, personal and two
+/// projects; the fifth closes the least recently used, and the next request for it
+/// opens it again. The store is a history, so reopening costs a migration check,
+/// not a lost conversation.
+pub const OPEN_LIMIT: usize = 4;
+
+/// The open profile stores, shared by every profile state in one daemon.
+///
+/// `seen` is kept after eviction on purpose: a reopened store has already had the
+/// sessions a previous process left behind marked closed, and doing that again
+/// would close conversations the current process is running.
+#[derive(Debug, Clone)]
+pub struct Stores {
+    inner: Arc<Mutex<OpenStores>>,
+    limit: usize,
+}
+
+#[derive(Debug, Default)]
+struct OpenStores {
+    open: HashMap<PathBuf, (Arc<Store>, u64)>,
+    seen: std::collections::HashSet<PathBuf>,
+    clock: u64,
+}
+
+impl Default for Stores {
+    fn default() -> Self {
+        Self::new(OPEN_LIMIT)
+    }
+}
+
+impl Stores {
+    /// A cache of at most `limit` open stores.
+    #[must_use]
+    pub fn new(limit: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(OpenStores::default())),
+            limit: limit.max(1),
+        }
+    }
+
+    /// The store at `path`, opening it if needed.
+    ///
+    /// The boolean is whether this is the first open in this process, which is
+    /// when the caller marks sessions from a previous run closed.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be opened or migrated.
+    pub fn open(&self, path: impl AsRef<Path>) -> Result<(Arc<Store>, bool), StoreError> {
+        let path = path.as_ref().to_path_buf();
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner.clock = inner.clock.saturating_add(1);
+        let clock = inner.clock;
+        if let Some((store, used)) = inner.open.get_mut(&path) {
+            *used = clock;
+            return Ok((Arc::clone(store), false));
+        }
+        let store = Arc::new(Store::open_profile(&path)?);
+        let first = inner.seen.insert(path.clone());
+        if inner.open.len() >= self.limit
+            && let Some(oldest) = inner
+                .open
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(path, _)| path.clone())
+        {
+            inner.open.remove(&oldest);
+        }
+        inner.open.insert(path, (Arc::clone(&store), clock));
+        Ok((store, first))
+    }
+
+    /// The store at `path` only if it is already open. Never opens one.
+    #[must_use]
+    pub fn peek(&self, path: impl AsRef<Path>) -> Option<Arc<Store>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .open
+            .get(path.as_ref())
+            .map(|(store, _)| Arc::clone(store))
+    }
+
+    /// How many stores are open now.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .open
+            .len()
+    }
+
+    /// Whether no store is open.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Every currently open store, oldest use first.
+    #[must_use]
+    pub fn open_stores(&self) -> Vec<Arc<Store>> {
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut rows: Vec<_> = inner.open.values().collect();
+        rows.sort_by_key(|(_, used)| *used);
+        rows.into_iter()
+            .map(|(store, _)| Arc::clone(store))
+            .collect()
+    }
 }
 
 /// A host the daemon has been told about, as the database keeps it.
@@ -758,6 +1100,17 @@ pub enum StoreError {
         supported: u32,
     },
 
+    /// The pre-P4-4 database could not be moved to its new name.
+    #[error("cannot move {} to {}: {source}", from.display(), to.display())]
+    Adopt {
+        /// The old path.
+        from: PathBuf,
+        /// The new path.
+        to: PathBuf,
+        /// Why the rename failed.
+        source: std::io::Error,
+    },
+
     /// A stored event or payload is not the JSON this build expects.
     #[error("a stored row is not readable: {0}")]
     Json(#[from] serde_json::Error),
@@ -807,6 +1160,70 @@ mod tests {
             again.session("s1").expect("read").expect("there").title,
             "a conversation"
         );
+    }
+
+    #[test]
+    fn a_profile_store_adopts_the_old_name_once() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let legacy = directory.path().join(LEGACY_FILE_NAME);
+        {
+            let store = Store::open(&legacy).expect("the old store");
+            store.save_session(&summary("s1")).expect("session");
+        }
+        assert!(legacy.exists(), "the old file is there to adopt");
+
+        let adopted = Store::open_profile(directory.path().join(FILE_NAME)).expect("adopt");
+        assert!(
+            directory.path().join(FILE_NAME).exists(),
+            "the store moved to the P4-4 name"
+        );
+        assert!(!legacy.exists(), "the old name is not left beside it");
+        assert_eq!(
+            adopted.session("s1").expect("read").expect("there").title,
+            "a conversation"
+        );
+    }
+
+    #[test]
+    fn the_store_cache_keeps_at_most_four_open_and_reopens_evicted_ones() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let cache = Stores::default();
+        let paths: Vec<_> = (0..5)
+            .map(|index| directory.path().join(format!("p{index}.sqlite")))
+            .collect();
+
+        for path in &paths {
+            cache.open(path).expect("open");
+        }
+        assert_eq!(cache.len(), OPEN_LIMIT);
+        assert!(cache.peek(&paths[0]).is_none(), "the oldest was evicted");
+        assert!(cache.peek(&paths[4]).is_some(), "the newest stayed");
+
+        let (_, first) = cache.open(&paths[0]).expect("reopen");
+        assert!(
+            !first,
+            "a reopened store is not a first open in this process"
+        );
+        assert_eq!(cache.len(), OPEN_LIMIT);
+    }
+
+    #[test]
+    fn the_index_remembers_profiles_and_forgets_their_workspaces() {
+        let index = Index::in_memory().expect("open");
+        index.remember_workspace("work", "/one").expect("workspace");
+        index.remember_workspace("work", "/two").expect("workspace");
+        index
+            .remember_workspace("personal", "/home")
+            .expect("workspace");
+
+        assert_eq!(index.profiles().expect("profiles"), ["work", "personal"]);
+        assert_eq!(
+            index.workspaces("work").expect("workspaces"),
+            ["/one", "/two"]
+        );
+        assert_eq!(index.forget_profile("work").expect("forget"), 1);
+        assert_eq!(index.profiles().expect("profiles"), ["personal"]);
+        assert!(index.workspaces("work").expect("workspaces").is_empty());
     }
 
     #[test]

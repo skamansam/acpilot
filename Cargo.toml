@@ -178,6 +178,11 @@ portable-pty = "0.9"
 # storage & config
 rusqlite = { version = "0.41", features = ["bundled"] }
 rusqlite_migration = "2"
+# `profile rm` moves a profile to the platform's own trash (freedesktop on
+# Linux, Finder's Trash on macOS, the Recycle Bin on Windows). Hand-rolling that
+# would mean three platform branches and a Windows shell API, which the workspace's
+# no-unsafe rule puts out of reach.
+trash = "5.3"
 figment = "0.10"
 # `v1` is the platform-independent Entry API (Keychain, Credential Manager,
 # Secret Service). Without a feature the crate compiles but offers no store.

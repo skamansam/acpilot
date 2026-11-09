@@ -849,7 +849,7 @@ pub async fn create(
         spec.id.clone(),
         Some(Arc::clone(broker)),
         state.transcripts(),
-        state.store().cloned(),
+        state.store(),
     );
     if let Some(title) = &request.title {
         record.title_from(title);

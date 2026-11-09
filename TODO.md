@@ -407,7 +407,9 @@ and deterministic.
     "subdirectory" modal) have no manifest field yet, so `PtyAgent::send` is how a caller
     answers one; a profile field is a schema change and therefore a `agents-v2.json`.
 - [x] **P2-8** `acpilot-agent::transcript`: append-only `session.jsonl` (`events`, `grants`, `meta`), reader for replay, compaction into sqlite later. — **done 2026-10-25**
-  - **Result:** `acpilot_agent::transcript` is a writer and a reader for one JSON Lines file per conversation. `Transcript::create` opens with `create_new`, so an existing transcript is refused rather than truncated: if two conversations shared a file, one that neither reader could untangle, append-only would be a lie. The first line is `meta` (version, session, workspace, agent, created_at); `event` lines are the same `SessionEvent` the stream carried, sequence and all, so `replay(path, after)` has exactly the contract of `GET /v1/sessions/{id}/events?after=`; `grant` lines are permission decisions flattened to the words a person reads (`policy:allow-workspace`, not an enum with a rule id inside it), with paths made lossy rather than failing the write over bytes a log cannot spell. A record is one `write_all` of `line + '\n'` on an `O_APPEND` file, so a crash can only ever leave a partial *last* line — `read` stops there and keeps everything before it, while a corrupt line in the middle is an error naming its line number. Nothing is `fsync`ed per record: a turn is thousands of events, and a process crash loses nothing anyway. **The daemon writes them:** `acpilotd` gives each session `<data>/acpilot/transcripts/<id>/session.jsonl` (`ACPILOT_HOME` moves it with the rest of Acpilot's state) and appends every recorded event, with the broker's new audit rows flushed at the end of each turn (the cursor is the audit sequence, so a second conversation's grants are never written twice). A transcript that cannot be written is one warning per session, not a failed turn. `next_id` now skips an id that already has a transcript directory, so a restarted daemon's first conversation does not land on top of a stored one — which is what "never reused" claimed and did not do for a deleted session. **Tests:** five in `transcript.rs` (meta first and never rewritten, replay after a sequence, a grant keeping its decider, a torn tail costing only the last record, a corrupt middle line naming its line), and two in `acpilotd` (a session's events and grants read back from its file, and a stored transcript keeping its id from being reused).
+  - **Result:** `acpilot_agent::transcript` is a writer and a reader for one JSON Lines file per conversation. `Transcript::create` opens with `create_new`, so an existing transcript is refused rather than truncated: if two conversations shared a file, one that neither reader could untangle, append-only would be a lie. The first line is `meta` (version, session, workspace, agent, created_at); `event` lines are the same `SessionEvent` the stream carried, sequence and all, so `replay(path, after)` has exactly the contract of `GET /v1/sessions/{id}/events?after=`; `grant` lines are permission decisions flattened to the words a person reads (`policy:allow-workspace`, not an enum with a rule id inside it), with paths made lossy rather than failing the write over bytes a log cannot spell. A record is one `write_all` of `line + '\n'` on an `O_APPEND` file, so a crash can only ever leave a partial *last* line — `read` stops there and keeps everything before it, while a corrupt line in the middle is an error naming its line number. Nothing is `fsync`ed per record: a turn is thousands of events, and a process crash loses nothing anyway.    **The daemon writes them:** `acpilotd` gives each session
+    `<data>/profiles/<id>/sessions/<session>/session.jsonl` (`ACPILOT_HOME` moves it with the
+    rest of Acpilot's state) and appends every recorded event, with the broker's new audit rows flushed at the end of each turn (the cursor is the audit sequence, so a second conversation's grants are never written twice). A transcript that cannot be written is one warning per session, not a failed turn. `next_id` now skips an id that already has a transcript directory, so a restarted daemon's first conversation does not land on top of a stored one — which is what "never reused" claimed and did not do for a deleted session. **Tests:** five in `transcript.rs` (meta first and never rewritten, replay after a sequence, a grant keeping its decider, a torn tail costing only the last record, a corrupt middle line naming its line), and two in `acpilotd` (a session's events and grants read back from its file, and a stored transcript keeping its id from being reused).
   - **Open:** nothing reads a stored transcript back over the API yet — the file survives a restart, but the session list does not, so reverting to the service phase's task P3-7 (SQLite) is what makes a past conversation reachable. Compaction is the same item.
 - [x] **P2-9** Test fixture: `crates/acpilot-agent/tests/fixtures/mock_agent.rs` — a tiny ACP agent (using the SDK's `Agent` trait) that can be told to stream N chunks, request a permission, request a file write, open a terminal, and hang. — **done 2026-10-23**
   - **Result:** the fixture is a **process**, not an in-process helper, because the gap it was
@@ -544,9 +546,9 @@ and deterministic.
   per profile (P4-4), so migrations run once per open profile — keep them idempotent.
   - **Result (2026-11-03):** `acpilot-store` is the crate, `migrations/0001_init.sql` the
     schema (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`),
-    and `acpilotd` opens it at startup, marks every session a previous process left open as
-    `closed`, and writes each session row, event and permission decision as it happens. One
-    database per profile (`Profile::data_dir()/acpilot.db`), so a client's conversation
+    and `acpilotd` opens it on the first request that needs history, marks every session a
+    previous process left open as `closed`, and writes each session row, event and permission
+    decision as it happens. One database per profile (`Profile::data_dir()/profile.sqlite`), so a client's conversation
     cannot sit beside a weekend project's; a daemon with no profile uses the shared data
     directory. `WAL`, `foreign_keys = ON` and a `busy_timeout` are set per connection, not
     hoped for per database. **The migration runner is 25 lines here, not
@@ -768,15 +770,38 @@ Three rules:
     non-creating `--profile default` probe. A profile created by the fallback has only
     `config.toml`; P4-4 still owns creating the state roots.
 
-- [ ] **P4-4 · Profile-scoped state** (1d)
+- [x] **P4-4 · Profile-scoped state** (1d) — **done 2026-11-09**
   - One SQLite per profile (`<data>/profile.sqlite`) with the service phase's task P3-7 schema, plus a small global
     `index.sqlite` (`profiles`, `workspaces(profile, path, first_seen)`).
-  - Transcripts under `<data>/sessions/`. `profile rm` moves the directory to the OS trash and
-    prints the path; `--purge` is required to delete outright.
+  - Transcripts under `<data>/profiles/<id>/sessions/`. `profile rm` moves the directory to
+    the OS trash and prints the path; `--purge` is required to delete outright.
   - Daemon opens stores lazily and keeps at most 4 open (LRU) with per-store migration state.
-  - [decide] D11: DB-per-profile (recommended) vs one DB with a `profile` column.
+  - [x] D11: **one database per profile** (decided 2026-11-09, ADR 0007).
     `acpilot sessions ls --all` iterates stores sequentially in the first case; budget ≤50 ms
-    for 10 profiles, otherwise build the index.
+    for 10 profiles, otherwise build the index. The global index is built and populated now.
+  - **Result (2026-11-09):** `acpilot-store` names the profile database `profile.sqlite`
+    (`FILE_NAME`), and `Store::open_profile` adopts a pre-P4-4 `acpilot.db` (plus `-wal` and
+    `-shm`) by rename when the new name is absent. The global `index.sqlite` is a separate
+    schema (`profiles`, `workspaces`) with `remember_profile`, `remember_workspace`,
+    `profiles`, `workspaces` and `forget_profile`; the daemon records every profile and the
+    workspace it serves as discovery loads them. Each profile's transcripts live under its
+    own `<data>/profiles/<id>/sessions/<session>/session.jsonl`. `Stores` is the shared LRU
+    cache: at most four open (`OPEN_LIMIT`), with a `seen` set so a reopened database is not
+    mistaken for a first open and its live sessions are not closed. `AppState` holds a
+    `StoreSlot::{None, Ready, Lazy}`; the daemon attaches paths and opens each database on
+    the first route that needs history, while tests and embedded callers keep their explicit
+    stores. The retention sweep peeks at open stores, so it cannot defeat the laziness.
+    `acpilot profile rm <name>` moves the config directory and the separate data, cache,
+    state and runtime roots to the OS trash (`trash` 5.3), prints each path, and forgets the
+    index row; `--purge` deletes outright. A removal whose index write fails is a warning,
+    because the profile is already gone and discovery rebuilds the index. Tests: store
+    adoption, the four-store cap and reopen, index remember/forget, profile path scoping,
+    and CLI purge plus missing-profile exit `3`; the full `acpilot-store` and
+    `acpilot-profile` suites pass.
+  - **Open:** `acpilot sessions ls --all` does not exist yet, so the 50 ms budget for ten
+    profiles is not measured; the index is in place for it. `profile new/list/use` remain
+    P4-9. A profile's roots are still created on first write rather than by `profile new`, and
+    `acpilotd` keeps one workspace for every profile.
 
 - [ ] **P4-5 · Per-profile secrets** (1d)
   - **Started 2026-10-22:** `acpilot-agent::keyring` implements the namespace. `KeyringResolver`

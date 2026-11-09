@@ -286,6 +286,60 @@ fn a_marker_naming_a_missing_profile_exits_three_with_the_fix() {
 }
 
 #[test]
+fn profile_rm_purges_the_config_state_and_index_row() {
+    let home = TempDir::new();
+    let profile = home.path().join("profiles/work");
+    fs::create_dir_all(profile.join("sessions/s1")).expect("profile state");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
+    fs::write(profile.join("profile.sqlite"), "a database").expect("database");
+    fs::write(profile.join("sessions/s1/session.jsonl"), "{}").expect("transcript");
+    let index = acpilot_store::Index::open(home.path().join("index.sqlite")).expect("index");
+    index
+        .remember_workspace("work", "/a/workspace")
+        .expect("index row");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "rm", "work", "--purge"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile rm");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains(&profile.display().to_string()),
+        "the removed path is printed: {}",
+        stdout(&output)
+    );
+    assert!(!profile.exists(), "the profile directory is gone");
+    assert!(
+        index.profiles().expect("profiles").is_empty(),
+        "the index row is gone with it"
+    );
+}
+
+#[test]
+fn profile_rm_of_a_missing_profile_is_not_found() {
+    let home = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "rm", "work", "--purge"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile rm");
+
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("config.toml"),
+        "the refusal says what is missing: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn doctor_reports_a_fresh_machine_and_writes_nothing() {
     let config = TempDir::new();
     let workspace = TempDir::new();

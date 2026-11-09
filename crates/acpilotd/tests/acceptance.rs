@@ -115,7 +115,7 @@ async fn daemon_in(
     let registry = Registry::load(&agents, Arc::new(MapResolver::new())).expect("registry");
 
     let store =
-        Arc::new(Store::open(directory.join("acpilot.db")).expect("a database to record into"));
+        Arc::new(Store::open(directory.join("profile.sqlite")).expect("a database to record into"));
     // What `startup` does at boot: a session the last process left open is closed,
     // because nothing is running it. A second daemon that skipped this would list a
     // conversation as `busy` with nobody behind it.
@@ -131,7 +131,7 @@ async fn daemon_in(
         )))
         .with_workspace(acpilotd::workspace_at(&workspace).expect("workspace"))
         .with_store(store)
-        .with_transcripts(directory.join("transcripts"));
+        .with_transcripts(directory.join("sessions"));
 
     let socket = directory.join("acpilotd.sock");
     let (stop, stopped) = oneshot::channel::<()>();
@@ -322,7 +322,7 @@ async fn a_stream_replays_after_a_drop_with_no_gap() {
         "every sequence once, in order, across the reconnect"
     );
     assert!(
-        harness.directory.path().join("acpilot.db").exists(),
+        harness.directory.path().join("profile.sqlite").exists(),
         "the conversation was recorded as it streamed"
     );
 }

@@ -30,6 +30,9 @@ acpilot-host = { workspace = true }
 # two different projects.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# `profile rm` removes the profile's index rows with the same crate that owns the
+# schema, instead of a second SQLite connection and a second spelling of the table.
+acpilot-store = { workspace = true }
 # `acpilot tui` starts in this binary rather than as a second executable: one
 # process per surface, and the TUI inherits the same argument surface. With the
 # daemon's crate above, that process is also the daemon when none is running.
@@ -41,6 +44,9 @@ clap = { workspace = true }
 # daemon's `serve` future runs on; the client's blocking helper only starts the
 # embedded loopback listener, which cannot take the address a browser is given.
 tokio = { workspace = true }
+# The OS trash is a platform API; this is the one dependency that knows how to
+# reach it on Linux, macOS and Windows without the workspace taking on `unsafe`.
+trash = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

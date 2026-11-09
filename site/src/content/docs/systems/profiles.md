@@ -54,10 +54,18 @@ surprise.
 
 - **Secrets** live in a keyring namespace per profile.
 - **State** is one SQLite database per profile, so a query cannot cross profiles
-  by accident; it would have to open another file.
+  by accident; it would have to open another file. A profile's database is
+  `<data>/profiles/<id>/profile.sqlite`; the daemon opens it on first use and
+  keeps at most four open, least recently used first. `<data>/index.sqlite` is a
+  disposable global list of profiles and the workspaces each has seen.
 - **Sessions and history** are per profile. `work` sessions are invisible from
   `personal` — a `404`, not an empty list, because "empty" implies "you could
-  have them".
+  have them". Transcripts live under
+  `<data>/profiles/<id>/sessions/<session>/session.jsonl`.
+- **Removal is real.** `acpilot profile rm <id>` moves the config directory and
+  the separate data, cache, state and runtime roots to the OS trash, prints each
+  path, and forgets the index row. `--purge` deletes them outright. A profile
+  whose `config.toml` is broken can still be removed.
 - **Cross-profile references** require an explicit opt-in and leave an audit
   line.
 
@@ -79,6 +87,8 @@ dispatches each request by `X-Acpilot-Profile`: each profile has its own agents,
 policy, database, sessions and language servers. `GET /v1/profiles`, `GET
 /v1/profiles/{id}` and `POST /v1/profiles/{id}/activate` are served, and the web
 cockpit's profile picker uses them. The launch order (`--profile` → environment →
-marker → `active_profile` → created `default`) is served. Creating, renaming,
-deleting and exporting a profile and the per-profile preferences routes are still
-open (P4-8/P4-9), as is the isolation matrix (P4-10).
+marker → `active_profile` → created `default`) is served, and profile state is
+isolated by database and transcript directory. `acpilot profile rm` is served
+(P4-4). Creating, renaming and exporting a profile, and the per-profile
+preferences routes, are still open (P4-8/P4-9), as is the isolation matrix
+(P4-10).

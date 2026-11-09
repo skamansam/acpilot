@@ -90,6 +90,16 @@ pub fn user_config_path() -> PathBuf {
     config_dir().join(CONFIG_FILE)
 }
 
+/// The global profile/workspace index: `<data>/index.sqlite`.
+///
+/// One file for every profile, because its question is cross-profile: a client
+/// listing profiles must not open each profile's database to find them. It holds
+/// no conversation, so it is safe to lose and rebuild.
+#[must_use]
+pub fn index_path() -> PathBuf {
+    data_dir().join(acpilot_store::INDEX_FILE)
+}
+
 /// One profile's directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
@@ -221,10 +231,21 @@ impl Profile {
     /// The database that holds this profile's conversations (the service phase's task P3-7).
     ///
     /// The file name belongs to `acpilot-store`, because the crate that migrates the
-    /// schema is the thing that decides what it is called.
+    /// schema is the thing that decides what it is called. Opening it through
+    /// `Store::open_profile` adopts the pre-P4-4 `acpilot.db` name when needed.
     #[must_use]
     pub fn database_path(&self) -> PathBuf {
         self.data_dir().join(acpilot_store::FILE_NAME)
+    }
+
+    /// Where this profile's JSONL transcripts live.
+    ///
+    /// Under the profile's own data directory, not the shared root: two profiles
+    /// may use the same session id, and a shared directory would let one read the
+    /// other's conversation.
+    #[must_use]
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.data_dir().join("sessions")
     }
 
     /// The `[policy]` table, or the shipped policy when the file has none.
@@ -406,6 +427,33 @@ command = "rust-analyzer"
         assert!(
             matches!(error, ProfileError::Name(_)),
             "the name is refused before any directory is opened: {error}"
+        );
+    }
+
+    #[test]
+    fn state_paths_are_scoped_to_the_profile() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("work");
+        fs::create_dir(&root).expect("profile directory");
+        fs::write(root.join(CONFIG_FILE), "schema_version = 1\n").expect("write config");
+        let profile = Profile::open(&root).expect("the profile opens");
+
+        assert!(
+            profile
+                .database_path()
+                .ends_with("profiles/work/profile.sqlite"),
+            "the P4-4 database name: {}",
+            profile.database_path().display()
+        );
+        assert!(
+            profile.sessions_dir().ends_with("profiles/work/sessions"),
+            "transcripts are under this profile: {}",
+            profile.sessions_dir().display()
+        );
+        assert!(
+            crate::index_path().ends_with("index.sqlite"),
+            "the index is global: {}",
+            crate::index_path().display()
         );
     }
 }

@@ -210,6 +210,14 @@ silently is the failure mode with the worst consequences.
     └── personal/…
 ```
 
+Profile state lives under the platform data root (or the same `ACPILOT_HOME` on a
+portable install), not inside the config directory:
+`<data>/profiles/<id>/profile.sqlite` holds that profile's conversations, and
+`sessions/<session>/session.jsonl` its transcripts. `<data>/index.sqlite` is the small
+global index of profiles and the workspaces each has seen; it is disposable and
+rebuilt by discovery. `acpilot profile rm <id>` moves the config directory and every
+state root to the OS trash and prints each path; `--purge` deletes them outright.
+
 | Scoped to a profile | Global |
 | --- | --- |
 | Agents and their credentials (`keyring:<name>`, resolved in this profile) | Daemon settings (bind, token, log level) |

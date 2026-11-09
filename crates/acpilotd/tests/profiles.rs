@@ -2,10 +2,10 @@
 //! a request is dispatched to, and the two refusals.
 //!
 //! The states are built directly rather than through `discover`, because discovery
-//! opens each profile's database in the data directory — a test that wrote there
-//! would be testing the machine's home directory as much as the daemon. The
-//! routing is the same either way: `from_states` is what `discover` calls once the
-//! states exist.
+//! reads every profile under the machine's config root and attaches its database
+//! path to a shared store cache — a test that used it would be testing the home
+//! directory as much as the daemon. The routing is the same either way:
+//! `from_states` is what `discover` calls once the states exist.
 
 use std::sync::Arc;
 

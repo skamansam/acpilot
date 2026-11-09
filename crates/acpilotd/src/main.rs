@@ -62,9 +62,9 @@ struct Cli {
 
     /// SQLite file to keep sessions in.
     ///
-    /// Defaults to `acpilot.db` in the profile's data directory, or the shared data
-    /// directory when the daemon has no profile. One database per profile is what
-    /// keeps a client's conversation out of a weekend project's.
+    /// Defaults to `profile.sqlite` in the profile's data directory, or the shared
+    /// data directory when the daemon has no profile. One database per profile is
+    /// what keeps a client's conversation out of a weekend project's.
     #[arg(long, value_name = "PATH")]
     database: Option<PathBuf>,
 

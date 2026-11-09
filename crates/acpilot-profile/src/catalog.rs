@@ -284,6 +284,12 @@ impl ProfileRoots {
     pub fn database_path(&self) -> PathBuf {
         self.data.join(acpilot_store::FILE_NAME)
     }
+
+    /// Where this profile's JSONL transcripts live.
+    #[must_use]
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.data.join("sessions")
+    }
 }
 
 /// The global registry: `config.toml` at the config root.
@@ -498,6 +504,12 @@ mod tests {
         assert_eq!(roots.runtime, home.path().join("runtime/profiles/work"));
         assert_eq!(roots.config_file(), roots.config.join("config.toml"));
         assert!(roots.database_path().ends_with(acpilot_store::FILE_NAME));
+        assert!(
+            roots.database_path().ends_with("profile.sqlite"),
+            "the P4-4 name: {}",
+            roots.database_path().display()
+        );
+        assert!(roots.sessions_dir().ends_with("sessions"));
 
         roots.create().expect("the roots are writable");
         for path in [

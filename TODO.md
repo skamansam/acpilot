@@ -803,7 +803,7 @@ Three rules:
     P4-9. A profile's roots are still created on first write rather than by `profile new`, and
     `acpilotd` keeps one workspace for every profile.
 
-- [ ] **P4-5 · Per-profile secrets** (1d)
+- [x] **P4-5 · Per-profile secrets** (1d) — **done 2026-11-09**
   - **Started 2026-10-22:** `acpilot-agent::keyring` implements the namespace. `KeyringResolver`
     reads the OS store through `keyring` 4.2's `v1` API (Keychain, Credential Manager, Secret Service),
     service `acpilot`, account `<profile>/<name>`, for both `keyring:<name>` and
@@ -812,11 +812,9 @@ Three rules:
     tested without a desktop session. `CredentialStore` gained write and delete so the CLI can use the
     same namespace rather than a second copy of the rule: `acpilot secret set` reads the value from
     stdin (no `--value`, which would land in shell history and `ps`), `rm` of an absent entry exits
-    `3`, and `list` parses the profile's `agents.toml` with a recording resolver and prints only
+    `3`, and    `list` parses the profile's `agents.toml` with a recording resolver and prints only
     `present`/`missing` per account — the keyring API cannot enumerate, so the manifest is the honest
-    list of what should exist. Still open: profile resolution (P4-2) supplies the name, legacy
-    unscoped entries are adopted into `default`, cross-profile resolutions warn on every use, and
-    `profile export` redacts.
+    list of what should exist.
   - Keyring service `acpilot`, account `<profile>/<name>`; `keyring:anthropic` resolves in the
     active profile only.
   - Cross-profile refs (`keyring:work/anthropic`) need `allow_cross_profile = true` on that
@@ -825,6 +823,28 @@ Three rules:
     `--with-secrets` additionally requires `--i-understand-the-risk` and a `0600` output file.
   - Test: the same env var name in two profiles resolves to two values, and neither appears in
     the other profile's child process environment.
+  - **Result (2026-11-09):** `secret set|list|rm` resolve their profile through
+    `ProfileResolver`, the same five-layer order as a launch, so a credential is written to the
+    active profile rather than always to `default`; a name that does not resolve exits `3`.
+    `KeyringResolver` adopts a pre-profile bare-name entry into `default/<name>` on the first read,
+    copying before deleting so a failed write leaves the only value in place, and no other profile
+    ever reads the legacy account. Every cross-profile read warns through `tracing` with the
+    resolving profile and the reference. `acpilot profile export <id>` writes the profile's
+    allow-listed configuration files as one JSON document; references stay references, so the
+    default export contains no credential. `--with-secrets` adds a separate `secrets` map keyed by
+    `<profile>/<name>`, requires `--i-understand-the-risk` and `--output`, refuses to overwrite an
+    existing file, makes the file `0600` (through `acpilot_host::private_file`), and refuses a
+    cross-profile reference rather than copying another profile's secret. Tests cover legacy
+    adoption only by `default`, the environment layer of secret resolution (a missing
+    `ACPILOT_PROFILE` exits `3` without creating `default`), two profiles resolving the same env
+    variable to different values with neither value present in the other's agent environment,
+    export redaction, the gated flags, the no-overwrite rule, and cross-profile refusal.
+  - **Open:** export covers the profile's configuration files, not sessions, chats or extension
+    payloads; `profile import`, `diff`, `new`, `ls`, `show` and `use` remain P4-9. Legacy adoption is
+    lazy per referenced entry rather than a one-time startup sweep, because the keyring API cannot
+    enumerate an account list. `profile rm` still removes the profile's directories and index row
+    but not its keyring entries; doing that needs the manifest read before the directory is moved
+    and a decision about whether a trashed profile should stay recoverable.
 
 - [ ] **P4-6 · Profiles in the domain** (1.5d)
   - `Workspace.profile` and `Session.profile`; every lookup takes a profile as an argument.
@@ -908,8 +928,8 @@ Three rules:
     stream, and the activation switch does not re-target an open one.
 
 - [ ] **P4-9 · CLI** (0.5d)
-  - `acpilot profile new|ls|show|use|rm|export|import|diff`; global `--profile`, accepted before
-    or after the subcommand.
+  - `acpilot profile new|ls|show|use|rm|import|diff`; `export` is already served by P4-5.
+    Global `--profile`, accepted before or after the subcommand.
   - `acpilot profile diff a b` prints the effective merged config with per-key origin — the tool
     that answers "why is it doing that?".
   - `acpilot doctor` reports the resolved profile, its roots, and every unknown key.

@@ -545,9 +545,132 @@ fn serve_uses_a_token_it_was_given() {
 fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
     // `acpilot()` pipes an empty stdin. The command must refuse that rather than
     // store a zero-length credential, and it must do so before any keyring call.
-    let output = acpilot(&["secret", "set", "anthropic"]);
+    // The config root is a temp one so profile resolution's first-run default is
+    // a test side effect rather than a write into the runner's home directory.
+    let config = TempDir::new();
+    let output = acpilot_with_env(
+        &[
+            "secret",
+            "set",
+            "anthropic",
+            "--config",
+            config.path().to_str().expect("utf-8 path"),
+        ],
+        "ACPILOT_HOME",
+        config.path().to_str().expect("utf-8 path"),
+    );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("empty"), "{}", stderr(&output));
+}
+
+#[test]
+fn profile_export_redacts_by_default_and_gates_secrets() {
+    let home = TempDir::new();
+    let profile = home.path().join("profiles").join("work");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\nid = \"claude\"\ntransport = \"acp-stdio\"\n\
+         command = \"npx\"\nenv = { ANTHROPIC_API_KEY = \"keyring:anthropic\" }\n",
+    )
+    .expect("manifest");
+    let output_path = home.path().join("work.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "export", "work", "--output"])
+        .arg(&output_path)
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let document = fs::read_to_string(&output_path).expect("export file");
+    assert!(document.contains("keyring:anthropic"), "{document}");
+    assert!(!document.contains("\"secrets\""), "{document}");
+
+    let without_risk = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--with-secrets",
+            "--output",
+            home.path()
+                .join("secret.json")
+                .to_str()
+                .expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert_eq!(
+        without_risk.status.code(),
+        Some(2),
+        "{}",
+        stderr(&without_risk)
+    );
+    assert!(
+        stderr(&without_risk).contains("--i-understand-the-risk"),
+        "{}",
+        stderr(&without_risk)
+    );
+
+    let without_output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--with-secrets",
+            "--i-understand-the-risk",
+        ])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert_eq!(
+        without_output.status.code(),
+        Some(2),
+        "{}",
+        stderr(&without_output)
+    );
+    assert!(
+        stderr(&without_output).contains("--output"),
+        "{}",
+        stderr(&without_output)
+    );
+}
+
+#[test]
+fn a_secret_uses_the_environment_profile_and_does_not_fall_back() {
+    let config = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "secret",
+            "set",
+            "anthropic",
+            "--config",
+            config.path().to_str().expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", config.path())
+        .env("ACPILOT_PROFILE", "work")
+        .output()
+        .expect("run acpilot secret set");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a missing environment profile is not found: {}",
+        stderr(&output)
+    );
+    assert!(stderr(&output).contains("work"), "{}", stderr(&output));
+    assert!(
+        !config.path().join("profiles").join("default").exists(),
+        "a missing named profile must not create or use default"
+    );
 }
 
 #[test]

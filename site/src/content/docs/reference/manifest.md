@@ -138,9 +138,10 @@ A manifest is checked before use, not at spawn time:
 - `keyring:` references are resolved eagerly, so a missing credential is reported
   when the profile loads rather than mid-turn. `keyring:<name>` means this
   profile; `keyring:<profile>/<name>` means another one and additionally needs
-  `allow_cross_profile = true`. The entry lives in the OS keyring under the
-  `acpilot` service, with the account `<profile>/<name>` in both forms — so the
-  same line means two different secrets in `profiles/work` and `profiles/personal`.
+  `allow_cross_profile = true`, and every resolution of that reference logs a
+  warning. The entry lives in the OS keyring under the `acpilot` service, with
+  the account `<profile>/<name>` in both forms — so the same line means two
+  different secrets in `profiles/work` and `profiles/personal`.
 
 A file that fails any check does not load at all, and a profile whose file
 fails to reload keeps the agents it already had: the old snapshot is only

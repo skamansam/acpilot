@@ -1,11 +1,13 @@
 //! The registry as the daemon uses it: a directory it owns, a manifest that
 //! changes underneath it, and a snapshot that is never half-updated.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use acpilot_agent::keyring::{CredentialStore, KeyringResolver, SERVICE};
 use acpilot_agent::{AgentError, MapResolver, Parser, Registry, SecretResolver, Transport};
 use acpilot_proto::agent::AgentTransport;
 
@@ -295,6 +297,76 @@ fn watching_a_broken_save_still_picks_up_the_next_good_one() {
         registry.get("freebuff").is_some()
     });
     assert_eq!(registry.last_error(), None);
+}
+
+#[derive(Debug, Default, Clone)]
+struct MemoryStore {
+    entries: Arc<Mutex<BTreeMap<(String, String), String>>>,
+}
+
+impl CredentialStore for MemoryStore {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .entries
+            .lock()
+            .expect("entries")
+            .get(&(service.to_owned(), account.to_owned()))
+            .cloned())
+    }
+
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String> {
+        self.entries
+            .lock()
+            .expect("entries")
+            .insert((service.to_owned(), account.to_owned()), value.to_owned());
+        Ok(())
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<bool, String> {
+        Ok(self
+            .entries
+            .lock()
+            .expect("entries")
+            .remove(&(service.to_owned(), account.to_owned()))
+            .is_some())
+    }
+}
+
+#[test]
+fn two_profiles_never_put_each_others_secret_in_a_child_environment() {
+    let work = tempfile::tempdir().expect("work profile");
+    let personal = tempfile::tempdir().expect("personal profile");
+    write(work.path(), FIRST);
+    write(personal.path(), FIRST);
+
+    let store = MemoryStore::default();
+    store
+        .set(SERVICE, "work/anthropic", "sk-work")
+        .expect("work secret");
+    store
+        .set(SERVICE, "personal/anthropic", "sk-personal")
+        .expect("personal secret");
+
+    let work = Registry::load(
+        manifest_path(work.path()),
+        Arc::new(KeyringResolver::with_store("work", store.clone())),
+    )
+    .expect("work registry");
+    let personal = Registry::load(
+        manifest_path(personal.path()),
+        Arc::new(KeyringResolver::with_store("personal", store)),
+    )
+    .expect("personal registry");
+
+    let work_agent = work.get("claude").expect("work agent");
+    let personal_agent = personal.get("claude").expect("personal agent");
+    assert_eq!(work_agent.env["ANTHROPIC_API_KEY"].expose(), "sk-work");
+    assert_eq!(
+        personal_agent.env["ANTHROPIC_API_KEY"].expose(),
+        "sk-personal"
+    );
+    assert!(!format!("{work_agent:?}").contains("sk-personal"));
+    assert!(!format!("{personal_agent:?}").contains("sk-work"));
 }
 
 #[test]

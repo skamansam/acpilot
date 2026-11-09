@@ -217,6 +217,9 @@ portable install), not inside the config directory:
 global index of profiles and the workspaces each has seen; it is disposable and
 rebuilt by discovery. `acpilot profile rm <id>` moves the config directory and every
 state root to the OS trash and prints each path; `--purge` deletes them outright.
+`acpilot profile export <id> --output profile.json` writes the configuration with
+keyring references intact; `--with-secrets --i-understand-the-risk` adds the values
+in a separate map and writes a new `0600` file.
 
 | Scoped to a profile | Global |
 | --- | --- |

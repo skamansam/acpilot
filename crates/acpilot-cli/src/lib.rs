@@ -9,6 +9,7 @@ use acpilot_core::AcpilotError;
 
 pub mod cli;
 pub mod doctor;
+pub mod export;
 pub mod ext;
 pub mod secret;
 

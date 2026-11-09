@@ -41,8 +41,11 @@ never keyring → HTTP response.
 ## 3. A profile is a namespace
 
 Keyring entries are namespaced per profile. Deleting a profile removes its
-entries; deleting one profile does not disturb another (a test asserts the
-directory hash of the survivors is unchanged).
+directory and state; deleting one profile does not disturb another (a test
+asserts the directory hash of the survivors is unchanged). A profile's keyring
+entries are not deleted by `profile rm` yet: the keyring API cannot enumerate
+them, and a trashed profile would otherwise lose credentials before it could be
+restored.
 
 ## What is deliberately not supported
 
@@ -62,12 +65,21 @@ account `<profile>/<name>`. A missing entry fails the manifest load and names th
 account to add, rather than failing mid-turn. The namespace and every error path
 are tested against an injected store, so the suite needs no logged-in desktop.
 
-`acpilot secret set|list|rm` writes and removes through the same namespace. `set`
-reads the value from stdin — there is no `--value`, because an argument is
-visible in shell history and in `ps` — and never prints it back. `list` parses
-the profile's `agents.toml` and reports `present` or `missing` per account, so it
-shows what the manifest expects without reading any value out of the keyring.
+`acpilot secret set|list|rm` writes and removes through the same namespace. The
+profile is resolved in the launch order — `--profile`, `ACPILOT_PROFILE`, the
+project marker, `active_profile`, then `default` — so a credential follows the
+identity the command is actually running under. `set` reads the value from stdin
+— there is no `--value`, because an argument is visible in shell history and in
+`ps` — and never prints it back. `list` parses the profile's `agents.toml` and
+reports `present` or `missing` per account, so it shows what the manifest expects
+without reading any value out of the keyring.
 
-Still to come in the profiles phase (task P4-5): profile resolution supplies the profile name, legacy
-unscoped entries are adopted into `default`, each cross-profile resolution logs a
-warning, and `profile export` redacts a secret back to its reference.
+An entry written before profiles existed, under the bare account `<name>`, is
+adopted into `default/<name>` the first time `default` reads it. No other profile
+ever looks at the old account. A cross-profile reference needs the manifest's
+`allow_cross_profile = true` and logs a warning on every resolution.
+
+`acpilot profile export <id>` keeps every secret as its reference. With
+`--with-secrets --i-understand-the-risk --output FILE`, the export adds a separate
+`secrets` map, writes a new `0600` file, and refuses a cross-profile reference
+rather than copying another profile's credential.

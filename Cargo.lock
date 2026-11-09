@@ -45,6 +45,7 @@ dependencies = [
  "acpilotd",
  "clap",
  "insta",
+ "serde_json",
  "tempfile",
  "tokio",
  "trash",

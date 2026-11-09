@@ -17,6 +17,7 @@ use acpilot_proto::profile::ThemeSurface;
 use clap::{Args, Parser, Subcommand};
 
 use crate::doctor;
+use crate::export;
 use crate::ext::{self, Paths};
 use crate::secret;
 
@@ -242,7 +243,8 @@ pub enum ConfigCommand {
 /// Everything under `acpilot profile`.
 ///
 /// `new`, `list` and `use` are P4-9; `rm` is here because P4-4 owns deleting the
-/// state a profile created, and a removal that forgets the database is not one.
+/// state a profile created, and `export` is here because P4-5 owns keeping its
+/// secrets out of the document.
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommand {
     /// Move a profile and its state to the OS trash, or delete them with `--purge`.
@@ -260,6 +262,27 @@ pub enum ProfileCommand {
         #[command(flatten)]
         config: ConfigArgs,
     },
+    /// Write this profile's configuration to a file, or print it.
+    ///
+    /// Keyring references stay references. `--with-secrets` adds a separate
+    /// `secrets` map instead of rewriting a manifest into a plaintext credential,
+    /// and requires an output file so the values never land in a terminal log.
+    Export {
+        /// Profile name under `<config>/profiles`.
+        name: String,
+        /// File to write. Without it the document is printed to stdout.
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// Include the keyring values this profile's agents reference.
+        #[arg(long)]
+        with_secrets: bool,
+        /// Acknowledge that the export file will contain plaintext credentials.
+        #[arg(long)]
+        i_understand_the_risk: bool,
+        /// Where profiles live, when it is not the default config root.
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
 }
 
 /// Everything under `acpilot secret`.
@@ -273,19 +296,19 @@ pub enum SecretCommand {
         /// Entry name, `name` or `profile/name`, with or without `keyring:`.
         name: String,
         #[command(flatten)]
-        profile: ProfileArgs,
+        profile: SecretProfileArgs,
     },
     /// List the secrets this profile references, and whether they are set.
     List {
         #[command(flatten)]
-        profile: ProfileArgs,
+        profile: SecretProfileArgs,
     },
     /// Remove a secret.
     Rm {
         /// Entry name, `name` or `profile/name`, with or without `keyring:`.
         name: String,
         #[command(flatten)]
-        profile: ProfileArgs,
+        profile: SecretProfileArgs,
     },
 }
 
@@ -392,6 +415,20 @@ pub struct ProfileArgs {
     pub config: ConfigArgs,
 }
 
+/// Which profile a secret verb acts on, when it is not the launch's choice.
+///
+/// Unlike [`ProfileArgs`], absence is meaningful: the five-layer launch resolver
+/// supplies the name, so `acpilot secret set` uses the active profile rather than
+/// writing every credential into `default`.
+#[derive(Debug, Args)]
+pub struct SecretProfileArgs {
+    /// Profile to act on. Defaults to the launch resolution.
+    #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
+    pub profile: Option<String>,
+    #[command(flatten)]
+    pub config: ConfigArgs,
+}
+
 /// Run a parsed command and return the process exit code.
 pub fn run(cli: Cli) -> u8 {
     match cli.command {
@@ -493,6 +530,67 @@ fn run_doctor(
 /// Remove a profile's config and state, or move them to the OS trash.
 fn run_profile(command: ProfileCommand) -> u8 {
     match command {
+        ProfileCommand::Export {
+            name,
+            output,
+            with_secrets,
+            i_understand_the_risk,
+            config,
+        } => {
+            if with_secrets && !i_understand_the_risk {
+                eprintln!(
+                    "acpilot profile export: --with-secrets requires --i-understand-the-risk"
+                );
+                return exit::USAGE;
+            }
+            if with_secrets && output.is_none() {
+                eprintln!(
+                    "acpilot profile export: --with-secrets requires --output FILE so the values \
+                     are not written to the terminal"
+                );
+                return exit::USAGE;
+            }
+            let id = match ProfileId::parse(&name) {
+                Ok(id) => id,
+                Err(error) => {
+                    eprintln!("acpilot profile export: {error}");
+                    return exit::USAGE;
+                }
+            };
+            let root = config.config.unwrap_or_else(acpilot_profile::config_dir);
+            let profile =
+                match acpilot_profile::Profile::open(root.join("profiles").join(id.as_str())) {
+                    Ok(profile) => profile,
+                    Err(error) => {
+                        eprintln!("acpilot profile export: {error}");
+                        return exit::NOT_FOUND;
+                    }
+                };
+            let resolver = KeyringResolver::new(id.as_str());
+            let document = match export::document(&profile, with_secrets, &resolver) {
+                Ok(document) => document,
+                Err(message) => {
+                    eprintln!("acpilot profile export: {message}");
+                    return exit::FAILURE;
+                }
+            };
+            match output {
+                Some(path) => match export::write(&document, &path, with_secrets) {
+                    Ok(()) => {
+                        println!("exported {id} to {}", path.display());
+                        exit::SUCCESS
+                    }
+                    Err(message) => {
+                        eprintln!("acpilot profile export: {message}");
+                        exit::FAILURE
+                    }
+                },
+                None => {
+                    print!("{document}");
+                    exit::SUCCESS
+                }
+            }
+        }
         ProfileCommand::Rm {
             name,
             purge,
@@ -1374,6 +1472,48 @@ fn run_token(command: TokenCommand) -> u8 {
     }
 }
 
+type ResolvedSecretProfile = Result<(String, PathBuf), (String, u8)>;
+
+/// The profile a secret verb acts on, through the same order a launch uses.
+///
+/// The flag may be a name; an explicit directory is accepted only when its last
+/// segment is a valid profile id, because that segment is the keyring namespace.
+fn resolve_secret_profile(profile: &SecretProfileArgs) -> ResolvedSecretProfile {
+    let root = Root::resolve(None).map_err(|error| (error.to_string(), exit::FAILURE))?;
+    let config_root = profile
+        .config
+        .config
+        .clone()
+        .unwrap_or_else(acpilot_profile::config_dir);
+    let user_config = config_root.join(acpilot_profile::CONFIG_FILE);
+    let resolved =
+        ProfileResolver::new_in(config_root.join("profiles"), Some(user_config.as_path()))
+            .flag(profile.profile.as_deref().map(Path::new))
+            .process_environment()
+            .resolve(&root)
+            .map_err(|error| {
+                let code = if error.is_missing() {
+                    exit::NOT_FOUND
+                } else {
+                    exit::FAILURE
+                };
+                (error.to_string(), code)
+            })?;
+    let id = resolved.profile().id().ok_or_else(|| {
+        (
+            format!(
+                "{} is not a named profile; secrets are namespaced by profile name",
+                resolved.profile().root().display()
+            ),
+            exit::USAGE,
+        )
+    })?;
+    Ok((
+        id.as_str().to_owned(),
+        resolved.profile().root().to_path_buf(),
+    ))
+}
+
 fn run_secret(command: SecretCommand) -> u8 {
     match command {
         SecretCommand::Set { name, profile } => {
@@ -1384,6 +1524,13 @@ fn run_secret(command: SecretCommand) -> u8 {
                     return exit::USAGE;
                 }
             };
+            let (profile, _) = match resolve_secret_profile(&profile) {
+                Ok(resolved) => resolved,
+                Err((message, code)) => {
+                    eprintln!("acpilot secret set: {message}");
+                    return code;
+                }
+            };
             let value = match secret::read_value(std::io::stdin().lock()) {
                 Ok(value) => value,
                 Err(message) => {
@@ -1391,7 +1538,7 @@ fn run_secret(command: SecretCommand) -> u8 {
                     return exit::FAILURE;
                 }
             };
-            let resolver = KeyringResolver::new(profile.profile);
+            let resolver = KeyringResolver::new(profile);
             match secret::set(&resolver, &reference, &value) {
                 Ok(account) => {
                     println!("stored {account} in the {} keyring", secret::service());
@@ -1404,15 +1551,14 @@ fn run_secret(command: SecretCommand) -> u8 {
             }
         }
         SecretCommand::List { profile } => {
-            let directory =
-                match secret::profile_dir(profile.config.config.as_ref(), &profile.profile) {
-                    Ok(directory) => directory,
-                    Err(message) => {
-                        eprintln!("error: {message}");
-                        return exit::FAILURE;
-                    }
-                };
-            let resolver = KeyringResolver::new(profile.profile);
+            let (profile, directory) = match resolve_secret_profile(&profile) {
+                Ok(resolved) => resolved,
+                Err((message, code)) => {
+                    eprintln!("acpilot secret list: {message}");
+                    return code;
+                }
+            };
+            let resolver = KeyringResolver::new(profile);
             match secret::list(&directory, &resolver) {
                 Ok(lines) => {
                     for line in lines {
@@ -1434,7 +1580,14 @@ fn run_secret(command: SecretCommand) -> u8 {
                     return exit::USAGE;
                 }
             };
-            let resolver = KeyringResolver::new(profile.profile);
+            let (profile, _) = match resolve_secret_profile(&profile) {
+                Ok(resolved) => resolved,
+                Err((message, code)) => {
+                    eprintln!("acpilot secret rm: {message}");
+                    return code;
+                }
+            };
+            let resolver = KeyringResolver::new(profile);
             let account = resolver.account(&reference);
             match secret::remove(&resolver, &reference) {
                 Ok(true) => {

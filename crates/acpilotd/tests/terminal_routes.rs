@@ -14,6 +14,7 @@
 //! agent instead. The route's own refusals are covered by the suite beside this one.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use acpilot_host::ExecCommand;
 use acpilot_proto::terminal::TerminalSize;
@@ -89,10 +90,17 @@ async fn a_terminal_resizes_and_then_ends() {
 
     let (status, _) = send(&app, "DELETE", "/v1/terminals/t1", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(
-        !terminal.summary().alive,
-        "ending a pane ends the program, not just the entry"
-    );
+    // `kill` signals the child; `alive` flips when the reader thread reaches EOF.
+    // That is not guaranteed to happen before the 204 comes back, so wait for the
+    // process to end instead of assuming it ended before the response.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while terminal.summary().alive {
+        assert!(
+            Instant::now() < deadline,
+            "ending a pane ends the program, not just the entry"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     let (status, listed) = send(&app, "GET", "/v1/terminals", None).await;
     assert_eq!(status, StatusCode::OK);

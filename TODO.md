@@ -679,7 +679,7 @@ Three rules:
 3. **Isolation by construction.** Separate secrets namespace, separate SQLite, separate
    sessions. Cross-profile access needs an opt-in and leaves an audit line.
 
-- [ ] **P4-1 · `acpilot-profile` crate** (1.5d)
+- [x] **P4-1 · `acpilot-profile` crate** (1.5d) — **done 2026-11-08**
   - `ProfileId` newtype (slug `[a-z0-9][a-z0-9-]{1,31}`, case-insensitive input, reserved
     `default|global|system`); `Profile { id, label, extends, created_at }`.
   - `ProfileRoots { config, data, cache, state, runtime }` via `directories`: Linux
@@ -688,6 +688,20 @@ Three rules:
   - `ACPILOT_HOME` override for tests, portable installs, and CI; every test uses a temp root.
   - Global registry `config.toml`: `schema_version`, `active_profile`, `[daemon]` settings, one
     table per profile. No secrets in it, ever.
+  - **Result (2026-11-08):** the new `acpilot-profile::catalog` module has `ProfileId` (shape,
+    case folding, reserved names), `ProfileRoots` (five roots from `directories`, or all five
+    under one `ACPILOT_HOME`), and `Registry` (schema 1, `active_profile`, `[daemon]`, one
+    `[profiles.<id>]` table each; unknown top-level tables such as `[preferences]` survive a
+    save). The crate's existing `Profile` is the *opened directory* handle, so the registry row
+    is named `ProfileRecord` and is keyed by its id rather than repeating it inside the table.
+    `Profile` gained `id()`/`roots()`, and `Profile::named` now parses through `ProfileId`, which
+    closes the `../` traversal a raw `join` allowed. Four catalog tests plus the named-profile
+    traversal regression pass.
+  - **Open:** no `profile new/list/use` command writes the registry yet, and nothing reads
+    `active_profile` during launch; both are P4-2/P4-3. Creating a profile still does not create
+    its roots — P4-4 owns the first write. The macOS directory is the documented lower-case
+    `Application Support/acpilot` because that is the root this crate already resolves through
+    `directories`; the ticket's `Acpilot` spelling is not used anywhere else.
 
 - [ ] **P4-2 · Config cascade** (1.5d)
   - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. Still open here: profile files, `ACPILOT_*` env, CLI flags, `extends`, the union rules for `disabled`/`deny`, the unknown-key warning, and `acpilot config explain`.

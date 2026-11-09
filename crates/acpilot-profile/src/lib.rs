@@ -14,6 +14,7 @@
 //! that *does* exist but has no `[policy]` table is a different thing: the
 //! profile has said nothing about permissions, so the shipped policy applies.
 
+pub mod catalog;
 pub mod project;
 pub mod settings;
 pub mod watch;
@@ -24,6 +25,10 @@ use std::path::{Path, PathBuf};
 
 use acpilot_agent::{Policy, PolicyError};
 use thiserror::Error;
+
+pub use catalog::{
+    ProfileId, ProfileIdError, ProfileRecord, ProfileRoots, Registry, RegistryError,
+};
 
 /// The file a profile keeps its settings in.
 pub const CONFIG_FILE: &str = "config.toml";
@@ -117,7 +122,8 @@ impl Profile {
     ///
     /// The directory does not exist or does not hold a `config.toml`.
     pub fn named(name: &str) -> Result<Self, ProfileError> {
-        Self::open(profiles_dir().join(name))
+        let id = ProfileId::parse(name)?;
+        Self::open(profiles_dir().join(id.as_str()))
     }
 
     /// The profile's directory.
@@ -167,6 +173,23 @@ impl Profile {
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.root.file_name().and_then(std::ffi::OsStr::to_str)
+    }
+
+    /// The validated id this directory is addressed by, when its name is one.
+    ///
+    /// Temporary directories and hand-made paths are real profiles to the daemon,
+    /// so an invalid segment is `None` rather than an error: the catalogue is what
+    /// a named profile goes through, and this is how a caller asks whether this
+    /// handle has a row there.
+    #[must_use]
+    pub fn id(&self) -> Option<ProfileId> {
+        self.name().and_then(|name| ProfileId::parse(name).ok())
+    }
+
+    /// The five roots this profile owns, when its directory name is a valid id.
+    #[must_use]
+    pub fn roots(&self) -> Option<ProfileRoots> {
+        self.id().map(|id| ProfileRoots::for_id(&id))
     }
 
     /// The database that holds this profile's conversations (the service phase's task P3-7).
@@ -220,6 +243,10 @@ pub enum ProfileError {
         /// Which key, and what it said.
         source: PolicyError,
     },
+
+    /// A name that is not a profile id was used to resolve a named profile.
+    #[error("not a profile name: {0}")]
+    Name(#[from] ProfileIdError),
 }
 
 #[cfg(test)]
@@ -339,6 +366,20 @@ command = "rust-analyzer"
             profile.name(),
             Some("work"),
             "the keyring namespace is the directory name"
+        );
+        assert_eq!(
+            profile.id().as_ref().map(ProfileId::as_str),
+            Some("work"),
+            "a valid directory name is also a profile id"
+        );
+    }
+
+    #[test]
+    fn a_named_profile_cannot_climb_out_of_the_profile_root() {
+        let error = Profile::named("../escape").expect_err("a path is not a profile name");
+        assert!(
+            matches!(error, ProfileError::Name(_)),
+            "the name is refused before any directory is opened: {error}"
         );
     }
 }

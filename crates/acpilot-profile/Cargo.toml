@@ -26,8 +26,10 @@ directories = { workspace = true }
 # makes that one line each instead of a fourth bespoke precedence function.
 figment = { workspace = true, features = ["toml"] }
 # `Settings` is a deserialisation target, and the derive is what lets figment fill
-# it field by field.
+# it field by field. The global registry also has to be *written*, which figment
+# only reads, so the TOML implementation is named directly.
 serde = { workspace = true }
+toml = { workspace = true }
 # "The settings were saved" is one question with one answer, and this crate owns the
 # paths it is asked about. A watcher in each client would be a second debounce
 # policy and a second answer to an editor that saves by rename.

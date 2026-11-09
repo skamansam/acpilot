@@ -3,12 +3,12 @@
 //! Every command here is either a filesystem operation or (later) a call into
 //! `acpilot-proto`; none of them reimplements daemon policy.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use acpilot_agent::keyring::KeyringResolver;
 use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
-use acpilot_profile::Profile;
+use acpilot_profile::launch::ProfileResolver;
 use acpilot_profile::project::Root;
 use acpilot_profile::settings::Settings;
 use acpilot_proto::API_PREFIX;
@@ -95,14 +95,14 @@ pub enum Command {
         /// more useful than a daemon this client started without being asked.
         #[arg(long)]
         no_spawn: bool,
-        /// Profile directory the daemon serves.
+        /// Profile name, or a profile directory.
         ///
         /// Only used when this command runs the daemon itself; a daemon that is
         /// already running keeps the profile it was started with, and naming a
         /// different one here is an error rather than a silent mismatch. Without
-        /// it, the profile named by the project's settings is used, so the usual
-        /// launch names no profile at all.
-        #[arg(long, value_name = "DIR")]
+        /// it, resolution follows `ACPILOT_PROFILE`, the project's marker, the
+        /// global `active_profile`, and finally `default`.
+        #[arg(long, value_name = "NAME|DIR")]
         profile: Option<PathBuf>,
         /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
@@ -469,37 +469,23 @@ fn run_config(command: ConfigCommand) -> u8 {
             return exit::FAILURE;
         }
     };
-    // The flag first, then the name the project already chose. `active_profile`
-    // is the registry's answer for a launch that names none; it is read here
-    // rather than guessed so the explanation and the launch agree.
-    let named = match profile {
-        Some(name) => Some(name),
-        None => match root.settings() {
-            Ok(settings) => settings.profile,
-            Err(error) => {
-                eprintln!("acpilot config explain: {error}");
-                return exit::FAILURE;
-            }
-        },
-    };
-    let named = named.or_else(|| {
-        acpilot_profile::Registry::load(&acpilot_profile::user_config_path())
-            .ok()
-            .and_then(|registry| registry.active_profile.map(|id| id.as_str().to_owned()))
-    });
-    let profile = match named {
-        Some(name) => match Profile::named(&name) {
-            Ok(profile) => Some(profile),
-            Err(error) => {
-                eprintln!("acpilot config explain: {error}");
-                eprintln!(
-                    "acpilot config explain: create {} or pass --profile <name>",
-                    acpilot_profile::profiles_dir().join(&name).display()
-                );
-                return exit::CONFLICT;
-            }
-        },
-        None => None,
+    // The same five layers a launch reads, answered by the same resolver. A
+    // name that does not resolve is exit 3 with the command that fixes it, not
+    // a quiet read of `default`.
+    let resolved = match ProfileResolver::new()
+        .flag(profile.as_deref().map(Path::new))
+        .process_environment()
+        .resolve(&root)
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("acpilot config explain: {error}");
+            return if error.is_missing() {
+                exit::NOT_FOUND
+            } else {
+                exit::FAILURE
+            };
+        }
     };
     let user = acpilot_profile::user_config_path();
     let cascade = match acpilot_profile::settings::Cascade::for_launch(
@@ -507,7 +493,7 @@ fn run_config(command: ConfigCommand) -> u8 {
         root.project()
             .map(acpilot_profile::project::Project::config_path)
             .as_deref(),
-        profile.as_ref(),
+        Some(resolved.profile()),
     ) {
         Ok(cascade) => cascade,
         Err(error) => {
@@ -712,41 +698,35 @@ fn run_tui(flags: TuiFlags) -> u8 {
     // What the command was pointed at, before the workspace became a daemon
     // argument: a file is opened in the editor, and a directory names only a place.
     let initial = initial_file(path.as_deref(), &workspace);
-    // The settings are read once, here: the profile they name and the theme they
-    // name come from the same cascade, and reading it twice is how two keys end up
-    // resolved from two different files.
-    let settings = match root.settings() {
+    // One resolution order for the profile, so the theme and the daemon cannot
+    // read two different identities. The flag may still name a directory; a name
+    // comes from the environment, the project marker, `active_profile`, or the
+    // created `default`.
+    let resolved = match ProfileResolver::new()
+        .flag(profile.as_deref())
+        .process_environment()
+        .resolve(&root)
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("acpilot tui: {error}");
+            return if error.is_missing() {
+                exit::NOT_FOUND
+            } else {
+                exit::FAILURE
+            };
+        }
+    };
+    let profile = resolved.profile().clone();
+    // The theme is resolved after the profile is known, because `profile.toml` is
+    // a layer of the same cascade: reading it before that would draw the global
+    // theme for the first frame and the profile's after a save.
+    let settings = match root.settings_with_profile(Some(&profile)) {
         Ok(settings) => settings,
         Err(error) => {
             eprintln!("acpilot tui: {error}");
             return exit::FAILURE;
         }
-    };
-    // The profile is the project's, unless the caller named one. A project that
-    // names none means the daemon's default, which is a profile nobody has to
-    // spell out on the command line.
-    let profile = match profile {
-        Some(directory) => Some(directory),
-        None => match implied_profile(&settings) {
-            Ok(profile) => profile,
-            Err(code) => return code,
-        },
-    };
-    // The theme is resolved after the profile is known, because `profile.toml` is
-    // a layer of the same cascade: reading it before that would draw the global
-    // theme for the first frame and the profile's after a save.
-    let settings = match profile
-        .as_deref()
-        .and_then(|directory| Profile::open(directory).ok())
-    {
-        Some(profile) => match root.settings_with_profile(Some(&profile)) {
-            Ok(settings) => settings,
-            Err(error) => {
-                eprintln!("acpilot tui: {error}");
-                return exit::FAILURE;
-            }
-        },
-        None => settings,
     };
     let theme = match tui_theme(&settings) {
         Ok(theme) => theme,
@@ -755,7 +735,10 @@ fn run_tui(flags: TuiFlags) -> u8 {
             return exit::FAILURE;
         }
     };
-    let implied = profile.is_some();
+    // The automatic default is not a disagreement with a running daemon: it is
+    // the profile every machine has. A flag, environment variable, marker or
+    // `active_profile` is a choice the daemon may not share.
+    let implied = !resolved.is_default();
 
     let token = token.or_else(acpilot_host::token::local);
     let options = acpilot_client::daemon::Options {
@@ -768,7 +751,7 @@ fn run_tui(flags: TuiFlags) -> u8 {
         daemon_args: Vec::new(),
     };
     let in_process = InProcess {
-        profile: profile.clone(),
+        profile: Some(profile.root().to_path_buf()),
         workspace: workspace.clone(),
     };
     let running = match acpilot_client::daemon::ensure_or_embed_blocking(&options, &in_process) {
@@ -808,7 +791,7 @@ fn run_tui(flags: TuiFlags) -> u8 {
     // is the colours on screen rather than a note to restart.
     let theme_files = acpilot_tui::ThemeFiles {
         user: Some(acpilot_profile::user_config_path()),
-        profile: profile.clone(),
+        profile: Some(profile.root().to_path_buf()),
         project: root.project().map(|project| project.config_path()),
         // The terminal's own colours are asked for by the client, before it takes
         // the screen: one reader of one terminal.
@@ -1110,30 +1093,6 @@ fn tui_theme(settings: &Settings) -> Result<acpilot_tui::Theme, String> {
                 .map_err(|error| format!("{error}, and no built-in dark theme to fall back to"))
         }
         Err(error) => Err(error.to_string()),
-    }
-}
-
-/// The profile directory a root's settings name, when they name one.
-///
-/// A project that says `profile = "work"` means `<config>/profiles/work`. A name
-/// that is not there is refused rather than ignored: starting a daemon on the
-/// default profile because a name had a typo is how a work prompt goes out under a
-/// personal key.
-fn implied_profile(settings: &Settings) -> Result<Option<PathBuf>, u8> {
-    let Some(name) = settings.profile.clone() else {
-        return Ok(None);
-    };
-    match Profile::named(&name) {
-        Ok(profile) => Ok(Some(profile.root().to_path_buf())),
-        Err(error) => {
-            eprintln!("acpilot tui: {error}");
-            eprintln!(
-                "acpilot tui: the project's settings name profile `{name}`; create {} or pass \
-                 --profile <dir>",
-                acpilot_profile::profiles_dir().join(&name).display()
-            );
-            Err(exit::CONFLICT)
-        }
     }
 }
 

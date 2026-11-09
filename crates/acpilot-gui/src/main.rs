@@ -3,6 +3,7 @@
 //! ```bash
 //! cargo run -p acpilot-gui --features gui                    # this directory
 //! cargo run -p acpilot-gui --features gui -- src/main.rs     # its project
+//! cargo run -p acpilot-gui --features gui -- --profile work
 //! cargo run -p acpilot-gui --features gui -- --profile ~/.config/acpilot/profiles/work
 //! ```
 //!
@@ -43,10 +44,10 @@ struct Cli {
     #[arg(value_name = "PATH")]
     path: Option<std::path::PathBuf>,
 
-    /// A profile directory to open. Repeat for more than one.
+    /// A profile name, or a profile directory, to open. Repeat for more than one.
     ///
     /// Wins over the profile a project implies, for the case a path cannot express.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "NAME|DIR")]
     profile: Vec<std::path::PathBuf>,
 
     /// Theme id to draw with, overriding the one the settings name.

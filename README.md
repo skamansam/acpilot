@@ -218,9 +218,10 @@ silently is the failure mode with the worst consequences.
 | Editor, theme, keymap and UI preferences | |
 | Sessions, transcripts, grants, workspaces, diagnostics cache | |
 
-Resolution is `--profile` → `ACPILOT_PROFILE` → `.acpilot/profile` (a committed, secret-free
-marker) → `active_profile` → `default`. A name that does not resolve is an error, never a
-silent fallback: guessing here means running the wrong agent with the wrong key. Settings
+Resolution is `--profile` → `ACPILOT_PROFILE` → the `profile` key in the committed,
+secret-free `.acpilot/config.toml` → `active_profile` → `default`, which is created on
+first use. A name that does not resolve is an error, never a silent fallback: guessing
+here means running the wrong agent with the wrong key. Settings
 cascade per key (defaults < global < profile < workspace < env < flags); `acpilot config
 explain <key>` and `acpilot profile diff a b` name the file that won.
 

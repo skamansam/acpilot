@@ -57,7 +57,7 @@ acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
 acpilot config explain <key> [PATH] [--profile <name>]
-acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
+acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <name|dir>] [--workspace <dir>] [--no-mouse]
 acpilot serve [--bind <addr>] [--token <token>] [--profile <dir>] [--workspace <dir>]
 acpilot doctor [PATH] [--profile <name>] [--api-url <url|path>] [--token <token>]
 ```
@@ -134,7 +134,7 @@ window rather than a second engine.
 ```bash
 $ acpilot tui                       # attach to a daemon, or host the core in this process
 $ acpilot tui --no-spawn            # attach or fail: tests, CI, a service manager
-$ acpilot tui --profile ~/.config/acpilot/profiles/work --workspace ~/code/thing
+$ acpilot tui --profile work --workspace ~/code/thing
 $ acpilot tui --no-mouse            # the terminal keeps its own drag-to-select
 ```
 

@@ -245,6 +245,44 @@ fn config_explain_names_the_winning_layer() {
 }
 
 #[test]
+fn a_marker_naming_a_missing_profile_exits_three_with_the_fix() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    fs::create_dir_all(workspace.path().join(".acpilot")).expect("project marker");
+    fs::write(
+        workspace.path().join(".acpilot/config.toml"),
+        "profile = \"work\"\n",
+    )
+    .expect("project settings");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("config")
+        .arg("explain")
+        .arg("tab_width")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot config explain");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a missing profile is not found, not a generic failure: {}",
+        stderr(&output)
+    );
+    let text = stderr(&output);
+    assert!(
+        text.contains("acpilot profile new work"),
+        "the hint is actionable: {text}"
+    );
+    assert!(text.contains(".acpilot/config.toml"), "{text}");
+    assert!(
+        !config.path().join("profiles/default").exists(),
+        "a missing marker must not fall back to default"
+    );
+}
+
+#[test]
 fn doctor_reports_a_fresh_machine_and_writes_nothing() {
     let config = TempDir::new();
     let workspace = TempDir::new();

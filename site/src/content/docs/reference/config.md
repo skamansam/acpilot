@@ -39,7 +39,7 @@ answer.
 ```toml
 # ~/.config/acpilot/config.toml
 schema_version = 1
-profile = "work"                    # the profile a launch runs under, when it names one
+active_profile = "work"             # used when no flag, environment or project marker names one
 
 [preferences]
 tab_width = 2
@@ -123,6 +123,13 @@ it follows this setting too: on, a find cannot return what the tree hides.
 A project is a directory holding `.acpilot/config.toml`. That file is the only
 marker, and it exists only because someone saved settings there — opening a
 directory or a file never creates one.
+
+A launch resolves its profile in one order: `--profile`, then `ACPILOT_PROFILE`,
+then the `profile` key below, then `active_profile` in the global file, then
+`default`. A missing name is exit `3` with `acpilot profile new <name>`, never a
+fallback; guessing is how a work prompt goes out under a personal key. Only the
+last fallback creates `default` (a directory with `schema_version = 1`) on first
+use.
 
 ```toml
 # <project>/.acpilot/config.toml

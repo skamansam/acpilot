@@ -11,7 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
-use acpilot_profile::project::{PROJECT_DIR, PROJECT_FILE, Root};
+use acpilot_profile::launch::ProfileResolver;
+use acpilot_profile::project::Root;
 use acpilot_profile::settings::SettingsError;
 use acpilot_profile::{Profile, ProfileError};
 use acpilot_proto::profile::ThemeSurface;
@@ -109,27 +110,15 @@ pub enum LaunchError {
     #[error(transparent)]
     Profile(Box<ProfileError>),
 
-    /// The root names a profile that is not there.
-    #[error("{source}\nthe settings at {} name profile `{name}`", config.display())]
-    MissingProfile {
-        /// The profile name the settings asked for.
-        name: String,
-        /// The file that asked for it.
-        config: PathBuf,
-        /// What the profile reader said.
-        #[source]
-        source: Box<ProfileError>,
-    },
+    /// The resolution order did not produce a profile.
+    #[error(transparent)]
+    Resolve(#[from] acpilot_profile::launch::ProfileResolveError),
 
-    /// There is no profile to open: no flag, no marker, no name.
-    #[error(
-        "{} is not a project with a profile: pass --profile <dir>, or set `profile` in its \
-         {PROJECT_DIR}/{PROJECT_FILE}",
-        root.display()
-    )]
-    NoProfile {
-        /// The root that named nothing.
-        root: PathBuf,
+    /// A `--profile` argument is neither a path nor a UTF-8 profile name.
+    #[error("--profile {} is not a profile name or a directory", path.display())]
+    BadProfileArgument {
+        /// The argument that could not be read.
+        path: PathBuf,
     },
 }
 
@@ -175,34 +164,44 @@ fn open_for_in(
     if !named.is_empty() {
         return named
             .iter()
-            .map(|directory| {
-                ShellProfile::open(directory).map_err(|error| LaunchError::Profile(Box::new(error)))
-            })
+            .map(|argument| open_argument(argument, profiles))
             .collect();
     }
 
     let root = Root::resolve(path).map_err(|error| LaunchError::Project(Box::new(error)))?;
-    let settings = root.settings_with(user_config)?;
-    let Some(name) = settings.profile else {
-        return Err(LaunchError::NoProfile {
-            root: root.root().to_path_buf(),
-        });
-    };
-    let directory = profiles.join(&name);
-    let profile = ShellProfile::open(&directory).map_err(|source| LaunchError::MissingProfile {
-        name: name.clone(),
-        config: root.project().map_or_else(
-            || root.root().to_path_buf(),
-            |project| project.config_path(),
-        ),
-        source: Box::new(source),
-    })?;
+    let resolved = ProfileResolver::new_in(profiles, user_config)
+        .process_environment()
+        .resolve(&root)?;
+    let profile = ShellProfile::open(resolved.profile().root())
+        .map_err(|error| LaunchError::Profile(Box::new(error)))?;
     Ok(vec![profile])
+}
+
+/// One `--profile` value: a path-shaped directory, or a name under `profiles`.
+///
+/// A single segment is always a name, even when a directory of that name exists
+/// below the current directory: profiles live under the config root, and a
+/// window that opened a random `work/` from the shell's directory would be a
+/// second namespace.
+fn open_argument(argument: &Path, profiles: &Path) -> Result<ShellProfile, LaunchError> {
+    if argument.is_absolute() || argument.components().count() > 1 {
+        return ShellProfile::open(argument).map_err(|error| LaunchError::Profile(Box::new(error)));
+    }
+    let name = argument
+        .to_str()
+        .ok_or_else(|| LaunchError::BadProfileArgument {
+            path: argument.to_path_buf(),
+        })?;
+    let profile =
+        Profile::named_in(profiles, name).map_err(|error| LaunchError::Profile(Box::new(error)))?;
+    ShellProfile::open(profile.root()).map_err(|error| LaunchError::Profile(Box::new(error)))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+
+    use acpilot_profile::project::{PROJECT_DIR, PROJECT_FILE};
 
     use super::*;
 
@@ -295,17 +294,35 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_with_no_project_is_told_how_to_get_a_profile() {
+    fn a_directory_with_no_project_opens_the_created_default() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let error = open_for_in(
-            Some(directory.path()),
-            &[],
-            &directory.path().join("p"),
-            None,
+        let profiles = directory.path().join("p");
+        let opened =
+            open_for_in(Some(directory.path()), &[], &profiles, None).expect("the default profile");
+        assert_eq!(opened[0].name(), "default");
+        assert!(
+            profiles
+                .join("default")
+                .join(acpilot_profile::CONFIG_FILE)
+                .is_file(),
+            "the fallback exists on the next launch"
+        );
+    }
+
+    #[test]
+    fn a_profile_may_be_named_rather_than_a_directory() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let profiles = directory.path().join("profiles");
+        fs::create_dir_all(profiles.join("work")).expect("profile directory");
+        fs::write(
+            profiles.join("work").join(acpilot_profile::CONFIG_FILE),
+            "schema_version = 1\n",
         )
-        .expect_err("nothing to open");
-        assert!(matches!(error, LaunchError::NoProfile { .. }));
-        assert!(error.to_string().contains("--profile"), "{error}");
+        .expect("profile settings");
+
+        let opened =
+            open_for_in(None, &[PathBuf::from("work")], &profiles, None).expect("named profile");
+        assert_eq!(opened[0].name(), "work");
     }
 
     #[test]

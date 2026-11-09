@@ -697,8 +697,8 @@ Three rules:
     `Profile` gained `id()`/`roots()`, and `Profile::named` now parses through `ProfileId`, which
     closes the `../` traversal a raw `join` allowed. Five catalog tests plus the named-profile
     traversal regression pass.
-  - **Open:** no `profile new/list/use` command writes the registry yet, and nothing reads
-    `active_profile` during launch; both are P4-2/P4-3. Creating a profile still does not create
+  - **Open:** no `profile new/list/use` command writes the registry yet; `profile new` is P4-9.
+    `active_profile` is read by the P4-3 launch resolver. Creating a profile still does not create
     its roots — P4-4 owns the first write. The macOS directory is the documented lower-case
     `Application Support/acpilot` because that is the root this crate already resolves through
     `directories`; the ticket's `Acpilot` spelling is not used anywhere else.
@@ -741,14 +741,32 @@ Three rules:
     credential reference or a permission rule it never named. Preferences are safe to layer and
     surprising to copy, so the rule is the other way round.
 
-- [ ] **P4-3 · Resolution order + workspace marker** (0.5d)
-  - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected. Still open here: `--profile`/`ACPILOT_PROFILE` precedence over the marker (today `--profile` simply wins), `active_profile` in the global file, auto-creating `default`, the `acpilot profile new` hint, and the precedence matrix as a test table.
-  - `--profile` > `ACPILOT_PROFILE` > `.acpilot/profile` (committed, one line, no secrets) >
-    `config.toml:active_profile` > `default` (auto-created on first run).
+- [x] **P4-3 · Resolution order + workspace marker** (0.5d) — **done 2026-11-09**
+  - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected.
+  - `--profile` > `ACPILOT_PROFILE` > `.acpilot/config.toml:profile` (committed, one line, no
+    secrets) > `config.toml:active_profile` > `default` (auto-created on first run).
   - A marker naming a missing profile exits `3` with the exact `acpilot profile new <name>`
     hint. Never fall back: falling back means sending work prompts with personal keys.
   - Table-driven precedence matrix, including "flag and marker disagree" and "marker inside a
     profile-less checkout".
+  - **Result (2026-11-09):** `acpilot_profile::launch::ProfileResolver` owns the five layers and
+    both native clients call it, so `acpilot tui` and `acpilot-gui` cannot disagree about the
+    profile. `--profile` still accepts a path-shaped directory for existing scripts; one segment
+    is a name under `<config>/profiles`. `ACPILOT_PROFILE` beats the marker, the marker beats
+    `active_profile`, and only the final fallback creates `default/config.toml` with
+    `schema_version = 1`. A missing name is `ProfileResolveError::Missing`, which `tui`,
+    `config explain` and the GUI print with exit `3` and `acpilot profile new <name>`; there is
+    no fallback path. The GUI's repeatable `--profile` accepts names or directories. Six
+    table-driven cases cover every layer, flag/marker disagreement, and a profile-less checkout;
+    separate tests cover a missing marker, a missing environment name, first-run creation, a
+    path-shaped flag, and `create_default(false)` for read-only callers. `acpilot config explain`
+    now uses the same resolver rather than its own copy. README, profile/config/CLI docs and the
+    GUI help carry the new order.
+  - **Open:** `acpilot profile new` is still P4-9; the resolver only creates the single fallback
+    `default`. `acpilot serve --profile` and `acpilotd --profile` still take a directory because
+    they discover a root rather than launch a client. `doctor` keeps its read-only,
+    non-creating `--profile default` probe. A profile created by the fallback has only
+    `config.toml`; P4-4 still owns creating the state roots.
 
 - [ ] **P4-4 · Profile-scoped state** (1d)
   - One SQLite per profile (`<data>/profile.sqlite`) with the service phase's task P3-7 schema, plus a small global

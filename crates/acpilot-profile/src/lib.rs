@@ -15,6 +15,7 @@
 //! profile has said nothing about permissions, so the shipped policy applies.
 
 pub mod catalog;
+pub mod launch;
 pub mod project;
 pub mod settings;
 pub mod watch;
@@ -122,8 +123,22 @@ impl Profile {
     ///
     /// The directory does not exist or does not hold a `config.toml`.
     pub fn named(name: &str) -> Result<Self, ProfileError> {
+        Self::named_in(&profiles_dir(), name)
+    }
+
+    /// The profile a name resolves to under an explicit profiles root.
+    ///
+    /// The same name-to-directory rule as [`Self::named`], for a caller that
+    /// owns the root: the launch resolver's tests, a portable install, and the
+    /// desktop app's `--profile <name>` list.
+    ///
+    /// # Errors
+    ///
+    /// The name is not a profile id, or the directory does not exist or does not
+    /// hold a `config.toml`.
+    pub fn named_in(profiles: &Path, name: &str) -> Result<Self, ProfileError> {
         let id = ProfileId::parse(name)?;
-        Self::open(profiles_dir().join(id.as_str()))
+        Self::open(profiles.join(id.as_str()))
     }
 
     /// The profile's directory.

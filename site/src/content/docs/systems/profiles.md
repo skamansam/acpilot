@@ -31,14 +31,16 @@ The active profile is resolved in this order:
 ```mermaid
 flowchart LR
     flag["--profile name"] --> env["ACPILOT_PROFILE"]
-    env --> marker[".acpilot/profile marker"]
+    env --> marker["profile = \"name\"<br/>in .acpilot/config.toml"]
     marker --> active["active_profile<br/>in config.toml"]
-    active --> fallback["default"]
+    active --> fallback["default<br/>created on first use"]
 ```
 
-A name that does not resolve is an **error**, never a fallback. Falling back to
-`default` means "your client's code just went out under your personal key", and
-that is not a helpful default.
+A name that does not resolve is an **error** with exit code `3` and the command
+that fixes it, never a fallback. Falling back to `default` means "your client's
+code just went out under your personal key", and that is not a helpful default.
+Only the final fallback — no flag, no environment variable, no marker, no
+`active_profile` — creates and opens `default`.
 
 <Aside type="caution" title="The header rule">
 Every mutating API request must name its profile with `X-Acpilot-Profile`.
@@ -76,7 +78,7 @@ Partial. A daemon serves every profile directory under `<config>/profiles` and
 dispatches each request by `X-Acpilot-Profile`: each profile has its own agents,
 policy, database, sessions and language servers. `GET /v1/profiles`, `GET
 /v1/profiles/{id}` and `POST /v1/profiles/{id}/activate` are served, and the web
-cockpit's profile picker uses them. Creating, renaming, deleting, exporting a
-profile and the per-profile preferences routes are still open (P4-8), as are
-resolution (`--profile` > environment > marker > `active_profile`) and the
-isolation matrix (P4-2, P4-10).
+cockpit's profile picker uses them. The launch order (`--profile` → environment →
+marker → `active_profile` → created `default`) is served. Creating, renaming,
+deleting and exporting a profile and the per-profile preferences routes are still
+open (P4-8/P4-9), as is the isolation matrix (P4-10).

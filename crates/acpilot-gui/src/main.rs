@@ -56,6 +56,21 @@ struct Cli {
     /// at another one without editing either.
     #[arg(long, value_name = "ID")]
     theme: Option<String>,
+
+    /// Endpoint of the daemon: a URL, or a unix socket path.
+    ///
+    /// Defaults to `ACPILOT_API_URL`, then the per-user socket (or loopback HTTP
+    /// on Windows). The same string `acpilot tui` uses, so a window and a terminal
+    /// started together reach one daemon.
+    #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+    api_url: Option<String>,
+
+    /// Bearer token for a daemon on a TCP endpoint.
+    ///
+    /// Without it the token a local daemon wrote is read, so a window against
+    /// `acpilot serve` needs only its URL. A socket needs none.
+    #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+    token: Option<String>,
 }
 
 /// Recolour every open window when the daemon announces new settings.
@@ -185,6 +200,8 @@ fn apply_git_updates(
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let endpoint = cli.api_url.clone().unwrap_or_else(daemon::endpoint);
+    let token = cli.token.clone().or_else(daemon::token);
 
     let profiles = match profiles::open_for(cli.path.as_deref(), &cli.profile) {
         Ok(profiles) => profiles,
@@ -232,15 +249,20 @@ fn main() -> ExitCode {
     // window opens with, and a `prefs` frame replaces it. A daemon that is not
     // running costs this thread one failed request, not a window.
     let (settings, changed) = std::sync::mpsc::channel::<GuiTheme>();
-    daemon::follow(daemon::endpoint(), extensions.clone(), move |theme| {
-        let _ = settings.send(theme);
-    });
+    daemon::follow(
+        endpoint.clone(),
+        token.clone(),
+        extensions.clone(),
+        move |theme| {
+            let _ = settings.send(theme);
+        },
+    );
 
     // The stats bar is a second, slower question to the same daemon: the roster and
     // what each integration costs. A window with no daemon behind it keeps an empty
     // bar that says so, rather than failing a launch over a footer.
     let (stats, stats_changed) = std::sync::mpsc::channel::<Vec<Row>>();
-    daemon::follow_stats(daemon::endpoint(), move |rows| {
+    daemon::follow_stats(endpoint.clone(), token.clone(), move |rows| {
         let _ = stats.send(rows);
     });
 
@@ -248,7 +270,7 @@ fn main() -> ExitCode {
     // sender reaches every window; the receiver is the worker's.
     let (git_requests, git_commands) = std::sync::mpsc::channel();
     let (git_updates, git_changed) = std::sync::mpsc::channel();
-    daemon::follow_git(daemon::endpoint(), git_commands, move |update| {
+    daemon::follow_git(endpoint, token, git_commands, move |update| {
         let _ = git_updates.send(update);
     });
 

@@ -31,6 +31,18 @@ pub fn path() -> PathBuf {
     crate::runtime_dir().join("token")
 }
 
+/// The token a daemon on this machine wrote, when there is one.
+///
+/// A convenience for a binary that has a person in front of it: a client against a
+/// local port should not make them paste a secret the daemon already put in a
+/// `0600` file. Libraries still take a token as an argument — this reads
+/// [`path`], which is the caller's machine, and only a caller with a user can
+/// decide that is the right machine.
+#[must_use]
+pub fn local() -> Option<String> {
+    read(&path()).ok().flatten()
+}
+
 /// The token in `path`, or `None` when there is none to read.
 ///
 /// A missing file and an empty file are the same answer: nothing is accepted, and

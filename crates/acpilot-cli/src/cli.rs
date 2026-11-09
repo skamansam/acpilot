@@ -411,7 +411,10 @@ fn run_doctor(
             .ok()
             .as_deref(),
     );
-    let daemon = probe_daemon(&endpoint, token.or_else(local_token).as_deref());
+    let daemon = probe_daemon(
+        &endpoint,
+        token.or_else(acpilot_host::token::local).as_deref(),
+    );
     match doctor::collect(path, profile, &installed, &probe_agent, daemon) {
         Ok(report) => {
             print!("{}", report.render());
@@ -641,7 +644,7 @@ fn run_tui(flags: TuiFlags) -> u8 {
     };
     let implied = profile.is_some();
 
-    let token = token.or_else(local_token);
+    let token = token.or_else(acpilot_host::token::local);
     let options = acpilot_client::daemon::Options {
         endpoint: api_url,
         no_spawn,
@@ -1018,19 +1021,6 @@ fn implied_profile(settings: &Settings) -> Result<Option<PathBuf>, u8> {
             Err(exit::CONFLICT)
         }
     }
-}
-
-/// The token a local daemon wrote, when there is one.
-///
-/// The client is given a token, never told to look for one — but `acpilot tui`
-/// against a port on this machine should not require pasting a secret the daemon
-/// already put in a `0600` file. Reading it here keeps that convenience in the
-/// binary that has a user, rather than in a library that would then behave
-/// differently depending on whose environment it runs in.
-fn local_token() -> Option<String> {
-    acpilot_host::token::read(&acpilot_host::token::path())
-        .ok()
-        .flatten()
 }
 
 /// The workspace id the daemon derives from a root: its directory name.

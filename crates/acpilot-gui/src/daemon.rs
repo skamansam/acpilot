@@ -96,6 +96,7 @@ pub enum GitUpdate {
 /// not a poll, and each is answered on the same thread so two commits cannot race.
 pub fn follow_git(
     endpoint: String,
+    token: Option<String>,
     requests: std::sync::mpsc::Receiver<GitCommand>,
     sink: impl Fn(GitUpdate) + Send + 'static,
 ) {
@@ -106,7 +107,7 @@ pub fn follow_git(
         else {
             return;
         };
-        let client = acpilot_client::Client::new(endpoint);
+        let client = client(&endpoint, token.as_deref());
         while let Ok(command) = requests.recv() {
             runtime.block_on(async {
                 match command {
@@ -198,6 +199,29 @@ pub fn endpoint() -> String {
         .unwrap_or_else(acpilot_client::daemon::default_endpoint)
 }
 
+/// The token a local daemon wrote, when there is one.
+///
+/// `acpilot serve` and a TCP daemon save the bearer token in the runtime
+/// directory. A window against a port on this machine reads that file rather than
+/// making the person copy the startup panel; `--token` or `ACPILOT_TOKEN` still
+/// wins, for a daemon whose runtime directory this machine cannot see.
+#[must_use]
+pub fn token() -> Option<String> {
+    acpilot_host::token::local()
+}
+
+/// A client that carries the token when the launch has one.
+///
+/// One place for the choice, rather than three copies that could disagree: an
+/// untokened client against a guarded port answers 401 and looks exactly like a
+/// daemon with nothing in it.
+fn client(endpoint: &str, token: Option<&str>) -> acpilot_client::Client {
+    match token {
+        Some(token) => acpilot_client::Client::with_token(endpoint, token),
+        None => acpilot_client::Client::new(endpoint),
+    }
+}
+
 /// The theme these preferences ask the window to draw with.
 ///
 /// `theme_gui` over `theme`, which is the same cascade the launch resolves — the
@@ -220,7 +244,11 @@ pub fn theme_for(
 ///
 /// A failed request never reaches `sink`: the rows already on screen stay there,
 /// exactly as the terminal's bar keeps them.
-pub fn follow_stats(endpoint: String, sink: impl Fn(Vec<Row>) + Send + 'static) {
+pub fn follow_stats(
+    endpoint: String,
+    token: Option<String>,
+    sink: impl Fn(Vec<Row>) + Send + 'static,
+) {
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -229,7 +257,7 @@ pub fn follow_stats(endpoint: String, sink: impl Fn(Vec<Row>) + Send + 'static) 
             return;
         };
         runtime.block_on(async move {
-            let client = acpilot_client::Client::new(endpoint);
+            let client = client(&endpoint, token.as_deref());
             let mut said_so = false;
             loop {
                 match client.stats().await {
@@ -259,6 +287,7 @@ pub fn follow_stats(endpoint: String, sink: impl Fn(Vec<Row>) + Send + 'static) 
 /// to show someone who only wanted to look at a file.
 pub fn follow(
     endpoint: String,
+    token: Option<String>,
     extensions: Vec<LoadedExtension>,
     sink: impl Fn(GuiTheme) + Send + 'static,
 ) {
@@ -272,7 +301,7 @@ pub fn follow(
         runtime.block_on(async move {
             use futures::StreamExt as _;
 
-            let client = acpilot_client::Client::new(endpoint);
+            let client = client(&endpoint, token.as_deref());
             let mut frames = client.profile_events();
             while let Some(frame) = frames.next().await {
                 match frame {

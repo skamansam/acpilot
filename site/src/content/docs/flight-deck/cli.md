@@ -182,6 +182,9 @@ a `401` is reported as a refused token naming that file — not as "no daemon",
 which would send you to start a second one on the same port. `acpilot token rotate`
 rewrites that file; the daemon reads it per request, so the new token applies on the
 next call and every client holding the old one is refused, with nothing restarting.
+Both native clients resolve that file themselves: `acpilot tui` and `acpilot-gui`
+read it when `--token` (or `ACPILOT_TOKEN`) is absent, so a window or terminal
+opened against `acpilot serve` on this machine needs only its URL.
 
 The order is probe, then spawn: a daemon that answers `GET /v1/health` is used as
 it is, and only silence starts one. The spawned daemon is detached from the

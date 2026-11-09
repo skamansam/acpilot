@@ -80,13 +80,12 @@ async function freePort(): Promise<number> {
  * The token `acpilot serve` printed, once it has.
  *
  * The file is the durable copy, but reading it would mean knowing the platform's
- * runtime directory. The startup line is the daemon's own answer, and `--token`
- * makes it print even when the file already existed.
+ * runtime directory. The startup panel is the daemon's own answer.
  */
 async function waitForToken(child: ChildProcessWithoutNullStreams): Promise<string> {
   const deadline = Date.now() + 30_000;
   for (;;) {
-    const match = /acpilot serve: token ([0-9a-f]{16,})/.exec(log);
+    const match = /Token\s+([0-9a-f]{16,})/.exec(log);
     if (match) {
       return match[1];
     }
@@ -180,8 +179,6 @@ command = ${JSON.stringify(MOCK_AGENT)}
       'serve',
       '--bind',
       `127.0.0.1:${port}`,
-      // Printed even when the runtime directory already held a token.
-      '--token',
       '--profile',
       profile,
       '--workspace',

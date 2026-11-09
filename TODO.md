@@ -695,7 +695,7 @@ Three rules:
     save). The crate's existing `Profile` is the *opened directory* handle, so the registry row
     is named `ProfileRecord` and is keyed by its id rather than repeating it inside the table.
     `Profile` gained `id()`/`roots()`, and `Profile::named` now parses through `ProfileId`, which
-    closes the `../` traversal a raw `join` allowed. Four catalog tests plus the named-profile
+    closes the `../` traversal a raw `join` allowed. Five catalog tests plus the named-profile
     traversal regression pass.
   - **Open:** no `profile new/list/use` command writes the registry yet, and nothing reads
     `active_profile` during launch; both are P4-2/P4-3. Creating a profile still does not create

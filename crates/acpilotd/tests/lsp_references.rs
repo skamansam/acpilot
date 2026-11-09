@@ -40,6 +40,7 @@ fn workspace() -> tempfile::TempDir {
 async fn get(directory: &std::path::Path, uri: &str) -> (StatusCode, serde_json::Value) {
     let state = AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root: directory.canonicalize().expect("resolved"),
     });
     let request = Request::builder()

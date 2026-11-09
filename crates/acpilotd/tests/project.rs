@@ -21,6 +21,7 @@ fn app(state: AppState) -> axum::Router {
 async fn send(uri: &str, directory: &std::path::Path) -> (StatusCode, serde_json::Value) {
     let state = AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root: directory.canonicalize().expect("resolved"),
     });
     let request = Request::builder()

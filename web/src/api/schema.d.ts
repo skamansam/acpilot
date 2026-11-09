@@ -2096,6 +2096,14 @@ export interface components {
             created_at: string;
             /** @description Session identifier. */
             id: components["schemas"]["String"];
+            /**
+             * @description Profile that owns this session.
+             *
+             *     The daemon routes by profile, so this is normally the profile whose
+             *     header selected the router; it is carried so a stored row and a live
+             *     summary say the same thing.
+             */
+            profile: string;
             /** @description Lifecycle state. */
             status: components["schemas"]["SessionStatus"];
             /** @description Display title, derived from the first prompt when not set. */
@@ -2245,6 +2253,13 @@ export interface components {
             id: components["schemas"]["String"];
             /** @description Display name, defaulting to the directory's basename. */
             name: string;
+            /**
+             * @description Profile that owns this workspace.
+             *
+             *     Two profiles may see the same host path; the owner is what makes one
+             *     profile's workspace id unacceptable in another's request.
+             */
+            profile: string;
             /** @description Root path, as the host spells it (not translated to the client's platform). */
             root: string;
             /**

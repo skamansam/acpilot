@@ -15,6 +15,11 @@ pub struct WorkspaceSummary {
     pub id: WorkspaceId,
     /// Display name, defaulting to the directory's basename.
     pub name: String,
+    /// Profile that owns this workspace.
+    ///
+    /// Two profiles may see the same host path; the owner is what makes one
+    /// profile's workspace id unacceptable in another's request.
+    pub profile: String,
     /// Host the root lives on.
     pub host_id: HostId,
     /// Root path, as the host spells it (not translated to the client's platform).

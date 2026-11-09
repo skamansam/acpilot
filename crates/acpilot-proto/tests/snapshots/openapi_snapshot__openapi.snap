@@ -2718,6 +2718,10 @@ expression: canonical(document)
             "$ref": "#/components/schemas/String",
             "description": "Session identifier."
           },
+          "profile": {
+            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router; it is carried so a stored row and a live\nsummary say the same thing.",
+            "type": "string"
+          },
           "status": {
             "$ref": "#/components/schemas/SessionStatus",
             "description": "Lifecycle state."
@@ -2737,6 +2741,7 @@ expression: canonical(document)
         },
         "required": [
           "id",
+          "profile",
           "workspace_id",
           "agent_id",
           "title",
@@ -2996,6 +3001,10 @@ expression: canonical(document)
             "description": "Display name, defaulting to the directory's basename.",
             "type": "string"
           },
+          "profile": {
+            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path; the owner is what makes one\nprofile's workspace id unacceptable in another's request.",
+            "type": "string"
+          },
           "root": {
             "description": "Root path, as the host spells it (not translated to the client's platform).",
             "type": "string"
@@ -3010,6 +3019,7 @@ expression: canonical(document)
         "required": [
           "id",
           "name",
+          "profile",
           "host_id",
           "root",
           "session_count"

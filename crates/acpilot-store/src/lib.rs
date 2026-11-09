@@ -63,7 +63,7 @@ pub const RETENTION_DAYS: i64 = 30;
 /// Bumped with every entry in [`MIGRATIONS`]. A database written by a newer daemon
 /// is refused rather than read: the columns a newer build added are the ones this
 /// one would try to write past.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The schema, in order, as `(version, sql)`.
 ///
@@ -76,6 +76,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_agent_pins.sql")),
+    (3, include_str!("../migrations/0003_session_profile.sql")),
 ];
 
 /// A profile's conversations, sessions and decisions.
@@ -324,14 +325,17 @@ impl Store {
             params![summary.workspace_id, jiff::Timestamp::now().to_string()],
         )?;
         connection.execute(
-            "INSERT INTO sessions (id, workspace_id, agent_id, title, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO sessions
+                 (id, profile, workspace_id, agent_id, title, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (id) DO UPDATE SET
+                 profile = excluded.profile,
                  title = excluded.title,
                  status = excluded.status,
                  updated_at = excluded.updated_at",
             params![
                 summary.id,
+                summary.profile,
                 summary.workspace_id,
                 summary.agent_id,
                 summary.title,
@@ -393,7 +397,7 @@ impl Store {
         let connection = self.lock();
         let row = connection
             .query_row(
-                "SELECT id, workspace_id, agent_id, title, status, created_at, updated_at
+                "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
                  FROM sessions WHERE id = ?1",
                 params![id],
                 |row| {
@@ -405,6 +409,7 @@ impl Store {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
                     ))
                 },
             )
@@ -427,7 +432,7 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<SessionSummary>, StoreError> {
         let connection = self.lock();
         let mut statement = connection.prepare(
-            "SELECT id, workspace_id, agent_id, title, status, created_at, updated_at
+            "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
              FROM sessions ORDER BY rowid",
         )?;
         let rows = statement.query_map([], |row| {
@@ -439,6 +444,7 @@ impl Store {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })?;
         let mut summaries = Vec::new();
@@ -840,6 +846,27 @@ impl Index {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// The profile that first opened `workspace`, when one did.
+    ///
+    /// The index is deliberately willing to answer `None`: a workspace opened
+    /// before the index existed has no owner row, and refusing every such root
+    /// would make an upgrade erase access to an existing checkout.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be read.
+    pub fn workspace_owner(&self, workspace: &str) -> Result<Option<String>, StoreError> {
+        let connection = self.lock();
+        connection
+            .query_row(
+                "SELECT profile FROM workspaces WHERE path = ?1 ORDER BY rowid LIMIT 1",
+                params![workspace],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
     /// Forget `profile` and every workspace recorded for it.
     ///
     /// # Errors
@@ -1014,7 +1041,8 @@ pub struct Grant {
 }
 
 fn summary_from(
-    (id, workspace_id, agent_id, title, status, created_at, updated_at): (
+    (id, profile, workspace_id, agent_id, title, status, created_at, updated_at): (
+        String,
         String,
         String,
         String,
@@ -1026,6 +1054,7 @@ fn summary_from(
 ) -> SessionSummary {
     SessionSummary {
         id,
+        profile,
         workspace_id,
         agent_id,
         title,
@@ -1123,6 +1152,7 @@ mod tests {
     fn summary(id: &str) -> SessionSummary {
         SessionSummary {
             id: id.to_owned(),
+            profile: "default".into(),
             workspace_id: "demo".into(),
             agent_id: "mock".into(),
             title: "a conversation".into(),
@@ -1156,10 +1186,9 @@ mod tests {
         }
         let again = Store::open(&path).expect("the second open runs no migration");
         assert_eq!(again.version().expect("version"), SCHEMA_VERSION);
-        assert_eq!(
-            again.session("s1").expect("read").expect("there").title,
-            "a conversation"
-        );
+        let session = again.session("s1").expect("read").expect("there");
+        assert_eq!(session.title, "a conversation");
+        assert_eq!(session.profile, "default", "the row keeps its owner");
     }
 
     #[test]

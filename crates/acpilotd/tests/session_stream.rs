@@ -17,6 +17,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 fn summary() -> SessionSummary {
     SessionSummary {
         id: "s1".into(),
+        profile: "default".into(),
         workspace_id: "w1".into(),
         agent_id: "mock".into(),
         title: "a conversation".into(),

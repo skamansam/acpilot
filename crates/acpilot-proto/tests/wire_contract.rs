@@ -105,6 +105,7 @@ fn workspace_documents() {
     round_trip::<acpilot_proto::workspace::WorkspaceSummary>(json!({
         "id": "ws-1",
         "name": "acpilot",
+        "profile": "work",
         "host_id": "local",
         "root": "/home/sam/workspace-other/acpilot",
         "session_count": 3
@@ -126,6 +127,7 @@ fn workspace_documents() {
 fn session_documents() {
     round_trip::<acpilot_proto::session::SessionSummary>(json!({
         "id": "s-1",
+        "profile": "work",
         "workspace_id": "ws-1",
         "agent_id": "claude",
         "title": "Fix the framing bug",

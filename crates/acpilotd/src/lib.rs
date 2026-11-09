@@ -208,6 +208,7 @@ impl ApiError {
             AcpilotError::NotFound { .. } => StatusCode::NOT_FOUND,
             AcpilotError::Conflict { .. } => StatusCode::CONFLICT,
             AcpilotError::PermissionDenied { .. } => StatusCode::FORBIDDEN,
+            AcpilotError::ProfileMismatch { .. } => StatusCode::CONFLICT,
             AcpilotError::HostUnavailable { .. }
             | AcpilotError::ModelUnavailable { .. }
             | AcpilotError::AgentFailed { .. } => StatusCode::BAD_GATEWAY,
@@ -260,6 +261,8 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
 pub struct Workspace {
     /// Identifier the API uses, derived from the directory's basename.
     pub id: String,
+    /// Profile that owns this workspace, empty for a daemon started without one.
+    pub profile: String,
     /// Resolved root the broker compares with and the agent is given.
     pub root: std::path::PathBuf,
 }
@@ -319,6 +322,13 @@ pub struct AppState {
     /// prompt. A path in `GET /v1/health` would be a filesystem fact a browser has
     /// no business knowing, so the two are not the same field.
     profile_root: Option<std::path::PathBuf>,
+    /// The cross-profile index, when the daemon opened one.
+    ///
+    /// The per-profile workspace registry cannot see another profile, so the
+    /// index is how a root already owned elsewhere becomes a `409` rather than a
+    /// second workspace that happens to share a path. Tests and embedded states
+    /// may have none, and then a workspace is local to its profile.
+    index: Option<acpilot_store::Index>,
     /// The hosts this daemon knows, the one it runs on first.
     ///
     /// A registry rather than a table read per request: the local host's
@@ -448,6 +458,7 @@ impl Default for AppState {
             workspace: None,
             profile: None,
             profile_root: None,
+            index: None,
             hosts: Arc::new(hosts::Hosts::default()),
             workspaces: Arc::default(),
             sessions: Sessions::default(),
@@ -474,8 +485,28 @@ impl AppState {
     /// Serve this profile's name in `GET /v1/health`.
     #[must_use]
     pub fn with_profile_name(mut self, profile: Option<String>) -> Self {
+        self.workspaces
+            .set_profile(profile.as_deref().unwrap_or_default());
         self.profile = profile;
         self
+    }
+
+    /// Let this profile consult the shared index before opening a workspace.
+    ///
+    /// The index records who opened a root first; the same index is handed to
+    /// every profile state in one daemon, which is what makes the ownership check
+    /// cross-profile rather than a per-router accident.
+    #[must_use]
+    pub fn with_index(mut self, index: acpilot_store::Index) -> Self {
+        self.workspaces.set_index(index.clone());
+        self.index = Some(index);
+        self
+    }
+
+    /// The index this daemon opened, when it has one.
+    #[must_use]
+    pub fn index(&self) -> Option<&acpilot_store::Index> {
+        self.index.as_ref()
     }
 
     /// The profile directory's name, when this daemon was started with one.
@@ -647,7 +678,10 @@ impl AppState {
 
     /// Serve this workspace, and open every session in it.
     #[must_use]
-    pub fn with_workspace(mut self, workspace: Workspace) -> Self {
+    pub fn with_workspace(mut self, mut workspace: Workspace) -> Self {
+        if workspace.profile.is_empty() {
+            workspace.profile = self.profile.clone().unwrap_or_default();
+        }
         self.workspace = Some(workspace);
         self
     }
@@ -1259,7 +1293,11 @@ pub fn workspace_at(root: &std::path::Path) -> Result<Workspace, StateError> {
         .file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| "workspace".to_owned(), str::to_owned);
-    Ok(Workspace { id, root })
+    Ok(Workspace {
+        id,
+        profile: String::new(),
+        root,
+    })
 }
 
 /// The profile's agents, when it has an `agents.toml`.
@@ -2193,6 +2231,7 @@ mod tests {
 
         let state = AppState::new().with_workspace(Workspace {
             id: "thing".to_owned(),
+            profile: String::new(),
             root: directory.path().to_path_buf(),
         });
         let theme = state.web_palette().expect("a theme is named");

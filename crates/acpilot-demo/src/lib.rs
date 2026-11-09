@@ -176,6 +176,7 @@ fn summary(
 ) -> SessionSummary {
     SessionSummary {
         id: id.to_owned(),
+        profile: "demo".to_owned(),
         workspace_id: "acpilot".to_owned(),
         agent_id: agent.to_owned(),
         title: title.to_owned(),

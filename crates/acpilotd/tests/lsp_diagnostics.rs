@@ -78,6 +78,7 @@ async fn an_answer_is_kept_for_the_client_that_connects_after_it() {
     let directory = workspace();
     let state = AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root: directory.path().canonicalize().expect("resolved"),
     });
 

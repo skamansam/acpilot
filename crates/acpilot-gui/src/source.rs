@@ -547,6 +547,7 @@ mod tests {
     fn session(id: &str) -> SessionSummary {
         SessionSummary {
             id: id.to_owned(),
+            profile: "acpilot".to_owned(),
             workspace_id: "acpilot".to_owned(),
             agent_id: "mock".to_owned(),
             title: "one".to_owned(),

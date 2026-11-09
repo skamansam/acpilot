@@ -280,6 +280,14 @@ and returns `SessionSummary`. `workspace_id` may be empty, which means this
 daemon's own workspace; an id it does not serve is `404`, checked before the policy
 so that answer does not depend on whether one loaded.
 
+`SessionSummary` and `WorkspaceSummary` both carry `profile`, the identity that
+owns the row. `POST /v1/workspaces` records the first profile to open a host and
+root pair in the global index; a second profile asking for the same pair is
+`409 profile_mismatch` with the owner in `details` (`field: "owner"`), rather
+than a second workspace that happens to share a checkout. A workspace id in a
+profile daemon is namespaced (`work:local:/src`), so carrying one profile's id
+into another's request is visible rather than accidental.
+
 `POST /v1/sessions/{id}/prompt` takes `PromptRequest { text, idempotency_key? }`
 and is **asynchronous**: it returns `202` with `PromptAccepted { session_id,
 turn_id, first_seq }`. The turn itself streams over SSE; `200` here would mean

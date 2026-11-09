@@ -112,6 +112,7 @@ async fn a_server_nobody_has_asked_is_stopped_and_starts_again() {
     let root = directory.path().canonicalize().expect("resolved");
     let state = AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root,
     });
     let offset = SOURCE.find("dup();").expect("a call");

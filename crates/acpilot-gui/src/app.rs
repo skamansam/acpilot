@@ -1924,6 +1924,7 @@ mod drawn {
     fn session_summary(id: &str, title: &str) -> acpilot_proto::session::SessionSummary {
         acpilot_proto::session::SessionSummary {
             id: id.to_owned(),
+            profile: "acpilot".to_owned(),
             workspace_id: "acpilot".to_owned(),
             agent_id: "mock".to_owned(),
             title: title.to_owned(),

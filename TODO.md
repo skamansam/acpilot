@@ -855,6 +855,16 @@ Three rules:
     profiles' mock agents concurrently and diffs their `env`.
   - Hosts are global; a profile may override per-host identity (`user`, `identity_file`,
     `ProxyJump`) but not the hostname — one machine, several identities.
+  - **Result (2026-11-09, partial):** `WorkspaceSummary` and `SessionSummary` carry `profile`,
+    the daemon's `Workspace` and `Record` carry it, and the session row persists it (store schema
+    v3, with old rows reading as the empty profile). Workspace ids are namespaced by profile
+    (`work:local:/src`), and the global index records the first profile to open a host+root so a
+    second profile gets `409 profile_mismatch` with `details.owner`. A profile's workspace list
+    now names its owner, and the store round-trip and two-profile router test cover the field and
+    the refusal. **Open:** the per-host identity override, the CLI's explicit `--steal`, and a
+    concurrent two-profile mock-agent environment diff are not in this cut; the existing registry
+    isolation test proves two profiles resolve the same variable to different values, but not with
+    two live agent children.
 
 - [ ] **P4-7 · Preferences schema + live reload** (1d)
   - `Preferences { schema_version, editor, theme, keymap, ui, lsp, agents }`, typed in

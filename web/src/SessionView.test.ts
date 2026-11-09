@@ -16,6 +16,7 @@ const TOKEN = 'the-daemon-token';
 
 const SESSION: SessionSummary = {
   id: 'session-1',
+  profile: 'work',
   workspace_id: 'acpilot',
   agent_id: 'mock-agent',
   title: 'a session that exists',

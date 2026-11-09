@@ -17,7 +17,7 @@
 //! the transport.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use acpilot_core::AcpilotError;
 use acpilot_proto::host::{HostKind, HostSummary};
@@ -37,9 +37,22 @@ use crate::{ApiError, AppState};
 /// In memory for the same reason the host list is: the store is where sessions and
 /// hosts outlive a restart, and a workspace row records nothing a host and a root
 /// pair does not already say.
+///
+/// The profile and index are set by [`crate::AppState`] before the router serves a
+/// request. A registry with neither still works: it belongs to one anonymous
+/// daemon and nothing else can own its roots.
 #[derive(Debug, Default)]
 pub struct Workspaces {
     known: Mutex<Vec<WorkspaceSummary>>,
+    profile: RwLock<String>,
+    index: RwLock<Option<acpilot_store::Index>>,
+}
+
+/// Why a workspace was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceConflict {
+    /// The profile that opened the root first.
+    pub owner: String,
 }
 
 impl Workspaces {
@@ -47,6 +60,23 @@ impl Workspaces {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Name the profile whose workspaces this registry records.
+    pub fn set_profile(&self, profile: &str) {
+        *self.profile.write().unwrap_or_else(PoisonError::into_inner) = profile.to_owned();
+    }
+
+    /// Give the registry the daemon's shared owner index.
+    pub fn set_index(&self, index: acpilot_store::Index) {
+        *self.index.write().unwrap_or_else(PoisonError::into_inner) = Some(index);
+    }
+
+    fn profile(&self) -> String {
+        self.profile
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Every workspace, the daemon's own first when it was given one.
@@ -62,22 +92,55 @@ impl Workspaces {
     /// Open `host_id` + `root`, or hand back the row that pair already has.
     ///
     /// Idempotent because a client opens its workspace on every launch: the second
-    /// call is the same workspace, not a second one.
-    pub fn open(&self, host_id: &str, root: &str, name: Option<String>) -> WorkspaceSummary {
-        let id = format!("{host_id}:{root}");
+    /// call is the same workspace, not a second one. A root the shared index says
+    /// another profile opened is refused rather than adopted: two profiles editing
+    /// one checkout is the isolation this phase exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// Another profile already owns the root.
+    pub fn open(
+        &self,
+        host_id: &str,
+        root: &str,
+        name: Option<String>,
+    ) -> Result<WorkspaceSummary, WorkspaceConflict> {
+        let profile = self.profile();
+        // The index is keyed by host and root, not by the namespaced id: that is
+        // what lets the second profile ask the same question and learn who was
+        // first. The id a client holds is namespaced so the two profiles cannot
+        // address one another's workspace by accident.
+        let key = format!("{host_id}:{root}");
+        let id = workspace_id(&profile, host_id, root);
         let mut known = self.lock();
         if let Some(existing) = known.iter().find(|workspace| workspace.id == id) {
-            return existing.clone();
+            return Ok(existing.clone());
+        }
+        if let Some(index) = self
+            .index
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            match index.workspace_owner(&key) {
+                Ok(Some(owner)) if owner != profile => return Err(WorkspaceConflict { owner }),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, %key, "workspace ownership was not read"),
+            }
+            if let Err(error) = index.remember_workspace(&profile, &key) {
+                tracing::warn!(%error, profile = %profile, "the workspace was not indexed");
+            }
         }
         let summary = WorkspaceSummary {
             name: name.unwrap_or_else(|| basename(root)),
             id,
+            profile,
             host_id: host_id.to_owned(),
             root: root.to_owned(),
             session_count: 0,
         };
         known.push(summary.clone());
-        summary
+        Ok(summary)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<WorkspaceSummary>> {
@@ -112,13 +175,14 @@ async fn list(State(state): State<AppState>) -> Json<Vec<WorkspaceSummary>> {
     let mut rows = state.workspaces().list();
     if let Some(served) = state.workspace() {
         let root = served.root.display().to_string();
-        let id = format!("{}:{root}", crate::hosts::LOCAL_HOST);
+        let id = workspace_id(&served.profile, crate::hosts::LOCAL_HOST, &root);
         if !rows.iter().any(|row| row.id == id) {
             rows.insert(
                 0,
                 WorkspaceSummary {
                     id,
                     name: served.id.clone(),
+                    profile: served.profile.clone(),
                     host_id: crate::hosts::LOCAL_HOST.to_owned(),
                     root,
                     session_count: 0,
@@ -188,9 +252,10 @@ fn local(state: &AppState, root: &str, name: Option<String>) -> Result<Workspace
             "{root} is a file, and a workspace is a directory"
         ))));
     }
-    Ok(state
+    state
         .workspaces()
-        .open(crate::hosts::LOCAL_HOST, root, name))
+        .open(crate::hosts::LOCAL_HOST, root, name)
+        .map_err(|conflict| profile_mismatch(root, conflict))
 }
 
 /// A root on a host the daemon reaches through its helper.
@@ -262,13 +327,37 @@ async fn remote(
             "the helper answered fs.list with {listing}, which is not a listing"
         )));
     }
-    Ok(state.workspaces().open(&host.id, root, name))
+    state
+        .workspaces()
+        .open(&host.id, root, name)
+        .map_err(|conflict| profile_mismatch(root, conflict))
 }
 
 /// Whether `root` is spelled as a path from the root of a filesystem.
 ///
 /// Both separators: the path is the far host's, and a Windows host answers to
 /// `C:\src` while the daemon asking may be running on anything.
+/// The id a workspace is known by: namespaced by profile when there is one.
+///
+/// The host and root alone are not unique across profiles, and an id that a
+/// request can reuse under the wrong identity is the bug P4-6 closes.
+fn workspace_id(profile: &str, host_id: &str, root: &str) -> String {
+    if profile.is_empty() {
+        format!("{host_id}:{root}")
+    } else {
+        format!("{profile}:{host_id}:{root}")
+    }
+}
+
+/// A root already owned by another profile, in the API's envelope.
+fn profile_mismatch(root: &str, conflict: WorkspaceConflict) -> ApiError {
+    ApiError::new(AcpilotError::ProfileMismatch {
+        what: format!("workspace {root}"),
+        owner: conflict.owner.clone(),
+    })
+    .with_detail("owner", conflict.owner)
+}
+
 fn absolute(root: &str) -> bool {
     root.starts_with('/')
         || root.starts_with('\\')

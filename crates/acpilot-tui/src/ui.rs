@@ -3189,6 +3189,7 @@ mod tests {
         app.connected = true;
         app.sessions.push(SessionSummary {
             id: "s1".to_owned(),
+            profile: "work".to_owned(),
             workspace_id: "work".to_owned(),
             agent_id: "mock".to_owned(),
             title: "wire the tui".to_owned(),

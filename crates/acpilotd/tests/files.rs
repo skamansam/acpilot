@@ -50,6 +50,7 @@ async fn send(
 fn serving(directory: &std::path::Path) -> AppState {
     AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root: directory.canonicalize().expect("resolved"),
     })
 }

@@ -325,6 +325,7 @@ impl Sessions {
 #[derive(Debug)]
 pub struct Record {
     id: SessionId,
+    profile: String,
     workspace_id: String,
     agent_id: String,
     lifecycle: Mutex<Lifecycle>,
@@ -416,7 +417,32 @@ struct Log {
 }
 
 impl Record {
+    #[cfg(test)]
     fn new(
+        id: SessionId,
+        workspace_id: String,
+        agent_id: String,
+        broker: Option<Arc<Broker>>,
+        transcripts: Option<&Path>,
+        store: Option<Arc<Store>>,
+    ) -> (Arc<Self>, mpsc::Receiver<Command>) {
+        Self::new_for(
+            String::new(),
+            id,
+            workspace_id,
+            agent_id,
+            broker,
+            transcripts,
+            store,
+        )
+    }
+
+    /// [`Self::new`] with the profile this session belongs to.
+    ///
+    /// Kept apart so a unit test can build a record without inventing a profile;
+    /// the create route is the only caller that has one.
+    fn new_for(
+        profile: String,
         id: SessionId,
         workspace_id: String,
         agent_id: String,
@@ -448,6 +474,7 @@ impl Record {
         (
             Arc::new(Self {
                 id,
+                profile,
                 workspace_id,
                 agent_id,
                 lifecycle: Mutex::new(Lifecycle {
@@ -506,6 +533,7 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner);
         SessionSummary {
             id: self.id.clone(),
+            profile: self.profile.clone(),
             workspace_id: self.workspace_id.clone(),
             agent_id: self.agent_id.clone(),
             title: state
@@ -843,7 +871,8 @@ pub async fn create(
     // worse than no file, and it would hold the id forever.
     let session = start(Arc::clone(&spec), options, workspace.root.as_path()).await?;
 
-    let (record, mailbox) = Record::new(
+    let (record, mailbox) = Record::new_for(
+        state.profile_name().unwrap_or_default().to_owned(),
         id.clone(),
         workspace.id.clone(),
         spec.id.clone(),

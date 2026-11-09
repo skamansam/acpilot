@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use acpilot_store::Index;
 use acpilotd::profiles::{self, Profiles};
 use acpilotd::state_for_profile;
 use axum::Router;
@@ -41,12 +42,30 @@ async fn send(
     uri: &str,
     profile: Option<&str>,
 ) -> (StatusCode, serde_json::Value) {
+    send_json(app, method, uri, profile, None).await
+}
+
+/// [`send`] with a JSON body.
+async fn send_json(
+    app: Router,
+    method: &str,
+    uri: &str,
+    profile: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
     let mut request = Request::builder().method(method).uri(uri);
     if let Some(name) = profile {
         request = request.header("X-Acpilot-Profile", name);
     }
+    let body = match body {
+        Some(value) => {
+            request = request.header("content-type", "application/json");
+            Body::from(value.to_string())
+        }
+        None => Body::empty(),
+    };
     let response = app
-        .oneshot(request.body(Body::empty()).expect("request"))
+        .oneshot(request.body(body).expect("request"))
         .await
         .expect("router is infallible");
     let status = response.status();
@@ -140,6 +159,55 @@ async fn a_header_picks_the_profile_and_a_mutation_without_one_is_refused() {
     assert_eq!(body["profile"], "personal");
 
     assert_eq!(registry.active(), "personal");
+}
+
+#[tokio::test]
+async fn opening_a_workspace_another_profile_owns_is_a_profile_mismatch() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let work = profile(root.path(), "work", "work-agent");
+    let personal = profile(root.path(), "personal", "personal-agent");
+    let index = Index::in_memory().expect("an owner index");
+    let work_state = state_for_profile(&work, workspace.path())
+        .expect("work loads")
+        .with_index(index.clone());
+    let personal_state = state_for_profile(&personal, workspace.path())
+        .expect("personal loads")
+        .with_index(index);
+    let registry = Arc::new(Profiles::from_states(
+        vec![
+            ("work".to_owned(), work_state),
+            ("personal".to_owned(), personal_state),
+        ],
+        "work".to_owned(),
+    ));
+    let app = profiles::router(registry);
+    let body = serde_json::json!({
+        "host_id": "local",
+        "root": workspace.path().to_string_lossy(),
+    });
+
+    let (status, opened) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/workspaces",
+        Some("work"),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["profile"], "work");
+    assert_eq!(
+        opened["id"],
+        format!("work:local:{}", workspace.path().display())
+    );
+
+    let (status, refused) =
+        send_json(app, "POST", "/v1/workspaces", Some("personal"), Some(body)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "profile_mismatch");
+    assert_eq!(refused["details"][0]["field"], "owner");
+    assert_eq!(refused["details"][0]["message"], "work");
 }
 
 #[tokio::test]

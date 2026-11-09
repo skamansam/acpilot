@@ -192,13 +192,18 @@ impl Profiles {
         for (name, directory) in &directories {
             match startup_with_stores(Some(directory), workspace, Arc::clone(&stores)) {
                 Ok(state) => {
+                    let mut state = state;
                     if let Some(index) = index {
+                        state = state.with_index(index.clone());
                         if let Err(error) = index.remember_profile(name) {
                             tracing::warn!(%error, profile = %name, "the profile was not indexed");
                         }
-                        if let Err(error) =
-                            index.remember_workspace(name, &workspace.to_string_lossy())
-                        {
+                        let workspace_id = format!(
+                            "{}:{}",
+                            crate::hosts::LOCAL_HOST,
+                            workspace.to_string_lossy()
+                        );
+                        if let Err(error) = index.remember_workspace(name, &workspace_id) {
                             tracing::warn!(%error, profile = %name, "the workspace was not indexed");
                         }
                     }

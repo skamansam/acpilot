@@ -108,6 +108,7 @@ async fn harness() -> Harness {
         )))
         .with_workspace(Workspace {
             id: "work".to_owned(),
+            profile: String::new(),
             root,
         })
         .with_profile_root(Some(profile.path().to_path_buf()));

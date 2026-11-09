@@ -30,6 +30,12 @@ pub enum SessionStatus {
 pub struct SessionSummary {
     /// Session identifier.
     pub id: SessionId,
+    /// Profile that owns this session.
+    ///
+    /// The daemon routes by profile, so this is normally the profile whose
+    /// header selected the router; it is carried so a stored row and a live
+    /// summary say the same thing.
+    pub profile: String,
     /// Workspace the session edits.
     pub workspace_id: WorkspaceId,
     /// Agent driving the session.

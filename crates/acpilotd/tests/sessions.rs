@@ -182,6 +182,7 @@ command = "acpilot-mock-agent"
         .with_registry(Arc::new(registry))
         .with_workspace(acpilotd::Workspace {
             id: "work".to_owned(),
+            profile: String::new(),
             root: workspace,
         });
     let (status, body) = send(
@@ -230,6 +231,7 @@ command = "acpilot-mock-agent"
         .with_registry(Arc::new(registry))
         .with_workspace(acpilotd::Workspace {
             id: "work".to_owned(),
+            profile: String::new(),
             root: workspace,
         });
     let (status, body) = send(

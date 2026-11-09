@@ -26,6 +26,7 @@ const HEALTH: Health = {
 
 const SESSION: SessionSummary = {
   id: 'session-1',
+  profile: 'work',
   workspace_id: 'acpilot',
   agent_id: 'mock-agent',
   title: 'a session that exists',
@@ -610,8 +611,8 @@ describe('the session view', () => {
   it('the workspace picker changes the address and the sessions it shows', async () => {
     sessionStorage.setItem(TOKEN_KEY, 'stored');
     const workspaces = [
-      { id: 'local:/acpilot', name: 'acpilot', host_id: 'local', root: '/acpilot', session_count: 1 },
-      { id: 'local:/build', name: 'build', host_id: 'local', root: '/build', session_count: 0 },
+      { id: 'local:/acpilot', name: 'acpilot', profile: 'work', host_id: 'local', root: '/acpilot', session_count: 1 },
+      { id: 'local:/build', name: 'build', profile: 'work', host_id: 'local', root: '/build', session_count: 0 },
     ];
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const route = String(input);

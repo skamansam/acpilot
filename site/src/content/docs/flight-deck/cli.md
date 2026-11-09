@@ -57,7 +57,7 @@ acpilot ext why <preset> --profile <name>
 acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
 acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
-acpilot serve --http [--bind <addr>] [--token] [--profile <dir>] [--workspace <dir>]
+acpilot serve [--bind <addr>] [--token <token>] [--profile <dir>] [--workspace <dir>]
 acpilot doctor [PATH] [--profile <name>] [--api-url <url|path>] [--token <token>]
 ```
 
@@ -138,13 +138,26 @@ $ acpilot tui --no-mouse            # the terminal keeps its own drag-to-select
 ```
 
 ```bash
-$ acpilot serve --http                 # the web UI at http://127.0.0.1:7777/
+$ acpilot serve                        # a free loopback port, printed with the token
+$ acpilot serve --bind 127.0.0.1:7777  # a fixed port
 $ acpilot serve --bind 0.0.0.0:7777    # the same over the LAN; the token guards every call
 ```
 
-The token is printed on the run that creates it, and only then unless `--token`
-asks again: it is also in the daemon's runtime directory, and `acpilot token
-rotate` replaces it without restarting anything.
+```
+┌  acpilot 0.1.0 · ready in 3 ms
+│
+│  Local       http://127.0.0.1:54321/
+│  Token       8f5b9d0c2a7e41f3b6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4
+│  Token file  /run/user/1000/acpilot/token
+│
+│  Open the page and paste the token when it asks.
+└  Ctrl-C to stop
+```
+
+The port is chosen by the OS unless `--bind` names one, and the token is
+generated on first use and reused unless `--token <token>` supplies one. It is
+written to the daemon's runtime directory, and `acpilot token rotate` replaces it
+without restarting anything.
 
 Mouse reporting is on: the menu bar, the dividers, a click that lands the caret, a
 drag that selects and the wheel all need it. It costs the terminal its own

@@ -128,28 +128,33 @@ pub enum Command {
         #[arg(long)]
         no_mouse: bool,
     },
-    /// Serve the daemon and the web UI over HTTP, printing the token once.
+    /// Serve the daemon and the web UI over HTTP, printing its address and token.
     ///
     /// One process, serving the same state `/v1` answers from: a browser at the
     /// printed URL talks to the daemon a TUI would attach to, not to a copy of it.
     /// Every request needs `Authorization: Bearer <token>` except the page itself,
     /// which a browser cannot give a header to when the address is typed.
     ///
-    /// The token is printed on the run that creates it, and only then unless
-    /// `--token` asks for it again: a secret in a scrollback is still a secret, and
-    /// printing it on every start puts it there once per restart.
+    /// A loopback port is picked by the operating system unless `--bind` names one,
+    /// and a token is generated when `--token` does not supply one. Both are printed
+    /// when the listener is up, in one panel, because a URL without the token stops
+    /// at the page's token field and a token without the port names nothing.
     Serve {
-        /// Listen on the default loopback port, `127.0.0.1:7777`.
-        ///
-        /// `--bind` chooses another address and implies this one.
-        #[arg(long)]
+        /// Accepted for compatibility; `serve` already listens on loopback.
+        #[arg(long, hide = true)]
         http: bool,
         /// The address to bind, for example `0.0.0.0:7777`.
+        ///
+        /// Without it the OS picks a free loopback port and the panel prints it.
         #[arg(long, value_name = "ADDR")]
         bind: Option<String>,
-        /// Print the bearer token even on a run that did not create it.
-        #[arg(long)]
-        token: bool,
+        /// Use this bearer token instead of generating one.
+        ///
+        /// It is written to the runtime token file the daemon reads. Without it a
+        /// token is generated on first use and reused, so a browser keeps working
+        /// across restarts.
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
         /// Profile directory the daemon serves.
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
@@ -342,13 +347,12 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Secret { command }) => run_secret(command),
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Serve {
-            http,
+            http: _,
             bind,
             token,
             profile,
             workspace,
         }) => run_serve(ServeFlags {
-            http,
             bind,
             token,
             profile,
@@ -737,17 +741,18 @@ fn initial_file(named: Option<&std::path::Path>, root: &std::path::Path) -> Opti
     }
 }
 
-/// The address `acpilot serve --http` listens on.
-const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:7777";
+/// The address `acpilot serve` asks for when no `--bind` names one.
+///
+/// Port zero is a request, not an address: the OS picks a free loopback port and
+/// the listener it hands back is the one the panel prints.
+const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:0";
 
 /// What `acpilot serve` was asked for.
 struct ServeFlags {
-    /// Listen on the default loopback port.
-    http: bool,
     /// The address to bind.
     bind: Option<String>,
-    /// Print the token even on a run that did not create it.
-    token: bool,
+    /// A token to use instead of the one on disk.
+    token: Option<String>,
     /// The profile the daemon serves.
     profile: Option<PathBuf>,
     /// The workspace root it serves.
@@ -762,49 +767,48 @@ struct ServeFlags {
 /// browser on another machine cannot use.
 fn run_serve(flags: ServeFlags) -> u8 {
     let ServeFlags {
-        http,
         bind,
         token,
         profile,
         workspace,
     } = flags;
-    let Some(addr) = bind.or_else(|| http.then(|| DEFAULT_SERVE_ADDR.to_owned())) else {
-        eprintln!(
-            "acpilot serve: pass --http to listen on {DEFAULT_SERVE_ADDR}, or --bind <ADDR> for \
-             another address"
-        );
-        return exit::USAGE;
-    };
+    let addr = bind.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned());
 
     // Before the bind, like the daemon does it: a listener that is up for even a
-    // moment without an answer to "who are you" is the hole the token closes. The
-    // file is read first only to tell a first run from a later one.
+    // moment without an answer to "who are you" is the hole the token closes.
     let token_path = acpilot_host::token::path();
-    let existing = acpilot_host::token::read(&token_path).ok().flatten();
-    let secret = match acpilot_host::token::load_or_create(&token_path) {
-        Ok(secret) => secret,
-        Err(error) => {
-            eprintln!(
-                "acpilot serve: cannot read or write {}: {error}",
-                token_path.display()
-            );
-            return exit::FAILURE;
+    let secret = match token {
+        Some(token) => {
+            // A header value cannot carry whitespace, and an empty token would
+            // accept `Authorization: Bearer ` — which is every request from a
+            // client that forgot the secret.
+            let token = token.trim();
+            if token.is_empty() || token.chars().any(char::is_whitespace) {
+                eprintln!(
+                    "acpilot serve: --token must be a non-empty bearer token without whitespace"
+                );
+                return exit::USAGE;
+            }
+            if let Err(error) = acpilot_host::token::store(&token_path, token) {
+                eprintln!(
+                    "acpilot serve: cannot write {}: {error}",
+                    token_path.display()
+                );
+                return exit::FAILURE;
+            }
+            token.to_owned()
         }
+        None => match acpilot_host::token::load_or_create(&token_path) {
+            Ok(secret) => secret,
+            Err(error) => {
+                eprintln!(
+                    "acpilot serve: cannot read or write {}: {error}",
+                    token_path.display()
+                );
+                return exit::FAILURE;
+            }
+        },
     };
-    if existing.is_none() {
-        println!("acpilot serve: token {secret}");
-        println!(
-            "acpilot serve: this run created it, so it is printed once; it is also in {}",
-            token_path.display()
-        );
-    } else if token {
-        println!("acpilot serve: token {secret}");
-    } else {
-        println!(
-            "acpilot serve: token in {} (--token prints it)",
-            token_path.display()
-        );
-    }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -831,16 +835,18 @@ fn run_serve(flags: ServeFlags) -> u8 {
         }
     };
 
-    println!("acpilot serve: http://{}/", browse_at(&addr));
-    if browse_at(&addr) != addr {
-        println!("acpilot serve: bound on {addr}, so another machine reaches it at that port");
-    }
-
+    let started = std::time::Instant::now();
     runtime.block_on(async move {
-        let served = acpilotd::serve(
+        let served = acpilotd::serve_with_listening(
             acpilotd::profiles::router(profiles.clone()),
             acpilotd::Target::Tcp(addr),
             acpilotd::shutdown(),
+            move |bound| {
+                print!(
+                    "{}",
+                    serve_panel(&bound, &secret, &token_path, started.elapsed())
+                )
+            },
         )
         .await;
         // Language servers are processes, and the router's drop is not their end.
@@ -853,6 +859,43 @@ fn run_serve(flags: ServeFlags) -> u8 {
             }
         }
     })
+}
+
+/// The address and token, in the shape a dev server prints.
+///
+/// One panel, because the two facts only help together: a URL without the token
+/// stops at the page's token field, and a token without the port names nothing.
+/// Plain text, so it reads the same in a terminal, a CI log and a scrollback;
+/// colour would be the only thing lost when either is redirected.
+fn serve_panel(
+    bound: &acpilotd::Bound,
+    token: &str,
+    token_path: &std::path::Path,
+    ready_in: std::time::Duration,
+) -> String {
+    let local = match bound {
+        acpilotd::Bound::Tcp(addr) => format!("http://{}/", browse_at(&addr.to_string())),
+        acpilotd::Bound::Socket(path) => path.display().to_string(),
+    };
+    let mut panel = format!(
+        "\n┌  acpilot {} · ready in {} ms\n│\n│  Local       {local}\n",
+        acpilot_core::VERSION,
+        ready_in.as_millis()
+    );
+    // A wildcard bind is the right thing to listen on and the wrong thing to
+    // type, so when the two differ the panel says both rather than guessing which
+    // one the person needs.
+    if let acpilotd::Bound::Tcp(addr) = bound {
+        let addr = addr.to_string();
+        if browse_at(&addr) != addr {
+            panel.push_str(&format!("│  Bound       {addr}\n"));
+        }
+    }
+    panel.push_str(&format!(
+        "│  Token       {token}\n│  Token file  {}\n│\n│  Open the page and paste the token when it asks.\n└  Ctrl-C to stop\n\n",
+        token_path.display()
+    ));
+    panel
 }
 
 /// The address a browser can actually open.
@@ -1285,5 +1328,41 @@ mod tests {
         assert_eq!(browse_at("0.0.0.0:7777"), "127.0.0.1:7777");
         assert_eq!(browse_at("[::]:7777"), "127.0.0.1:7777");
         assert_eq!(browse_at("127.0.0.1:7777"), "127.0.0.1:7777");
+    }
+
+    #[test]
+    fn the_serve_panel_prints_the_bound_port_and_the_token() {
+        let bound = acpilotd::Bound::Tcp("127.0.0.1:54321".parse().expect("address"));
+        let panel = serve_panel(
+            &bound,
+            "abc123",
+            std::path::Path::new("/run/user/1000/acpilot/token"),
+            std::time::Duration::from_millis(12),
+        );
+
+        assert!(panel.contains("http://127.0.0.1:54321/"), "{panel}");
+        assert!(panel.contains("Token       abc123"), "{panel}");
+        assert!(panel.contains("ready in 12 ms"), "{panel}");
+        assert!(
+            !panel.contains("Bound"),
+            "loopback is the address and what it bound in one: {panel}"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_panel_names_what_it_bound_as_well_as_what_to_open() {
+        let bound = acpilotd::Bound::Tcp("0.0.0.0:54321".parse().expect("address"));
+        let panel = serve_panel(
+            &bound,
+            "abc123",
+            std::path::Path::new("/run/user/1000/acpilot/token"),
+            std::time::Duration::from_millis(1),
+        );
+
+        assert!(
+            panel.contains("Local       http://127.0.0.1:54321/"),
+            "{panel}"
+        );
+        assert!(panel.contains("Bound       0.0.0.0:54321"), "{panel}");
     }
 }

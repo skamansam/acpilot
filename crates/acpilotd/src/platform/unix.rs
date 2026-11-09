@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use axum::Router;
 use tokio::net::{TcpListener, UnixListener};
 
-use super::Target;
+use super::{Bound, Target};
 
 /// The socket `acpilot-host` names as the default endpoint, so a client's default
 /// probe and the daemon's default bind are the same string by construction.
@@ -47,9 +47,15 @@ pub(crate) fn endpoint_answers(target: &Target) -> bool {
 ///
 /// The directory or socket could not be created, a socket path that another
 /// daemon is already serving, or the listener failed while serving.
-pub async fn serve<F>(router: Router, target: Target, shutdown: F) -> io::Result<()>
+pub async fn serve_with_listening<F, B>(
+    router: Router,
+    target: Target,
+    shutdown: F,
+    listening: B,
+) -> io::Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
+    B: FnOnce(Bound) + Send + 'static,
 {
     match target {
         Target::Tcp(addr) => {
@@ -64,8 +70,10 @@ where
             // rotation needs no restart.
             acpilot_host::token::load_or_create(&path)?;
             let listener = TcpListener::bind(&addr).await?;
+            let bound = listener.local_addr()?;
+            listening(Bound::Tcp(bound));
             tracing::warn!(
-                addr = %listener.local_addr()?,
+                addr = %bound,
                 token = %path.display(),
                 "listening on TCP; every request needs `Authorization: Bearer <token>`"
             );
@@ -76,6 +84,7 @@ where
         Target::Socket(path) => {
             let stale = prepare(&path)?;
             let listener = UnixListener::bind(&path)?;
+            listening(Bound::Socket(path.clone()));
             // After the bind: the mode is set on the socket that exists, and a
             // bind that fails leaves nothing to widen.
             acpilot_host::private_file(&path)?;

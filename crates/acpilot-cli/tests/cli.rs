@@ -317,6 +317,101 @@ fn doctor_reports_a_declared_agent_that_cannot_speak_acp() {
 }
 
 #[test]
+fn serve_picks_a_port_and_prints_both_facts_in_one_panel() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let config = TempDir::new();
+    let runtime = TempDir::new();
+    let workspace = TempDir::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("serve")
+        .arg("--workspace")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        // The token is written under the runtime directory; a real one would be
+        // both a side effect and a secret this test should not touch.
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("PATH", workspace.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn acpilot serve");
+
+    let stdout = child.stdout.take().expect("stdout");
+    let mut panel = String::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.expect("stdout line");
+        panel.push_str(&line);
+        panel.push('\n');
+        if line.contains("Ctrl-C") {
+            break;
+        }
+    }
+    // Stopped before any assertion, so a failed expectation cannot leave a server
+    // holding the port for the rest of the suite.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(panel.contains("Local"), "{panel}");
+    assert!(panel.contains("http://127.0.0.1:"), "{panel}");
+    let token_line = panel
+        .lines()
+        .find(|line| line.contains("Token       "))
+        .expect("a token line");
+    let token = token_line.split_whitespace().last().expect("a token value");
+    assert_eq!(token.len(), 64, "{panel}");
+    assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "{panel}");
+
+    let stored = fs::read_to_string(runtime.path().join("acpilot/token")).expect("token file");
+    assert_eq!(
+        stored.trim(),
+        token,
+        "the panel and the file are one secret"
+    );
+}
+
+#[test]
+fn serve_uses_a_token_it_was_given() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let config = TempDir::new();
+    let runtime = TempDir::new();
+    let workspace = TempDir::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("serve")
+        .arg("--workspace")
+        .arg(workspace.path())
+        .arg("--token")
+        .arg("chosen-token")
+        .env("ACPILOT_HOME", config.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("PATH", workspace.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn acpilot serve");
+
+    let stdout = child.stdout.take().expect("stdout");
+    let mut panel = String::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.expect("stdout line");
+        panel.push_str(&line);
+        panel.push('\n');
+        if line.contains("Ctrl-C") {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(panel.contains("Token       chosen-token"), "{panel}");
+    let stored = fs::read_to_string(runtime.path().join("acpilot/token")).expect("token file");
+    assert_eq!(stored.trim(), "chosen-token");
+}
+
+#[test]
 fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
     // `acpilot()` pipes an empty stdin. The command must refuse that rather than
     // store a zero-length credential, and it must do so before any keyring call.

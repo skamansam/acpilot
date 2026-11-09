@@ -12,19 +12,25 @@
 
 use std::path::PathBuf;
 
+use axum::Router;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(unix)]
-pub(crate) use unix::{default_target, endpoint_answers, executable_names};
+use unix::serve_with_listening as platform_serve;
 #[cfg(unix)]
-pub use unix::{serve, shutdown};
+pub use unix::shutdown;
+#[cfg(unix)]
+pub(crate) use unix::{default_target, endpoint_answers, executable_names};
+#[cfg(windows)]
+use windows::serve_with_listening as platform_serve;
+#[cfg(windows)]
+pub use windows::shutdown;
 #[cfg(windows)]
 pub(crate) use windows::{default_target, endpoint_answers, executable_names};
-#[cfg(windows)]
-pub use windows::{serve, shutdown};
 
 /// What the daemon binds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +49,55 @@ impl std::fmt::Display for Target {
             Self::Tcp(addr) => write!(formatter, "http://{addr}"),
         }
     }
+}
+
+/// A listener that is up, reported before it accepts its first request.
+///
+/// The bound address, not the requested one: `127.0.0.1:0` is a request for a
+/// port, and the only way to print the port a person can open is to ask the
+/// listener that got it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bound {
+    /// The unix socket at this path.
+    Socket(PathBuf),
+    /// The TCP address the operating system assigned.
+    Tcp(std::net::SocketAddr),
+}
+
+/// Bind `target` and serve until `shutdown` resolves, reporting the listener.
+///
+/// The callback is called once, after a successful bind and before the first
+/// request, so a caller that wants to print an address cannot do it too early.
+/// It is `FnOnce` because a listener has one address.
+///
+/// # Errors
+///
+/// The same failures as [`serve`], plus whatever the callback's owner decides to
+/// do with the address is outside this function.
+pub async fn serve_with_listening<F, B>(
+    router: Router,
+    target: Target,
+    shutdown: F,
+    listening: B,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+    B: FnOnce(Bound) + Send + 'static,
+{
+    platform_serve(router, target, shutdown, listening).await
+}
+
+/// Bind `target` and serve until `shutdown` resolves.
+///
+/// # Errors
+///
+/// The directory or socket could not be created, the address could not be bound,
+/// or the listener failed while serving.
+pub async fn serve<F>(router: Router, target: Target, shutdown: F) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    serve_with_listening(router, target, shutdown, |_| {}).await
 }
 
 /// The target the flags name, or the platform's default.

@@ -78,20 +78,38 @@ pub fn rotate(path: &Path) -> io::Result<String> {
     write(path)
 }
 
+/// Use `token` until it is rotated, replacing what `path` held.
+///
+/// For a daemon that was handed a token rather than asked to invent one. The
+/// caller validates it is header-safe: this only stores it, so the file the
+/// request layer reads and the value a person was given cannot disagree.
+///
+/// # Errors
+///
+/// The directory or file could not be created or made private.
+pub fn store(path: &Path, token: &str) -> io::Result<()> {
+    write_token(path, token)
+}
+
 /// Put a fresh token in `path`.
 fn write(path: &Path) -> io::Result<String> {
+    let token = random()?;
+    write_token(path, &token)?;
+    Ok(token)
+}
+
+/// Put `token` in `path` and narrow both.
+fn write_token(path: &Path, token: &str) -> io::Result<()> {
     if let Some(directory) = path.parent()
         && !directory.as_os_str().is_empty()
     {
         std::fs::create_dir_all(directory)?;
         crate::private_dir(directory)?;
     }
-    let token = random()?;
     // Written first, narrowed second: the directory is already `0700`, so the
     // window between the two is not one another user can use.
     std::fs::write(path, format!("{token}\n"))?;
-    crate::private_file(path)?;
-    Ok(token)
+    crate::private_file(path)
 }
 
 /// A fresh token that is not written anywhere.
@@ -162,6 +180,14 @@ mod tests {
         let path = directory.path().join("token");
         std::fs::write(&path, "  from-before  \n").expect("write");
         assert_eq!(load_or_create(&path).expect("loaded"), "from-before");
+    }
+
+    #[test]
+    fn a_chosen_token_is_stored_and_read_back() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("token");
+        store(&path, "chosen-token").expect("store");
+        assert_eq!(read(&path).expect("read"), Some("chosen-token".to_owned()));
     }
 
     #[test]

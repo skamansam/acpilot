@@ -2,29 +2,30 @@
 source: crates/acpilot-cli/tests/cli.rs
 expression: stdout(&serve)
 ---
-Serve the daemon and the web UI over HTTP, printing the token once.
+Serve the daemon and the web UI over HTTP, printing its address and token.
 
 One process, serving the same state `/v1` answers from: a browser at the printed URL talks to the
 daemon a TUI would attach to, not to a copy of it. Every request needs `Authorization: Bearer
 <token>` except the page itself, which a browser cannot give a header to when the address is typed.
 
-The token is printed on the run that creates it, and only then unless `--token` asks for it again: a
-secret in a scrollback is still a secret, and printing it on every start puts it there once per
-restart.
+A loopback port is picked by the operating system unless `--bind` names one, and a token is
+generated when `--token` does not supply one. Both are printed when the listener is up, in one
+panel, because a URL without the token stops at the page's token field and a token without the port
+names nothing.
 
 Usage: acpilot serve [OPTIONS]
 
 Options:
-      --http
-          Listen on the default loopback port, `127.0.0.1:7777`.
-          
-          `--bind` chooses another address and implies this one.
-
       --bind <ADDR>
-          The address to bind, for example `0.0.0.0:7777`
+          The address to bind, for example `0.0.0.0:7777`.
+          
+          Without it the OS picks a free loopback port and the panel prints it.
 
-      --token
-          Print the bearer token even on a run that did not create it
+      --token <TOKEN>
+          Use this bearer token instead of generating one.
+          
+          It is written to the runtime token file the daemon reads. Without it a token is generated
+          on first use and reused, so a browser keeps working across restarts.
 
       --profile <DIR>
           Profile directory the daemon serves

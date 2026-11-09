@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use axum::Router;
 use tokio::net::TcpListener;
 
-use super::Target;
+use super::{Bound, Target};
 
 /// Loopback HTTP, derived from the endpoint `acpilot-host` names.
 ///
@@ -69,9 +69,15 @@ pub async fn shutdown() {
 ///
 /// A socket target (no pipe transport yet), an address that cannot be bound, or
 /// the listener failing while serving.
-pub async fn serve<F>(router: Router, target: Target, shutdown: F) -> io::Result<()>
+pub async fn serve_with_listening<F, B>(
+    router: Router,
+    target: Target,
+    shutdown: F,
+    listening: B,
+) -> io::Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
+    B: FnOnce(Bound) + Send + 'static,
 {
     let addr = match target {
         Target::Tcp(addr) => addr,
@@ -95,8 +101,10 @@ where
     // needs no restart.
     acpilot_host::token::load_or_create(&path)?;
     let listener = TcpListener::bind(&addr).await?;
+    let bound = listener.local_addr()?;
+    listening(Bound::Tcp(bound));
     tracing::warn!(
-        addr = %listener.local_addr()?,
+        addr = %bound,
         token = %path.display(),
         "listening on TCP; every request needs `Authorization: Bearer <token>`"
     );

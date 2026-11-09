@@ -217,10 +217,9 @@ the `web` and `check` jobs, so the repaint and the attach are gates rather than
 demonstrations.
 
 ```bash
-acpilot serve --http                  # loopback, http://127.0.0.1:7777/
+acpilot serve                         # loopback, a free port printed with the token
 acpilot serve --bind 0.0.0.0:7777    # the same over the LAN; every request needs the token
-# the token is printed on the run that creates it, and lives after that in
-# $XDG_RUNTIME_DIR/acpilot/token; `acpilot serve --token` prints it again
+# the token is printed with the URL, and lives in $XDG_RUNTIME_DIR/acpilot/token
 ```
 
 Between the command and the page there is one step people miss: this daemon is the

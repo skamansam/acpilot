@@ -263,14 +263,14 @@ status line carries the active profile — switching it is one keystroke, never 
 Native desktop app: same panels, GPU-rendered text, LSP, image previews, real IME and
 accessibility. Talks to the daemon exactly as the TUI does.
 
-### Web — `acpilot serve --http`
+### Web — `acpilot serve`
 
-`acpilot serve --http` starts the daemon and prints the page URL (`http://127.0.0.1:7777/`
-by default); `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a compiled SPA
-(CodeMirror 6 + xterm.js) plus the API — same daemon, same sessions, so a browser tab can
-watch an agent run on the office workstation. Token auth, optional TLS termination, no cloud
-dependency; the token is printed on the run that creates it and lives in a `0600` file after
-that.
+`acpilot serve` starts the daemon on a free loopback port and prints the page URL with the
+token in one startup panel; `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a
+compiled SPA (CodeMirror 6 + xterm.js) plus the API — same daemon, same sessions, so a
+browser tab can watch an agent run on the office workstation. Token auth, optional TLS
+termination, no cloud dependency; `--token <token>` picks the secret instead of generating
+one, and it lives in a `0600` file either way.
 
 ### API — HTTP + SSE + WS
 

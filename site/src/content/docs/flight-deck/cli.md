@@ -58,7 +58,7 @@ acpilot secret set|list|rm [--profile <name>]
 acpilot token rotate
 acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <dir>] [--workspace <dir>] [--no-mouse]
 acpilot serve --http [--bind <addr>] [--token] [--profile <dir>] [--workspace <dir>]
-acpilot doctor
+acpilot doctor [PATH] [--profile <name>] [--api-url <url|path>] [--token <token>]
 ```
 
 <Aside type="note" title="`doctor` earns its place">
@@ -76,6 +76,7 @@ config     /home/sam/.config/acpilot
 profile    default · /home/sam/.config/acpilot/profiles/default · not created yet (not required)
 workspace  /home/sam/code/thing
 project    none · temporary root, nothing is written
+daemon     /run/user/1000/acpilot/acpilot.sock · running · 0.1.0
 
 Agents
   declared   none · the editor works without one
@@ -94,6 +95,14 @@ The only failure is a declaration that cannot run — a profile without a
 `config.toml`, a manifest that does not parse, an agent whose command is not on
 `PATH`, or a declared agent that never answers the handshake. `doctor` starts no
 daemon and writes no file, so it is safe on a machine that has never run Acpilot.
+
+The daemon line is a probe, not a launch: `doctor` asks `GET /v1/health` at the
+endpoint a `tui` launch would use — the default, `ACPILOT_API_URL`, or
+`--api-url` — with `--token` or the token file a local daemon wrote. Nothing is
+started, and a daemon that is not running is reported as unreachable rather than
+as a fault, because the TUI starts one on demand. A `401` is reported as a
+refused token, which proves something is listening and points at the token
+instead of at a missing daemon.
 
 When an agent is declared, its handshake appears under **Agents**:
 

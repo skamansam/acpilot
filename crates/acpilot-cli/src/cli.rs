@@ -174,6 +174,18 @@ pub enum Command {
         /// not as a failure.
         #[arg(long, env = "ACPILOT_PROFILE", default_value = "default")]
         profile: String,
+        /// The daemon's endpoint, when it is not the default.
+        ///
+        /// `doctor` asks `GET /v1/health` here and starts nothing. The same
+        /// variable, `ACPILOT_API_URL`, names the endpoint a launch would use.
+        #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+        api_url: Option<String>,
+        /// Bearer token for a daemon on a TCP endpoint.
+        ///
+        /// Without this flag the token a local daemon wrote is read. A socket
+        /// needs none. `doctor` reads it only to ask health; it writes nothing.
+        #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -361,7 +373,12 @@ pub fn run(cli: Cli) -> u8 {
             demo,
             mouse: !no_mouse,
         }),
-        Some(Command::Doctor { path, profile }) => run_doctor(path.as_deref(), &profile),
+        Some(Command::Doctor {
+            path,
+            profile,
+            api_url,
+            token,
+        }) => run_doctor(path.as_deref(), &profile, api_url.as_deref(), token),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -377,9 +394,21 @@ pub fn run(cli: Cli) -> u8 {
 
 /// Report what this machine has, and exit non-zero only when something that is
 /// configured cannot run.
-fn run_doctor(path: Option<&std::path::Path>, profile: &str) -> u8 {
+fn run_doctor(
+    path: Option<&std::path::Path>,
+    profile: &str,
+    api_url: Option<&str>,
+    token: Option<String>,
+) -> u8 {
     let installed = |program: &str| acpilotd::installed(program);
-    match doctor::collect(path, profile, &installed, &probe_agent) {
+    let endpoint = acpilot_client::daemon::resolve_endpoint(
+        api_url,
+        std::env::var(acpilot_client::daemon::ENV_ENDPOINT)
+            .ok()
+            .as_deref(),
+    );
+    let daemon = probe_daemon(&endpoint, token.or_else(local_token).as_deref());
+    match doctor::collect(path, profile, &installed, &probe_agent, daemon) {
         Ok(report) => {
             print!("{}", report.render());
             if report.ok() {
@@ -392,6 +421,58 @@ fn run_doctor(path: Option<&std::path::Path>, profile: &str) -> u8 {
             eprintln!("acpilot doctor: {message}");
             exit::FAILURE
         }
+    }
+}
+
+/// Ask `GET /v1/health` what is listening, without starting anything.
+///
+/// A local daemon answers immediately or is not there, so the bound is short: a
+/// slow answer is a busy machine, not a daemon starting, and waiting longer would
+/// make `doctor` feel hung. `Refused` is kept apart from `Down` because a `401`
+/// proves something is listening — the fix is a token, not a launch.
+fn probe_daemon(endpoint: &str, token: Option<&str>) -> doctor::Daemon {
+    use std::time::Duration;
+
+    /// A daemon on this machine either answers now or is not there.
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    let client = match token {
+        Some(token) => acpilot_client::Client::with_token(endpoint, token),
+        None => acpilot_client::Client::new(endpoint),
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return doctor::Daemon {
+                endpoint: endpoint.to_owned(),
+                state: doctor::DaemonState::Down {
+                    reason: error.to_string(),
+                },
+            };
+        }
+    };
+    let state =
+        match runtime.block_on(async { tokio::time::timeout(TIMEOUT, client.health()).await }) {
+            Ok(Ok(health)) => doctor::DaemonState::Running {
+                version: health.version,
+                workspace: health.workspace,
+            },
+            Ok(Err(acpilot_client::ClientError::Api { status: 401, .. })) => {
+                doctor::DaemonState::Refused { status: 401 }
+            }
+            Ok(Err(error)) => doctor::DaemonState::Down {
+                reason: error.to_string(),
+            },
+            Err(_) => doctor::DaemonState::Down {
+                reason: format!("no answer within {} s", TIMEOUT.as_secs()),
+            },
+        };
+    doctor::Daemon {
+        endpoint: endpoint.to_owned(),
+        state,
     }
 }
 

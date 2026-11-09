@@ -82,6 +82,68 @@ impl HandshakeOutcome {
     }
 }
 
+/// What the health probe found, without starting anything.
+///
+/// A daemon that is not running is not a failure: the TUI starts one on demand,
+/// and a report that called first run broken would be a toll booth. The endpoint
+/// is the one `tui` would use, so the line answers the question a person actually
+/// has when a launch misbehaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Daemon {
+    /// The endpoint that was asked.
+    pub endpoint: String,
+    /// The answer, or why there was none.
+    pub state: DaemonState,
+}
+
+/// The answer to `GET /v1/health`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonState {
+    /// A daemon answered with its version and, when it serves one, a workspace.
+    Running {
+        /// The daemon's version.
+        version: String,
+        /// The workspace id it serves, when it has one.
+        workspace: Option<String>,
+    },
+    /// Something answered, but refused the token.
+    ///
+    /// Reachability is still proved: the remedy is a token, not a launch.
+    Refused {
+        /// HTTP status the daemon sent, normally `401`.
+        status: u16,
+    },
+    /// Nothing answered at the endpoint.
+    Down {
+        /// Why, in the transport's words.
+        reason: String,
+    },
+}
+
+impl Daemon {
+    /// The line `Report::render` prints.
+    fn render(&self) -> String {
+        match &self.state {
+            DaemonState::Running { version, workspace } => {
+                let mut line = format!("{} · running · {version}", self.endpoint);
+                if let Some(workspace) = workspace {
+                    line.push_str(&format!(" · workspace {workspace}"));
+                }
+                line
+            }
+            DaemonState::Refused { status } => {
+                format!(
+                    "{} · answered {status} · the token was refused",
+                    self.endpoint
+                )
+            }
+            DaemonState::Down { reason } => {
+                format!("{} · not reachable · {reason}", self.endpoint)
+            }
+        }
+    }
+}
+
 /// What `doctor` found on one machine, as data so a test can read it without a
 /// terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +156,8 @@ pub struct Report {
     pub workspace: PathBuf,
     /// `.acpilot/config.toml`, when the workspace is a project.
     pub project: Option<PathBuf>,
+    /// The daemon probe: reachable, refused, or not running.
+    pub daemon: Daemon,
     /// Agents the profile declares, in file order.
     pub declared: Vec<Declared>,
     /// The one declared agent that was asked to `initialize`, if there was one.
@@ -155,6 +219,7 @@ impl Report {
             Some(path) => out.push_str(&format!("project    {}\n", path.display())),
             None => out.push_str("project    none · temporary root, nothing is written\n"),
         }
+        out.push_str(&format!("daemon     {}\n", self.daemon.render()));
 
         out.push_str("\nAgents\n");
         if self.declared.is_empty() {
@@ -243,7 +308,9 @@ impl Report {
 /// daemon's own lookup, and a test passes a table. `probe` answers the one
 /// handshake: it is called at most once, for the first declared `acp-stdio`
 /// agent whose command is on `PATH`. The binary supplies a runtime; a test
-/// supplies a table. Nothing else is injected: the filesystem answers the rest.
+/// supplies a table. `daemon` is the answer the binary already got from
+/// `/v1/health`, so this function starts nothing and waits for nothing.
+/// Nothing else is injected: the filesystem answers the rest.
 ///
 /// # Errors
 ///
@@ -255,6 +322,7 @@ pub fn collect(
     profile_name: &str,
     installed: &dyn Fn(&str) -> bool,
     probe: &dyn Fn(&AgentSpec) -> HandshakeOutcome,
+    daemon: Daemon,
 ) -> Result<Report, String> {
     let root = Root::resolve(path).map_err(|error| error.to_string())?;
     let mut problems = Vec::new();
@@ -320,6 +388,7 @@ pub fn collect(
         profile,
         workspace: root.root().to_path_buf(),
         project: root.project().map(|project| project.config_path()),
+        daemon,
         declared,
         handshake,
         on_path,
@@ -399,6 +468,12 @@ mod tests {
             profile: "default · /cfg/profiles/default · not created yet (not required)".into(),
             workspace: PathBuf::from("/work"),
             project: None,
+            daemon: Daemon {
+                endpoint: "/run/acpilot.sock".into(),
+                state: DaemonState::Down {
+                    reason: "connection refused".into(),
+                },
+            },
             declared: Vec::new(),
             handshake: None,
             on_path: vec!["claude"],
@@ -425,6 +500,48 @@ mod tests {
         assert!(
             text.contains("temporary root, nothing is written"),
             "{text}"
+        );
+        assert!(
+            text.contains("daemon     /run/acpilot.sock · not reachable · connection refused"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_daemon_that_answers_is_reported_not_required() {
+        let mut report = report();
+        report.daemon = Daemon {
+            endpoint: "http://127.0.0.1:7777".into(),
+            state: DaemonState::Running {
+                version: "0.1.0".into(),
+                workspace: Some("thing".into()),
+            },
+        };
+
+        let text = report.render();
+        assert!(
+            text.contains("daemon     http://127.0.0.1:7777 · running · 0.1.0 · workspace thing"),
+            "{text}"
+        );
+        assert!(report.ok(), "a daemon is found, not demanded");
+    }
+
+    #[test]
+    fn a_refused_token_is_reachability_not_absence() {
+        let mut report = report();
+        report.daemon = Daemon {
+            endpoint: "http://127.0.0.1:7777".into(),
+            state: DaemonState::Refused { status: 401 },
+        };
+
+        let text = report.render();
+        assert!(
+            text.contains("answered 401 · the token was refused"),
+            "{text}"
+        );
+        assert!(
+            report.ok(),
+            "the daemon answered; a token is a different question"
         );
     }
 

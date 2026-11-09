@@ -220,6 +220,9 @@ fn doctor_reports_a_fresh_machine_and_writes_nothing() {
         // An empty PATH makes detection deterministic: no agent or language
         // server is found, which is the fresh-machine answer this asserts.
         .env("PATH", workspace.path())
+        // Pin the health probe to a port with no listener, so a daemon running
+        // on the test machine cannot change the report.
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
         .output()
         .expect("run acpilot");
 
@@ -233,6 +236,11 @@ fn doctor_reports_a_fresh_machine_and_writes_nothing() {
     assert!(
         text.contains("temporary root, nothing is written"),
         "{text}"
+    );
+    assert!(text.contains("daemon"), "{text}");
+    assert!(
+        text.contains("not reachable"),
+        "no daemon is reported, not demanded"
     );
     assert!(text.contains("Language servers"), "{text}");
     assert!(
@@ -260,6 +268,7 @@ fn doctor_fails_only_when_a_declared_agent_cannot_run() {
         .arg(workspace.path())
         .env("ACPILOT_HOME", config.path())
         .env("PATH", workspace.path())
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
         .output()
         .expect("run acpilot");
 
@@ -296,6 +305,7 @@ fn doctor_reports_a_declared_agent_that_cannot_speak_acp() {
         .arg(workspace.path())
         .env("ACPILOT_HOME", config.path())
         .env("PATH", workspace.path())
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
         .output()
         .expect("run acpilot");
 

@@ -288,7 +288,7 @@ fn a_marker_naming_a_missing_profile_exits_three_with_the_fix() {
 #[test]
 fn profile_rm_purges_the_config_state_and_index_row() {
     let home = TempDir::new();
-    let profile = home.path().join("profiles/work");
+    let profile = home.path().join("profiles").join("work");
     fs::create_dir_all(profile.join("sessions/s1")).expect("profile state");
     fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
     fs::write(profile.join("profile.sqlite"), "a database").expect("database");

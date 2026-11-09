@@ -275,7 +275,10 @@ fn a_marker_naming_a_missing_profile_exits_three_with_the_fix() {
         text.contains("acpilot profile new work"),
         "the hint is actionable: {text}"
     );
-    assert!(text.contains(".acpilot/config.toml"), "{text}");
+    assert!(
+        text.contains(".acpilot/config.toml") || text.contains(".acpilot\\config.toml"),
+        "{text}"
+    );
     assert!(
         !config.path().join("profiles/default").exists(),
         "a missing marker must not fall back to default"

@@ -522,8 +522,9 @@ mod tests {
             error.to_string().contains("acpilot profile new work"),
             "the hint is exact: {error}"
         );
+        let message = error.to_string();
         assert!(
-            error.to_string().contains(".acpilot/config.toml"),
+            message.contains(".acpilot/config.toml") || message.contains(".acpilot\\config.toml"),
             "the file that asked is named: {error}"
         );
     }

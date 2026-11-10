@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use acpilot_agent::AgentProcess;
 use acpilot_agent::keyring::{CredentialStore, KeyringResolver, SERVICE};
-use acpilot_agent::{
-    AgentError, AgentProcess, MapResolver, Parser, Registry, SecretResolver, Transport,
-};
+use acpilot_agent::{AgentError, MapResolver, Parser, Registry, SecretResolver, Transport};
 use acpilot_proto::agent::AgentTransport;
 
 const FIRST: &str = r#"

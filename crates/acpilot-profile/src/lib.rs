@@ -303,7 +303,7 @@ impl Profile {
         let document: toml::Value =
             toml::from_str(&text).map_err(|source| ProfileError::Config {
                 path: path.clone(),
-                source,
+                source: Box::new(source),
             })?;
         let Some(hosts) = document.get("hosts") else {
             return Ok(BTreeMap::new());
@@ -406,8 +406,10 @@ pub enum ProfileError {
         /// The file that was read.
         path: PathBuf,
         /// The parser's own line and column.
+        /// Boxed because this error is carried in `ProfileResolveError`, and the
+        /// parser's error is large enough to trip `result_large_err` on Windows.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     /// The `[hosts]` table is not usable.

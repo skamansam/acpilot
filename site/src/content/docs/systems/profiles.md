@@ -98,9 +98,11 @@ practical answer to "why is it doing that?".
 
 Partial. A daemon serves every profile directory under `<config>/profiles` and
 dispatches each request by `X-Acpilot-Profile`: each profile has its own agents,
-policy, database, sessions and language servers. `GET /v1/profiles`, `GET
-/v1/profiles/{id}` and `POST /v1/profiles/{id}/activate` are served, and the web
-cockpit's profile picker uses them. The launch order (`--profile` → environment →
+policy, database, sessions and language servers. The profile API is served:
+list and read, create, patch label/parent, activate, delete (trash by default,
+`?purge=true` to remove), preferences, and export. The export carries keyring
+references, never resolved credentials. The web cockpit's profile picker uses
+the list and activation routes. The launch order (`--profile` → environment →
 marker → `active_profile` → created `default`) is served, and profile state is
 isolated by database and transcript directory. `acpilot profile rm` (P4-4),
 `acpilot profile export` (P4-5), and P4-6's workspace ownership are served:

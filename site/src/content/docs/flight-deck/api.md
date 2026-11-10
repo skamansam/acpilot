@@ -23,7 +23,7 @@ GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE tr
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
 POST /v1/files/format           # the daemon's language server; unchanged text with a reason when none
-GET /v1/profiles                # GET/PATCH /v1/profiles/{id}/preferences reads or changes the cascade
+GET/POST /v1/profiles           # PATCH/DELETE one; /preferences reads or changes the cascade; /export is keyring-safe
 GET /v1/git/status              # status, diff, tree and log from the host's git; paths are repo-relative
 GET /v1/git/commit/prompt       # the profile's commit prompt; POST /v1/git/commit-message drafts from the index
 POST /v1/git/stage              # add paths to the index and answer the new status; /unstage reverses it

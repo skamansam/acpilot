@@ -237,6 +237,164 @@ async fn opening_a_workspace_another_profile_owns_is_a_profile_mismatch() {
 }
 
 #[tokio::test]
+async fn profiles_can_be_created_patched_exported_and_deleted() {
+    let home = tempfile::tempdir().expect("temp home");
+    let root = home.path().join("profiles");
+    std::fs::create_dir_all(&root).expect("profiles root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let profiles = Arc::new(
+        Profiles::discover_in(&root, None, workspace.path(), false)
+            .expect("the empty daemon starts"),
+    );
+    let app = profiles::router(Arc::clone(&profiles));
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/profiles",
+        None,
+        Some(serde_json::json!({ "id": "work", "label": "Work" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["id"], "work");
+    assert_eq!(body["label"], "Work");
+    assert_eq!(body["active"], true, "the first profile becomes active");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/profiles",
+        None,
+        Some(serde_json::json!({ "id": "work" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/profiles",
+        None,
+        Some(serde_json::json!({ "id": "default" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/profiles",
+        None,
+        Some(serde_json::json!({ "id": "studio", "extends": "missing" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        !root.join("studio").exists(),
+        "a profile with an unknown parent leaves no directory behind"
+    );
+
+    let (status, body) = send_json(
+        app.clone(),
+        "PATCH",
+        "/v1/profiles/work",
+        None,
+        Some(serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        root.join("work/config.toml").is_file(),
+        "the profile directory was written"
+    );
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/profiles",
+        None,
+        Some(serde_json::json!({ "id": "personal", "label": "Personal" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "PATCH",
+        "/v1/profiles/work",
+        None,
+        Some(serde_json::json!({ "label": "Client", "extends": "personal" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["label"], "Client");
+    assert_eq!(body["extends"], "personal");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "PATCH",
+        "/v1/profiles/work",
+        None,
+        Some(serde_json::json!({ "clear_extends": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("extends").is_none(), "{body}");
+
+    std::fs::write(
+        root.join("work/profile.toml"),
+        "[preferences]\ntab_width = 2\n",
+    )
+    .expect("profile preferences");
+    let (status, body) = send(app.clone(), "POST", "/v1/profiles/work/export", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["profile"], "work");
+    assert!(
+        body["files"]["config.toml"]
+            .as_str()
+            .is_some_and(|text| text.contains("schema_version")),
+        "{body}"
+    );
+    assert_eq!(
+        body["files"]["profile.toml"],
+        "[preferences]\ntab_width = 2\n"
+    );
+    assert!(
+        body.get("secrets").is_none(),
+        "credentials never cross the HTTP boundary: {body}"
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        "DELETE",
+        "/v1/profiles/personal?purge=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !root.join("personal").exists(),
+        "the deleted profile directory is gone"
+    );
+    let (status, body) = send(app.clone(), "GET", "/v1/profiles", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().expect("rows").len(), 1);
+    assert_eq!(body[0]["id"], "work");
+
+    let (status, body) = send(app, "DELETE", "/v1/profiles/work?purge=true", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("last profile"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn a_profile_that_cannot_load_does_not_take_the_others_with_it() {
     let root = tempfile::tempdir().expect("temp dir");
     let workspace = tempfile::tempdir().expect("workspace");

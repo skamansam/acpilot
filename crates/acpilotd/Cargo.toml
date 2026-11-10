@@ -88,6 +88,10 @@ tokio = { workspace = true }
 # `oneshot` is how the profile registry hands a request to the router of the
 # profile its header names; the workspace already carries tower under axum, so
 # this declares the half the daemon calls rather than adding a second copy.
+# `DELETE /v1/profiles/{id}` defaults to the platform's trash, the same as
+# `acpilot profile rm`; hand-rolling freedesktop, Finder and Recycle Bin support
+# would be three platform branches and a Windows shell API.
+trash = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }

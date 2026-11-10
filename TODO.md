@@ -950,16 +950,28 @@ Three rules:
     `/v1/health`; a broken profile not taking the good one with it) and 1 in `web/src/App.test.ts`
     (activation POST, address, and the palette reconnect), with the document regenerated for the
     three routes.
-  - **Open:** create, patch, delete, export and the preferences routes are not served — their request
-    shapes have no proto types yet, and adding them is a wire decision rather than a handler. Activation
-    is not persisted: `active_profile` in the settings cascade (P4-2) is what the next launch reads, so a
-    browser's choice lasts as long as the daemon. The started profile stays active by default, and a
-    daemon serving one profile does not require the header (deliberate: its older clients would break,
-    and there is no second identity to guess); the `400` applies from two profiles up. `acpilot-client`,
-    the TUI and the CLI do not send `X-Acpilot-Profile` yet, so a multi-profile daemon refuses their
-    mutations until they do — that client half and the generated constructors' `profile` argument are
-    still this task. `GET /v1/events` stays per-profile rather than global: it is still the profile's
-    stream, and the activation switch does not re-target an open one.
+  - **Create, update, delete and export (2026-11-10):** `POST /v1/profiles` writes the profile's five
+    roots, its `config.toml` and its `[profiles.<id>]` registry row, then opens the state immediately;
+    the new row is the active profile when the daemon had none. `PATCH /v1/profiles/{id}` changes the
+    label and parent, with `clear_extends` as an explicit flag because serde flattens a nested
+    `extends: null` into "absent". `DELETE /v1/profiles/{id}` stops the profile's language servers,
+    removes it from the registry and the daemon, and moves its directories to the OS trash unless
+    `?purge=true`; deleting the last profile is `409`, because a daemon with no identity cannot be
+    repaired through its own API. `POST /v1/profiles/{id}/export` answers the same allow-listed files
+    as `acpilot profile export` with keyring references intact — credentials never cross this boundary.
+    `acpilot-client` gained the typed calls for all of them. **Tests:** a lifecycle test creates two
+    profiles, patches one's label and parent, clears it, exports `config.toml` and `profile.toml` with
+    no `secrets` field, deletes one with purge and refuses to delete the last; the wire contract pins
+    the new request and export shapes.
+  - **Open:** Activation is not persisted: `active_profile` in the settings cascade (P4-2) is what the
+    next launch reads, so a browser's choice lasts as long as the daemon. The started profile stays
+    active by default, and a daemon serving one profile does not require the header (deliberate: its
+    older clients would break, and there is no second identity to guess); the `400` applies from two
+    profiles up. `acpilot-client`, the TUI and the CLI do not send `X-Acpilot-Profile` yet, so a
+    multi-profile daemon refuses their mutations until they do — that client half and the generated
+    constructors' `profile` argument are still this task. `GET /v1/events` stays per-profile rather
+    than global: it is still the profile's stream, and the activation switch does not re-target an
+    open one.
 
 - [ ] **P4-9 · CLI** (0.5d)
   - `acpilot profile new|ls|show|use|rm|import|diff`; `export` is already served by P4-5.

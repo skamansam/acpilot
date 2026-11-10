@@ -4,6 +4,8 @@
 //! boundary: `GET /v1/profiles` reports which agents have a credential, never the
 //! credential itself.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -43,6 +45,70 @@ pub struct ProfileSummary {
     pub agent_count: u32,
     /// Number of workspaces opened under this profile.
     pub workspace_count: u32,
+    /// The profile this one inherits settings beneath, when it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<ProfileId>,
+}
+
+/// `POST /v1/profiles` — create a profile directory and its registry row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileCreate {
+    /// The directory name and keyring namespace for the new profile.
+    pub id: String,
+    /// Human-readable label; the id when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The profile this one inherits settings beneath.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+}
+
+/// `PATCH /v1/profiles/{id}` — change the fields a profile's row owns.
+///
+/// Detaching is a separate flag rather than `extends: null`: a nested option is
+/// flattened by serde, so absent and null would arrive as the same value and one
+/// of the two intentions would be lost.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProfilePatch {
+    /// Human-readable label; an empty label falls back to the id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A new parent. Cannot be combined with `clear_extends`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+    /// Remove the current parent, leaving the profile with no inherited layer.
+    #[serde(skip_serializing_if = "is_false")]
+    pub clear_extends: bool,
+}
+
+/// Omit a `false` flag from a request that did not ask for it.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl ProfilePatch {
+    /// Whether this patch names no field at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// `POST /v1/profiles/{id}/export` — the profile's configuration files.
+///
+/// The document deliberately has no secrets: a keyring reference is exported as
+/// the reference it is, and resolving it is the CLI's opt-in flag, never an HTTP
+/// answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ProfileExport {
+    /// Schema version of the export document.
+    pub schema_version: u32,
+    /// The profile the files belong to.
+    pub profile: ProfileId,
+    /// File name to contents, allow-listed to the configuration files a profile owns.
+    pub files: BTreeMap<String, String>,
 }
 
 /// Editor and UI preferences, per profile.

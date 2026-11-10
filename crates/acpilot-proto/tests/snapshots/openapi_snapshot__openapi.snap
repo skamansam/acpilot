@@ -2304,6 +2304,93 @@ expression: canonical(document)
         },
         "type": "object"
       },
+      "ProfileCreate": {
+        "additionalProperties": false,
+        "description": "`POST /v1/profiles` — create a profile directory and its registry row.",
+        "properties": {
+          "extends": {
+            "description": "The profile this one inherits settings beneath.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The directory name and keyring namespace for the new profile.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Human-readable label; the id when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "ProfileExport": {
+        "description": "`POST /v1/profiles/{id}/export` — the profile's configuration files.\n\nThe document deliberately has no secrets: a keyring reference is exported as\nthe reference it is, and resolving it is the CLI's opt-in flag, never an HTTP\nanswer.",
+        "properties": {
+          "files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "File name to contents, allow-listed to the configuration files a profile owns.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/String",
+            "description": "The profile the files belong to."
+          },
+          "schema_version": {
+            "description": "Schema version of the export document.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "files"
+        ],
+        "type": "object"
+      },
+      "ProfilePatch": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/profiles/{id}` — change the fields a profile's row owns.\n\nDetaching is a separate flag rather than `extends: null`: a nested option is\nflattened by serde, so absent and null would arrive as the same value and one\nof the two intentions would be lost.",
+        "properties": {
+          "clear_extends": {
+            "default": false,
+            "description": "Remove the current parent, leaving the profile with no inherited layer.",
+            "type": "boolean"
+          },
+          "extends": {
+            "default": null,
+            "description": "A new parent. Cannot be combined with `clear_extends`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "default": null,
+            "description": "Human-readable label; an empty label falls back to the id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ProfileSummary": {
         "description": "A profile as returned by `GET /v1/profiles`.",
         "properties": {
@@ -2316,6 +2403,17 @@ expression: canonical(document)
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "extends": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "The profile this one inherits settings beneath, when it does."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/String",

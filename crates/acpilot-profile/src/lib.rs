@@ -15,6 +15,7 @@
 //! profile has said nothing about permissions, so the shipped policy applies.
 
 pub mod catalog;
+pub mod export;
 pub mod launch;
 pub mod prefs;
 pub mod project;

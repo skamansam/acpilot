@@ -180,6 +180,16 @@ impl ProfileRecord {
             &self.label
         }
     }
+
+    /// The label to draw when the id is already a string.
+    #[must_use]
+    pub fn label_or_name(&self, id: &str) -> String {
+        if self.label.is_empty() {
+            id.to_owned()
+        } else {
+            self.label.clone()
+        }
+    }
 }
 
 /// The five directories one profile owns.

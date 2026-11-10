@@ -472,7 +472,11 @@ export interface paths {
          */
         get: operations["list_profiles_doc"];
         put?: never;
-        post?: never;
+        /**
+         * Create a profile
+         * @description Creates the profile's directories and `config.toml`, records its label and parent in the global registry, and opens its state immediately. The new profile becomes active when the daemon had none. A reserved or malformed name is `400`; an existing directory is `409`.
+         */
+        post: operations["create_profile_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -490,10 +494,18 @@ export interface paths {
         get: operations["read_profile_doc"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a profile
+         * @description Stops the profile's language servers, removes it from the registry and this daemon, and moves its directories to the OS trash. `?purge=true` removes them permanently. The last profile is refused with `409`: a daemon with no identity cannot be repaired through its own API.
+         */
+        delete: operations["delete_profile_doc"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change a profile's label or parent
+         * @description Only the named fields are changed. `clear_extends: true` detaches the profile from its current parent; omitting both parent fields leaves it alone. The registry is rewritten with every table it does not own preserved.
+         */
+        patch: operations["patch_profile_doc"];
         trace?: never;
     };
     "/v1/profiles/{id}/activate": {
@@ -510,6 +522,26 @@ export interface paths {
          * @description In memory for the life of this daemon: streams that bind at connect are unaffected until they reconnect, and persisting the choice is the settings cascade's job rather than a runtime request's.
          */
         post: operations["activate_profile_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/profiles/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export a profile's configuration
+         * @description Answers the allow-listed configuration files as one JSON document. Keyring references are exported exactly as written; credentials are never resolved into an HTTP answer. The CLI's `--with-secrets` path is the only place a secret is read.
+         */
+        post: operations["export_profile_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1895,6 +1927,59 @@ export interface components {
              */
             wrap: boolean | null;
         };
+        /** @description `POST /v1/profiles` — create a profile directory and its registry row. */
+        ProfileCreate: {
+            /** @description The profile this one inherits settings beneath. */
+            extends?: string | null;
+            /** @description The directory name and keyring namespace for the new profile. */
+            id: string;
+            /** @description Human-readable label; the id when omitted. */
+            label?: string | null;
+        };
+        /**
+         * @description `POST /v1/profiles/{id}/export` — the profile's configuration files.
+         *
+         *     The document deliberately has no secrets: a keyring reference is exported as
+         *     the reference it is, and resolving it is the CLI's opt-in flag, never an HTTP
+         *     answer.
+         */
+        ProfileExport: {
+            /** @description File name to contents, allow-listed to the configuration files a profile owns. */
+            files: {
+                [key: string]: string;
+            };
+            /** @description The profile the files belong to. */
+            profile: components["schemas"]["String"];
+            /**
+             * Format: int32
+             * @description Schema version of the export document.
+             */
+            schema_version: number;
+        };
+        /**
+         * @description `PATCH /v1/profiles/{id}` — change the fields a profile's row owns.
+         *
+         *     Detaching is a separate flag rather than `extends: null`: a nested option is
+         *     flattened by serde, so absent and null would arrive as the same value and one
+         *     of the two intentions would be lost.
+         */
+        ProfilePatch: {
+            /**
+             * @description Remove the current parent, leaving the profile with no inherited layer.
+             * @default false
+             */
+            clear_extends: boolean;
+            /**
+             * @description A new parent. Cannot be combined with `clear_extends`.
+             * @default null
+             */
+            extends: string | null;
+            /**
+             * @description Human-readable label; an empty label falls back to the id.
+             * @default null
+             */
+            label: string | null;
+        };
         /** @description A profile as returned by `GET /v1/profiles`. */
         ProfileSummary: {
             /** @description Whether this is the daemon's currently active profile. */
@@ -1904,6 +1989,7 @@ export interface components {
              * @description Number of configured agents.
              */
             agent_count: number;
+            extends?: components["schemas"]["String"] | null;
             /** @description Profile identifier. */
             id: components["schemas"]["String"];
             /** @description Human-readable label. */
@@ -3816,6 +3902,48 @@ export interface operations {
             };
         };
     };
+    create_profile_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description The profile, now served */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileSummary"];
+                };
+            };
+            /** @description An invalid name or parent */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A profile by that name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     read_profile_doc: {
         parameters: {
             query?: never;
@@ -3846,6 +3974,95 @@ export interface operations {
             };
         };
     };
+    delete_profile_doc: {
+        parameters: {
+            query?: {
+                /** @description Remove permanently instead of moving to the trash */
+                purge?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The profile's directory name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The profile as it was before deletion */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileSummary"];
+                };
+            };
+            /** @description No profile by that name on this daemon */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description This is the last profile served */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    patch_profile_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The profile's directory name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfilePatch"];
+            };
+        };
+        responses: {
+            /** @description The profile after the patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileSummary"];
+                };
+            };
+            /** @description An empty patch, an invalid parent, or a parent that is not served */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No profile by that name on this daemon */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     activate_profile_doc: {
         parameters: {
             query?: never;
@@ -3873,6 +4090,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    export_profile_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The profile's directory name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The profile's configuration files */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileExport"];
+                };
+            };
+            /** @description No profile by that name on this daemon */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

@@ -335,7 +335,26 @@ fn profile_documents() {
         "label": "Work",
         "active": true,
         "agent_count": 2,
-        "workspace_count": 1
+        "workspace_count": 1,
+        "extends": "default"
+    }));
+
+    round_trip::<acpilot_proto::profile::ProfileCreate>(json!({
+        "id": "work",
+        "label": "Work",
+        "extends": "default"
+    }));
+
+    // Detaching is its own flag; omitting both parent fields leaves it alone.
+    round_trip::<acpilot_proto::profile::ProfilePatch>(json!({
+        "label": "Work",
+        "clear_extends": true
+    }));
+
+    round_trip::<acpilot_proto::profile::ProfileExport>(json!({
+        "schema_version": 1,
+        "profile": "work",
+        "files": { "config.toml": "schema_version = 1\n" }
     }));
 
     round_trip::<acpilot_proto::profile::Preferences>(json!({

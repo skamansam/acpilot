@@ -146,6 +146,21 @@ profile the one a request without `X-Acpilot-Profile` is about, for the life of
 the process. Persisting that choice is the settings cascade's `active_profile`,
 not a runtime request's.
 
+`POST /v1/profiles` creates the five roots, `config.toml` and the registry row,
+and opens the profile's state without a restart; it becomes active when the
+daemon had no identity. A reserved or malformed name is `400`, and an existing
+directory is `409`. `PATCH` changes only `label` and `extends`; `clear_extends:
+true` detaches the profile, and setting and clearing in one request is `400`.
+`DELETE` stops the profile's language servers, removes it from the registry and
+the daemon, and moves its directories to the OS trash; `?purge=true` removes
+them permanently. The last profile is `409`, because a daemon with no identity
+could not be repaired through its own API.
+
+`POST /v1/profiles/{id}/export` answers the allow-listed configuration files as
+one `ProfileExport` document. Keyring references are exported exactly as they
+were written; credentials are never resolved into an HTTP answer. The CLI's
+`--with-secrets` path is the only place a secret is read.
+
 A request is dispatched to the profile its header names. An unknown name is
 `404`, and the message lists the profiles this daemon serves. A mutating request
 without the header is `400` when there is a choice: a daemon with two or more

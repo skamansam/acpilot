@@ -26,7 +26,9 @@ pub mod terminal;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionDecision, PermissionOption, PermissionRequest};
-use acpilot_proto::profile::Preferences;
+use acpilot_proto::profile::{
+    Preferences, PreferencesPatch, ProfileCreate, ProfileExport, ProfilePatch, ProfileSummary,
+};
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
@@ -250,6 +252,86 @@ impl Client {
     /// `GET /v1/agents`.
     pub async fn agents(&self) -> Result<Vec<AgentSummary>, ClientError> {
         self.get("/v1/agents").await
+    }
+
+    /// `GET /v1/profiles`.
+    pub async fn profiles(&self) -> Result<Vec<ProfileSummary>, ClientError> {
+        self.get("/v1/profiles").await
+    }
+
+    /// `GET /v1/profiles/{id}`.
+    pub async fn profile(&self, id: &str) -> Result<ProfileSummary, ClientError> {
+        self.get(&format!("/v1/profiles/{id}")).await
+    }
+
+    /// `POST /v1/profiles`.
+    pub async fn create_profile(
+        &self,
+        request: &ProfileCreate,
+    ) -> Result<ProfileSummary, ClientError> {
+        let builder = self
+            .http
+            .post(self.request_url("/v1/profiles"))
+            .json(request);
+        self.send(builder, "/v1/profiles").await
+    }
+
+    /// `PATCH /v1/profiles/{id}`.
+    pub async fn patch_profile(
+        &self,
+        id: &str,
+        patch: &ProfilePatch,
+    ) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}");
+        let builder = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(builder, &path).await
+    }
+
+    /// `DELETE /v1/profiles/{id}`.
+    ///
+    /// `purge` is the permanent form; without it the daemon asks the platform to
+    /// move the profile's directories to the OS trash.
+    pub async fn delete_profile(
+        &self,
+        id: &str,
+        purge: bool,
+    ) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}?purge={purge}");
+        let builder = self.http.delete(self.request_url(&path));
+        self.send(builder, &path).await
+    }
+
+    /// `POST /v1/profiles/{id}/activate`.
+    pub async fn activate_profile(&self, id: &str) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}/activate");
+        let builder = self.http.post(self.request_url(&path));
+        self.send(builder, &path).await
+    }
+
+    /// `GET /v1/profiles/{id}/preferences`.
+    pub async fn preferences(&self, id: &str) -> Result<Preferences, ClientError> {
+        self.get(&format!("/v1/profiles/{id}/preferences")).await
+    }
+
+    /// `PATCH /v1/profiles/{id}/preferences`.
+    pub async fn patch_preferences(
+        &self,
+        id: &str,
+        patch: &PreferencesPatch,
+    ) -> Result<Preferences, ClientError> {
+        let path = format!("/v1/profiles/{id}/preferences");
+        let builder = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(builder, &path).await
+    }
+
+    /// `POST /v1/profiles/{id}/export`.
+    ///
+    /// The redacted document: files hold `keyring:` references, never resolved
+    /// credentials. Resolving them is the CLI's explicit opt-in, not an HTTP answer.
+    pub async fn export_profile(&self, id: &str) -> Result<ProfileExport, ClientError> {
+        let path = format!("/v1/profiles/{id}/export");
+        let builder = self.http.post(self.request_url(&path));
+        self.send(builder, &path).await
     }
 
     /// `GET /v1/workspaces`.

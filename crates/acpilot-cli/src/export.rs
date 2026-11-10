@@ -15,34 +15,16 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
+use acpilot_agent::SecretResolver;
 use acpilot_agent::keyring::KeyringResolver;
-use acpilot_agent::{MANIFEST_FILE, SecretResolver};
-use acpilot_extensions::activation::ACTIVATION_FILE;
 use acpilot_host::private_file;
-use acpilot_profile::settings::PROFILE_SETTINGS_FILE;
-use acpilot_profile::{CONFIG_FILE, Profile};
-use serde_json::{Map, Value, json};
+use acpilot_profile::Profile;
+use serde_json::Value;
 
 use crate::secret;
 
 /// The export document's schema version.
 const SCHEMA_VERSION: u32 = 1;
-
-/// The configuration files a profile can hold.
-///
-/// Deliberately an allow-list: a profile directory may also hold a store, a lock
-/// or a file a later binary wrote, and "export everything" is how an unexpected
-/// file becomes somebody else's copy.
-const PROFILE_FILES: [&str; 8] = [
-    CONFIG_FILE,
-    PROFILE_SETTINGS_FILE,
-    MANIFEST_FILE,
-    ACTIVATION_FILE,
-    "lsp.toml",
-    "policy.toml",
-    "keymap.toml",
-    "theme.toml",
-];
 
 /// Build the export document.
 ///
@@ -61,19 +43,8 @@ pub fn document(
         )
     })?;
 
-    let mut files = Map::new();
-    for name in PROFILE_FILES {
-        let path = profile.root().join(name);
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                files.insert(name.to_owned(), Value::String(text));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("{}: {error}", path.display())),
-        }
-    }
-
-    let mut document = json!({
+    let files = acpilot_profile::export::files(profile)?;
+    let mut document = serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "profile": id.as_str(),
         "files": files,
@@ -82,7 +53,7 @@ pub fn document(
     if with_secrets {
         let secrets = secret_map(profile, resolver)?;
         if let Value::Object(object) = &mut document {
-            object.insert("secrets".to_owned(), json!(secrets));
+            object.insert("secrets".to_owned(), serde_json::json!(secrets));
         }
     }
 
@@ -145,7 +116,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
+    use acpilot_agent::MANIFEST_FILE;
     use acpilot_agent::keyring::{CredentialStore, SERVICE};
+    use acpilot_profile::CONFIG_FILE;
     use tempfile::TempDir;
 
     use super::*;

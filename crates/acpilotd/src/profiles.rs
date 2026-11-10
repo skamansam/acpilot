@@ -36,15 +36,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use acpilot_core::AcpilotError;
+use acpilot_profile::{CONFIG_FILE, ProfileId, ProfileRecord, ProfileRoots, Registry};
 use acpilot_proto::ErrorBody;
-use acpilot_proto::profile::{Preferences, PreferencesPatch, ProfileSummary};
+use acpilot_proto::profile::{
+    Preferences, PreferencesPatch, ProfileCreate, ProfileExport, ProfilePatch, ProfileSummary,
+};
 use acpilot_store::{Index, Stores};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path as UrlPath, Request, State};
-use axum::http::Method;
+use axum::extract::{Path as UrlPath, Query, Request, State};
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use serde::Deserialize;
 use tower::ServiceExt;
 
 use crate::{ApiError, AppState, StateError, router_with, startup_with_stores};
@@ -58,21 +62,32 @@ pub const PROFILE_HEADER: &str = "x-acpilot-profile";
 
 /// One profile's state and the router built over it.
 struct Entry {
-    /// The profile's directory, for the preference route that writes `profile.toml`.
+    /// The profile's directory, for the routes that read and write its files.
     directory: PathBuf,
+    /// Every directory this profile owns, including the data, cache, state and
+    /// runtime roots. Delete removes exactly these, deduplicated because a
+    /// portable install puts config and data in the same directory.
+    paths: Vec<PathBuf>,
     /// Kept beside the router because shutdown and the summary need it: a router
     /// owns its state but does not hand it back.
     state: AppState,
     router: Router,
     /// The row the API lists; `active` is filled in when the list is answered.
-    summary: ProfileSummary,
+    summary: RwLock<ProfileSummary>,
 }
 
 impl Entry {
-    fn new(name: &str, directory: PathBuf, state: AppState) -> Self {
+    fn new(
+        name: &str,
+        directory: PathBuf,
+        paths: Vec<PathBuf>,
+        label: String,
+        extends: Option<String>,
+        state: AppState,
+    ) -> Self {
         let summary = ProfileSummary {
             id: name.to_owned(),
-            label: name.to_owned(),
+            label,
             active: false,
             agent_count: state
                 .registry()
@@ -81,12 +96,25 @@ impl Entry {
             // counts what a client could open under this profile, which is that
             // one and no more until workspaces become per-profile.
             workspace_count: u32::from(state.workspace().is_some()),
+            extends,
         };
         Self {
             directory,
+            paths,
             router: router_with(state.clone()),
             state,
-            summary,
+            summary: RwLock::new(summary),
+        }
+    }
+
+    fn row(&self, active: bool) -> ProfileSummary {
+        ProfileSummary {
+            active,
+            ..self
+                .summary
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
         }
     }
 }
@@ -94,15 +122,34 @@ impl Entry {
 /// Every profile this daemon serves, and which one a headerless request is about.
 pub struct Profiles {
     /// Named profiles, by directory name. Empty when the daemon has no profile.
-    entries: BTreeMap<String, Entry>,
+    ///
+    /// Behind a lock because `POST` and `DELETE` change what this daemon serves
+    /// without a restart. Every entry is an `Arc`: a request clones the one it
+    /// needs before awaiting, so a lock is never held across a language server or
+    /// a filesystem call.
+    entries: RwLock<BTreeMap<String, Arc<Entry>>>,
     /// The state of a daemon started without a profile and with none on disk.
     ///
     /// Separate from the map because it has no name: `GET /v1/profiles` is empty,
     /// and a header cannot select it. It exists so a profile-less daemon keeps
     /// serving the workspace it was given.
-    anonymous: Option<Entry>,
+    anonymous: Option<Arc<Entry>>,
     /// The profile a read without a header is about.
     active: RwLock<String>,
+    /// When the profiles root was supplied by a caller, the home it stands in.
+    /// A test or portable install owns `<home>/profiles`, so its data, cache and
+    /// state roots stay under that home rather than the machine's real ones.
+    home: Option<PathBuf>,
+    /// The workspace every new profile is opened against.
+    workspace: PathBuf,
+    /// Whether a new profile's router answers cross-origin requests.
+    cors: bool,
+    /// The store cache shared by every profile, including one created later.
+    stores: Arc<Stores>,
+    /// The cross-profile index, when discovery opened one.
+    index: Option<Index>,
+    /// `<config>/config.toml`, where profile labels and parents are recorded.
+    registry_path: PathBuf,
 }
 
 impl Profiles {
@@ -140,6 +187,7 @@ impl Profiles {
             started,
             workspace,
             cors,
+            None,
         )
     }
 
@@ -162,7 +210,11 @@ impl Profiles {
         workspace: &Path,
         cors: bool,
     ) -> Result<Self, StateError> {
-        Self::discover_in_with(root, None, started, workspace, cors)
+        // A caller that owns `<home>/profiles` owns the data, cache, state and
+        // runtime roots beside it too. Using the machine's real roots here would
+        // make a test delete somebody's profile.
+        let home = root.parent().map(Path::to_path_buf);
+        Self::discover_in_with(root, None, started, workspace, cors, home.as_deref())
     }
 
     fn discover_in_with(
@@ -171,6 +223,7 @@ impl Profiles {
         started: Option<&Path>,
         workspace: &Path,
         cors: bool,
+        home: Option<&Path>,
     ) -> Result<Self, StateError> {
         let stores = Arc::new(Stores::default());
         let mut directories = profile_directories(root);
@@ -182,13 +235,34 @@ impl Profiles {
             let name = started_name.clone().unwrap_or_else(|| "profile".to_owned());
             directories.insert(name, directory.to_path_buf());
         }
+        let registry_path = registry_path(root);
+        let registry = match Registry::load(&registry_path) {
+            Ok(registry) => registry,
+            Err(error) => {
+                tracing::warn!(%error, path = %registry_path.display(), "profile registry not read; using names as labels");
+                Registry::default()
+            }
+        };
 
         if directories.is_empty() {
             let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
-                entries: BTreeMap::new(),
-                anonymous: Some(Entry::new("", PathBuf::new(), state)),
+                entries: RwLock::new(BTreeMap::new()),
+                anonymous: Some(Arc::new(Entry::new(
+                    "",
+                    PathBuf::new(),
+                    Vec::new(),
+                    String::new(),
+                    None,
+                    state,
+                ))),
                 active: RwLock::new(String::new()),
+                home: home.map(Path::to_path_buf),
+                workspace: workspace.to_path_buf(),
+                cors,
+                stores,
+                index: index.cloned(),
+                registry_path,
             });
         }
 
@@ -196,24 +270,18 @@ impl Profiles {
         for (name, directory) in &directories {
             match startup_with_stores(Some(directory), workspace, Arc::clone(&stores)) {
                 Ok(state) => {
-                    let mut state = state;
-                    if let Some(index) = index {
-                        state = state.with_index(index.clone());
-                        if let Err(error) = index.remember_profile(name) {
-                            tracing::warn!(%error, profile = %name, "the profile was not indexed");
-                        }
-                        let workspace_id = format!(
-                            "{}:{}",
-                            crate::hosts::LOCAL_HOST,
-                            workspace.to_string_lossy()
-                        );
-                        if let Err(error) = index.remember_workspace(name, &workspace_id) {
-                            tracing::warn!(%error, profile = %name, "the workspace was not indexed");
-                        }
-                    }
+                    let state = attach_index(state, index, name, workspace).with_cors(cors);
+                    let record = registry_for(&registry, name);
                     entries.insert(
                         name.clone(),
-                        Entry::new(name, directory.to_path_buf(), state.with_cors(cors)),
+                        Arc::new(Entry::new(
+                            name,
+                            directory.to_path_buf(),
+                            profile_paths(name, directory, home),
+                            record.label_or_name(name),
+                            record.extends.as_ref().map(ProfileId::to_string),
+                            state,
+                        )),
                     );
                 }
                 Err(error) if Some(name) == started_name.as_ref() => return Err(error),
@@ -230,9 +298,22 @@ impl Profiles {
             tracing::warn!("no profile loaded; serving the workspace without an identity");
             let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
-                entries: BTreeMap::new(),
-                anonymous: Some(Entry::new("", PathBuf::new(), state)),
+                entries: RwLock::new(BTreeMap::new()),
+                anonymous: Some(Arc::new(Entry::new(
+                    "",
+                    PathBuf::new(),
+                    Vec::new(),
+                    String::new(),
+                    None,
+                    state,
+                ))),
                 active: RwLock::new(String::new()),
+                home: home.map(Path::to_path_buf),
+                workspace: workspace.to_path_buf(),
+                cors,
+                stores,
+                index: index.cloned(),
+                registry_path,
             });
         }
 
@@ -250,9 +331,15 @@ impl Profiles {
             .unwrap_or_default();
         tracing::info!(profiles = entries.len(), active = %active, "profiles loaded");
         Ok(Self {
-            entries,
+            entries: RwLock::new(entries),
             anonymous: None,
             active: RwLock::new(active),
+            home: home.map(Path::to_path_buf),
+            workspace: workspace.to_path_buf(),
+            cors,
+            stores,
+            index: index.cloned(),
+            registry_path,
         })
     }
 
@@ -261,10 +348,13 @@ impl Profiles {
     pub fn summaries(&self) -> Vec<ProfileSummary> {
         let active = self.active();
         self.entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .map(|entry| ProfileSummary {
-                active: entry.summary.id == active,
-                ..entry.summary.clone()
+            .map(|entry| {
+                let mut row = entry.row(false);
+                row.active = row.id == active;
+                row
             })
             .collect()
     }
@@ -272,7 +362,11 @@ impl Profiles {
     /// One profile's row, when this daemon serves it.
     #[must_use]
     pub fn summary(&self, id: &str) -> Option<ProfileSummary> {
-        self.summaries().into_iter().find(|row| row.id == id)
+        self.entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(|entry| entry.row(self.active() == id))
     }
 
     /// A registry over states a caller already built.
@@ -282,11 +376,34 @@ impl Profiles {
     /// one an embedded daemon would use to serve states it owns.
     #[must_use]
     pub fn from_states(rows: Vec<(String, AppState)>, active: String) -> Self {
-        let entries: BTreeMap<String, Entry> = rows
+        Self::from_states_with(acpilot_profile::profiles_dir(), None, rows, active)
+    }
+
+    /// [`Self::from_states`] under a profiles root the caller owns.
+    #[must_use]
+    pub fn from_states_in(root: &Path, rows: Vec<(String, AppState)>, active: String) -> Self {
+        let home = root.parent().map(Path::to_path_buf);
+        Self::from_states_with(root.to_path_buf(), home, rows, active)
+    }
+
+    fn from_states_with(
+        root: PathBuf,
+        home: Option<PathBuf>,
+        rows: Vec<(String, AppState)>,
+        active: String,
+    ) -> Self {
+        let entries: BTreeMap<String, Arc<Entry>> = rows
             .into_iter()
             .map(|(name, state)| {
-                let directory = acpilot_profile::profiles_dir().join(&name);
-                let entry = Entry::new(&name, directory, state);
+                let directory = root.join(&name);
+                let entry = Arc::new(Entry::new(
+                    &name,
+                    directory.clone(),
+                    profile_paths(&name, &directory, home.as_deref()),
+                    name.clone(),
+                    None,
+                    state,
+                ));
                 (name, entry)
             })
             .collect();
@@ -296,9 +413,15 @@ impl Profiles {
             entries.keys().next().cloned().unwrap_or_default()
         };
         Self {
-            entries,
+            entries: RwLock::new(entries),
             anonymous: None,
             active: RwLock::new(active),
+            registry_path: registry_path(&root),
+            home,
+            workspace: PathBuf::new(),
+            cors: false,
+            stores: Arc::new(Stores::default()),
+            index: None,
         }
     }
 
@@ -312,14 +435,267 @@ impl Profiles {
     ///
     /// No profile by that name is served.
     pub fn activate(&self, id: &str) -> Result<ProfileSummary, ApiError> {
-        let Some(row) = self.summary(id) else {
-            return Err(no_such_profile(id, &self.names()));
-        };
+        let entry = self.entry(id)?;
+        let row = entry.row(true);
         *self.active.write().unwrap_or_else(PoisonError::into_inner) = id.to_owned();
-        Ok(ProfileSummary {
-            active: true,
-            ..row
+        Ok(row)
+    }
+
+    /// Create a profile directory, its registry row, and the state that serves it.
+    ///
+    /// The name is checked by `ProfileId::user`, so a request cannot create a
+    /// second `default` or a path segment that escapes the profiles root. The
+    /// profile is usable immediately: its state is opened here rather than waiting
+    /// for a restart, and it becomes active if the daemon had no identity.
+    ///
+    /// # Errors
+    ///
+    /// The name is invalid or taken, the directories or registry cannot be
+    /// written, or the new profile's own files do not load.
+    pub fn create(&self, request: &ProfileCreate) -> Result<ProfileSummary, ApiError> {
+        let id = ProfileId::user(&request.id)
+            .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+        if self
+            .entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(id.as_str())
+        {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "profile `{id}` already exists"
+            ))));
+        }
+        let extends = request
+            .extends
+            .as_deref()
+            .map(ProfileId::parse)
+            .transpose()
+            .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+        if extends.as_ref() == Some(&id) {
+            return Err(ApiError::new(AcpilotError::invalid(
+                "a profile cannot extend itself",
+            )));
+        }
+        if let Some(parent) = &extends
+            && !self.names().iter().any(|served| served == parent.as_str())
+        {
+            return Err(ApiError::new(AcpilotError::invalid(format!(
+                "no profile `{parent}` is served to extend"
+            ))));
+        }
+
+        let roots = self.roots_for(&id);
+        if roots.config.exists() {
+            return Err(ApiError::new(AcpilotError::conflict(format!(
+                "{} already exists",
+                roots.config.display()
+            ))));
+        }
+        roots.create().map_err(io_error)?;
+        let config = roots.config_file();
+        if let Err(error) = std::fs::write(&config, "schema_version = 1\n") {
+            let _ = std::fs::remove_dir_all(&roots.config);
+            return Err(io_error(error));
+        }
+
+        let mut registry = self.registry_for_write()?;
+        let label = request
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .unwrap_or(id.as_str())
+            .to_owned();
+        let record = ProfileRecord {
+            label: label.clone(),
+            extends,
+            created_at: Some(jiff::Timestamp::now().to_string()),
+        };
+        registry.insert(id.clone(), record.clone());
+        if let Err(error) = registry.save(&self.registry_path) {
+            let _ = remove_paths(&roots_paths(&roots), true);
+            return Err(registry_error(error));
+        }
+
+        let entry = match self.open_entry(id.as_str(), roots.config.clone(), &roots, &record) {
+            Ok(entry) => entry,
+            Err(error) => {
+                registry.profiles.remove(&id);
+                let _ = registry.save(&self.registry_path);
+                let _ = remove_paths(&roots_paths(&roots), true);
+                return Err(error);
+            }
+        };
+        let entry = Arc::new(entry);
+        self.entries
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_string(), Arc::clone(&entry));
+        let mut active = self.active.write().unwrap_or_else(PoisonError::into_inner);
+        if active.is_empty() {
+            *active = id.to_string();
+        }
+        Ok(entry.row(*active == id.as_str()))
+    }
+
+    /// Change the label and parent recorded for a profile.
+    ///
+    /// # Errors
+    ///
+    /// The profile is unknown, the patch names nothing, the parent is not a
+    /// profile name, or the registry cannot be written.
+    pub fn patch(&self, id: &str, patch: &ProfilePatch) -> Result<ProfileSummary, ApiError> {
+        let entry = self.entry(id)?;
+        if patch.is_empty() {
+            return Err(ApiError::new(AcpilotError::invalid(
+                "the profile patch names no fields",
+            )));
+        }
+        let profile_id = ProfileId::parse(id)
+            .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+        let mut registry = self.registry_for_write()?;
+        let mut record = registry
+            .profile(&profile_id)
+            .cloned()
+            .unwrap_or_else(|| ProfileRecord::new(entry.row(false).label));
+        if let Some(label) = &patch.label {
+            record.label = label.trim().to_owned();
+        }
+        if patch.clear_extends && patch.extends.is_some() {
+            return Err(ApiError::new(AcpilotError::invalid(
+                "a patch cannot set and clear `extends` at the same time",
+            )));
+        }
+        if patch.clear_extends {
+            record.extends = None;
+        } else if let Some(name) = &patch.extends {
+            let parent = ProfileId::parse(name)
+                .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+            if parent == profile_id {
+                return Err(ApiError::new(AcpilotError::invalid(
+                    "a profile cannot extend itself",
+                )));
+            }
+            if !self.names().iter().any(|served| served == parent.as_str()) {
+                return Err(ApiError::new(AcpilotError::invalid(format!(
+                    "no profile `{parent}` is served to extend"
+                ))));
+            }
+            record.extends = Some(parent);
+        }
+        registry.insert(profile_id, record.clone());
+        registry.save(&self.registry_path).map_err(registry_error)?;
+
+        let mut summary = entry
+            .summary
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        summary.label = record.label_or_name(id);
+        summary.extends = record.extends.as_ref().map(ProfileId::to_string);
+        let row = ProfileSummary {
+            active: self.active() == id,
+            ..summary.clone()
+        };
+        Ok(row)
+    }
+
+    /// Remove a profile from this daemon and from the disk.
+    ///
+    /// The last profile is refused: with no identity left there is no active
+    /// profile, and a daemon that answered every request with `404` would be one
+    /// the caller cannot repair through the same API. `purge` removes the
+    /// directories permanently; without it they go to the platform's trash, the
+    /// same default as `acpilot profile rm`.
+    ///
+    /// # Errors
+    ///
+    /// The profile is unknown, it is the only one served, the registry cannot be
+    /// written, or a directory cannot be moved or removed.
+    pub async fn delete(&self, id: &str, purge: bool) -> Result<ProfileSummary, ApiError> {
+        let entry = self.entry(id)?;
+        if self.names().len() <= 1 {
+            return Err(ApiError::new(AcpilotError::conflict(
+                "the last profile cannot be deleted: create another one first, or the daemon \
+                 would have no identity",
+            )));
+        }
+        let was_active = self.active() == id;
+        let row = entry.row(was_active);
+        entry.state.language_servers().shutdown().await;
+
+        let profile_id = ProfileId::parse(id)
+            .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+        let mut registry = self.registry_for_write()?;
+        registry.profiles.remove(&profile_id);
+        registry.save(&self.registry_path).map_err(registry_error)?;
+
+        let mut entries = self.entries.write().unwrap_or_else(PoisonError::into_inner);
+        entries.remove(id);
+        if was_active && let Some(next) = entries.keys().next().cloned() {
+            *self.active.write().unwrap_or_else(PoisonError::into_inner) = next;
+        }
+        drop(entries);
+
+        if let Some(index) = &self.index
+            && let Err(error) = index.forget_profile(id)
+        {
+            tracing::warn!(%error, profile = %id, "the profile index was not updated");
+        }
+        if let Err(error) = remove_paths(&entry.paths, purge) {
+            return Err(io_error(error));
+        }
+        Ok(row)
+    }
+
+    /// Read a profile's configuration files for an export.
+    ///
+    /// # Errors
+    ///
+    /// The profile or one of its files cannot be read.
+    pub fn export(&self, id: &str) -> Result<ProfileExport, ApiError> {
+        let entry = self.entry(id)?;
+        let profile = acpilot_profile::Profile::open(&entry.directory)
+            .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
+        let files = acpilot_profile::export::files(&profile)
+            .map_err(|message| ApiError::new(AcpilotError::Io(std::io::Error::other(message))))?;
+        Ok(ProfileExport {
+            schema_version: 1,
+            profile: id.to_owned(),
+            files,
         })
+    }
+
+    fn roots_for(&self, id: &ProfileId) -> ProfileRoots {
+        match &self.home {
+            Some(home) => ProfileRoots::under(home, id),
+            None => ProfileRoots::for_id(id),
+        }
+    }
+
+    fn open_entry(
+        &self,
+        name: &str,
+        directory: PathBuf,
+        roots: &ProfileRoots,
+        record: &ProfileRecord,
+    ) -> Result<Entry, ApiError> {
+        let state =
+            startup_with_stores(Some(&directory), &self.workspace, Arc::clone(&self.stores))
+                .map_err(state_error)?;
+        let state =
+            attach_index(state, self.index.as_ref(), name, &self.workspace).with_cors(self.cors);
+        Ok(Entry::new(
+            name,
+            directory,
+            roots_paths(roots),
+            record.label_or_name(name),
+            record.extends.as_ref().map(ProfileId::to_string),
+            state,
+        ))
+    }
+
+    fn registry_for_write(&self) -> Result<Registry, ApiError> {
+        Registry::load(&self.registry_path).map_err(registry_error)
     }
 
     /// The active profile's name, empty when the daemon has no profile.
@@ -334,7 +710,12 @@ impl Profiles {
     /// The names this daemon serves, sorted.
     #[must_use]
     pub fn names(&self) -> Vec<String> {
-        self.entries.keys().cloned().collect()
+        self.entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Which profile a request is about.
@@ -347,18 +728,15 @@ impl Profiles {
         method: &Method,
         path: &str,
     ) -> Result<String, ApiError> {
+        let entries = self.entries.read().unwrap_or_else(PoisonError::into_inner);
         if let Some(name) = header {
-            return if self.entries.contains_key(name) {
+            return if entries.contains_key(name) {
                 Ok(name.to_owned())
-            } else if self.anonymous.is_some() {
-                Err(ApiError::new(AcpilotError::not_found(format!(
-                    "this daemon serves no profile, so `{name}` is not an identity it has"
-                ))))
             } else {
                 Err(no_such_profile(name, &self.names()))
             };
         }
-        if self.entries.is_empty() {
+        if entries.is_empty() {
             return Ok(String::new());
         }
         // `/v1/profiles*` is answered before the fallback; a mutating request that
@@ -368,27 +746,36 @@ impl Profiles {
         // identity to confuse, and its older clients — the TUI, the CLI — do not
         // send the header yet. A daemon with two or more refuses to guess.
         let mutating = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
-        if mutating && self.entries.len() > 1 && !path.starts_with("/v1/profiles") {
+        if mutating && entries.len() > 1 && !path.starts_with("/v1/profiles") {
             return Err(ApiError::new(AcpilotError::invalid(
                 "name the profile in `X-Acpilot-Profile`: a mutating request is never sent as the \
                  active profile, because guessing an identity is how work goes out under the \
                  wrong one",
             )));
         }
-        Ok(self.active())
+        let active = self.active();
+        drop(entries);
+        Ok(active)
     }
 
-    fn entry(&self, name: &str) -> Result<&Entry, ApiError> {
+    fn entry(&self, name: &str) -> Result<Arc<Entry>, ApiError> {
         self.entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(name)
+            .cloned()
             .ok_or_else(|| no_such_profile(name, &self.names()))
     }
 
-    fn router_for(&self, name: &str) -> Option<&Router> {
+    fn router_for(&self, name: &str) -> Option<Router> {
         if name.is_empty() {
-            self.anonymous.as_ref().map(|entry| &entry.router)
+            self.anonymous.as_ref().map(|entry| entry.router.clone())
         } else {
-            self.entries.get(name).map(|entry| &entry.router)
+            self.entries
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(name)
+                .map(|entry| entry.router.clone())
         }
     }
 
@@ -398,7 +785,15 @@ impl Profiles {
     /// holding a state clone keeps the registry alive past `serve`, which is why
     /// this is a call and not a destructor.
     pub async fn shutdown_language_servers(&self) {
-        for entry in self.entries.values().chain(self.anonymous.iter()) {
+        let entries: Vec<Arc<Entry>> = {
+            let entries = self.entries.read().unwrap_or_else(PoisonError::into_inner);
+            entries
+                .values()
+                .cloned()
+                .chain(self.anonymous.iter().cloned())
+                .collect()
+        };
+        for entry in entries {
             entry.state.language_servers().shutdown().await;
         }
     }
@@ -437,6 +832,100 @@ fn no_such_profile(name: &str, served: &[String]) -> ApiError {
     )))
 }
 
+/// Where the global registry lives for a profiles root.
+fn registry_path(root: &Path) -> PathBuf {
+    root.parent().unwrap_or(root).join(CONFIG_FILE)
+}
+
+/// The registry row for a name, or a default that uses the name as its label.
+fn registry_for(registry: &Registry, name: &str) -> ProfileRecord {
+    ProfileId::parse(name)
+        .ok()
+        .and_then(|id| registry.profile(&id).cloned())
+        .unwrap_or_default()
+}
+
+/// The directories one profile owns.
+fn roots_paths(roots: &ProfileRoots) -> Vec<PathBuf> {
+    let mut paths = vec![
+        roots.config.clone(),
+        roots.data.clone(),
+        roots.cache.clone(),
+        roots.state.clone(),
+        roots.runtime.clone(),
+    ];
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// The directories a discovered profile owns.
+///
+/// With a caller-owned home, every root is under it; otherwise the platform's
+/// roots are the answer. A directory whose name is not a profile id owns only
+/// itself, because there is no keyring namespace to derive another root from.
+fn profile_paths(name: &str, directory: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let Ok(id) = ProfileId::parse(name) else {
+        return vec![directory.to_path_buf()];
+    };
+    match home {
+        Some(home) => roots_paths(&ProfileRoots::under(home, &id)),
+        None => roots_paths(&ProfileRoots::for_id(&id)),
+    }
+}
+
+/// Attach the cross-profile index and record the profile and workspace in it.
+fn attach_index(state: AppState, index: Option<&Index>, name: &str, workspace: &Path) -> AppState {
+    let Some(index) = index else {
+        return state;
+    };
+    let state = state.with_index(index.clone());
+    if let Err(error) = index.remember_profile(name) {
+        tracing::warn!(%error, profile = %name, "the profile was not indexed");
+    }
+    let workspace_id = format!(
+        "{}:{}",
+        crate::hosts::LOCAL_HOST,
+        workspace.to_string_lossy()
+    );
+    if let Err(error) = index.remember_workspace(name, &workspace_id) {
+        tracing::warn!(%error, profile = %name, "the workspace was not indexed");
+    }
+    state
+}
+
+/// Move every existing path to the trash, or remove it permanently.
+fn remove_paths(paths: &[PathBuf], purge: bool) -> std::io::Result<()> {
+    let mut paths = paths.to_vec();
+    paths.sort();
+    paths.dedup();
+    for path in paths.into_iter().filter(|path| path.exists()) {
+        if purge {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            trash::delete(&path).map_err(std::io::Error::other)?;
+        }
+    }
+    Ok(())
+}
+
+/// A filesystem failure as the API's `io` class.
+fn io_error(error: std::io::Error) -> ApiError {
+    ApiError::new(AcpilotError::Io(error))
+}
+
+/// A profile that was written but does not load is a bad request about its files.
+fn state_error(error: StateError) -> ApiError {
+    ApiError::new(AcpilotError::invalid(format!(
+        "the profile was created but did not load: {error}"
+    )))
+}
+
+/// A registry read or write failure as the API's `io` class.
+fn registry_error(error: acpilot_profile::RegistryError) -> ApiError {
+    ApiError::new(AcpilotError::Io(std::io::Error::other(error.to_string())))
+}
+
 /// The daemon's routes over several profiles.
 ///
 /// The profile routes are answered here because they are about the registry
@@ -446,13 +935,19 @@ fn no_such_profile(name: &str, served: &[String]) -> ApiError {
 /// it is attributed.
 pub fn router(profiles: Arc<Profiles>) -> Router {
     Router::new()
-        .route("/v1/profiles", get(list_profiles))
-        .route("/v1/profiles/{id}", get(read_profile))
+        .route("/v1/profiles", get(list_profiles).post(create_profile))
+        .route(
+            "/v1/profiles/{id}",
+            get(read_profile)
+                .patch(patch_profile)
+                .delete(delete_profile),
+        )
         .route("/v1/profiles/{id}/activate", post(activate_profile))
         .route(
             "/v1/profiles/{id}/preferences",
             get(read_preferences).patch(patch_preferences),
         )
+        .route("/v1/profiles/{id}/export", post(export_profile))
         .fallback(dispatch)
         .with_state(profiles)
 }
@@ -460,6 +955,59 @@ pub fn router(profiles: Arc<Profiles>) -> Router {
 /// `GET /v1/profiles`.
 async fn list_profiles(State(profiles): State<Arc<Profiles>>) -> Json<Vec<ProfileSummary>> {
     Json(profiles.summaries())
+}
+
+/// `POST /v1/profiles`.
+async fn create_profile(
+    State(profiles): State<Arc<Profiles>>,
+    body: Result<Json<ProfileCreate>, axum::extract::rejection::JsonRejection>,
+) -> Result<(StatusCode, Json<ProfileSummary>), ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a profile: {rejection}"
+        )))
+    })?;
+    profiles
+        .create(&request)
+        .map(|row| (StatusCode::CREATED, Json(row)))
+}
+
+/// `PATCH /v1/profiles/{id}`.
+async fn patch_profile(
+    State(profiles): State<Arc<Profiles>>,
+    UrlPath(id): UrlPath<String>,
+    body: Result<Json<ProfilePatch>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<ProfileSummary>, ApiError> {
+    let Json(patch) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a profile patch: {rejection}"
+        )))
+    })?;
+    profiles.patch(&id, &patch).map(Json)
+}
+
+/// `DELETE /v1/profiles/{id}`.
+#[derive(Debug, Deserialize)]
+struct DeleteProfile {
+    /// Remove permanently instead of moving to the OS trash.
+    #[serde(default)]
+    purge: bool,
+}
+
+async fn delete_profile(
+    State(profiles): State<Arc<Profiles>>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<DeleteProfile>,
+) -> Result<Json<ProfileSummary>, ApiError> {
+    profiles.delete(&id, query.purge).await.map(Json)
+}
+
+/// `POST /v1/profiles/{id}/export`.
+async fn export_profile(
+    State(profiles): State<Arc<Profiles>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<ProfileExport>, ApiError> {
+    profiles.export(&id).map(Json)
 }
 
 /// `GET /v1/profiles/{id}`.
@@ -678,20 +1226,19 @@ pub fn register(document: &mut utoipa::openapi::OpenApi) {
     use utoipa::openapi::path::{HttpMethod, PathItem};
 
     let paths = &mut document.paths.paths;
-    paths.insert(
-        "/v1/profiles".to_owned(),
-        PathItem::new(
-            HttpMethod::Get,
-            <__path_list_profiles_doc as utoipa::Path>::operation(),
-        ),
+    let mut list = PathItem::new(
+        HttpMethod::Get,
+        <__path_list_profiles_doc as utoipa::Path>::operation(),
     );
-    paths.insert(
-        "/v1/profiles/{id}".to_owned(),
-        PathItem::new(
-            HttpMethod::Get,
-            <__path_read_profile_doc as utoipa::Path>::operation(),
-        ),
+    list.post = Some(<__path_create_profile_doc as utoipa::Path>::operation());
+    paths.insert("/v1/profiles".to_owned(), list);
+    let mut one = PathItem::new(
+        HttpMethod::Get,
+        <__path_read_profile_doc as utoipa::Path>::operation(),
     );
+    one.patch = Some(<__path_patch_profile_doc as utoipa::Path>::operation());
+    one.delete = Some(<__path_delete_profile_doc as utoipa::Path>::operation());
+    paths.insert("/v1/profiles/{id}".to_owned(), one);
     paths.insert(
         "/v1/profiles/{id}/activate".to_owned(),
         PathItem::new(
@@ -705,6 +1252,13 @@ pub fn register(document: &mut utoipa::openapi::OpenApi) {
     );
     preferences.patch = Some(<__path_patch_preferences_doc as utoipa::Path>::operation());
     paths.insert("/v1/profiles/{id}/preferences".to_owned(), preferences);
+    paths.insert(
+        "/v1/profiles/{id}/export".to_owned(),
+        PathItem::new(
+            HttpMethod::Post,
+            <__path_export_profile_doc as utoipa::Path>::operation(),
+        ),
+    );
 }
 
 #[allow(dead_code)]
@@ -724,6 +1278,22 @@ fn list_profiles_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
+    post,
+    path = "/v1/profiles",
+    tag = "profiles",
+    summary = "Create a profile",
+    description = "Creates the profile's directories and `config.toml`, records its label and parent in the global registry, and opens its state immediately. The new profile becomes active when the daemon had none. A reserved or malformed name is `400`; an existing directory is `409`.",
+    request_body = ProfileCreate,
+    responses(
+        (status = 201, description = "The profile, now served", body = ProfileSummary),
+        (status = 400, description = "An invalid name or parent", body = ErrorBody),
+        (status = 409, description = "A profile by that name already exists", body = ErrorBody)
+    )
+)]
+fn create_profile_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
     get,
     path = "/v1/profiles/{id}",
     tag = "profiles",
@@ -735,6 +1305,42 @@ fn list_profiles_doc() {}
     )
 )]
 fn read_profile_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    patch,
+    path = "/v1/profiles/{id}",
+    tag = "profiles",
+    summary = "Change a profile's label or parent",
+    description = "Only the named fields are changed. `clear_extends: true` detaches the profile from its current parent; omitting both parent fields leaves it alone. The registry is rewritten with every table it does not own preserved.",
+    params(("id" = String, Path, description = "The profile's directory name")),
+    request_body = ProfilePatch,
+    responses(
+        (status = 200, description = "The profile after the patch", body = ProfileSummary),
+        (status = 400, description = "An empty patch, an invalid parent, or a parent that is not served", body = ErrorBody),
+        (status = 404, description = "No profile by that name on this daemon", body = ErrorBody)
+    )
+)]
+fn patch_profile_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    delete,
+    path = "/v1/profiles/{id}",
+    tag = "profiles",
+    summary = "Delete a profile",
+    description = "Stops the profile's language servers, removes it from the registry and this daemon, and moves its directories to the OS trash. `?purge=true` removes them permanently. The last profile is refused with `409`: a daemon with no identity cannot be repaired through its own API.",
+    params(
+        ("id" = String, Path, description = "The profile's directory name"),
+        ("purge" = Option<bool>, Query, description = "Remove permanently instead of moving to the trash")
+    ),
+    responses(
+        (status = 200, description = "The profile as it was before deletion", body = ProfileSummary),
+        (status = 404, description = "No profile by that name on this daemon", body = ErrorBody),
+        (status = 409, description = "This is the last profile served", body = ErrorBody)
+    )
+)]
+fn delete_profile_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(
@@ -782,6 +1388,21 @@ fn read_preferences_doc() {}
     )
 )]
 fn patch_preferences_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/profiles/{id}/export",
+    tag = "profiles",
+    summary = "Export a profile's configuration",
+    description = "Answers the allow-listed configuration files as one JSON document. Keyring references are exported exactly as written; credentials are never resolved into an HTTP answer. The CLI's `--with-secrets` path is the only place a secret is read.",
+    params(("id" = String, Path, description = "The profile's directory name")),
+    responses(
+        (status = 200, description = "The profile's configuration files", body = ProfileExport),
+        (status = 404, description = "No profile by that name on this daemon", body = ErrorBody)
+    )
+)]
+fn export_profile_doc() {}
 
 #[cfg(test)]
 mod tests {

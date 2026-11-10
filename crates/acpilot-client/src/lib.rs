@@ -31,6 +31,7 @@ use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
 use acpilot_proto::terminal::TerminalSummary;
+use acpilot_proto::workspace::{WorkspaceOpenRequest, WorkspaceSummary};
 use eventsource_stream::Eventsource;
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -246,6 +247,30 @@ impl Client {
     /// `GET /v1/agents`.
     pub async fn agents(&self) -> Result<Vec<AgentSummary>, ClientError> {
         self.get("/v1/agents").await
+    }
+
+    /// `GET /v1/workspaces`.
+    pub async fn workspaces(&self) -> Result<Vec<WorkspaceSummary>, ClientError> {
+        self.get("/v1/workspaces").await
+    }
+
+    /// `POST /v1/workspaces`.
+    ///
+    /// `profile` is the identity the request is made under. It is a header rather
+    /// than a body field because the daemon dispatches every route by it, and a
+    /// request that named a profile only in one place would be a request that could
+    /// open a workspace under one identity and record it under another.
+    pub async fn open_workspace(
+        &self,
+        profile: Option<&str>,
+        request: &WorkspaceOpenRequest,
+    ) -> Result<WorkspaceSummary, ClientError> {
+        let path = "/v1/workspaces";
+        let mut builder = self.http.post(self.request_url(path)).json(request);
+        if let Some(profile) = profile {
+            builder = builder.header("X-Acpilot-Profile", profile);
+        }
+        self.send(builder, path).await
     }
 
     /// `GET /v1/sessions`.

@@ -608,7 +608,7 @@ async fn a_workspace_on_another_host_is_refused_rather_than_answered_locally() {
     let state = serving(directory.path());
     let row = state
         .workspaces()
-        .open("ssh:box", "/home/box/project", None)
+        .open("ssh:box", "/home/box/project", None, false)
         .expect("this state has no owner index");
     let (status, body) = send(app(state), &format!("/v1/git/status?workspace={}", row.id)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");

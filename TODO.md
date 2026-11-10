@@ -846,7 +846,7 @@ Three rules:
     but not its keyring entries; doing that needs the manifest read before the directory is moved
     and a decision about whether a trashed profile should stay recoverable.
 
-- [ ] **P4-6 · Profiles in the domain** (1.5d)
+- [x] **P4-6 · Profiles in the domain** (1.5d)
   - `Workspace.profile` and `Session.profile`; every lookup takes a profile as an argument.
     `acpilot-core` has no ambient "current profile" — it is resolved at the edge and passed down.
   - Workspace owned by another profile → `409 profile_mismatch` with `details.owner`.
@@ -855,16 +855,19 @@ Three rules:
     profiles' mock agents concurrently and diffs their `env`.
   - Hosts are global; a profile may override per-host identity (`user`, `identity_file`,
     `ProxyJump`) but not the hostname — one machine, several identities.
-  - **Result (2026-11-09, partial):** `WorkspaceSummary` and `SessionSummary` carry `profile`,
-    the daemon's `Workspace` and `Record` carry it, and the session row persists it (store schema
-    v3, with old rows reading as the empty profile). Workspace ids are namespaced by profile
+  - **Result (2026-11-09):** `WorkspaceSummary` and `SessionSummary` carry `profile`, the daemon's
+    `Workspace` and `Record` carry it, and the session row persists it (store schema v3, with old
+    rows reading as the empty profile). Workspace ids are namespaced by profile
     (`work:local:/src`), and the global index records the first profile to open a host+root so a
-    second profile gets `409 profile_mismatch` with `details.owner`. A profile's workspace list
-    now names its owner, and the store round-trip and two-profile router test cover the field and
-    the refusal. **Open:** the per-host identity override, the CLI's explicit `--steal`, and a
-    concurrent two-profile mock-agent environment diff are not in this cut; the existing registry
-    isolation test proves two profiles resolve the same variable to different values, but not with
-    two live agent children.
+    second profile gets `409 profile_mismatch` with `details.owner`. `POST /v1/workspaces` now
+    accepts `steal: true`, which transfers only that index row and logs both owners; the CLI exposes
+    it as `acpilot workspace open --profile <name> --steal <path>`. A profile's `config.toml` may
+    set `[hosts.<id>]` with `user`, `identity_file`, and `proxy_jump`; the daemon applies them as
+    `ssh -l/-i/-J` while the host list and hostname stay global. Tests cover the 409, the explicit
+    transfer, the SSH argument construction, profile parsing, and two profiles' mock-agent children
+    running concurrently with different environments (`sk-work` and `sk-personal`). **Open:** the
+    CLI command currently opens one local path; `workspace list` and `workspace rm` remain P5-2, and
+    `acpilot-host::ssh`'s own `SshConfig` still owns agent/password auth and reconnect in P8-1.
 
 - [ ] **P4-7 · Preferences schema + live reload** (1d)
   - `Preferences { schema_version, editor, theme, keymap, ui, lsp, agents }`, typed in

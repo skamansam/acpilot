@@ -41,4 +41,15 @@ pub struct WorkspaceOpenRequest {
     /// Optional display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Take the root from the profile that opened it first.
+    ///
+    /// The default is to refuse: two profiles editing one checkout is the
+    /// isolation this phase exists to prevent. A client that really means it says
+    /// so here, and the daemon records the new owner and logs the transfer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub steal: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

@@ -253,6 +253,22 @@ rather than two rows a client cannot tell apart. It is not `ssh://me@box`: the i
 a path segment on `/v1/hosts/{id}/test`, and `//` would split it into two. An added host is recorded, so it is listed again by
 the next daemon.
 
+Hosts are global: adding `ssh:box` once makes it available to every profile. A
+profile may override the identity it uses for that host — never the hostname —
+with a table in its `config.toml`:
+
+```toml
+[hosts."ssh:box"]
+user = "deploy"
+identity_file = "/home/me/.ssh/work"
+proxy_jump = "bastion"
+```
+
+The daemon applies those fields when it builds the transport (`ssh -l`, `-i`,
+`-J`); the host list and the machine `ssh:box` names are unchanged. A bare
+address (`[hosts.box]`) is accepted as the key too. WSL has no SSH identity, so
+the fields are ignored for a WSL host.
+
 `POST /v1/hosts/{id}/test` asks the host whether it answers. The local host answers
 with this build's capabilities. A remote host is reached by putting `acpilotd-helper`
 on it and starting it over that host's transport, then asking it to shake hands. A
@@ -284,9 +300,11 @@ so that answer does not depend on whether one loaded.
 owns the row. `POST /v1/workspaces` records the first profile to open a host and
 root pair in the global index; a second profile asking for the same pair is
 `409 profile_mismatch` with the owner in `details` (`field: "owner"`), rather
-than a second workspace that happens to share a checkout. A workspace id in a
-profile daemon is namespaced (`work:local:/src`), so carrying one profile's id
-into another's request is visible rather than accidental.
+than a second workspace that happens to share a checkout. `steal: true` transfers
+the index row to the requesting profile and logs the old and new owner; it is the
+API behind `acpilot workspace open --profile <name> --steal <path>`. A workspace
+id in a profile daemon is namespaced (`work:local:/src`), so carrying one
+profile's id into another's request is visible rather than accidental.
 
 `POST /v1/sessions/{id}/prompt` takes `PromptRequest { text, idempotency_key? }`
 and is **asynchronous**: it returns `202` with `PromptAccepted { session_id,

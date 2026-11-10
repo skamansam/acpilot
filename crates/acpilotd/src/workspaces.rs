@@ -104,6 +104,7 @@ impl Workspaces {
         host_id: &str,
         root: &str,
         name: Option<String>,
+        steal: bool,
     ) -> Result<WorkspaceSummary, WorkspaceConflict> {
         let profile = self.profile();
         // The index is keyed by host and root, not by the namespaced id: that is
@@ -123,12 +124,27 @@ impl Workspaces {
             .as_ref()
         {
             match index.workspace_owner(&key) {
-                Ok(Some(owner)) if owner != profile => return Err(WorkspaceConflict { owner }),
-                Ok(_) => {}
+                Ok(Some(owner)) if owner != profile => {
+                    if !steal {
+                        return Err(WorkspaceConflict { owner });
+                    }
+                    if let Err(error) = index.steal_workspace(&profile, &key) {
+                        tracing::warn!(%error, %key, "the workspace ownership was not transferred");
+                        return Err(WorkspaceConflict { owner });
+                    }
+                    tracing::warn!(
+                        from = %owner,
+                        to = %profile,
+                        workspace = %key,
+                        "workspace ownership was taken with an explicit steal"
+                    );
+                }
+                Ok(_) => {
+                    if let Err(error) = index.remember_workspace(&profile, &key) {
+                        tracing::warn!(%error, profile = %profile, "the workspace was not indexed");
+                    }
+                }
                 Err(error) => tracing::warn!(%error, %key, "workspace ownership was not read"),
-            }
-            if let Err(error) = index.remember_workspace(&profile, &key) {
-                tracing::warn!(%error, profile = %profile, "the workspace was not indexed");
             }
         }
         let summary = WorkspaceSummary {
@@ -227,14 +243,21 @@ async fn open(
         ApiError::new(AcpilotError::not_found(format!("host {}", request.host_id)))
     })?;
     let summary = match host.kind {
-        HostKind::Local => local(&state, root, request.name)?,
-        HostKind::Ssh | HostKind::Wsl => remote(&state, &host, root, request.name).await?,
+        HostKind::Local => local(&state, root, request.name, request.steal)?,
+        HostKind::Ssh | HostKind::Wsl => {
+            remote(&state, &host, root, request.name, request.steal).await?
+        }
     };
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
 /// A root this daemon can look at itself.
-fn local(state: &AppState, root: &str, name: Option<String>) -> Result<WorkspaceSummary, ApiError> {
+fn local(
+    state: &AppState,
+    root: &str,
+    name: Option<String>,
+    steal: bool,
+) -> Result<WorkspaceSummary, ApiError> {
     let metadata = std::fs::metadata(Path::new(root)).map_err(|source| {
         let error = match source.kind() {
             std::io::ErrorKind::NotFound => {
@@ -254,7 +277,7 @@ fn local(state: &AppState, root: &str, name: Option<String>) -> Result<Workspace
     }
     state
         .workspaces()
-        .open(crate::hosts::LOCAL_HOST, root, name)
+        .open(crate::hosts::LOCAL_HOST, root, name, steal)
         .map_err(|conflict| profile_mismatch(root, conflict))
 }
 
@@ -264,6 +287,7 @@ async fn remote(
     host: &HostSummary,
     root: &str,
     name: Option<String>,
+    steal: bool,
 ) -> Result<WorkspaceSummary, ApiError> {
     // The capabilities are what the helper said in its handshake, so a host nobody has
     // tested has not said anything: asking it to list a directory would be a call that
@@ -286,7 +310,7 @@ async fn remote(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| host.id.clone());
-    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
+    let transport = state.hosts().transport(&host.id, host.kind, address);
     let unavailable = |detail: String| {
         ApiError::new(AcpilotError::HostUnavailable {
             host: host.id.clone(),
@@ -329,7 +353,7 @@ async fn remote(
     }
     state
         .workspaces()
-        .open(&host.id, root, name)
+        .open(&host.id, root, name, steal)
         .map_err(|conflict| profile_mismatch(root, conflict))
 }
 

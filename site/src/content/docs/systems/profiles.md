@@ -68,7 +68,12 @@ surprise.
   daemon id is namespaced (`work:local:/src`). The global index records the first
   profile to open a host and root pair; a second profile gets
   `409 profile_mismatch` with `details.owner` instead of a second workspace over
-  the same checkout.
+  the same checkout. `acpilot workspace open --profile <id> --steal <path>`
+  transfers the row deliberately, and the daemon logs both owners.
+- **Hosts are shared; identities are not.** A profile may set `[hosts.<id>]` in
+  its `config.toml` with `user`, `identity_file`, and `proxy_jump`. Those change
+  how the profile reaches the machine, never which machine the host id names;
+  the hostname is not a field.
 - **Removal is real.** `acpilot profile rm <id>` moves the config directory and
   the separate data, cache, state and runtime roots to the OS trash, prints each
   path, and forgets the index row. `--purge` deletes them outright. A profile
@@ -97,10 +102,11 @@ policy, database, sessions and language servers. `GET /v1/profiles`, `GET
 /v1/profiles/{id}` and `POST /v1/profiles/{id}/activate` are served, and the web
 cockpit's profile picker uses them. The launch order (`--profile` → environment →
 marker → `active_profile` → created `default`) is served, and profile state is
-isolated by database and transcript directory. `acpilot profile rm` (P4-4) and
-`acpilot profile export` (P4-5) are served. P4-6 has added profile ownership to
-workspace and session summaries, persisted a session's profile with its row, and
-made a root already owned by another profile a `409 profile_mismatch`. Creating,
-renaming and importing a profile, and the per-profile preferences routes, are
-still open (P4-8/P4-9), as are the remaining P4-6 pieces (a per-host identity
-override and an explicit workspace `--steal`) and the isolation matrix (P4-10).
+isolated by database and transcript directory. `acpilot profile rm` (P4-4),
+`acpilot profile export` (P4-5), and P4-6's workspace ownership are served:
+workspace and session summaries name their profile, a session row persists it, a
+root owned by another profile is a `409 profile_mismatch`, `--steal` transfers it
+deliberately, and per-host `user`/`identity_file`/`proxy_jump` overrides are read
+from the profile's `config.toml`. Creating, renaming and importing a profile, and
+the per-profile preferences routes, are still open (P4-8/P4-9), as is the
+isolation matrix (P4-10).

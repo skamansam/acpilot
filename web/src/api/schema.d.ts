@@ -2244,6 +2244,14 @@ export interface components {
             name?: string | null;
             /** @description Absolute path on that host. */
             root: string;
+            /**
+             * @description Take the root from the profile that opened it first.
+             *
+             *     The default is to refuse: two profiles editing one checkout is the
+             *     isolation this phase exists to prevent. A client that really means it says
+             *     so here, and the daemon records the new owner and logs the transfer.
+             */
+            steal?: boolean;
         };
         /** @description A workspace as returned by `GET /v1/workspaces`. */
         WorkspaceSummary: {

@@ -2974,6 +2974,10 @@
           "root": {
             "description": "Absolute path on that host.",
             "type": "string"
+          },
+          "steal": {
+            "description": "Take the root from the profile that opened it first.\n\nThe default is to refuse: two profiles editing one checkout is the\nisolation this phase exists to prevent. A client that really means it says\nso here, and the daemon records the new owner and logs the transfer.",
+            "type": "boolean"
           }
         },
         "required": [

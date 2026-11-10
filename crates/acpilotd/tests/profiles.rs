@@ -173,7 +173,7 @@ async fn opening_a_workspace_another_profile_owns_is_a_profile_mismatch() {
         .with_index(index.clone());
     let personal_state = state_for_profile(&personal, workspace.path())
         .expect("personal loads")
-        .with_index(index);
+        .with_index(index.clone());
     let registry = Arc::new(Profiles::from_states(
         vec![
             ("work".to_owned(), work_state),
@@ -202,12 +202,38 @@ async fn opening_a_workspace_another_profile_owns_is_a_profile_mismatch() {
         format!("work:local:{}", workspace.path().display())
     );
 
-    let (status, refused) =
-        send_json(app, "POST", "/v1/workspaces", Some("personal"), Some(body)).await;
+    let (status, refused) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/workspaces",
+        Some("personal"),
+        Some(body.clone()),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert_eq!(refused["code"], "profile_mismatch");
     assert_eq!(refused["details"][0]["field"], "owner");
     assert_eq!(refused["details"][0]["message"], "work");
+
+    let mut stolen = body;
+    stolen["steal"] = serde_json::Value::Bool(true);
+    let (status, opened) = send_json(
+        app,
+        "POST",
+        "/v1/workspaces",
+        Some("personal"),
+        Some(stolen),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["profile"], "personal");
+    assert_eq!(
+        index
+            .workspace_owner(&format!("local:{}", workspace.path().display()))
+            .expect("owner"),
+        Some("personal".to_owned()),
+        "an explicit steal moves the index row"
+    );
 }
 
 #[tokio::test]

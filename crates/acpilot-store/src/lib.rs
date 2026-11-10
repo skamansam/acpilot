@@ -846,6 +846,27 @@ impl Index {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Take `workspace` from whichever profile owns it and give it to `profile`.
+    ///
+    /// This is the explicit `--steal` path, not the default: the caller has already
+    /// decided to override the ownership refusal. The delete and the insert are one
+    /// connection, so a request that races another does not leave the root owned by
+    /// nobody.
+    ///
+    /// # Errors
+    ///
+    /// The profile or the workspace row could not be written.
+    pub fn steal_workspace(&self, profile: &str, workspace: &str) -> Result<(), StoreError> {
+        self.remember_profile(profile)?;
+        let connection = self.lock();
+        connection.execute("DELETE FROM workspaces WHERE path = ?1", params![workspace])?;
+        connection.execute(
+            "INSERT OR IGNORE INTO workspaces (profile, path, first_seen) VALUES (?1, ?2, ?3)",
+            params![profile, workspace, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
     /// The profile that first opened `workspace`, when one did.
     ///
     /// The index is deliberately willing to answer `None`: a workspace opened
@@ -1253,6 +1274,24 @@ mod tests {
         assert_eq!(index.forget_profile("work").expect("forget"), 1);
         assert_eq!(index.profiles().expect("profiles"), ["personal"]);
         assert!(index.workspaces("work").expect("workspaces").is_empty());
+    }
+
+    #[test]
+    fn an_explicit_steal_transfers_one_workspace_and_leaves_the_rest() {
+        let index = Index::in_memory().expect("open");
+        index.remember_workspace("work", "/one").expect("workspace");
+        index.remember_workspace("work", "/two").expect("workspace");
+
+        index.steal_workspace("personal", "/one").expect("transfer");
+        assert_eq!(
+            index.workspace_owner("/one").expect("owner"),
+            Some("personal".to_owned())
+        );
+        assert_eq!(
+            index.workspaces("work").expect("workspaces"),
+            ["/two"],
+            "only the named root moved"
+        );
     }
 
     #[test]

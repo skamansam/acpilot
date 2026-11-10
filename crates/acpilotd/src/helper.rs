@@ -94,16 +94,30 @@ pub struct Transport {
     pub address: String,
     /// The `ssh` program, which `ACPILOT_SSH` or a test can move.
     pub ssh: String,
+    /// This profile's identity override for the host, when it has one.
+    pub identity: Option<acpilot_profile::HostIdentity>,
 }
 
 impl Transport {
     /// One host, as the commands need it.
     #[must_use]
     pub fn new(kind: HostKind, address: impl Into<String>, ssh: impl Into<String>) -> Self {
+        Self::new_with_identity(kind, address, ssh, None)
+    }
+
+    /// One host, with the profile's credentials for it.
+    #[must_use]
+    pub fn new_with_identity(
+        kind: HostKind,
+        address: impl Into<String>,
+        ssh: impl Into<String>,
+        identity: Option<acpilot_profile::HostIdentity>,
+    ) -> Self {
         Self {
             kind,
             address: address.into(),
             ssh: ssh.into(),
+            identity,
         }
     }
 }
@@ -746,19 +760,21 @@ impl Connections {
         let dir = self.install_dir();
         let mut problems = Vec::new();
         if let Some(bytes) = self.bundle() {
-            let (program, args) = crate::hosts::remote_command(
+            let (program, args) = crate::hosts::remote_command_with(
                 transport.kind,
                 &transport.address,
                 &transport.ssh,
+                transport.identity.as_ref(),
                 crate::hosts::Step::Install,
                 &dir,
             );
             match install_within(&program, &args, &dir, &bytes, CALL_TIMEOUT) {
                 Ok(()) => {
-                    let (program, args) = crate::hosts::remote_command(
+                    let (program, args) = crate::hosts::remote_command_with(
                         transport.kind,
                         &transport.address,
                         &transport.ssh,
+                        transport.identity.as_ref(),
                         crate::hosts::Step::Installed,
                         &dir,
                     );
@@ -770,10 +786,11 @@ impl Connections {
                 Err(error) => problems.push(error),
             }
         }
-        let (program, args) = crate::hosts::remote_command(
+        let (program, args) = crate::hosts::remote_command_with(
             transport.kind,
             &transport.address,
             &transport.ssh,
+            transport.identity.as_ref(),
             crate::hosts::Step::Path,
             &dir,
         );

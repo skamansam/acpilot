@@ -893,7 +893,7 @@ fn remote_workspace(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| host.id.clone());
-    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
+    let transport = state.hosts().transport(&host.id, host.kind, address);
     Ok((
         root,
         Some(transport),

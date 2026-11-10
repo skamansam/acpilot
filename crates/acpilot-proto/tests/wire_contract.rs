@@ -121,6 +121,12 @@ fn workspace_documents() {
         "root": "/home/sam/workspace-other/acpilot",
         "name": "Acpilot"
     }));
+
+    round_trip::<acpilot_proto::workspace::WorkspaceOpenRequest>(json!({
+        "host_id": "local",
+        "root": "/home/sam/workspace-other/acpilot",
+        "steal": true
+    }));
 }
 
 #[test]

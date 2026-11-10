@@ -69,6 +69,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "policy",
     "lsp",
     "agents",
+    "hosts",
     "daemon",
     "providers",
     "acp",

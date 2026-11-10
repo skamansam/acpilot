@@ -23,7 +23,8 @@
 //! offered what the far side said it could do — a build with a PTY is offered a pane,
 //! one without `exec` is never offered as a place to start an agent.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use acpilot_core::AcpilotError;
 use acpilot_proto::host::{CreateHostRequest, HostCapabilities, HostKind, HostSummary};
@@ -62,6 +63,12 @@ pub struct Hosts {
     /// does: the environment belongs to the process, and a suite that wrote to it
     /// would be deciding the transport for every test beside it.
     ssh: Mutex<Option<String>>,
+    /// Per-host identity overrides from the profile this daemon serves.
+    ///
+    /// The host list is global; only the credentials are the profile's. Empty for a
+    /// profile that says nothing, which means the address and the user's own SSH
+    /// configuration decide, exactly as before P4-6.
+    identities: RwLock<HashMap<String, acpilot_profile::HostIdentity>>,
 }
 
 impl Default for Hosts {
@@ -70,6 +77,7 @@ impl Default for Hosts {
             known: Mutex::new(vec![local_summary()]),
             connections: Arc::new(crate::helper::Connections::new()),
             ssh: Mutex::new(None),
+            identities: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -104,6 +112,54 @@ impl Hosts {
     /// default nobody typed.
     pub fn prefer_install_dir(&self, dir: Option<String>) {
         self.connections.prefer_install_dir(dir);
+    }
+
+    /// Attach this profile's per-host credentials.
+    ///
+    /// The whole table is replaced, not merged: a profile state is built once at
+    /// startup, and a map that kept the previous profile's entries would be the
+    /// cross-profile leak this phase exists to prevent.
+    pub fn set_identities(
+        &self,
+        identities: impl IntoIterator<Item = (String, acpilot_profile::HostIdentity)>,
+    ) {
+        *self
+            .identities
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = identities.into_iter().collect();
+    }
+
+    /// The identity this profile uses for `host_id`, when it overrides one.
+    ///
+    /// Both spellings are accepted: the full id (`ssh:box`) and the address
+    /// (`box`), because a hand-written `config.toml` should not have to know the
+    /// daemon's prefix rule.
+    #[must_use]
+    pub fn identity(&self, host_id: &str) -> Option<acpilot_profile::HostIdentity> {
+        let identities = self
+            .identities
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        identities.get(host_id).cloned().or_else(|| {
+            host_id
+                .split_once(':')
+                .and_then(|(_, address)| identities.get(address).cloned())
+        })
+    }
+
+    /// The transport for one host, carrying this profile's identity override.
+    pub(crate) fn transport(
+        &self,
+        host_id: &str,
+        kind: HostKind,
+        address: String,
+    ) -> crate::helper::Transport {
+        crate::helper::Transport::new_with_identity(
+            kind,
+            address,
+            self.ssh_program(),
+            self.identity(host_id),
+        )
     }
 
     /// Say which helper to put on a host, overriding the one this build carries.
@@ -315,7 +371,7 @@ async fn remote(
         .split_once(':')
         .map(|(_, address)| address.to_owned())
         .unwrap_or_else(|| id.clone());
-    let transport = crate::helper::Transport::new(host.kind, address, state.hosts().ssh_program());
+    let transport = state.hosts().transport(&id, host.kind, address);
     // The connection the daemon already has for this host, or a new one it keeps:
     // testing the same host twice asks the helper that answered the first time.
     let connections = Arc::clone(state.hosts().connections());
@@ -370,10 +426,18 @@ pub(crate) enum Step {
 /// `dir` is where an installed helper lives, as a shell spells it: `$HOME/.local/bin` by
 /// default, or an absolute directory when a test would rather not write into a
 /// developer's home.
-pub(crate) fn remote_command(
+/// The program and arguments that run the helper on a host, with this profile's
+/// credentials.
+///
+/// The hostname is always the one in `address`: an identity may change the user,
+/// the key and the jump host, never the machine a host id means. That rule is
+/// enforced by the type — [`acpilot_profile::HostIdentity`] has no hostname field —
+/// rather than by checking three strings here.
+pub(crate) fn remote_command_with(
     kind: HostKind,
     address: &str,
     ssh: &str,
+    identity: Option<&acpilot_profile::HostIdentity>,
     step: Step,
     dir: &str,
 ) -> (String, Vec<String>) {
@@ -382,11 +446,33 @@ pub(crate) fn remote_command(
         // the user's shell, which ate backslashes and reported a missing program as
         // 127. `-e` calls `execvpe` directly and reports the failure as itself.
         HostKind::Ssh => {
-            let mut args = vec![
-                "-o".to_owned(),
-                "BatchMode=yes".to_owned(),
-                address.to_owned(),
-            ];
+            let mut args = vec!["-o".to_owned(), "BatchMode=yes".to_owned()];
+            if let Some(identity) = identity {
+                if let Some(user) = identity.user.as_deref() {
+                    args.push("-l".to_owned());
+                    args.push(user.to_owned());
+                }
+                if let Some(file) = identity.identity_file.as_ref() {
+                    args.push("-i".to_owned());
+                    args.push(file.to_string_lossy().into_owned());
+                }
+                if let Some(jump) = identity.proxy_jump.as_deref() {
+                    args.push("-J".to_owned());
+                    args.push(jump.to_owned());
+                }
+            }
+            let destination = identity
+                .and_then(|identity| identity.user.as_deref())
+                .map_or_else(
+                    || address.to_owned(),
+                    |_| {
+                        address
+                            .rsplit_once('@')
+                            .map_or(address, |(_, machine)| machine)
+                            .to_owned()
+                    },
+                );
+            args.push(destination);
             match step {
                 Step::Path => args.push(crate::helper::INSTALL_NAME.to_owned()),
                 // `ssh` hands the rest of the line to the remote user's shell, so the
@@ -449,5 +535,57 @@ fn transport_name(kind: HostKind) -> &'static str {
         HostKind::Ssh => "ssh",
         HostKind::Wsl => "wsl.exe",
         HostKind::Local => "the local host",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_identity_changes_the_user_key_and_jump_but_not_the_machine() {
+        let identity = acpilot_profile::HostIdentity {
+            user: Some("deploy".to_owned()),
+            identity_file: Some("/home/me/.ssh/work".into()),
+            proxy_jump: Some("bastion".to_owned()),
+        };
+        let (program, args) = remote_command_with(
+            HostKind::Ssh,
+            "me@box",
+            "ssh",
+            Some(&identity),
+            Step::Path,
+            "~/.local/bin",
+        );
+        assert_eq!(program, "ssh");
+        assert_eq!(
+            args,
+            [
+                "-o",
+                "BatchMode=yes",
+                "-l",
+                "deploy",
+                "-i",
+                "/home/me/.ssh/work",
+                "-J",
+                "bastion",
+                "box",
+                crate::helper::INSTALL_NAME,
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "me@box"));
+    }
+
+    #[test]
+    fn a_host_without_an_identity_keeps_its_address() {
+        let (_, args) = remote_command_with(
+            HostKind::Ssh,
+            "me@box",
+            "ssh",
+            None,
+            Step::Path,
+            "~/.local/bin",
+        );
+        assert_eq!(args, ["-o", "BatchMode=yes", "me@box", "acpilotd-helper"]);
     }
 }

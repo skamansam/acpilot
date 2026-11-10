@@ -20,6 +20,7 @@ pub mod project;
 pub mod settings;
 pub mod watch;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,22 @@ pub fn index_path() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     root: PathBuf,
+}
+
+/// The identity a profile uses for one host.
+///
+/// Hosts are global: the daemon knows one `ssh:box`, and every profile reaches the
+/// same machine. What may differ is who the profile connects as, which key it
+/// presents, and which jump host it goes through. The hostname is deliberately not
+/// here — two profiles cannot use one host id to mean two different machines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostIdentity {
+    /// SSH user, when it is not the one in the host address.
+    pub user: Option<String>,
+    /// Private key to present, as the profile spells its path.
+    pub identity_file: Option<PathBuf>,
+    /// `ProxyJump` target, for a host reached through another.
+    pub proxy_jump: Option<String>,
 }
 
 impl Profile {
@@ -261,6 +278,98 @@ impl Profile {
         })?;
         Policy::from_toml(&text).map_err(|source| ProfileError::Policy { path, source })
     }
+
+    /// The per-host identities this profile overrides.
+    ///
+    /// The file is `config.toml`, under `[hosts.<id>]`. A key may be the full host
+    /// id (`"ssh:box"`) or the address (`"box"`); the daemon checks both so a
+    /// profile written by hand reads the way its author expected. Unknown fields
+    /// are ignored: a newer profile should still run on this build.
+    ///
+    /// The hostname is not a field. One host id is one machine for every profile;
+    /// letting this table rename it would make `GET /v1/hosts` and the transport
+    /// disagree about what the id means.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read or parsed, or a known field has the wrong type or a
+    /// value SSH cannot take as one argument.
+    pub fn host_identities(&self) -> Result<BTreeMap<String, HostIdentity>, ProfileError> {
+        let path = self.config_path();
+        let text = fs::read_to_string(&path).map_err(|source| ProfileError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let document: toml::Value =
+            toml::from_str(&text).map_err(|source| ProfileError::Config {
+                path: path.clone(),
+                source,
+            })?;
+        let Some(hosts) = document.get("hosts") else {
+            return Ok(BTreeMap::new());
+        };
+        let hosts = hosts.as_table().ok_or_else(|| ProfileError::Hosts {
+            path: path.clone(),
+            why: "`hosts` is not a table".to_owned(),
+        })?;
+        let mut identities = BTreeMap::new();
+        for (key, value) in hosts {
+            let table = value.as_table().ok_or_else(|| ProfileError::Hosts {
+                path: path.clone(),
+                why: format!("`hosts.{key}` is not a table"),
+            })?;
+            let field = |name: &str| -> Result<Option<String>, ProfileError> {
+                match table.get(name) {
+                    None => Ok(None),
+                    Some(value) => value
+                        .as_str()
+                        .map(|value| Some(value.to_owned()))
+                        .ok_or_else(|| ProfileError::Hosts {
+                            path: path.clone(),
+                            why: format!("`hosts.{key}.{name}` is not a string"),
+                        }),
+                }
+            };
+            let user = field("user")?;
+            if let Some(user) = &user
+                && (user.trim().is_empty()
+                    || user.contains('@')
+                    || user.chars().any(char::is_whitespace))
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.user` is not one ssh user name"),
+                });
+            }
+            let identity_file = field("identity_file")?.map(PathBuf::from);
+            if let Some(file) = &identity_file
+                && file.as_os_str().is_empty()
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.identity_file` is empty"),
+                });
+            }
+            let proxy_jump = field("proxy_jump")?;
+            if let Some(jump) = &proxy_jump
+                && (jump.trim().is_empty() || jump.chars().any(char::is_whitespace))
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.proxy_jump` is not one ssh destination"),
+                });
+            }
+            identities.insert(
+                key.clone(),
+                HostIdentity {
+                    user,
+                    identity_file,
+                    proxy_jump,
+                },
+            );
+        }
+        Ok(identities)
+    }
 }
 
 /// What went wrong reading a profile.
@@ -289,6 +398,25 @@ pub enum ProfileError {
         path: PathBuf,
         /// Which key, and what it said.
         source: PolicyError,
+    },
+
+    /// The file is not valid TOML.
+    #[error("{} is not valid TOML: {source}", path.display())]
+    Config {
+        /// The file that was read.
+        path: PathBuf,
+        /// The parser's own line and column.
+        #[source]
+        source: toml::de::Error,
+    },
+
+    /// The `[hosts]` table is not usable.
+    #[error("{} has an invalid [hosts] table: {why}", path.display())]
+    Hosts {
+        /// The file that was read.
+        path: PathBuf,
+        /// Which host or field, and what it said.
+        why: String,
     },
 
     /// A name that is not a profile id was used to resolve a named profile.
@@ -428,6 +556,80 @@ command = "rust-analyzer"
             matches!(error, ProfileError::Name(_)),
             "the name is refused before any directory is opened: {error}"
         );
+    }
+
+    #[test]
+    fn host_identities_read_the_hosts_table_by_id_or_address() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts."ssh:box"]
+user = "deploy"
+identity_file = "/home/me/.ssh/work"
+proxy_jump = "bastion"
+
+[hosts.builder]
+user = "personal"
+"#,
+        );
+        let identities = profile.host_identities().expect("hosts parse");
+        let boxed = identities.get("ssh:box").expect("the full id is a key");
+        assert_eq!(boxed.user.as_deref(), Some("deploy"));
+        assert_eq!(
+            boxed.identity_file.as_deref(),
+            Some(Path::new("/home/me/.ssh/work"))
+        );
+        assert_eq!(boxed.proxy_jump.as_deref(), Some("bastion"));
+        assert_eq!(
+            identities
+                .get("builder")
+                .and_then(|identity| identity.user.as_deref()),
+            Some("personal"),
+            "the bare address is a key too"
+        );
+    }
+
+    #[test]
+    fn a_host_identity_cannot_change_the_hostname() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts.box]
+hostname = "somewhere-else"
+user = "deploy"
+"#,
+        );
+        let identities = profile
+            .host_identities()
+            .expect("unknown fields are ignored");
+        assert!(
+            identities
+                .get("box")
+                .is_some_and(|identity| identity.user.as_deref() == Some("deploy")),
+            "the identity still applies; there is no field that could rename the host"
+        );
+    }
+
+    #[test]
+    fn a_malformed_host_identity_names_the_field() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts.box]
+user = "two users"
+"#,
+        );
+        let error = profile
+            .host_identities()
+            .expect_err("a space is not one user");
+        assert!(
+            error.to_string().contains("hosts.box.user"),
+            "the message names the field: {error}"
+        );
+        assert!(matches!(error, ProfileError::Hosts { .. }));
     }
 
     #[test]

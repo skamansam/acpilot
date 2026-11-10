@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acpilot_agent::keyring::{CredentialStore, KeyringResolver, SERVICE};
-use acpilot_agent::{AgentError, MapResolver, Parser, Registry, SecretResolver, Transport};
+use acpilot_agent::{
+    AgentError, AgentProcess, MapResolver, Parser, Registry, SecretResolver, Transport,
+};
 use acpilot_proto::agent::AgentTransport;
 
 const FIRST: &str = r#"
@@ -367,6 +369,55 @@ fn two_profiles_never_put_each_others_secret_in_a_child_environment() {
     );
     assert!(!format!("{work_agent:?}").contains("sk-personal"));
     assert!(!format!("{personal_agent:?}").contains("sk-work"));
+}
+
+#[cfg(unix)]
+#[test]
+fn two_profiles_running_at_once_keep_their_own_child_environment() {
+    const SPAWN: &str = r#"
+schema_version = 1
+
+[[agents]]
+id = "claude"
+name = "Claude Code"
+transport = "acp-stdio"
+command = "/bin/sh"
+args = ["-c", "sleep 0.3; printf %s \"$ANTHROPIC_API_KEY\" >&2"]
+env = { ANTHROPIC_API_KEY = "keyring:anthropic" }
+"#;
+    let work = tempfile::tempdir().expect("work profile");
+    let personal = tempfile::tempdir().expect("personal profile");
+    write(work.path(), SPAWN);
+    write(personal.path(), SPAWN);
+
+    let store = MemoryStore::default();
+    store
+        .set(SERVICE, "work/anthropic", "sk-work")
+        .expect("work secret");
+    store
+        .set(SERVICE, "personal/anthropic", "sk-personal")
+        .expect("personal secret");
+    let work = Registry::load(
+        manifest_path(work.path()),
+        Arc::new(KeyringResolver::with_store("work", store.clone())),
+    )
+    .expect("work registry");
+    let personal = Registry::load(
+        manifest_path(personal.path()),
+        Arc::new(KeyringResolver::with_store("personal", store)),
+    )
+    .expect("personal registry");
+
+    // Both are spawned before either is waited on: the shell sleeps inside each
+    // child, so the two environments exist at the same time.
+    let mut work_process =
+        AgentProcess::spawn(work.get("claude").expect("work agent")).expect("work child starts");
+    let mut personal_process = AgentProcess::spawn(personal.get("claude").expect("personal agent"))
+        .expect("personal child starts");
+    assert!(work_process.wait().expect("work waits").success());
+    assert!(personal_process.wait().expect("personal waits").success());
+    assert_eq!(work_process.stderr().text(), "sk-work");
+    assert_eq!(personal_process.stderr().text(), "sk-personal");
 }
 
 #[test]

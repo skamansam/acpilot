@@ -521,6 +521,20 @@ impl AppState {
         self
     }
 
+    /// Attach the per-host credentials this profile's config names.
+    ///
+    /// The host list stays global; only the transport a request builds is the
+    /// profile's. An empty table is the old behaviour: the address and the user's
+    /// own SSH configuration decide.
+    #[must_use]
+    pub fn with_host_identities(
+        self,
+        identities: impl IntoIterator<Item = (String, acpilot_profile::HostIdentity)>,
+    ) -> Self {
+        self.hosts.set_identities(identities);
+        self
+    }
+
     /// The profile directory, when this daemon was started with one.
     pub fn profile_root(&self) -> Option<&std::path::Path> {
         self.profile_root.as_deref()
@@ -1144,6 +1158,7 @@ pub fn state_for_profile(
         .and_then(|name| name.to_str())
         .map(str::to_owned);
     let policy = profile.policy()?;
+    let identities = profile.host_identities()?;
     let workspace = workspace_at(workspace)?;
     tracing::info!(
         profile = %profile.root().display(),
@@ -1155,6 +1170,7 @@ pub fn state_for_profile(
     let state = AppState::new()
         .with_profile_name(name)
         .with_profile_root(Some(directory.to_path_buf()))
+        .with_host_identities(identities)
         .with_broker(broker)
         .with_workspace(workspace);
     Ok(match load_agents(&profile)? {

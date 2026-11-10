@@ -14,6 +14,7 @@ use acpilot_profile::settings::Settings;
 use acpilot_profile::{ProfileId, ProfileRoots};
 use acpilot_proto::API_PREFIX;
 use acpilot_proto::profile::ThemeSurface;
+use acpilot_proto::workspace::WorkspaceOpenRequest;
 use clap::{Args, Parser, Subcommand};
 
 use crate::doctor;
@@ -70,6 +71,12 @@ pub enum Command {
         /// Which profile verb.
         #[command(subcommand)]
         command: ProfileCommand,
+    },
+    /// Open, list, and remove workspaces.
+    Workspace {
+        /// Which workspace verb.
+        #[command(subcommand)]
+        command: WorkspaceCommand,
     },
     /// Open the terminal UI against a running daemon, or run one here.
     ///
@@ -237,6 +244,38 @@ pub enum ConfigCommand {
         /// Profile whose files are part of the cascade.
         #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
         profile: Option<String>,
+    },
+}
+
+/// Everything under `acpilot workspace`.
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Open a directory as a workspace, or return the row it already has.
+    ///
+    /// The daemon checks that the root is a directory on its host first. A root
+    /// another profile opened is refused unless `--steal` says to transfer it.
+    Open {
+        /// Directory to open.
+        path: PathBuf,
+        /// Profile to open it under.
+        ///
+        /// The daemon dispatches by this header. Without it, the daemon's active
+        /// profile is used — which is the right choice for a one-profile machine
+        /// and the wrong one when a client is about to switch.
+        #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
+        profile: Option<String>,
+        /// Take the root from the profile that opened it first.
+        ///
+        /// The daemon records the new owner and logs the transfer. Without this,
+        /// the open is a `409 profile_mismatch` naming the current owner.
+        #[arg(long)]
+        steal: bool,
+        /// Endpoint of the daemon: a URL, or a unix socket path.
+        #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+        api_url: Option<String>,
+        /// Bearer token for a daemon on a TCP endpoint.
+        #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -442,6 +481,7 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Config { command }) => run_config(command),
         Some(Command::Profile { command }) => run_profile(command),
+        Some(Command::Workspace { command }) => run_workspace(command),
         Some(Command::Serve {
             http: _,
             bind,
@@ -523,6 +563,114 @@ fn run_doctor(
         Err(message) => {
             eprintln!("acpilot doctor: {message}");
             exit::FAILURE
+        }
+    }
+}
+
+/// Open a workspace against a running daemon, starting one when it is not there.
+fn run_workspace(command: WorkspaceCommand) -> u8 {
+    let WorkspaceCommand::Open {
+        path,
+        profile,
+        steal,
+        api_url,
+        token,
+    } = command;
+    let root = match std::fs::canonicalize(&path) {
+        Ok(root) if root.is_dir() => root,
+        Ok(_) => {
+            eprintln!(
+                "acpilot workspace open: {} is a file, and a workspace is a directory",
+                path.display()
+            );
+            return exit::USAGE;
+        }
+        Err(error) => {
+            eprintln!("acpilot workspace open: {}: {error}", path.display());
+            return exit::NOT_FOUND;
+        }
+    };
+    let root = root.to_string_lossy().into_owned();
+    // `--profile` is a name at this surface, and `acpilotd` wants the directory
+    // that name resolves to. Resolving here keeps `workspace open --profile work`
+    // from starting a daemon that treats `work` as a relative path.
+    let profile_directory = match profile.as_deref() {
+        Some(name) => match acpilot_profile::Profile::named(name) {
+            Ok(profile) => Some(profile.root().to_path_buf()),
+            Err(error) => {
+                eprintln!("acpilot workspace open: {error}");
+                return exit::NOT_FOUND;
+            }
+        },
+        None => None,
+    };
+    let mut daemon_args = Vec::new();
+    if let Some(directory) = &profile_directory {
+        daemon_args.push("--profile".to_owned());
+        daemon_args.push(directory.display().to_string());
+    }
+    daemon_args.push("--workspace".to_owned());
+    daemon_args.push(root.clone());
+    let options = acpilot_client::daemon::Options {
+        endpoint: api_url,
+        no_spawn: false,
+        token: token.or_else(acpilot_host::token::local),
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot workspace open: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let request = WorkspaceOpenRequest {
+        host_id: "local".to_owned(),
+        root,
+        name: None,
+        steal,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot workspace open: {error}");
+            return exit::FAILURE;
+        }
+    };
+    match runtime.block_on(running.client.open_workspace(profile.as_deref(), &request)) {
+        Ok(opened) => {
+            println!(
+                "opened {} (profile {})",
+                opened.id,
+                if opened.profile.is_empty() {
+                    "none"
+                } else {
+                    &opened.profile
+                }
+            );
+            exit::SUCCESS
+        }
+        Err(acpilot_client::ClientError::Api {
+            status: 409,
+            message,
+            ..
+        }) => {
+            eprintln!("acpilot workspace open: {message}");
+            if !steal {
+                eprintln!("  pass --steal to transfer the root from its current owner");
+            }
+            exit::CONFLICT
+        }
+        Err(error) => {
+            eprintln!("acpilot workspace open: {error}");
+            if matches!(error, acpilot_client::ClientError::Api { status: 404, .. }) {
+                exit::NOT_FOUND
+            } else {
+                exit::FAILURE
+            }
         }
     }
 }

@@ -124,6 +124,65 @@ fn default_true() -> bool {
     true
 }
 
+/// A partial preferences update.
+///
+/// Every field is optional because a patch names only what changed. The daemon
+/// merges the named fields into the profile's `[preferences]` table and leaves
+/// the rest — including keys a newer binary wrote — alone. A full
+/// [`Preferences`] is deliberately not the body: a client that did not know
+/// about a new field must not erase it by sending the object it read back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PreferencesPatch {
+    /// Columns per tab stop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_width: Option<u8>,
+    /// Insert spaces instead of tab characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub insert_spaces: Option<bool>,
+    /// Run the formatter on save when one is available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format_on_save: Option<bool>,
+    /// Strip trailing whitespace on save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trim_trailing_whitespace: Option<bool>,
+    /// Soft-wrap long lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
+    /// Columns to draw a vertical ruler at, in cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rulers: Option<Vec<u16>>,
+    /// Theme identifier for every surface that does not name its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Theme for the terminal UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_tui: Option<String>,
+    /// Theme for the desktop app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_gui: Option<String>,
+    /// Theme for the browser UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_web: Option<String>,
+    /// Solve the terminal's palette from the terminal's own colours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_follow_terminal: Option<bool>,
+    /// Leave paths a `.gitignore` excludes out of the file tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tree_respect_gitignore: Option<bool>,
+    /// Lowest diagnostic severity shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics_min_severity: Option<DiagnosticSeverity>,
+}
+
+impl PreferencesPatch {
+    /// Whether this patch names no preference at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 impl Preferences {
     /// The theme one surface draws with.
     ///

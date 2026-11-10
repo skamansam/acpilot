@@ -33,8 +33,8 @@ use acpilot_lsp::position::{LineIndex, Position};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::file::{
     Diagnostic, DiagnosticSeverity, DiagnosticsRequest, FileChange, FileContent, FileDiagnostics,
-    FileEntry, FileRenameRequest, FileWriteRequest, GrepMatch, LineChange, LineMark, Reference,
-    ReferencesRequest,
+    FileEntry, FileFormat, FileFormatRequest, FileRenameRequest, FileWriteRequest, GrepMatch,
+    LineChange, LineMark, Reference, ReferencesRequest,
 };
 use axum::Json;
 use axum::Router;
@@ -595,6 +595,118 @@ async fn diagnostics(
         problems: problems.clone(),
     });
     Ok(Json(problems))
+}
+
+/// `POST /v1/files/format`.
+///
+/// Formatting is a question to the language server, not a save: the answer is the
+/// text the caller should write. A file with no server is returned unchanged with
+/// a reason, so format-on-save is safe everywhere rather than a save that can fail
+/// because a formatter is not installed.
+async fn format(
+    State(state): State<AppState>,
+    body: Result<Json<FileFormatRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<FileFormat>, ApiError> {
+    let Json(request) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a format request: {rejection}"
+        )))
+    })?;
+    let relative = relative_path(&request.path)?;
+    let source = source(&state, request.workspace.as_deref())?;
+    let (root, place) = place_of(&state, &source);
+    let Some(language) = crate::lsp::language_of(&request.path) else {
+        return Ok(Json(unchanged(
+            &request,
+            "no language server is configured for this file type",
+        )));
+    };
+    let resolved = match &source {
+        Source::Local(_) => resolve_existing(&root, &relative, &request.path)
+            .unwrap_or_else(|_| root.join(&relative)),
+        Source::Remote { .. } => root.join(&relative),
+    };
+    let preferences = state
+        .preferences()
+        .or_else(|| acpilot_profile::prefs::defaults().ok());
+    let (tab_width, insert_spaces) = preferences.map_or((4, true), |preferences| {
+        (preferences.tab_width, preferences.insert_spaces)
+    });
+    let connections = std::sync::Arc::clone(state.hosts().connections());
+    let Some(formatted) = state
+        .language_servers()
+        .format(
+            language,
+            &place,
+            &connections,
+            &resolved,
+            &request.text,
+            crate::lsp::FormatOptions {
+                tab_width,
+                insert_spaces,
+            },
+        )
+        .await
+    else {
+        return Ok(Json(unchanged(
+            &request,
+            "no language server answered for this file",
+        )));
+    };
+    let Some(text) = apply_format_edits(&request.text, &formatted) else {
+        return Ok(Json(FileFormat {
+            path: request.path.clone(),
+            text: request.text.clone(),
+            formatted: false,
+            server: Some(formatted.program.to_owned()),
+            reason: Some("the formatter returned an edit this daemon could not place".to_owned()),
+        }));
+    };
+    tracing::debug!(server = formatted.program, "formatted by a language server");
+    Ok(Json(FileFormat {
+        path: request.path,
+        text,
+        formatted: true,
+        server: Some(formatted.program.to_owned()),
+        reason: None,
+    }))
+}
+
+/// A format answer that leaves the buffer exactly as it arrived.
+fn unchanged(request: &FileFormatRequest, reason: &str) -> FileFormat {
+    FileFormat {
+        path: request.path.clone(),
+        text: request.text.clone(),
+        formatted: false,
+        server: None,
+        reason: Some(reason.to_owned()),
+    }
+}
+
+/// Apply formatting edits from the end of the document backwards.
+///
+/// A protocol edit's range is in the server's encoding, and applying one shifts
+/// every offset after it — which is why the edits are converted against the
+/// original text, sorted by start, and applied from the back. An edit that does
+/// not land on a character boundary is refused as a whole rather than skipped: a
+/// partial format is a document nobody wrote.
+fn apply_format_edits(text: &str, formatted: &crate::lsp::Formatted) -> Option<String> {
+    let index = acpilot_lsp::LineIndex::new(text);
+    let mut edits = Vec::with_capacity(formatted.edits.len());
+    for edit in &formatted.edits {
+        let start = index.offset(text, edit.start, formatted.encoding)?;
+        let end = index.offset(text, edit.end, formatted.encoding)?;
+        if start > end || end > text.len() {
+            return None;
+        }
+        edits.push((start, end, edit.text.as_str()));
+    }
+    edits.sort_by_key(|(start, end, _)| (*start, *end));
+    let mut result = text.to_owned();
+    for (start, end, replacement) in edits.into_iter().rev() {
+        result.replace_range(start..end, replacement);
+    }
+    Some(result)
 }
 
 /// The answer when no server was asked, which is not the answer to a clean file.
@@ -2502,6 +2614,7 @@ pub fn routes() -> Router<AppState> {
             get(references).post(references_in_buffer),
         )
         .route("/v1/files/diagnostics", post(diagnostics))
+        .route("/v1/files/format", post(format))
 }
 
 #[allow(dead_code)]
@@ -2633,6 +2746,21 @@ fn diagnostics_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(
     post,
+    path = "/v1/files/format",
+    tag = "files",
+    summary = "Format an open buffer with the language server",
+    request_body = FileFormatRequest,
+    responses(
+        (status = 200, description = "The formatted text, or the buffer unchanged with a reason", body = FileFormat),
+        (status = 400, description = "A body that is not a format request, or a path that escapes", body = ErrorBody),
+        (status = 409, description = "This daemon has no workspace", body = ErrorBody)
+    )
+)]
+fn format_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
     path = "/v1/files/references",
     tag = "files",
     summary = "Find the code uses of an identifier in an open buffer",
@@ -2733,6 +2861,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             HttpMethod::Post,
             <__path_diagnostics_doc as Path>::operation(),
         ),
+        (
+            "/v1/files/format",
+            HttpMethod::Post,
+            <__path_format_doc as Path>::operation(),
+        ),
     ]
 }
 
@@ -2793,5 +2926,52 @@ mod tests {
             display_path(root, Path::new("/work/app/src/lib.rs")),
             "src/lib.rs"
         );
+    }
+
+    #[test]
+    fn formatting_edits_are_applied_from_the_back() {
+        use acpilot_lsp::PositionEncoding;
+        use acpilot_lsp::position::Position;
+        use acpilot_lsp::session::FormatEdit;
+
+        let text = "fn main(){}\n";
+        let formatted = crate::lsp::Formatted {
+            program: "test",
+            encoding: PositionEncoding::Utf8,
+            edits: vec![
+                FormatEdit {
+                    start: Position::new(0, 7),
+                    end: Position::new(0, 11),
+                    text: "() {\n}".to_owned(),
+                },
+                FormatEdit {
+                    start: Position::new(0, 0),
+                    end: Position::new(0, 2),
+                    text: "pub fn".to_owned(),
+                },
+            ],
+        };
+        assert_eq!(
+            apply_format_edits(text, &formatted).as_deref(),
+            Some("pub fn main() {\n}\n")
+        );
+    }
+
+    #[test]
+    fn an_edit_that_cannot_be_placed_refuses_the_whole_format() {
+        use acpilot_lsp::PositionEncoding;
+        use acpilot_lsp::position::Position;
+        use acpilot_lsp::session::FormatEdit;
+
+        let formatted = crate::lsp::Formatted {
+            program: "test",
+            encoding: PositionEncoding::Utf8,
+            edits: vec![FormatEdit {
+                start: Position::new(9, 0),
+                end: Position::new(9, 1),
+                text: "x".to_owned(),
+            }],
+        };
+        assert_eq!(apply_format_edits("one\n", &formatted), None);
     }
 }

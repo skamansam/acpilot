@@ -769,6 +769,16 @@ impl AppState {
         self.preference_changes.subscribe()
     }
 
+    /// Announce preferences a route just wrote.
+    ///
+    /// The watcher would notice the file a moment later, but a PATCH answers before
+    /// that debounce and should not make its client wait for a second path to the
+    /// same fact. The extra frame is harmless: it is the same state, and a client
+    /// applies preferences by replacement.
+    pub fn announce_preferences(&self, preferences: Preferences) {
+        let _ = self.preference_changes.send(preferences);
+    }
+
     /// Subscribe to saves that did not parse, for the profile-wide stream.
     #[must_use]
     pub fn subscribe_preference_errors(&self) -> broadcast::Receiver<String> {

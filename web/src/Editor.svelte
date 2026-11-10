@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { basicSetup } from 'codemirror';
-  import { EditorState, type Extension } from '@codemirror/state';
+  import { Compartment, EditorState, type Extension } from '@codemirror/state';
   import { EditorView, gutter } from '@codemirror/view';
   import { MergeView } from '@codemirror/merge';
   import { javascript } from '@codemirror/lang-javascript';
@@ -13,12 +13,15 @@
     ApiError,
     createFile,
     deleteFile,
+    formatFile,
     listDirectory,
+    preferencesFor,
     readFile,
     renameFile,
     writeFile,
     type FileEntry,
     type LineMark,
+    type Preferences,
   } from './api';
   import {
     basename,
@@ -35,7 +38,16 @@
   } from './files';
   import { gitMarks, gitMarksFor, setGitMarks } from './git-gutter';
 
-  let { token }: { token: string } = $props();
+  let { token, profile = '' }: { token: string; profile?: string } = $props();
+
+  // The daemon's answer, not this component's own idea of it: wrap and rulers
+  // are the same preferences the TUI and desktop app apply. An absent profile —
+  // the component mounted on its own in a test — leaves the editor modeless
+  // rather than inventing defaults that disagree with the server.
+  let preferences = $state<Preferences | null>(null);
+  const wrap = new Compartment();
+  const wrapExtension = (on: boolean): Extension =>
+    on ? EditorView.lineWrapping : [];
 
   // A tab is a buffer plus the version of the file it was read at. A tab with no
   // `file` is a path whose first save is a create, which is why it is dirty from
@@ -120,6 +132,7 @@
     '.cm-content': {
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       padding: '0.5rem 0',
+      backgroundImage: 'var(--acpilot-ruler-image, none)',
     },
     '.cm-gutters': {
       backgroundColor: 'var(--bg-panel)',
@@ -376,17 +389,38 @@
     try {
       // A tab with no file is a create: the daemon reads an absent `if_match` as
       // "this path is new" and refuses a file that is already there.
+      let text = open.draft;
+      let formatter: string | null = null;
+      if (preferences?.format_on_save) {
+        try {
+          const answer = await formatFile(open.path, text, token);
+          if (answer.formatted) {
+            text = answer.text;
+            formatter = answer.server ?? 'the language server';
+          }
+        } catch {
+          // A formatter that cannot be reached is not a failed save: write the
+          // buffer the person typed rather than losing the edit to an enhancement.
+        }
+      }
       const written =
         open.file === null
-          ? await createFile(open.path, open.draft, token)
-          : await writeFile(open.path, open.draft, open.file.etag, token);
+          ? await createFile(open.path, text, token)
+          : await writeFile(open.path, text, open.file.etag, token);
+      if (view && view.state.doc.toString() !== written.text) {
+        // The formatter rewrote the buffer: draw what was written rather than
+        // leaving the old text looking unsaved beside a file that already has it.
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: written.text },
+        });
+      }
       open.file = written;
       open.draft = written.text;
       open.path = written.path;
       // The write answered with the marks this text earns; draw them now rather
       // than rebuilding the view and moving the caret to apply them.
       showMarks(written.marks ?? []);
-      note = `Saved ${written.path}`;
+      note = formatter ? `Saved ${written.path} · formatted by ${formatter}` : `Saved ${written.path}`;
       // The row's git status changed with the write; the listing is a second
       // question about the same file, so it is asked again rather than guessed.
       void browse(dir);
@@ -556,6 +590,7 @@
           extensionFor(languageFor(path), path),
           gitMarksFor(marks),
           gitGutter,
+          wrap.of(wrapExtension(untrack(() => preferences?.wrap ?? false))),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               open.draft = update.state.doc.toString();
@@ -603,8 +638,36 @@
     return () => merge.destroy();
   });
 
+  // A saved preference reaches an open tab without a reload. Wrap is a
+  // compartment because CodeMirror extensions are otherwise fixed at creation;
+  // rulers are a background layer measured in `ch`, so they follow the font.
+  $effect(() => {
+    const on = preferences?.wrap ?? false;
+    view?.dispatch({ effects: wrap.reconfigure(wrapExtension(on)) });
+    const rulers = preferences?.rulers ?? [];
+    if (!hostEl) {
+      return;
+    }
+    const image = rulers
+      .map(
+        (column) =>
+          `linear-gradient(to right, transparent calc(${column}ch - 1px), var(--border) calc(${column}ch - 1px), var(--border) ${column}ch, transparent ${column}ch)`,
+      )
+      .join(', ');
+    hostEl.style.setProperty('--acpilot-ruler-image', image || 'none');
+  });
+
   onMount(() => {
     void restoreTabs();
+    if (profile) {
+      void preferencesFor(profile, token)
+        .then((loaded) => {
+          preferences = loaded;
+        })
+        // Preferences are an enhancement: an older daemon or a failed read leaves
+        // the editor usable with its defaults rather than blocking the files.
+        .catch(() => {});
+    }
     // The debounce is short, but a person can reload inside it; unmounting flushes.
     return () => flushStore();
   });

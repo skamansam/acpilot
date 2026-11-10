@@ -406,6 +406,29 @@ impl Client {
         self.send(request, "/v1/files/diagnostics").await
     }
 
+    /// `POST /v1/files/format`.
+    ///
+    /// The formatter is the daemon's language server, not this client's child: a
+    /// TUI on another machine formats with the server where the files are. A file
+    /// with no formatter is returned unchanged and `formatted: false`, so a
+    /// format-on-save caller can write it rather than failing the save.
+    pub async fn format_file(
+        &self,
+        path: &str,
+        text: &str,
+    ) -> Result<acpilot_proto::file::FileFormat, ClientError> {
+        let body = acpilot_proto::file::FileFormatRequest {
+            workspace: None,
+            path: path.to_owned(),
+            text: text.to_owned(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/format"))
+            .json(&body);
+        self.send(request, "/v1/files/format").await
+    }
+
     /// `GET /v1/project/map`.
     ///
     /// The map the agent wrote under `.acpilot/`, as areas with a summary and the

@@ -1098,6 +1098,68 @@
         ],
         "type": "object"
       },
+      "FileFormat": {
+        "description": "What a formatter did with a buffer.\n\n`formatted` is true only when a language server answered. A language with no\nserver, an installed server that refused, or a refusal to start is not a\nformatting failure the save has to stop for: `text` is the buffer as it\narrived, and `reason` says why nothing changed. That lets format-on-save be\nsafe on every file rather than a command that can lose an edit.",
+        "properties": {
+          "formatted": {
+            "description": "Whether a language server answered and its edits were applied.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Workspace-relative path that was formatted.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the buffer was left alone, when it was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server": {
+            "description": "The command that formatted, when one did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The buffer after formatting, or the input when no formatter answered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text",
+          "formatted"
+        ],
+        "type": "object"
+      },
+      "FileFormatRequest": {
+        "description": "Request body for `POST /v1/files/format`.\n\nThe text is the buffer the editor holds, not the file on disk: a save is the\nmoment the formatter has to see what the person typed. Nothing here writes —\nthe caller saves the returned text through `PUT /v1/files`.",
+        "properties": {
+          "path": {
+            "description": "The file to format, workspace-relative.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
       "FileRenameRequest": {
         "description": "Request body for `POST /v1/files/rename`.\n\nA move is not a write: it changes the name of a file without touching its text,\nwhich is why it carries no `if_match`. The destination is required to be new, so\na rename can never replace a file the caller did not name.",
         "properties": {
@@ -2114,6 +2176,128 @@
           "theme",
           "diagnostics_min_severity"
         ],
+        "type": "object"
+      },
+      "PreferencesPatch": {
+        "additionalProperties": false,
+        "description": "A partial preferences update.\n\nEvery field is optional because a patch names only what changed. The daemon\nmerges the named fields into the profile's `[preferences]` table and leaves\nthe rest — including keys a newer binary wrote — alone. A full\n[`Preferences`] is deliberately not the body: a client that did not know\nabout a new field must not erase it by sending the object it read back.",
+        "properties": {
+          "diagnostics_min_severity": {
+            "default": null,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiagnosticSeverity",
+                "description": "Lowest diagnostic severity shown."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "format_on_save": {
+            "default": null,
+            "description": "Run the formatter on save when one is available.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "insert_spaces": {
+            "default": null,
+            "description": "Insert spaces instead of tab characters.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "rulers": {
+            "default": null,
+            "description": "Columns to draw a vertical ruler at, in cells.",
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tab_width": {
+            "default": null,
+            "description": "Columns per tab stop.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "theme": {
+            "default": null,
+            "description": "Theme identifier for every surface that does not name its own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_follow_terminal": {
+            "default": null,
+            "description": "Solve the terminal's palette from the terminal's own colours.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "theme_gui": {
+            "default": null,
+            "description": "Theme for the desktop app.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_tui": {
+            "default": null,
+            "description": "Theme for the terminal UI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_web": {
+            "default": null,
+            "description": "Theme for the browser UI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tree_respect_gitignore": {
+            "default": null,
+            "description": "Leave paths a `.gitignore` excludes out of the file tree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "trim_trailing_whitespace": {
+            "default": null,
+            "description": "Strip trailing whitespace on save.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wrap": {
+            "default": null,
+            "description": "Soft-wrap long lines.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ProfileSummary": {
@@ -3381,6 +3565,54 @@
           }
         },
         "summary": "What the language server says is wrong with a file"
+      }
+    },
+    "/v1/files/format": {
+      "post": {
+        "operationId": "format_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileFormatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileFormat"
+                }
+              }
+            },
+            "description": "The formatted text, or the buffer unchanged with a reason"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A body that is not a format request, or a path that escapes"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "This daemon has no workspace"
+          }
+        },
+        "summary": "Format an open buffer with the language server"
       }
     },
     "/v1/files/grep": {
@@ -4723,6 +4955,104 @@
           }
         },
         "summary": "Make a profile the one headerless reads are about"
+      }
+    },
+    "/v1/profiles/{id}/preferences": {
+      "get": {
+        "description": "The merged answer a client would draw with: defaults, the user's file, the profile's files and the project's layer. This is the same object the `prefs` event carries.",
+        "operationId": "read_preferences_doc",
+        "parameters": [
+          {
+            "description": "The profile's directory name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The effective preferences"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile by that name on this daemon"
+          }
+        },
+        "summary": "Read a profile's effective preferences"
+      },
+      "patch": {
+        "description": "Only the keys the body names are written, into the profile's `profile.toml`; every other table and key is left alone. The answer is the merged preferences after the write, and the change is announced as a `prefs` event.",
+        "operationId": "patch_preferences_doc",
+        "parameters": [
+          {
+            "description": "The profile's directory name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            },
+            "description": "The effective preferences after the patch"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An empty or malformed patch, or one that would make the settings unreadable"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile by that name on this daemon"
+          }
+        },
+        "summary": "Change some of a profile's preferences"
       }
     },
     "/v1/project/map": {

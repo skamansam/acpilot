@@ -54,6 +54,12 @@ tree_respect_gitignore = true     # the file tree hides what the workspace's .gi
 diagnostics_min_severity = "warning"
 ```
 
+`format_on_save` asks the daemon's language server for edits before the write; a
+file whose language has no server, or whose server is not installed, is saved
+unchanged rather than treated as a failed save. `wrap` and `rulers` are applied by
+the TUI and the browser editor, and a `PATCH` to the preferences route writes only
+the fields it names into the profile's `profile.toml`.
+
 The daemon reads its own flags and `ACPILOT_ADDR` today; a `[daemon]` table in
 this file is the profiles phase's (P4) and is not read yet.
 

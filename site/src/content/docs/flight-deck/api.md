@@ -22,6 +22,8 @@ GET /v1/events                  # text/event-stream: preferences, permission.req
 GET /v1/sessions                # POST starts one; prompt, cancel, and an SSE transcript per session
 GET /v1/terminals?session=      # POST starts one; WS /v1/terminals/{id}/attach is the pane
 GET /v1/files?path=             # PUT writes it back with `if_match`; /v1/files/list for directories
+POST /v1/files/format           # the daemon's language server; unchanged text with a reason when none
+GET /v1/profiles                # GET/PATCH /v1/profiles/{id}/preferences reads or changes the cascade
 GET /v1/git/status              # status, diff, tree and log from the host's git; paths are repo-relative
 GET /v1/git/commit/prompt       # the profile's commit prompt; POST /v1/git/commit-message drafts from the index
 POST /v1/git/stage              # add paths to the index and answer the new status; /unstage reverses it
@@ -61,9 +63,11 @@ window or a browser can follow `theme` without seeing this machine's files and
 without a restart. Preferences are state rather than history, which is why they
 are the one thing the stream sends on connect; a file that does not parse is
 announced as a `prefs_error` frame with the parser's sentence, and the last good
-preferences stay in force. The TUI resolves the same frames, so a client behind a
-socket and one sitting in the daemon's directory end up with the same palette from
-two paths.
+preferences stay in force. `PATCH /v1/profiles/{id}/preferences` changes only the
+keys it names and sends the new object immediately, so a client can offer a
+preference control without polling. The TUI resolves the same frames, so a client
+behind a socket and one sitting in the daemon's directory end up with the same
+palette from two paths.
 
 `WS /v1/terminals/{id}/attach` is the one route that upgrades instead of
 answering. Binary frames are the terminal in both directions — keystrokes one
@@ -85,7 +89,6 @@ into the shell an agent started without a second process behind it.
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
 
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
-| Profiles | `GET/POST /v1/profiles`, `PATCH /v1/profiles/{id}/preferences` |
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
 | Models (post-v1) | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |

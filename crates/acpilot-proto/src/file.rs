@@ -247,6 +247,45 @@ pub struct Diagnostic {
     pub code: Option<String>,
 }
 
+/// Request body for `POST /v1/files/format`.
+///
+/// The text is the buffer the editor holds, not the file on disk: a save is the
+/// moment the formatter has to see what the person typed. Nothing here writes —
+/// the caller saves the returned text through `PUT /v1/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FileFormatRequest {
+    /// Workspace id, when the client names one. The daemon serves exactly one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The file to format, workspace-relative.
+    pub path: String,
+    /// The buffer as the editor holds it.
+    pub text: String,
+}
+
+/// What a formatter did with a buffer.
+///
+/// `formatted` is true only when a language server answered. A language with no
+/// server, an installed server that refused, or a refusal to start is not a
+/// formatting failure the save has to stop for: `text` is the buffer as it
+/// arrived, and `reason` says why nothing changed. That lets format-on-save be
+/// safe on every file rather than a command that can lose an edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FileFormat {
+    /// Workspace-relative path that was formatted.
+    pub path: String,
+    /// The buffer after formatting, or the input when no formatter answered.
+    pub text: String,
+    /// Whether a language server answered and its edits were applied.
+    pub formatted: bool,
+    /// The command that formatted, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// Why the buffer was left alone, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// Request body for `POST /v1/files/diagnostics`.
 ///
 /// The path is the question; the text is the version it is about. A buffer edited and

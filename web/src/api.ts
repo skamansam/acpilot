@@ -71,6 +71,15 @@ export type TerminalSummary = components['schemas']['TerminalSummary'];
 /** One file, as `GET /v1/files` and `PUT /v1/files` answer it. */
 export type FileContent = components['schemas']['FileContent'];
 
+/** A buffer after a formatter, or unchanged with a reason. */
+export type FileFormat = components['schemas']['FileFormat'];
+
+/** A profile's merged editor and UI preferences. */
+export type Preferences = components['schemas']['Preferences'];
+
+/** A partial preferences update: only the keys named are written. */
+export type PreferencesPatch = components['schemas']['PreferencesPatch'];
+
 /** One row of `GET /v1/files/list`: a file or a directory. */
 export type FileEntry = components['schemas']['FileEntry'];
 
@@ -344,6 +353,36 @@ export async function activateProfile(id: string, token: string): Promise<Profil
   );
 }
 
+/** `GET /v1/profiles/{id}/preferences` — the merged answer a client draws with. */
+export async function preferencesFor(
+  id: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<Preferences> {
+  return answered(
+    await client.GET('/v1/profiles/{id}/preferences', {
+      params: { path: { id } },
+      headers: { ...auth(token), 'X-Acpilot-Profile': id },
+      signal,
+    }),
+  );
+}
+
+/** `PATCH /v1/profiles/{id}/preferences` — write only the values the patch names. */
+export async function patchPreferences(
+  id: string,
+  patch: PreferencesPatch,
+  token: string,
+): Promise<Preferences> {
+  return answered(
+    await client.PATCH('/v1/profiles/{id}/preferences', {
+      params: { path: { id } },
+      body: patch,
+      headers: { ...auth(token), 'X-Acpilot-Profile': id },
+    }),
+  );
+}
+
 /** `GET /v1/sessions/{id}` — one session, for an address that names one. */
 export async function session(
   id: string,
@@ -496,6 +535,25 @@ export async function writeFile(
   return answered(
     await client.PUT('/v1/files', {
       body: { path, text, if_match: ifMatch },
+      headers: auth(token),
+    }),
+  );
+}
+
+/**
+ * `POST /v1/files/format` — ask the daemon's language server about a buffer.
+ *
+ * A file with no formatter answers unchanged with a reason, which is what makes
+ * this safe to call on every save: the caller writes the answer either way.
+ */
+export async function formatFile(
+  path: string,
+  text: string,
+  token: string,
+): Promise<FileFormat> {
+  return answered(
+    await client.POST('/v1/files/format', {
+      body: { path, text },
       headers: auth(token),
     }),
   );

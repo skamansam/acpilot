@@ -38,7 +38,7 @@ use acpilot_extensions::theme::SyntaxToken;
 use acpilot_text::buffer::Buffer;
 use acpilot_text::edit::{Edit, IndentMode, IndentStyle};
 use acpilot_text::highlight::{Grammars, Highlights, Span};
-use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
+use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, parse_position};
 use acpilot_text::{Document, LineColumn, Selection, Selections};
 use std::ops::Range;
 use std::time::Instant;
@@ -110,6 +110,8 @@ pub enum State {
     Bracket,
     /// Covered by a selection a drag made.
     Selected,
+    /// A column a ruler preference marks.
+    Ruler,
 }
 
 /// One run of characters painted the same way.
@@ -405,11 +407,19 @@ impl EditorPane {
     /// rather than a character: the same text occupies a different window.
     pub fn set_preferences(&mut self, preferences: &acpilot_proto::profile::Preferences) {
         let width = usize::from(preferences.tab_width.max(1));
+        let changed = width != self.viewport.tab_width()
+            || preferences.wrap != self.viewport.wrap()
+            || preferences.rulers != self.preferences.rulers;
         if width != self.viewport.tab_width() {
             self.viewport = self.viewport.with_tab_width(width);
-            self.rebuild();
+        }
+        if preferences.wrap != self.viewport.wrap() {
+            self.viewport = self.viewport.with_wrap(preferences.wrap);
         }
         self.preferences = preferences.clone();
+        if changed {
+            self.rebuild();
+        }
     }
 
     /// Replace the whole buffer as one undo step, keeping the pane's other state.
@@ -794,16 +804,8 @@ impl EditorPane {
     /// counted from the top of the window, and the cell from the left of the text
     /// (the horizontal scroll is the viewport's, not the pane's).
     fn offset_at(&self, row: usize, cell: usize) -> usize {
-        let lines = self.document.buffer().line_count();
-        let line = (self.viewport.top() + row).min(lines.saturating_sub(1));
-        let cell = self.viewport.left() + cell;
-        let column = column_at(
-            self.document.buffer(),
-            line,
-            cell,
-            self.viewport.tab_width(),
-        );
-        self.offset(LineColumn::new(line, column))
+        let position = self.viewport.position_at(self.document.buffer(), row, cell);
+        self.offset(position)
     }
 
     /// Which mode the keys are in.
@@ -1195,7 +1197,15 @@ impl EditorPane {
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &spans, bracket, find, selection.as_ref()),
+                runs: runs(
+                    row,
+                    &spans,
+                    bracket,
+                    find,
+                    selection.as_ref(),
+                    &self.preferences.rulers,
+                    self.viewport.tab_width(),
+                ),
                 width: row.width(),
             })
             .collect()
@@ -1210,7 +1220,15 @@ impl EditorPane {
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &[], bracket, find, selection.as_ref()),
+                runs: runs(
+                    row,
+                    &[],
+                    bracket,
+                    find,
+                    selection.as_ref(),
+                    &self.preferences.rulers,
+                    self.viewport.tab_width(),
+                ),
                 width: row.width(),
             })
             .collect()
@@ -1262,10 +1280,15 @@ fn runs(
     bracket: Option<(usize, usize)>,
     find: &Find,
     selection: Option<&Range<usize>>,
+    rulers: &[u16],
+    tab_width: usize,
 ) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::with_capacity(row.cells.len());
+    let mut column = row.start;
     for cell in &row.cells {
-        let (token, state) = appearance(cell, spans, bracket, find, selection);
+        let ruler = rulers.contains(&u16::try_from(column).unwrap_or(u16::MAX));
+        let (token, state) = appearance(cell, spans, bracket, find, selection, ruler);
+        column += acpilot_text::pane::cells_of(cell.ch, column, tab_width).max(1);
         match runs.last_mut() {
             Some(run) if run.token == token && run.state == state => run.text.push(cell.ch),
             _ => runs.push(Run {
@@ -1285,6 +1308,7 @@ fn appearance(
     bracket: Option<(usize, usize)>,
     find: &Find,
     selection: Option<&Range<usize>>,
+    ruler: bool,
 ) -> (Option<SyntaxToken>, State) {
     // A blank past the end of a line belongs to no character, so it cannot be part
     // of a selection: dragging over the end of a line copies the line's text, which
@@ -1303,6 +1327,8 @@ fn appearance(
         State::Selected
     } else if bracket.is_some_and(|(open, close)| at == open || at == close) {
         State::Bracket
+    } else if ruler {
+        State::Ruler
     } else {
         match find.hit(at) {
             Hit::Match => State::Match,
@@ -1623,6 +1649,55 @@ mod tests {
             "the last line's text is the edge"
         );
         assert!(pane.cursor().is_some(), "and the head is on screen");
+    }
+
+    #[test]
+    fn a_ruler_marks_the_column_without_changing_the_text() {
+        let mut pane = pane(&["abcd"], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.rulers = vec![2];
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        let states: Vec<State> = painted[0].runs.iter().map(|run| run.state).collect();
+        assert!(states.contains(&State::Ruler), "{states:?}");
+        let joined: String = painted[0]
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect();
+        assert_eq!(joined, "abcd", "a ruler is a decoration, not a character");
+    }
+
+    #[test]
+    fn a_wrapped_ruler_is_a_column_of_the_line_not_of_the_segment() {
+        let long = "x".repeat(70);
+        let mut pane = pane(&[long.as_str()], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.wrap = true;
+        preferences.rulers = vec![65];
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        assert!(
+            !painted[0].runs.iter().any(|run| run.state == State::Ruler),
+            "column 65 is not on the first segment"
+        );
+        assert!(
+            painted[1].runs.iter().any(|run| run.state == State::Ruler),
+            "the continuation starts at column 60, so 65 is five cells in"
+        );
+    }
+
+    #[test]
+    fn wrap_folds_a_long_line_into_continuation_rows() {
+        let long = "x".repeat(70);
+        let mut pane = pane(&[long.as_str(), "tail"], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.wrap = true;
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        assert!(painted.len() > 2, "the long line took more than one row");
+        assert_eq!(painted[0].line, 0);
+        assert_eq!(painted[1].line, 0, "the continuation is the same line");
     }
 
     #[test]

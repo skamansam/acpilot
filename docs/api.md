@@ -153,6 +153,16 @@ profiles refuses to guess. Reads and streams without a header are the active
 profile; a stream binds at connect, so a switch is a reconnect rather than a
 frame on an open stream.
 
+`GET /v1/profiles/{id}/preferences` answers the effective `Preferences`: the same
+merged object the `prefs` frame carries, with every layer (defaults, user file,
+profile files, project) applied. `PATCH` takes a `PreferencesPatch` with any subset
+of the editable keys and writes only those into the profile's `profile.toml`.
+Every other key and table is left alone, because a preference change is not a
+rewrite of a profile's policy. The merged preferences are read back after the
+write; a patch that would make them unreadable is rolled back and answered `400`.
+The successful answer is the new effective object and is also announced as a
+`prefs` frame, so an open client applies it without waiting for the file watcher.
+
 **Deliberately not v1**: providers and models, the model lab and recipes, the ACP
 bridge and remote drivers, and extensions. They follow the same conventions when
 they land; none of them changes a route above.
@@ -621,6 +631,16 @@ same route: the server is started on the workspace's host, `text` absent means t
 is read through the helper, and the rows' lines come back from the machine that has the
 file. A server on a host is one per workspace root and language, so two workspaces on
 one host are two indexes; it is stopped by the same idle sweep as a local one.
+
+`POST /v1/files/format` takes `FileFormatRequest { path, text, workspace? }` and asks
+that server to format the buffer. It answers `FileFormat { path, text, formatted,
+server?, reason? }`: `formatted` is true only when a server answered, and `text` is
+what the caller should write. A language with no configured server, a missing server
+or one that refuses is not an error — the text comes back unchanged with `reason` —
+because format-on-save must not turn a missing formatter into a save that loses an
+edit. The edit positions are converted from the server's negotiated encoding in the
+daemon and applied from the end of the document backwards; an edit that cannot be
+placed refuses the whole format rather than applying half of it.
 
 `POST /v1/files/references` is the same question with the **open buffer** attached:
 `ReferencesRequest { q, path, offset, text?, workspace? }`. `text` is the file as the

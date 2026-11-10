@@ -113,6 +113,30 @@ pub struct Answer {
     pub locations: Vec<Location>,
 }
 
+/// The style options a formatter is asked to format with.
+///
+/// A struct rather than two booleans in the call: the pair travels together, and a
+/// call site that named only one of them would be a formatter asked with the
+/// other's default.
+#[derive(Debug, Clone, Copy)]
+pub struct FormatOptions {
+    /// Columns per tab stop.
+    pub tab_width: u8,
+    /// Insert spaces rather than tabs.
+    pub insert_spaces: bool,
+}
+
+/// What a formatter did, and the encoding its edit positions are counted in.
+#[derive(Debug)]
+pub struct Formatted {
+    /// The command that answered.
+    pub program: &'static str,
+    /// The encoding every position in [`Formatted::edits`] is counted in.
+    pub encoding: PositionEncoding,
+    /// The edits, in the server's order.
+    pub edits: Vec<acpilot_lsp::session::FormatEdit>,
+}
+
 /// What a server said is wrong with a document, and the encoding it said it in.
 #[derive(Debug)]
 pub struct Problems {
@@ -369,6 +393,61 @@ impl Servers {
             }
             Err(error) => {
                 tracing::debug!(server = program, %error, "diagnostics failed");
+                sessions.insert(key.clone(), None);
+                None
+            }
+        }
+    }
+
+    /// Ask the server for `language` to format a buffer.
+    ///
+    /// `None` means nothing answered — no server for the language, none installed,
+    /// or one that failed — and the caller saves the buffer unchanged. A server that
+    /// answered with no edits is `Some`, because "already formatted" is an answer
+    /// and "nobody looked" is not.
+    pub async fn format(
+        &self,
+        language: &str,
+        place: &Place,
+        connections: &Arc<Connections>,
+        path: &Path,
+        text: &str,
+        options: FormatOptions,
+    ) -> Option<Formatted> {
+        let (language, program) = SERVERS
+            .iter()
+            .find(|(id, _, _)| *id == language)
+            .map(|(id, program, _)| (*id, *program))?;
+        let key = place.key(language);
+        let mut sessions = self.sessions.lock().await;
+        let running = running(&mut sessions, language, place, connections).await?;
+        running.last_used = Instant::now();
+        running.requests += 1;
+        let encoding = running.session.encoding();
+        if let Err(error) = running.session.open(path, language, text).await {
+            tracing::debug!(server = program, %error, "language server lost the document");
+            sessions.insert(key.clone(), None);
+            return None;
+        }
+        match running
+            .session
+            .format(
+                path,
+                u32::from(options.tab_width.max(1)),
+                options.insert_spaces,
+            )
+            .await
+        {
+            Ok(edits) => {
+                running.last_used = Instant::now();
+                Some(Formatted {
+                    program,
+                    encoding,
+                    edits,
+                })
+            }
+            Err(error) => {
+                tracing::debug!(server = program, %error, "formatting failed");
                 sessions.insert(key.clone(), None);
                 None
             }

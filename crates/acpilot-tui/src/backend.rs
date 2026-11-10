@@ -172,6 +172,8 @@ pub enum Request {
         text: String,
         /// The `etag` the read answered with.
         etag: String,
+        /// Whether to run the daemon's formatter before writing.
+        format: bool,
     },
     /// Attach to one of the open session's terminals, by id.
     OpenTerminal {
@@ -327,6 +329,21 @@ pub enum Update {
         path: String,
         /// The token the next save must send, which is the new file's.
         etag: String,
+    },
+    /// A save the formatter rewrote before writing.
+    ///
+    /// The text travels because the buffer the person sees is the one that was
+    /// written: marking the old buffer saved would show unsaved changes that are
+    /// already on disk.
+    FormattedSaved {
+        /// The path the daemon answered with.
+        path: String,
+        /// The formatted text that was written.
+        text: String,
+        /// The token the next save must send.
+        etag: String,
+        /// Which server formatted it.
+        server: String,
     },
     /// The integrations the bar draws, as the daemon reported them.
     Stats(Vec<IntegrationStats>),
@@ -648,20 +665,56 @@ async fn run(
                         }
                     }
                 }
-                Some(Request::SaveFile { path, text, etag }) => {
+                Some(Request::SaveFile {
+                    path,
+                    text,
+                    etag,
+                    format,
+                }) => {
+                    let (text, formatted) = if format {
+                        match client.format_file(&path, &text).await {
+                            Ok(answer) if answer.formatted => (answer.text, answer.server),
+                            Ok(answer) => {
+                                if let Some(reason) = answer.reason {
+                                    let _ = updates.send(Update::Status(format!(
+                                        "saving unformatted · {reason}"
+                                    )));
+                                }
+                                (answer.text, None)
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::Status(format!(
+                                    "saving unformatted · {error}"
+                                )));
+                                (text, None)
+                            }
+                        }
+                    } else {
+                        (text, None)
+                    };
                     let body = acpilot_proto::file::FileWriteRequest {
                         workspace: None,
                         path: path.clone(),
-                        text,
+                        text: text.clone(),
                         if_match: Some(etag),
                     };
                     match client.write_file(&body).await {
-                        Ok(content) => {
-                            let _ = updates.send(Update::Saved {
-                                path: content.path,
-                                etag: content.etag,
-                            });
-                        }
+                        Ok(content) => match formatted {
+                            Some(server) => {
+                                let _ = updates.send(Update::FormattedSaved {
+                                    path: content.path,
+                                    text,
+                                    etag: content.etag,
+                                    server,
+                                });
+                            }
+                            None => {
+                                let _ = updates.send(Update::Saved {
+                                    path: content.path,
+                                    etag: content.etag,
+                                });
+                            }
+                        },
                         Err(error) => {
                             let _ = updates.send(Update::Status(describe(&error)));
                         }

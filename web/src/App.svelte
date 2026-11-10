@@ -709,7 +709,7 @@
 
       <section class="editor-panel" aria-labelledby="editor-title">
         <h3 id="editor-title">Editor</h3>
-        <Editor {token} />
+        <Editor {token} profile={route.profile} />
       </section>
 
       <SourceControl {token} sessions={rows} openSession={openSession} />

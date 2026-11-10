@@ -122,6 +122,22 @@ pub struct Problem {
     pub code: Option<String>,
 }
 
+/// One edit a formatter asked for.
+///
+/// The positions are in the session's negotiated encoding, like every other
+/// position this crate returns. Applying an edit is the caller's job because the
+/// caller is the one holding the text, and an edit applied to different text is an
+/// edit that never matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormatEdit {
+    /// Where the edit starts.
+    pub start: crate::position::Position,
+    /// Where it ends.
+    pub end: crate::position::Position,
+    /// What replaces that range.
+    pub text: String,
+}
+
 /// What a server published about a document this session opened.
 ///
 /// The path rather than the URI: a publish names a document the way the protocol
@@ -344,6 +360,39 @@ impl Session {
         Ok(locations(&answer))
     }
 
+    /// Ask the server to format `path`, which it must already know through
+    /// [`Session::open`].
+    ///
+    /// The answer is edits rather than a whole document: that is what the protocol
+    /// promises, and applying them here would make this layer own the text. A server
+    /// that refuses the request is an error; a server that answers `null` or an empty
+    /// array has no edits to make, which is a successful format.
+    ///
+    /// # Errors
+    ///
+    /// A path that is not on this filesystem, a server that refused the request, or
+    /// one that did not answer in [`REQUEST`].
+    pub async fn format(
+        &mut self,
+        path: &Path,
+        tab_size: u32,
+        insert_spaces: bool,
+    ) -> Result<Vec<FormatEdit>, SessionError> {
+        let uri = file_uri(path)?;
+        let answer = self
+            .server
+            .request(
+                "textDocument/formatting",
+                json!({
+                    "textDocument": { "uri": uri.as_str() },
+                    "options": { "tabSize": tab_size, "insertSpaces": insert_spaces },
+                }),
+                REQUEST,
+            )
+            .await?;
+        Ok(format_edits(Some(&answer)))
+    }
+
     /// Wait for what the server says is wrong with `path`.
     ///
     /// A publish is a notification, not an answer, so this polls until one arrives or
@@ -516,6 +565,37 @@ fn spelled(value: &Value) -> Option<String> {
     }
 }
 
+/// The edits in a `textDocument/formatting` answer.
+///
+/// `null` and an empty array both mean "nothing to change"; anything inside an
+/// edit that is not a range is dropped rather than defaulted to the start of the
+/// file, because a malformed edit placed at byte zero would rewrite the document.
+#[must_use]
+pub fn format_edits(answer: Option<&Value>) -> Vec<FormatEdit> {
+    let Some(items) = answer.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let range = item.get("range")?;
+            let start = range.get("start")?;
+            let end = range.get("end")?;
+            Some(FormatEdit {
+                start: crate::position::Position::new(
+                    u32::try_from(start.get("line")?.as_u64()?).ok()?,
+                    u32::try_from(start.get("character")?.as_u64()?).ok()?,
+                ),
+                end: crate::position::Position::new(
+                    u32::try_from(end.get("line")?.as_u64()?).ok()?,
+                    u32::try_from(end.get("character")?.as_u64()?).ok()?,
+                ),
+                text: item.get("newText")?.as_str()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
 /// The locations in a `textDocument/references` answer.
 ///
 /// Two shapes are legal and servers pick either: `Location { uri, range }` and
@@ -574,6 +654,39 @@ pub fn locations(answer: &Value) -> Vec<Location> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formatting_edits_carry_their_range_and_replacement() {
+        let answer = json!([
+            {
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 3 }
+                },
+                "newText": "four"
+            },
+            {
+                "range": {
+                    "start": { "line": 2, "character": 1 },
+                    "end": { "line": 2, "character": 1 }
+                },
+                "newText": "\n"
+            }
+        ]);
+        let edits = format_edits(Some(&answer));
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].start, crate::position::Position::new(0, 0));
+        assert_eq!(edits[0].end, crate::position::Position::new(0, 3));
+        assert_eq!(edits[0].text, "four");
+        assert_eq!(edits[1].text, "\n");
+    }
+
+    #[test]
+    fn a_null_or_malformed_format_answer_makes_no_edits() {
+        assert!(format_edits(Some(&Value::Null)).is_empty());
+        assert!(format_edits(Some(&json!([{ "newText": "x" }]))).is_empty());
+        assert!(format_edits(None).is_empty());
+    }
 
     /// The `file://` spelling of an absolute path, as a server sends one.
     ///

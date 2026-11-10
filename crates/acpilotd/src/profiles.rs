@@ -36,7 +36,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use acpilot_core::AcpilotError;
-use acpilot_proto::profile::ProfileSummary;
+use acpilot_proto::ErrorBody;
+use acpilot_proto::profile::{Preferences, PreferencesPatch, ProfileSummary};
 use acpilot_store::{Index, Stores};
 use axum::Json;
 use axum::Router;
@@ -57,6 +58,8 @@ pub const PROFILE_HEADER: &str = "x-acpilot-profile";
 
 /// One profile's state and the router built over it.
 struct Entry {
+    /// The profile's directory, for the preference route that writes `profile.toml`.
+    directory: PathBuf,
     /// Kept beside the router because shutdown and the summary need it: a router
     /// owns its state but does not hand it back.
     state: AppState,
@@ -66,7 +69,7 @@ struct Entry {
 }
 
 impl Entry {
-    fn new(name: &str, state: AppState) -> Self {
+    fn new(name: &str, directory: PathBuf, state: AppState) -> Self {
         let summary = ProfileSummary {
             id: name.to_owned(),
             label: name.to_owned(),
@@ -80,6 +83,7 @@ impl Entry {
             workspace_count: u32::from(state.workspace().is_some()),
         };
         Self {
+            directory,
             router: router_with(state.clone()),
             state,
             summary,
@@ -183,7 +187,7 @@ impl Profiles {
             let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
                 entries: BTreeMap::new(),
-                anonymous: Some(Entry::new("", state)),
+                anonymous: Some(Entry::new("", PathBuf::new(), state)),
                 active: RwLock::new(String::new()),
             });
         }
@@ -207,7 +211,10 @@ impl Profiles {
                             tracing::warn!(%error, profile = %name, "the workspace was not indexed");
                         }
                     }
-                    entries.insert(name.clone(), Entry::new(name, state.with_cors(cors)));
+                    entries.insert(
+                        name.clone(),
+                        Entry::new(name, directory.to_path_buf(), state.with_cors(cors)),
+                    );
                 }
                 Err(error) if Some(name) == started_name.as_ref() => return Err(error),
                 Err(error) => {
@@ -224,7 +231,7 @@ impl Profiles {
             let state = startup_with_stores(None, workspace, Arc::clone(&stores))?.with_cors(cors);
             return Ok(Self {
                 entries: BTreeMap::new(),
-                anonymous: Some(Entry::new("", state)),
+                anonymous: Some(Entry::new("", PathBuf::new(), state)),
                 active: RwLock::new(String::new()),
             });
         }
@@ -278,7 +285,8 @@ impl Profiles {
         let entries: BTreeMap<String, Entry> = rows
             .into_iter()
             .map(|(name, state)| {
-                let entry = Entry::new(&name, state);
+                let directory = acpilot_profile::profiles_dir().join(&name);
+                let entry = Entry::new(&name, directory, state);
                 (name, entry)
             })
             .collect();
@@ -370,6 +378,12 @@ impl Profiles {
         Ok(self.active())
     }
 
+    fn entry(&self, name: &str) -> Result<&Entry, ApiError> {
+        self.entries
+            .get(name)
+            .ok_or_else(|| no_such_profile(name, &self.names()))
+    }
+
     fn router_for(&self, name: &str) -> Option<&Router> {
         if name.is_empty() {
             self.anonymous.as_ref().map(|entry| &entry.router)
@@ -435,6 +449,10 @@ pub fn router(profiles: Arc<Profiles>) -> Router {
         .route("/v1/profiles", get(list_profiles))
         .route("/v1/profiles/{id}", get(read_profile))
         .route("/v1/profiles/{id}/activate", post(activate_profile))
+        .route(
+            "/v1/profiles/{id}/preferences",
+            get(read_preferences).patch(patch_preferences),
+        )
         .fallback(dispatch)
         .with_state(profiles)
 }
@@ -461,6 +479,170 @@ async fn activate_profile(
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<ProfileSummary>, ApiError> {
     profiles.activate(&id).map(Json)
+}
+
+/// `GET /v1/profiles/{id}/preferences`.
+async fn read_preferences(
+    State(profiles): State<Arc<Profiles>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<Preferences>, ApiError> {
+    let entry = profiles.entry(&id)?;
+    let preferences = entry
+        .state
+        .preferences()
+        .or_else(|| acpilot_profile::prefs::defaults().ok());
+    preferences.map(Json).ok_or_else(|| {
+        ApiError::new(AcpilotError::invalid(
+            "this profile's settings do not resolve, so there are no preferences to read",
+        ))
+    })
+}
+
+/// `PATCH /v1/profiles/{id}/preferences`.
+///
+/// Only the named keys are written. The file's other tables and unknown keys stay
+/// where they are: a preferences patch must not become a rewrite of a profile's
+/// policy. The write is validated by reading the cascade back, and a file that
+/// would not parse is restored rather than left as a profile that cannot start.
+async fn patch_preferences(
+    State(profiles): State<Arc<Profiles>>,
+    UrlPath(id): UrlPath<String>,
+    body: Result<Json<PreferencesPatch>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Preferences>, ApiError> {
+    let Json(patch) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a preferences patch: {rejection}"
+        )))
+    })?;
+    if patch.is_empty() {
+        return Err(ApiError::new(AcpilotError::invalid(
+            "the preferences patch names no values",
+        )));
+    }
+    let entry = profiles.entry(&id)?;
+    let path = entry
+        .directory
+        .join(acpilot_profile::settings::PROFILE_SETTINGS_FILE);
+    let previous = std::fs::read_to_string(&path).ok();
+    write_preferences(&path, &patch)?;
+    let preferences = entry.state.preferences();
+    let Some(preferences) = preferences else {
+        restore(&path, previous.as_deref());
+        return Err(ApiError::new(AcpilotError::invalid(
+            "the patch produced settings this daemon could not read; nothing was changed",
+        )));
+    };
+    entry.state.announce_preferences(preferences.clone());
+    Ok(Json(preferences))
+}
+
+/// Merge a patch into a profile's `profile.toml` and write it back.
+///
+/// The document is parsed as TOML and rendered again, so comments are not part of
+/// the promise this function keeps: the keys and tables are. A comment-preserving
+/// writer would need an editing parser rather than a value tree.
+fn write_preferences(path: &Path, patch: &PreferencesPatch) -> Result<(), ApiError> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut document: toml::Value = if text.trim().is_empty() {
+        toml::Value::Table(toml::map::Map::new())
+    } else {
+        toml::from_str(&text).map_err(|error| {
+            ApiError::new(AcpilotError::invalid(format!(
+                "{} does not parse: {error}",
+                path.display()
+            )))
+        })?
+    };
+    let Some(root) = document.as_table_mut() else {
+        return Err(ApiError::new(AcpilotError::invalid(format!(
+            "{} is not a TOML table",
+            path.display()
+        ))));
+    };
+    let preferences = root
+        .entry("preferences")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::invalid(format!(
+                "{} has a `preferences` key that is not a table",
+                path.display()
+            )))
+        })?;
+    patch_preferences_into(preferences, patch);
+    let rendered = toml::to_string(&document).map_err(|error| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the preferences could not be written: {error}"
+        )))
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| {
+            ApiError::new(AcpilotError::Io(std::io::Error::new(
+                source.kind(),
+                format!("{}: {source}", parent.display()),
+            )))
+        })?;
+    }
+    std::fs::write(path, rendered).map_err(|source| {
+        ApiError::new(AcpilotError::Io(std::io::Error::new(
+            source.kind(),
+            format!("{}: {source}", path.display()),
+        )))
+    })
+}
+
+/// Put only the keys a patch names into a `[preferences]` table.
+fn patch_preferences_into(
+    table: &mut toml::map::Map<String, toml::Value>,
+    patch: &PreferencesPatch,
+) {
+    macro_rules! put {
+        ($key:literal, $value:expr) => {
+            if let Some(value) = $value {
+                table.insert(
+                    $key.to_owned(),
+                    toml::Value::try_from(value).expect("a preference serializes"),
+                );
+            }
+        };
+    }
+    put!("tab_width", patch.tab_width.as_ref());
+    put!("insert_spaces", patch.insert_spaces.as_ref());
+    put!("format_on_save", patch.format_on_save.as_ref());
+    put!(
+        "trim_trailing_whitespace",
+        patch.trim_trailing_whitespace.as_ref()
+    );
+    put!("wrap", patch.wrap.as_ref());
+    put!("rulers", patch.rulers.as_ref());
+    put!("theme", patch.theme.as_ref());
+    put!("theme_tui", patch.theme_tui.as_ref());
+    put!("theme_gui", patch.theme_gui.as_ref());
+    put!("theme_web", patch.theme_web.as_ref());
+    put!(
+        "theme_follow_terminal",
+        patch.theme_follow_terminal.as_ref()
+    );
+    put!(
+        "tree_respect_gitignore",
+        patch.tree_respect_gitignore.as_ref()
+    );
+    put!(
+        "diagnostics_min_severity",
+        patch.diagnostics_min_severity.as_ref()
+    );
+}
+
+/// Put a file back after a patch that did not produce readable settings.
+fn restore(path: &Path, previous: Option<&str>) {
+    match previous {
+        Some(text) => {
+            let _ = std::fs::write(path, text);
+        }
+        None => {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Hand a request to the router of the profile it names.
@@ -517,6 +699,12 @@ pub fn register(document: &mut utoipa::openapi::OpenApi) {
             <__path_activate_profile_doc as utoipa::Path>::operation(),
         ),
     );
+    let mut preferences = PathItem::new(
+        HttpMethod::Get,
+        <__path_read_preferences_doc as utoipa::Path>::operation(),
+    );
+    preferences.patch = Some(<__path_patch_preferences_doc as utoipa::Path>::operation());
+    paths.insert("/v1/profiles/{id}/preferences".to_owned(), preferences);
 }
 
 #[allow(dead_code)]
@@ -562,3 +750,69 @@ fn read_profile_doc() {}
     )
 )]
 fn activate_profile_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/profiles/{id}/preferences",
+    tag = "profiles",
+    summary = "Read a profile's effective preferences",
+    description = "The merged answer a client would draw with: defaults, the user's file, the profile's files and the project's layer. This is the same object the `prefs` event carries.",
+    params(("id" = String, Path, description = "The profile's directory name")),
+    responses(
+        (status = 200, description = "The effective preferences", body = Preferences),
+        (status = 404, description = "No profile by that name on this daemon", body = ErrorBody)
+    )
+)]
+fn read_preferences_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    patch,
+    path = "/v1/profiles/{id}/preferences",
+    tag = "profiles",
+    summary = "Change some of a profile's preferences",
+    description = "Only the keys the body names are written, into the profile's `profile.toml`; every other table and key is left alone. The answer is the merged preferences after the write, and the change is announced as a `prefs` event.",
+    params(("id" = String, Path, description = "The profile's directory name")),
+    request_body = PreferencesPatch,
+    responses(
+        (status = 200, description = "The effective preferences after the patch", body = Preferences),
+        (status = 400, description = "An empty or malformed patch, or one that would make the settings unreadable", body = ErrorBody),
+        (status = 404, description = "No profile by that name on this daemon", body = ErrorBody)
+    )
+)]
+fn patch_preferences_doc() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_patch_writes_only_the_keys_it_names() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("profile.toml");
+        std::fs::write(
+            &path,
+            "[preferences]\ntab_width = 2\ntheme = \"acpilot.paper\"\n\n[policy]\ndefault = \"deny\"\n",
+        )
+        .expect("write");
+
+        let patch = PreferencesPatch {
+            format_on_save: Some(true),
+            rulers: Some(vec![80, 100]),
+            ..PreferencesPatch::default()
+        };
+        write_preferences(&path, &patch).expect("patch");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("format_on_save = true"), "{text}");
+        assert!(text.contains("rulers = [80, 100]"), "{text}");
+        assert!(text.contains("tab_width = 2"), "the old key stays: {text}");
+        assert!(text.contains("[policy]"), "other tables stay: {text}");
+    }
+
+    #[test]
+    fn an_empty_patch_is_refused_before_touching_the_file() {
+        let patch = PreferencesPatch::default();
+        assert!(patch.is_empty());
+    }
+}

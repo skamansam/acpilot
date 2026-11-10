@@ -101,6 +101,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/files/format": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Format an open buffer with the language server */
+        post: operations["format_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/files/grep": {
         parameters: {
             query?: never;
@@ -497,6 +514,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/profiles/{id}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a profile's effective preferences
+         * @description The merged answer a client would draw with: defaults, the user's file, the profile's files and the project's layer. This is the same object the `prefs` event carries.
+         */
+        get: operations["read_preferences_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change some of a profile's preferences
+         * @description Only the keys the body names are written, into the profile's `profile.toml`; every other table and key is left alone. The answer is the merged preferences after the write, and the change is announced as a `prefs` event.
+         */
+        patch: operations["patch_preferences_doc"];
         trace?: never;
     };
     "/v1/project/map": {
@@ -1212,6 +1253,42 @@ export interface components {
             status?: components["schemas"]["FileChange"] | null;
         };
         /**
+         * @description What a formatter did with a buffer.
+         *
+         *     `formatted` is true only when a language server answered. A language with no
+         *     server, an installed server that refused, or a refusal to start is not a
+         *     formatting failure the save has to stop for: `text` is the buffer as it
+         *     arrived, and `reason` says why nothing changed. That lets format-on-save be
+         *     safe on every file rather than a command that can lose an edit.
+         */
+        FileFormat: {
+            /** @description Whether a language server answered and its edits were applied. */
+            formatted: boolean;
+            /** @description Workspace-relative path that was formatted. */
+            path: string;
+            /** @description Why the buffer was left alone, when it was. */
+            reason?: string | null;
+            /** @description The command that formatted, when one did. */
+            server?: string | null;
+            /** @description The buffer after formatting, or the input when no formatter answered. */
+            text: string;
+        };
+        /**
+         * @description Request body for `POST /v1/files/format`.
+         *
+         *     The text is the buffer the editor holds, not the file on disk: a save is the
+         *     moment the formatter has to see what the person typed. Nothing here writes —
+         *     the caller saves the returned text through `PUT /v1/files`.
+         */
+        FileFormatRequest: {
+            /** @description The file to format, workspace-relative. */
+            path: string;
+            /** @description The buffer as the editor holds it. */
+            text: string;
+            /** @description Workspace id, when the client names one. The daemon serves exactly one. */
+            workspace?: string | null;
+        };
+        /**
          * @description Request body for `POST /v1/files/rename`.
          *
          *     A move is not a write: it changes the name of a file without touching its text,
@@ -1743,6 +1820,80 @@ export interface components {
             trim_trailing_whitespace: boolean;
             /** @description Soft-wrap long lines. */
             wrap: boolean;
+        };
+        /**
+         * @description A partial preferences update.
+         *
+         *     Every field is optional because a patch names only what changed. The daemon
+         *     merges the named fields into the profile's `[preferences]` table and leaves
+         *     the rest — including keys a newer binary wrote — alone. A full
+         *     [`Preferences`] is deliberately not the body: a client that did not know
+         *     about a new field must not erase it by sending the object it read back.
+         */
+        PreferencesPatch: {
+            /** @default null */
+            diagnostics_min_severity: components["schemas"]["DiagnosticSeverity"] | null;
+            /**
+             * @description Run the formatter on save when one is available.
+             * @default null
+             */
+            format_on_save: boolean | null;
+            /**
+             * @description Insert spaces instead of tab characters.
+             * @default null
+             */
+            insert_spaces: boolean | null;
+            /**
+             * @description Columns to draw a vertical ruler at, in cells.
+             * @default null
+             */
+            rulers: number[] | null;
+            /**
+             * Format: int32
+             * @description Columns per tab stop.
+             * @default null
+             */
+            tab_width: number | null;
+            /**
+             * @description Theme identifier for every surface that does not name its own.
+             * @default null
+             */
+            theme: string | null;
+            /**
+             * @description Solve the terminal's palette from the terminal's own colours.
+             * @default null
+             */
+            theme_follow_terminal: boolean | null;
+            /**
+             * @description Theme for the desktop app.
+             * @default null
+             */
+            theme_gui: string | null;
+            /**
+             * @description Theme for the terminal UI.
+             * @default null
+             */
+            theme_tui: string | null;
+            /**
+             * @description Theme for the browser UI.
+             * @default null
+             */
+            theme_web: string | null;
+            /**
+             * @description Leave paths a `.gitignore` excludes out of the file tree.
+             * @default null
+             */
+            tree_respect_gitignore: boolean | null;
+            /**
+             * @description Strip trailing whitespace on save.
+             * @default null
+             */
+            trim_trailing_whitespace: boolean | null;
+            /**
+             * @description Soft-wrap long lines.
+             * @default null
+             */
+            wrap: boolean | null;
         };
         /** @description A profile as returned by `GET /v1/profiles`. */
         ProfileSummary: {
@@ -2558,6 +2709,48 @@ export interface operations {
                 };
             };
             /** @description A body that is not a diagnostics request, or a path that escapes */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description This daemon has no workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    format_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileFormatRequest"];
+            };
+        };
+        responses: {
+            /** @description The formatted text, or the buffer unchanged with a reason */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileFormat"];
+                };
+            };
+            /** @description A body that is not a format request, or a path that escapes */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3680,6 +3873,83 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    read_preferences_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The profile's directory name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective preferences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description No profile by that name on this daemon */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    patch_preferences_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The profile's directory name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencesPatch"];
+            };
+        };
+        responses: {
+            /** @description The effective preferences after the patch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description An empty or malformed patch, or one that would make the settings unreadable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No profile by that name on this daemon */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

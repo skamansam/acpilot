@@ -3873,6 +3873,31 @@ impl App {
                     self.ask_about_problems();
                 }
             }
+            Update::FormattedSaved {
+                path,
+                text,
+                etag,
+                server,
+            } => {
+                let mut saved_this = false;
+                if let Some(editor) = &mut self.editor
+                    && editor.path() == path
+                {
+                    // The formatter's text is what was written: replacing the buffer
+                    // keeps the pane and the file the same version, and the undo
+                    // history can still take the pre-format text back.
+                    if editor.replace_all(&text, std::time::Instant::now()) {
+                        editor.settle();
+                    }
+                    editor.set_etag(etag);
+                    editor.mark_saved();
+                    self.status = format!("saved {path} · formatted by {server}");
+                    saved_this = true;
+                }
+                if saved_this {
+                    self.ask_about_problems();
+                }
+            }
             Update::Status(message) => self.status = message,
             Update::Preferences(preferences) => {
                 self.preferences = preferences;
@@ -5202,7 +5227,12 @@ impl App {
             self.notice("trimmed trailing whitespace before saving");
         }
         self.status = format!("saving {path}…");
-        Some(Request::SaveFile { path, text, etag })
+        Some(Request::SaveFile {
+            path,
+            text,
+            etag,
+            format: self.preferences.format_on_save,
+        })
     }
 
     /// The editor's keys, over the document the pane holds.
@@ -8346,7 +8376,10 @@ mod tests {
         app.handle_key(key(KeyCode::Char('x')));
         app.handle_key(key(KeyCode::Esc));
         let request = app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
-        let Some(Request::SaveFile { path, text, etag }) = request else {
+        let Some(Request::SaveFile {
+            path, text, etag, ..
+        }) = request
+        else {
             panic!("a save is a request: {request:?}");
         };
         assert_eq!(path, "src/main.rs");

@@ -729,6 +729,9 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
                 // the terminal's copy mode uses: it has to read as marked on every
                 // theme, including one whose accent is close to its background.
                 State::Selected => style.add_modifier(Modifier::REVERSED),
+                // A ruler is a reading aid, not text: it is drawn in the border
+                // colour so it never competes with a syntax token.
+                State::Ruler => style.fg(theme.border()),
             };
             spans.push(Span::styled(run.text.clone(), style));
         }

@@ -7,7 +7,7 @@ import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Editor from './Editor.svelte';
-import type { FileContent, FileEntry } from './api';
+import type { FileContent, FileEntry, Preferences } from './api';
 import { plainFetch, type PlainFetch } from './test-fetch';
 
 const ROOT: FileEntry[] = [
@@ -18,6 +18,20 @@ const ROOT: FileEntry[] = [
 const SRC: FileEntry[] = [{ path: 'src/main.rs', is_dir: false, size: 34 }];
 
 const README: FileContent = { path: 'README.md', text: '# Acpilot\n', etag: 'v1' };
+
+const PREFS: Preferences = {
+  schema_version: 1,
+  tab_width: 4,
+  insert_spaces: true,
+  format_on_save: false,
+  trim_trailing_whitespace: false,
+  wrap: true,
+  rulers: [80],
+  theme: 'acpilot.night-flight',
+  theme_follow_terminal: false,
+  tree_respect_gitignore: true,
+  diagnostics_min_severity: 'warning',
+};
 
 const MAIN: FileContent = {
   path: 'src/main.rs',
@@ -61,6 +75,9 @@ beforeEach(() => {
         const route = String(input);
         const headers = (init?.headers ?? {}) as Record<string, string>;
         calls.push({ route, authorization: headers.Authorization ?? headers.authorization });
+        if (route === '/v1/profiles/demo/preferences') {
+          return json(PREFS);
+        }
         if (route.startsWith('/v1/files/list?path=src')) {
           return json(SRC);
         }
@@ -105,8 +122,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(): void {
-  const instance = mount(Editor, { target, props: { token: 'stored' } });
+function render(props: { token: string; profile?: string } = { token: 'stored' }): void {
+  const instance = mount(Editor, { target, props });
   cleanups.push(() => unmount(instance));
 }
 
@@ -178,6 +195,19 @@ describe('a file', () => {
     // never opens a file does not need a DOM the editor can measure.
     await find('.cm-editor');
     expect(target.textContent).toContain('# Acpilot');
+  });
+
+  it('applies wrap and rulers from the profile preferences', async () => {
+    render({ token: 'stored', profile: 'demo' });
+    await (await findButton('README.md')).click();
+    await find('.cm-editor');
+
+    await vi.waitFor(() => {
+      const host = target.querySelector('.editor-host') as HTMLElement;
+      expect(host.style.getPropertyValue('--acpilot-ruler-image')).toContain('80ch');
+    });
+    expect(target.querySelector('.cm-content')?.classList.contains('cm-lineWrapping')).toBe(true);
+    expect(calls.some((call) => call.route === '/v1/profiles/demo/preferences')).toBe(true);
   });
 
   it('can be opened by typing its path', async () => {

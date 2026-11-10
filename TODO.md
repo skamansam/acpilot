@@ -908,14 +908,20 @@ Three rules:
     `prefs_error` without losing its colours. Tests cover the parent-profile watch, the error
     frame on both the daemon and client, indentation, trimming, the severity floor, and a
     keymap that stays in force when a save does not parse.
-  - **Open:** `format_on_save` has no formatter interface yet, so it is carried and not acted on;
-    `wrap` and `rulers` are in the schema but no TUI/web editor consumes them yet. The daemon
-    announces `prefs`/`prefs_error`; there is no separate `profile.changed` event. The read and
-    patch routes for preferences remain P4-8.
+  - **Open:** there is no separate `profile.changed` event. Format-on-save now goes through the
+    daemon's language-server formatter (`POST /v1/files/format`), and the TUI and browser both apply
+    `wrap` and `rulers`; the preference read/patch routes landed with P4-8's first half.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 
 - [ ] **P4-8 · API** (1d)
+  - **Preferences routes (2026-11-10):** `GET /v1/profiles/{id}/preferences` answers the merged
+    preferences a client draws with, and `PATCH` accepts a `PreferencesPatch` naming only the keys
+    to change. The patch is written into that profile's `profile.toml`, preserving every other key
+    and table; a write that would make the cascade unreadable is rolled back and refused. The
+    answer is announced immediately as a `prefs` frame as well as being picked up by the watcher.
+    **Tests:** the writer keeps an old key and another table, and an empty patch is refused before
+    it touches the file.
   - `GET/POST /v1/profiles`, `GET/PATCH/DELETE /v1/profiles/{id}`,
     `POST /v1/profiles/{id}/activate`, `GET/PATCH /v1/profiles/{id}/preferences`,
     `POST /v1/profiles/{id}/export`.

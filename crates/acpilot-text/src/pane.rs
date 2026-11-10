@@ -26,10 +26,10 @@
 //!   line.
 //!
 //! What is not here: colours (a [`Cell`] carries the char offset and the pane
-//! asks the highlighter), wrapping (long lines scroll, they do not fold — a soft
-//! wrap is a layout a pane chooses, and it changes what "one row" means), and
-//! diffing: a review is drawn from the hunks it was given, not from a diff the
-//! pane computes.
+//! asks the highlighter), and diffing: a review is drawn from the hunks it was
+//! given, not from a diff the pane computes. Wrapping is opt-in through
+//! [`Viewport::with_wrap`]: it changes how many rows a line occupies, never the
+//! line or caret the buffer reports.
 
 use std::ops::Range;
 
@@ -54,6 +54,7 @@ pub struct Viewport {
     rows: usize,
     cols: usize,
     tab_width: usize,
+    wrap: bool,
 }
 
 impl Viewport {
@@ -67,6 +68,7 @@ impl Viewport {
             rows,
             cols,
             tab_width: TAB_WIDTH,
+            wrap: false,
         }
     }
 
@@ -79,6 +81,23 @@ impl Viewport {
     pub fn with_tab_width(mut self, tab_width: usize) -> Self {
         self.tab_width = tab_width.max(1);
         self
+    }
+
+    /// Whether long lines fold at the right edge instead of scrolling.
+    ///
+    /// Presentation only: the buffer's lines and the caret's line/column do not
+    /// change. A wrapped pane measures a row as a visual segment, which is why the
+    /// caret and click arithmetic ask this viewport rather than counting lines.
+    #[must_use]
+    pub fn with_wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// Whether long lines fold.
+    #[must_use]
+    pub const fn wrap(&self) -> bool {
+        self.wrap
     }
 
     /// Change the size, keeping the top-left corner.
@@ -138,6 +157,11 @@ impl Viewport {
     /// The largest `top` that still fills the viewport, so scrolling stops with
     /// the last line at the bottom rather than in the middle.
     fn max_top(&self, buffer: &Buffer) -> usize {
+        if self.wrap {
+            // A wrapped line can fill the pane on its own, so the last line must be
+            // reachable as the top rather than the last screenful of lines.
+            return buffer.line_count().saturating_sub(1);
+        }
         buffer.line_count().saturating_sub(self.rows.max(1))
     }
 
@@ -160,6 +184,9 @@ impl Viewport {
     /// end to clamp to — the longest line is not known without walking the file —
     /// so it stops at the left edge and otherwise scrolls as asked.
     pub fn scroll_columns(&mut self, delta: isize) -> bool {
+        if self.wrap {
+            return false;
+        }
         let left = shifted(self.left, delta);
         let moved = left != self.left;
         self.left = left;
@@ -180,6 +207,21 @@ impl Viewport {
             return false;
         }
         let line = caret.line.min(buffer.line_count().saturating_sub(1));
+        if self.wrap {
+            self.left = 0;
+            let mut moved = self.set_top(self.top.min(self.max_top(buffer)));
+            if line < self.top {
+                moved |= self.set_top(line);
+            } else {
+                let rows = self.rows.max(1);
+                let mut top = self.top;
+                while top < line && self.visual_row(buffer, line, caret.column, top) >= rows {
+                    top += 1;
+                }
+                moved |= self.set_top(top);
+            }
+            return moved;
+        }
         // A viewport that grew has to stop being scrolled past the end of the
         // document: the first real size a pane is given arrives after it was
         // created one row tall, and without this the editor opens near the bottom
@@ -210,6 +252,9 @@ impl Viewport {
     /// than as lines that are not there.
     #[must_use]
     pub fn visible(&self, buffer: &Buffer) -> Vec<Row> {
+        if self.wrap {
+            return self.visible_wrapped(buffer);
+        }
         let lines = buffer.line_count();
         let mut rows = Vec::with_capacity(self.rows.min(lines));
         for row in 0..self.rows {
@@ -220,6 +265,88 @@ impl Viewport {
             rows.push(self.row(buffer, line));
         }
         rows
+    }
+
+    /// The rows a wrapped pane shows, filling the screen across line endings.
+    fn visible_wrapped(&self, buffer: &Buffer) -> Vec<Row> {
+        let lines = buffer.line_count();
+        let mut rows = Vec::with_capacity(self.rows);
+        let mut line = self.top;
+        while rows.len() < self.rows && line < lines {
+            for row in self.wrapped_rows(buffer, line) {
+                if rows.len() == self.rows {
+                    break;
+                }
+                rows.push(row);
+            }
+            line += 1;
+        }
+        rows
+    }
+
+    /// One line split into the visual rows a wrapped pane draws.
+    ///
+    /// The split is by cells, not characters: a tab is several cells and a wide
+    /// glyph is two, so chunking the `Vec<Cell>` would put a wide glyph in a row
+    /// that claims one more column than it has. A wide glyph that cannot fit in an
+    /// empty row is drawn alone rather than dropped.
+    fn wrapped_rows(&self, buffer: &Buffer, line: usize) -> Vec<Row> {
+        let cells = self.full_row(buffer, line);
+        if cells.is_empty() {
+            return vec![Row {
+                line,
+                start: 0,
+                cells: Vec::new(),
+            }];
+        }
+        let cols = self.cols.max(1);
+        let mut rows = Vec::new();
+        let mut segment = Vec::new();
+        let mut start = 0;
+        let mut column = 0;
+        for cell in cells {
+            let width = cells_of(cell.ch, column, self.tab_width).max(1);
+            if !segment.is_empty() && column - start + width > cols {
+                rows.push(Row {
+                    line,
+                    start,
+                    cells: std::mem::take(&mut segment),
+                });
+                start = column;
+            }
+            segment.push(cell);
+            column += width;
+        }
+        rows.push(Row {
+            line,
+            start,
+            cells: segment,
+        });
+        rows
+    }
+
+    /// Every cell of one line, tabs expanded and nothing clipped.
+    fn full_row(&self, buffer: &Buffer, line: usize) -> Vec<Cell> {
+        let range = buffer.line_range(line);
+        let text = buffer.slice(range.clone());
+        let mut cells = Vec::new();
+        let mut column = 0;
+        for (offset, character) in text.chars().enumerate() {
+            let width = cells_of(character, column, self.tab_width);
+            let at = range.start + offset;
+            if character == '\t' {
+                for _ in 0..width {
+                    cells.push(Cell { ch: ' ', at: None });
+                }
+            } else {
+                cells.push(Cell {
+                    ch: character,
+                    at: Some(at),
+                });
+            }
+            column += width;
+        }
+        cells
     }
 
     /// One line as it will be drawn: the characters the window shows, and blank
@@ -263,7 +390,11 @@ impl Viewport {
             }
             column += width;
         }
-        Row { line, cells }
+        Row {
+            line,
+            start: self.left,
+            cells,
+        }
     }
 
     /// Where the caret is on screen: the row of the viewport and the cell column
@@ -277,13 +408,64 @@ impl Viewport {
         if self.rows == 0 || self.cols == 0 {
             return None;
         }
-        let row = self.row_of(caret.line)?;
         if caret.line >= buffer.line_count() {
             return None;
         }
+        if self.wrap {
+            let cells = caret_cells(buffer, caret, self.tab_width);
+            let cols = self.cols.max(1);
+            let row = self.visual_row(buffer, caret.line, caret.column, self.top);
+            return (row < self.rows).then_some((row, cells % cols));
+        }
+        let row = self.row_of(caret.line)?;
         let column = caret_cells(buffer, caret, self.tab_width);
         (column >= self.left && column < self.left + self.cols.max(1))
             .then(|| (row, column - self.left))
+    }
+
+    /// How many visual rows a line occupies at this width.
+    fn line_rows(&self, buffer: &Buffer, line: usize) -> usize {
+        let cells = caret_cells(buffer, LineColumn::new(line, usize::MAX), self.tab_width);
+        cells.div_ceil(self.cols.max(1)).max(1)
+    }
+
+    /// The visual row of a caret, counted from `top`.
+    fn visual_row(&self, buffer: &Buffer, line: usize, column: usize, top: usize) -> usize {
+        let mut row = 0;
+        for above in top..line {
+            row += self.line_rows(buffer, above);
+        }
+        let cells = caret_cells(buffer, LineColumn::new(line, column), self.tab_width);
+        row + cells / self.cols.max(1)
+    }
+
+    /// Where a visual row and cell name a buffer position.
+    ///
+    /// A wrapped pane's row is not a line: continuation rows belong to the same
+    /// line, and a click on the second segment has to land after the first. A row
+    /// past the end is the end of the document, never a panic.
+    #[must_use]
+    pub fn position_at(&self, buffer: &Buffer, row: usize, cell: usize) -> LineColumn {
+        let lines = buffer.line_count();
+        if !self.wrap {
+            let line = (self.top + row).min(lines.saturating_sub(1));
+            return LineColumn::new(
+                line,
+                column_at(buffer, line, self.left + cell, self.tab_width),
+            );
+        }
+        let cols = self.cols.max(1);
+        let mut visual = 0;
+        for line in self.top..lines {
+            let height = self.line_rows(buffer, line);
+            if row < visual + height {
+                let offset = (row - visual) * cols + cell;
+                return LineColumn::new(line, column_at(buffer, line, offset, self.tab_width));
+            }
+            visual += height;
+        }
+        let line = lines.saturating_sub(1);
+        LineColumn::new(line, buffer.slice(buffer.line_range(line)).chars().count())
     }
 
     /// Move the top of the viewport, clamped by nothing: the caller has the buffer
@@ -300,6 +482,9 @@ impl Viewport {
 pub struct Row {
     /// The line's number in the buffer, zero-based.
     pub line: usize,
+    /// The cell column this row starts at, for a decoration measured in the
+    /// line rather than in the visual row (a ruler, and a horizontal scroll).
+    pub start: usize,
     /// The cells that fit, left to right.
     pub cells: Vec<Cell>,
 }
@@ -918,6 +1103,45 @@ mod tests {
         buffer.apply(&[crate::edit::Replacement::of(0..0, "zero ".to_owned())]);
         find.rescan(&buffer);
         assert_eq!(find.current(), Some(9..12), "moved with the text");
+    }
+
+    #[test]
+    fn a_wrapped_line_is_several_rows_and_keeps_its_line_number() {
+        let buffer = Buffer::from_text("abcdef\nxy\n");
+        let viewport = Viewport::new(2, 4).with_wrap(true);
+        let rows = viewport.visible(&buffer);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].text(), "abcd");
+        assert_eq!(rows[1].text(), "ef");
+        assert_eq!(rows[0].line, 0);
+        assert_eq!(rows[1].line, 0, "a continuation is the same buffer line");
+    }
+
+    #[test]
+    fn wrapped_rows_keep_character_offsets_and_absolute_columns() {
+        let buffer = Buffer::from_text("éé\n日日\n");
+        let viewport = Viewport::new(3, 2).with_wrap(true);
+        let rows = viewport.visible(&buffer);
+        assert_eq!(rows[0].start, 0);
+        assert_eq!(
+            rows[0].cells.iter().map(|cell| cell.at).collect::<Vec<_>>(),
+            vec![Some(0), Some(1)],
+            "a two-byte character is still one character offset"
+        );
+        assert_eq!(rows[1].start, 0);
+        assert_eq!(rows[1].cells[0].at, Some(3));
+        assert_eq!(rows[2].start, 2, "the second wide glyph starts a new row");
+        assert_eq!(rows[2].cells[0].at, Some(4));
+    }
+
+    #[test]
+    fn a_wrapped_caret_and_click_agree_about_the_segment() {
+        let buffer = Buffer::from_text("abcdef\nxy\n");
+        let mut viewport = Viewport::new(2, 4).with_wrap(true);
+        assert_eq!(viewport.caret(&buffer, LineColumn::new(0, 5)), Some((1, 1)));
+        assert_eq!(viewport.position_at(&buffer, 1, 2), LineColumn::new(0, 6));
+        viewport.reveal(&buffer, LineColumn::new(1, 1));
+        assert_eq!(viewport.top(), 1, "the next line replaces the wrapped one");
     }
 
     proptest! {

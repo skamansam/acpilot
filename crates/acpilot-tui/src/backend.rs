@@ -23,6 +23,8 @@ use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::keymap::Keymap;
+
 /// How long the session list waits before asking again.
 ///
 /// Status is not on the event stream — a turn ending changes a summary, not the
@@ -364,6 +366,17 @@ pub enum Update {
     /// read itself: the daemon's answer is the authoritative one, so the first of
     /// these takes over from the file watcher rather than racing it.
     DaemonTheme(crate::Theme),
+    /// The daemon's preferences, for the panes that are not a theme.
+    ///
+    /// Sent beside [`Update::DaemonTheme`] from the same frame: the theme is what
+    /// the window draws with, and this is what the editor indents with. A client
+    /// that only received the theme would keep yesterday's tab width until a
+    /// restart.
+    Preferences(acpilot_proto::profile::Preferences),
+    /// A settings save the daemon could not read, with its explanation.
+    PreferencesError(String),
+    /// `keymap.toml` changed and parsed.
+    Keymap(Keymap),
     /// A turn was accepted.
     Prompted {
         /// Session id.
@@ -1203,6 +1216,7 @@ async fn follow_permissions(
                 // one. A theme this build cannot resolve is said out loud rather
                 // than ignored: it is a preference, and somebody chose it.
                 Ok(ProfileStream::Preferences(preferences)) => {
+                    let _ = updates.send(Update::Preferences(preferences.clone()));
                     match crate::theme_for(&preferences, terminal) {
                         Some(theme) => {
                             let _ = updates.send(Update::DaemonTheme(theme));
@@ -1215,6 +1229,9 @@ async fn follow_permissions(
                             ));
                         }
                     }
+                }
+                Ok(ProfileStream::PreferencesError(message)) => {
+                    let _ = updates.send(Update::PreferencesError(message));
                 }
                 Ok(ProfileStream::Diagnostics(notice)) => {
                     let _ = updates.send(Update::DiagnosticsPushed(notice));

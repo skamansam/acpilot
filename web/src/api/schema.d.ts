@@ -1676,11 +1676,18 @@ export interface components {
          */
         Preferences: {
             /** @description Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`. */
-            diagnostics_min_severity: string;
+            diagnostics_min_severity: components["schemas"]["DiagnosticSeverity"];
             /** @description Run the formatter on save when one is available. */
             format_on_save: boolean;
             /** @description Insert spaces instead of tab characters. */
             insert_spaces: boolean;
+            /**
+             * @description Columns to draw a vertical ruler at, in cells.
+             *
+             *     Rulers are a reading aid, not a hard limit: a line past one is drawn, not
+             *     refused. Empty means the editor draws none, which is the default.
+             */
+            rulers?: number[];
             /**
              * Format: int32
              * @description Schema version of this document, so migrations are explicit.

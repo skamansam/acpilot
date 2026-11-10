@@ -359,7 +359,7 @@ only lists profiles and their workspaces and can be rebuilt.
 Two streams, one shape.
 
 `GET /v1/sessions/{id}/events` is the session's stream. `GET /v1/events` is the
-profile-wide stream: `profile.*`, `daemon.*`, `prefs`, `permission.requested`, and
+profile-wide stream: `profile.*`, `daemon.*`, `prefs`, `prefs_error`, `permission.requested`, and
 `diagnostics` — the rest because what they pair with is profile-wide: the pending
 list, the settings every surface draws with, and the problems of a file any of them
 may have open. One connection therefore covers every session a UI is watching, the
@@ -399,6 +399,7 @@ data: {"seq":43}
 | `session` | `SessionEvent` (`kind` is one of the eight below) | yes, from the session's ring, and on disk in its transcript |
 | `permission` | `{"type":"requested","request":PermissionRequest}` or `{"type":"resolved","id":…,"decision":PermissionDecision}` | `resolved` yes; `requested` live-only, on both streams |
 | `prefs` | `{"preferences": Preferences}` | the current ones, as the first frame of a connection; changes are live-only |
+| `prefs_error` | `{"message": "…"}` | no; a save that did not parse, with the last good preferences still in force |
 | `heartbeat` | `{"seq": n}` every 15 s | no |
 | `resync` | `{"latest_seq": n}` | no |
 
@@ -440,8 +441,9 @@ somebody edits a file, so a window or a browser that cannot see this machine's
 `config.toml` still opens with the right theme. A save — the daemon watches the
 user's and the project's settings, debounced — arrives as another `prefs` frame,
 which is the same whole object, so applying one is replacing what you had rather
-than patching it. A file that does not parse announces nothing: the last good
-preferences stay in force, and the next save is read normally. `theme_tui` is in
+than patching it. A file that does not parse is announced as a `prefs_error`
+frame carrying the parser's sentence: the last good preferences stay in force,
+and the next save is read normally. `theme_tui` is in
 the frame as well, because the frame describes the cascade and not one surface's
 slice of it — a client picks the theme for the surface it is.
 

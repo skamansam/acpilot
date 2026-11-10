@@ -152,6 +152,9 @@ pub enum ProfileStream {
     /// which is how a client that cannot read the daemon's files learns the
     /// current preferences at all.
     Preferences(Preferences),
+    /// A settings save could not be read, so the last good values are still in
+    /// force. The message is the daemon's explanation, not a preference value.
+    PreferencesError(String),
     /// A request somebody else answered.
     ///
     /// The pending list is state, so this is not how a client learns what is
@@ -902,6 +905,17 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
                     ClientError::Stream(format!("the preferences did not parse: {error}"))
                 })
         }
+        "prefs_error" => {
+            let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
+                ClientError::Stream(format!("a prefs_error frame did not parse: {error}"))
+            })?;
+            value["message"]
+                .as_str()
+                .map(|message| ProfileStream::PreferencesError(message.to_owned()))
+                .ok_or_else(|| {
+                    ClientError::Stream("a prefs_error frame did not name a message".to_owned())
+                })
+        }
         "heartbeat" => Ok(ProfileStream::Heartbeat),
         "diagnostics" => diagnostics_of(&frame.data).map(ProfileStream::Diagnostics),
         "resync" => Ok(ProfileStream::Resync),
@@ -1020,6 +1034,22 @@ mod tests {
             diagnostics_of(r#"{"diagnostics":{"path":7}}"#).is_err(),
             "a notice this build cannot read is said out loud"
         );
+    }
+
+    #[test]
+    fn a_prefs_error_frame_carries_the_sentence_the_window_shows() {
+        let frame = eventsource_stream::Event {
+            event: "prefs_error".to_owned(),
+            data: serde_json::json!({ "message": "config.toml: expected a value" }).to_string(),
+            id: String::new(),
+            retry: None,
+        };
+        match profile_frame(&frame).expect("the frame parses") {
+            ProfileStream::PreferencesError(message) => {
+                assert!(message.contains("config.toml"), "{message}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

@@ -36,7 +36,7 @@ use acpilot_git::{LineChange, LineChanges};
 // `Highlights` answers with.
 use acpilot_extensions::theme::SyntaxToken;
 use acpilot_text::buffer::Buffer;
-use acpilot_text::edit::{IndentMode, IndentStyle};
+use acpilot_text::edit::{Edit, IndentMode, IndentStyle};
 use acpilot_text::highlight::{Grammars, Highlights, Span};
 use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
 use acpilot_text::{Document, LineColumn, Selection, Selections};
@@ -186,6 +186,8 @@ pub struct EditorPane {
     /// and a term where the file has been deleted underneath the pane — and a save of
     /// one is refused rather than guessed at.
     etag: Option<String>,
+    /// The editor preferences this pane applies.
+    preferences: acpilot_proto::profile::Preferences,
 }
 
 /// A pane's debug shape: the file, the caret and the window.
@@ -239,6 +241,7 @@ impl EditorPane {
             document: Document::new(Buffer::from_text(text)),
             highlights,
             viewport: Viewport::new(0, 0),
+            preferences: acpilot_profile::prefs::defaults().expect("the shipped defaults load"),
             marks,
             problems: Vec::new(),
             find: Find::new(),
@@ -312,9 +315,10 @@ impl EditorPane {
     #[must_use]
     pub fn problem(&self, line: usize) -> Option<char> {
         let number = u32::try_from(line + 1).ok()?;
+        let floor = rank(self.preferences.diagnostics_min_severity);
         self.problems
             .iter()
-            .filter(|problem| problem.line == number)
+            .filter(|problem| problem.line == number && rank(problem.severity) <= floor)
             .map(|problem| rank(problem.severity))
             .min()
             .map(|rank| match rank {
@@ -393,6 +397,46 @@ impl EditorPane {
     #[must_use]
     pub fn cursor(&self) -> Option<(usize, usize)> {
         self.viewport.caret(self.document.buffer(), self.caret())
+    }
+
+    /// Apply the editor preferences a launch or a `prefs` frame resolved.
+    ///
+    /// A width change re-measures the rows, because a tab is a number of cells
+    /// rather than a character: the same text occupies a different window.
+    pub fn set_preferences(&mut self, preferences: &acpilot_proto::profile::Preferences) {
+        let width = usize::from(preferences.tab_width.max(1));
+        if width != self.viewport.tab_width() {
+            self.viewport = self.viewport.with_tab_width(width);
+            self.rebuild();
+        }
+        self.preferences = preferences.clone();
+    }
+
+    /// Replace the whole buffer as one undo step, keeping the pane's other state.
+    ///
+    /// Used by a save-time rewrite (trailing whitespace): the person can still undo
+    /// it, and the buffer the daemon writes is the buffer on screen.
+    pub fn replace_all(&mut self, text: &str, now: Instant) -> bool {
+        let len = self.document.buffer().char_len();
+        let edited = self.document.apply_at(Edit::replace(0..len, text), now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Strip spaces and tabs at the end of every line, as one undo step.
+    ///
+    /// A save-time rule, not an editing one: a person watching the buffer change
+    /// under the caret before the write would be a surprise, so the caller asks
+    /// only when it is about to save.
+    pub fn trim_trailing_whitespace(&mut self, now: Instant) -> bool {
+        let text = self.document.text();
+        let trimmed = trim_lines(&text);
+        if trimmed == text {
+            return false;
+        }
+        self.replace_all(&trimmed, now)
     }
 
     /// The two matched brackets under the caret, when there is a pair.
@@ -1196,6 +1240,22 @@ fn rank(severity: acpilot_proto::file::DiagnosticSeverity) -> u8 {
     }
 }
 
+/// Strip spaces and tabs at the end of every line, keeping the line endings.
+/// The buffer's text is `\n` throughout; the file's own line ending is applied on
+/// save, so this only has to strip before the `\n` it sees.
+fn trim_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (content, newline) = match line.strip_suffix('\n') {
+            Some(content) => (content, "\n"),
+            None => (line, ""),
+        };
+        out.push_str(content.trim_end_matches([' ', '\t']));
+        out.push_str(newline);
+    }
+    out
+}
+
 fn runs(
     row: &Row,
     spans: &[Span],
@@ -1773,6 +1833,58 @@ mod tests {
         assert!(pane.prompt_apply());
         assert_eq!(pane.take_command().as_deref(), Some("wq"));
         assert!(pane.take_command().is_none(), "one command per Enter");
+    }
+
+    #[test]
+    fn trimming_whitespace_is_one_undo_step_and_keeps_the_line_endings() {
+        let mut buffer = pane(&["one  ", "two\t", "three"], (0, 0));
+        assert!(buffer.trim_trailing_whitespace(Instant::now()));
+        assert_eq!(text(&buffer), "one\ntwo\nthree");
+        assert!(buffer.undo(), "the save-time rewrite is still undoable");
+        assert_eq!(text(&buffer), "one  \ntwo\t\nthree");
+
+        // A Windows file keeps its CRLF on disk: the buffer is `\n` throughout and
+        // the line ending is applied on save, so trimming must not flatten it.
+        let mut grammars = Grammars::new();
+        let mut windows = EditorPane::from_text(
+            "src/main.rs",
+            "one  \r\ntwo\t\r\n",
+            LineChanges::default(),
+            &mut grammars,
+        );
+        assert!(windows.trim_trailing_whitespace(Instant::now()));
+        assert_eq!(windows.document().to_bytes(), b"one\r\ntwo\r\n");
+
+        // Nothing to trim is not an edit, so a save does not create an undo step.
+        let mut without_trailing = pane(&["one", "two"], (0, 0));
+        assert!(!without_trailing.trim_trailing_whitespace(Instant::now()));
+    }
+
+    #[test]
+    fn the_diagnostic_floor_hides_the_severities_below_it() {
+        let mut pane = pane(&["one", "two"], (0, 0));
+        let problem = |line, severity| acpilot_proto::file::Diagnostic {
+            line,
+            column: 1,
+            end_line: line,
+            end_column: 2,
+            severity,
+            message: "a problem".to_owned(),
+            source: None,
+            code: None,
+        };
+        pane.set_problems(vec![
+            problem(1, acpilot_proto::file::DiagnosticSeverity::Warning),
+            problem(2, acpilot_proto::file::DiagnosticSeverity::Error),
+        ]);
+        assert_eq!(pane.problem(0), Some('W'));
+        assert_eq!(pane.problem(1), Some('E'));
+
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.diagnostics_min_severity = acpilot_proto::file::DiagnosticSeverity::Error;
+        pane.set_preferences(&preferences);
+        assert_eq!(pane.problem(0), None, "a warning is below an error floor");
+        assert_eq!(pane.problem(1), Some('E'));
     }
 
     #[test]

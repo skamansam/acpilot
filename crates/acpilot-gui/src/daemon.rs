@@ -314,6 +314,9 @@ pub fn follow(
                             Err(error) => eprintln!("acpilot-gui: preferences: {error}"),
                         }
                     }
+                    Ok(acpilot_client::ProfileStream::PreferencesError(message)) => {
+                        eprintln!("acpilot-gui: settings not applied: {message}");
+                    }
                     // The stream is alive and has nothing new. Nothing to draw.
                     Ok(_) => {}
                     Err(error) => {

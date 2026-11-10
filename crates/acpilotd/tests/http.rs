@@ -616,8 +616,9 @@ async fn a_saved_settings_file_reaches_a_client_over_the_event_stream() {
 #[tokio::test]
 async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
     // A half-written file must not become the palette a client draws with. It
-    // resolves to nothing, so the watcher announces nothing — and the next good
-    // save still arrives, which is what a stream that died on a typo would not do.
+    // resolves to nothing, so the watcher reports the error and leaves the last
+    // good preferences in force — and the next good save still arrives, which is
+    // what a stream that died on a typo would not do.
     let (_directory, settings, state) = serving("acpilot.paper");
     state.watch_preferences();
     let mut stream = stream_of(state.clone()).await;
@@ -628,6 +629,12 @@ async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
     assert!(
         state.preferences().is_none(),
         "a file that does not parse is not a set of preferences"
+    );
+    let error = until(&mut stream, "event: prefs_error").await;
+    assert!(error.contains("settings"), "{error}");
+    assert!(
+        error.contains("preferences"),
+        "the notice names the file the person edited: {error}"
     );
 
     std::fs::write(

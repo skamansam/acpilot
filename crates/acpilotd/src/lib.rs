@@ -376,6 +376,13 @@ pub struct AppState {
     /// it has to remember to drop. `AppState` always holds a sender, so the channel
     /// is never closed while the daemon runs.
     preference_changes: broadcast::Sender<Preferences>,
+    /// Saves that could not become preferences, announced as a notice.
+    ///
+    /// A file that does not parse keeps the last good values in force, but a
+    /// client that cannot see this machine's disk has no other way to learn that
+    /// the save it just made was ignored. The message names the failure; the last
+    /// good `prefs` frame remains the state.
+    preference_errors: broadcast::Sender<String>,
     /// Answer cross-origin requests (`[daemon] cors`).
     ///
     /// Off unless the daemon was told the browser is somewhere else: the page is
@@ -468,6 +475,7 @@ impl Default for AppState {
             cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
+            preference_errors: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
             language_servers: Arc::new(lsp::Servers::new()),
             diagnostics_changes: broadcast::channel(EVENT_BUFFER).0,
@@ -761,6 +769,12 @@ impl AppState {
         self.preference_changes.subscribe()
     }
 
+    /// Subscribe to saves that did not parse, for the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_preference_errors(&self) -> broadcast::Receiver<String> {
+        self.preference_errors.subscribe()
+    }
+
     /// Announce the settings a person saves, for as long as the daemon runs.
     ///
     /// The daemon watches rather than each client because a client may not be able
@@ -778,12 +792,6 @@ impl AppState {
         let Ok(root) = acpilot_profile::project::Root::resolve(Some(&workspace.root)) else {
             return;
         };
-        // Both files the cascade reads, so a save in either is a change: a project
-        // can be light while the user's own settings stay night flight.
-        let mut paths = vec![acpilot_profile::user_config_path()];
-        if let Some(project) = root.project() {
-            paths.push(project.config_path());
-        }
         let profile = self
             .profile_root()
             .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
@@ -791,10 +799,16 @@ impl AppState {
                 self.profile_name()
                     .and_then(|name| acpilot_profile::Profile::named(name).ok())
             });
-        if let Some(profile) = &profile {
-            paths.push(profile.config_path());
-            paths.push(profile.preferences_path());
-        }
+        // The cascade's own list, so a save in the user's file, the project's, a
+        // profile's, or a profile it extends is the same answer to "did the
+        // settings change?". A second list here would drift from the reader.
+        let paths = acpilot_profile::settings::watch_paths(
+            Some(&acpilot_profile::user_config_path()),
+            root.project()
+                .map(|project| project.config_path())
+                .as_deref(),
+            profile.as_ref(),
+        );
         let Some(changes) = acpilot_profile::watch::changes(paths) else {
             tracing::warn!(
                 "settings are not being watched; clients will only see the preferences \
@@ -807,8 +821,13 @@ impl AppState {
             while changes.recv().is_ok() {
                 // A file that does not parse, or names something no extension
                 // provides, answers `None`: the last good preferences stay in
-                // force and the stream says nothing rather than something wrong.
+                // force, and the stream says the save was ignored rather than
+                // quietly leaving a client on stale values.
                 let Some(preferences) = state.preferences() else {
+                    let _ = state.preference_errors.send(
+                        "a settings file does not parse; keeping the last good preferences"
+                            .to_owned(),
+                    );
                     continue;
                 };
                 let _ = state.preference_changes.send(preferences);
@@ -1442,6 +1461,7 @@ async fn events(State(state): State<AppState>) -> Response {
     // Subscribed before the current answer is read, so a save landing between the
     // two is announced rather than silently skipped.
     let preferences = state.subscribe_preferences();
+    let preference_errors = state.subscribe_preference_errors();
     if let Some(current) = state.preferences() {
         // The channel is fresh, so this cannot fail; if it somehow did, the pump
         // below is the next thing to notice.
@@ -1465,6 +1485,7 @@ async fn events(State(state): State<AppState>) -> Response {
         requests,
         resolved,
         preferences,
+        preference_errors,
         diagnostics,
         sender,
     ));
@@ -1518,6 +1539,8 @@ enum Step {
     Resolved(Result<(String, PermissionOption), broadcast::error::RecvError>),
     /// The settings settled, or that subscription ended.
     Preferences(Result<Preferences, broadcast::error::RecvError>),
+    /// A settings save could not be read, or that subscription ended.
+    PreferenceError(Result<String, broadcast::error::RecvError>),
     /// A language server published problems, or that subscription ended.
     Diagnostics(Result<acpilot_proto::file::DiagnosticsNotice, broadcast::error::RecvError>),
 }
@@ -1535,6 +1558,7 @@ async fn pump(
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
     mut resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
     mut preferences: broadcast::Receiver<Preferences>,
+    mut preference_errors: broadcast::Receiver<String>,
     mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
     sender: mpsc::Sender<Event>,
 ) {
@@ -1572,6 +1596,7 @@ async fn pump(
         let step = tokio::select! {
             _ = beat.tick() => Step::Beat,
             preferences = preferences.recv() => Step::Preferences(preferences),
+            error = preference_errors.recv() => Step::PreferenceError(error),
             requests = announced => Step::Permission(requests),
             answers = answered => Step::Resolved(answers),
             published = diagnostics.recv() => Step::Diagnostics(published),
@@ -1593,6 +1618,13 @@ async fn pump(
             Step::Preferences(Ok(preferences)) => {
                 seq += 1;
                 prefs_frame(Some(seq), &preferences)
+            }
+            Step::PreferenceError(Ok(message)) => {
+                seq += 1;
+                Event::default()
+                    .event("prefs_error")
+                    .id(seq.to_string())
+                    .data(serde_json::json!({ "message": message }).to_string())
             }
             // The request is gone from the pending list by now, so the frame names
             // it rather than carrying it: a client closes the dialog it is showing
@@ -1625,6 +1657,9 @@ async fn pump(
             Step::Permission(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
                 .event("resync")
                 .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+            Step::PreferenceError(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Preferences(Err(broadcast::error::RecvError::Lagged(_))) => {
                 match state.preferences() {
                     Some(current) => {
@@ -1644,6 +1679,7 @@ async fn pump(
             Step::Permission(Err(broadcast::error::RecvError::Closed))
             | Step::Resolved(Err(broadcast::error::RecvError::Closed))
             | Step::Preferences(Err(broadcast::error::RecvError::Closed))
+            | Step::PreferenceError(Err(broadcast::error::RecvError::Closed))
             | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
         };
 

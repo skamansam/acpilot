@@ -14,6 +14,8 @@ insert_spaces = true
 format_on_save = false
 trim_trailing_whitespace = true
 wrap = false
+# Columns where an editor draws a ruler, as a reading aid. Empty by default.
+# rulers = [80, 100]
 theme = "acpilot.night-flight"
 # A theme is an extension, and the same one draws the TUI, the desktop app and the
 # browser: `theme` is the answer for every surface that does not name its own. Set

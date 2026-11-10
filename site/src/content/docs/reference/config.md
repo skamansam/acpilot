@@ -47,6 +47,7 @@ insert_spaces = true
 format_on_save = true
 trim_trailing_whitespace = true
 wrap = false
+rulers = [80, 100]                 # cell columns; empty or absent draws none
 theme = "acpilot.night-flight"
 # theme_follow_terminal = true      # solve the terminal's palette from the terminal itself
 tree_respect_gitignore = true     # the file tree hides what the workspace's .gitignore hides
@@ -151,7 +152,11 @@ Arrays replace, except `disabled` and `deny`, which union: a workspace adding on
 disabled agent must not silently re-enable the ones the profile disabled.
 `extends` walks at most four profiles and refuses a cycle. An unknown key is
 warned about once and the read continues, so a newer file still runs on an older
-binary; a value of the wrong type fails with the file, line and key.
+binary; a value of the wrong type fails with the file, line and key. A running
+client follows the settings: the daemon watches every file in the cascade,
+including a parent profile's, and sends the whole preferences object after a
+save, so a theme or an editor preference applies without a restart. A save that
+does not parse keeps the last good settings and is reported instead of applied.
 
 A path names the project: `acpilot tui src/main.rs` and `acpilot-gui src/main.rs`
 climb from the file to the nearest `.acpilot/config.toml`, while a directory is

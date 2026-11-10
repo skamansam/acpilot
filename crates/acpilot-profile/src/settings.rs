@@ -131,6 +131,27 @@ impl Settings {
     }
 }
 
+/// Every file a watcher should read for this launch.
+///
+/// The list follows `extends`: a parent's preferences are a layer of the child's
+/// cascade, so editing the parent has to reach a client watching the child. The
+/// child is still watched when the inheritance chain cannot be resolved, because
+/// a broken parent is a save to report, not a reason to stop watching the file
+/// the person is editing.
+#[must_use]
+pub fn watch_paths(
+    user: Option<&Path>,
+    project: Option<&Path>,
+    profile: Option<&Profile>,
+) -> Vec<PathBuf> {
+    let mut builder = CascadeBuilder::new().user(user).project(project);
+    if let Some(profile) = profile {
+        let registry = Registry::load(&crate::user_config_path()).ok();
+        builder = builder.profile(profile, registry.as_ref());
+    }
+    builder.watch_paths()
+}
+
 /// A value and the layer that produced it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Explanation {
@@ -338,6 +359,32 @@ impl CascadeBuilder {
             unions,
             warnings,
         })
+    }
+
+    /// The files this builder's layers read, in cascade order.
+    #[must_use]
+    pub fn watch_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Some(user) = &self.user {
+            paths.push(user.clone());
+        }
+        let chain = self
+            .profile_chain()
+            .unwrap_or_else(|_| self.profile.iter().cloned().collect());
+        for profile in chain {
+            paths.push(profile.config_path());
+            paths.push(profile.preferences_path());
+        }
+        if let Some(project) = &self.project {
+            paths.push(project.clone());
+        }
+        let mut unique = Vec::new();
+        for path in paths {
+            if !unique.contains(&path) {
+                unique.push(path);
+            }
+        }
+        unique
     }
 
     /// The profile chain, parent first, with the child last.
@@ -1146,6 +1193,46 @@ mod tests {
         assert_eq!(
             settings.preferences.theme, "acpilot.paper",
             "the parent's key is inherited"
+        );
+    }
+
+    #[test]
+    fn the_watcher_follows_an_extends_chain() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let user = write(directory.path(), "config.toml", "schema_version = 1\n");
+        let parent = profile(
+            directory.path(),
+            "base",
+            "schema_version = 1\n",
+            "[preferences]\ntheme = \"acpilot.paper\"\n",
+        );
+        let child = profile(
+            directory.path(),
+            "work",
+            "schema_version = 1\n",
+            "[preferences]\ntab_width = 2\n",
+        );
+        let mut registry = Registry::default();
+        registry.insert(
+            parent.id().expect("a parent id"),
+            crate::ProfileRecord::new("Base"),
+        );
+        registry.insert(
+            child.id().expect("a child id"),
+            crate::ProfileRecord {
+                extends: parent.id(),
+                ..crate::ProfileRecord::new("Work")
+            },
+        );
+        let paths = CascadeBuilder::new()
+            .user(Some(&user))
+            .profile(&child, Some(&registry))
+            .profiles_root(Some(directory.path()))
+            .watch_paths();
+        assert!(paths.contains(&child.preferences_path()));
+        assert!(
+            paths.contains(&parent.preferences_path()),
+            "a parent preference reaches the child, so the parent file is watched"
         );
     }
 

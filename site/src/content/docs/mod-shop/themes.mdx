@@ -131,11 +131,12 @@ theme = "acpilot.night-flight-syntax"
 
 `acpilot tui` watches the user's and the project's settings and recolours the open
 client, naming the theme in its status bar, so an edit in one window lands in the
-other. The daemon reads `theme_web` every time it serves the page, so the browser
-is the new palette on its next load. A file that does not parse, or an id no loaded
-extension provides, leaves what is on screen alone and is read again on the next
-save. Pushing the change to clients that are not watching a file — a daemon-side
-`prefs.changed` — is P4-7.
+other. The daemon sends the whole preferences object as the first frame of its
+profile stream and again after every save, so a browser or a window that cannot
+see this machine's files follows without a restart; `/app` listens on its palette
+stream and repaints an open tab. A file that does not parse, or an id no loaded
+extension provides, leaves what is on screen alone and is reported; the next save
+is read normally.
 
 ### Following the terminal
 

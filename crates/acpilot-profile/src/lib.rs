@@ -16,6 +16,7 @@
 
 pub mod catalog;
 pub mod launch;
+pub mod prefs;
 pub mod project;
 pub mod settings;
 pub mod watch;

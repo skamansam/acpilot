@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::file::DiagnosticSeverity;
+
 /// Which frontend is asking for a theme.
 ///
 /// The theme is one setting per surface rather than one for all of them, because a
@@ -62,6 +64,12 @@ pub struct Preferences {
     pub trim_trailing_whitespace: bool,
     /// Soft-wrap long lines.
     pub wrap: bool,
+    /// Columns to draw a vertical ruler at, in cells.
+    ///
+    /// Rulers are a reading aid, not a hard limit: a line past one is drawn, not
+    /// refused. Empty means the editor draws none, which is the default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rulers: Vec<u16>,
     /// Theme identifier for every surface that does not name its own.
     ///
     /// A theme is an extension, so this is the id of one: `acpilot.night-flight`
@@ -103,7 +111,7 @@ pub struct Preferences {
     #[serde(default = "default_true")]
     pub tree_respect_gitignore: bool,
     /// Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.
-    pub diagnostics_min_severity: String,
+    pub diagnostics_min_severity: DiagnosticSeverity,
 }
 
 /// `true`, for a preference whose default is on.

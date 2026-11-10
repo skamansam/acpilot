@@ -37,6 +37,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::backend::{Update, Worker};
+use crate::keymap::Keymap;
 
 /// How long the loop waits for a key before redrawing.
 ///
@@ -125,6 +126,17 @@ pub fn run(
     };
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
     let changes = updates.clone();
+    let keymap_updates = updates.clone();
+    // A profile's `keymap.toml` is the one the launch should use; the global file
+    // is the fallback for a profile that has not written one. The daemon's
+    // preferences live in `profile.toml`, but a key table can be large and has a
+    // reader of its own, so it stays a file rather than a `prefs` field.
+    let keymap_path = files
+        .profile
+        .as_ref()
+        .map(|directory| directory.join(KEYMAP_FILE))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| acpilot_profile::config_dir().join(KEYMAP_FILE));
     let worker = backend::spawn(
         daemon.to_owned(),
         token.map(str::to_owned),
@@ -141,9 +153,10 @@ pub fn run(
     app.remember_layout(acpilot_profile::data_dir().join(LAYOUT_FILE));
     // Before the screen is taken over: a key file that does not parse is a sentence
     // for the shell, and the client starts on the preset it describes.
-    if let Some(error) = app.remember_keymap(acpilot_profile::config_dir().join(KEYMAP_FILE)) {
+    if let Some(error) = app.remember_keymap(keymap_path.clone()) {
         eprintln!("acpilot tui: {error} · starting on the default keys");
     }
+    watch_keymap(keymap_path, keymap_updates);
     app.set_theme(theme);
     // The answer arrives as `Update::File`, which puts the keyboard in the editor
     // and says which file was opened. Until it does, the window is already an
@@ -285,23 +298,15 @@ pub fn query_terminal_colours() -> Option<TerminalColours> {
 /// debounce policies and two answers to an editor that saves by rename. A client
 /// with no settings to watch — the design pass, the demo — simply has no thread.
 fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
-    let profile_files = files.profile.as_ref().map(|directory| {
-        [
-            directory.join(acpilot_profile::CONFIG_FILE),
-            directory.join(acpilot_profile::settings::PROFILE_SETTINGS_FILE),
-        ]
-    });
-    let paths: Vec<std::path::PathBuf> = [
-        files.user.clone(),
-        files.project.clone(),
-        profile_files
-            .as_ref()
-            .and_then(|paths| paths.first().cloned()),
-        profile_files.and_then(|paths| paths.get(1).cloned()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let profile = files
+        .profile
+        .as_deref()
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok());
+    let paths = acpilot_profile::settings::watch_paths(
+        files.user.as_deref(),
+        files.project.as_deref(),
+        profile.as_ref(),
+    );
     let Some(changes) = acpilot_profile::watch::changes(paths) else {
         return;
     };
@@ -315,6 +320,37 @@ fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Up
             if updates.send(Update::Theme(theme)).is_err() {
                 // The client is gone; so is the reason to watch.
                 return;
+            }
+        }
+    });
+}
+
+/// Watch the key table and send a new one when it parses.
+///
+/// A keymap is a domain file rather than a preference, so it is not in the
+/// daemon's `prefs` frame. The client can read it wherever it is running, and a
+/// save should take effect without a restart just like a theme does. A file that
+/// does not parse leaves the table in force and says so.
+fn watch_keymap(path: std::path::PathBuf, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
+    let Some(changes) = acpilot_profile::watch::changes([path.clone()]) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        while changes.recv().is_ok() {
+            match Keymap::load(&path) {
+                Ok(keymap) => {
+                    if updates.send(Update::Keymap(keymap)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    if updates
+                        .send(Update::Status(format!("keymap not applied · {error}")))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
     });

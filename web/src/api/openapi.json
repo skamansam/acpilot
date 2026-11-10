@@ -2030,8 +2030,8 @@
         "description": "Editor and UI preferences, per profile.\n\nDefaults are data (`defaults.toml`), not code: adding a preference should be a\none-line change that every UI picks up, and unknown keys are reported rather\nthan ignored.",
         "properties": {
           "diagnostics_min_severity": {
-            "description": "Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.",
-            "type": "string"
+            "$ref": "#/components/schemas/DiagnosticSeverity",
+            "description": "Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`."
           },
           "format_on_save": {
             "description": "Run the formatter on save when one is available.",
@@ -2040,6 +2040,15 @@
           "insert_spaces": {
             "description": "Insert spaces instead of tab characters.",
             "type": "boolean"
+          },
+          "rulers": {
+            "description": "Columns to draw a vertical ruler at, in cells.\n\nRulers are a reading aid, not a hard limit: a line past one is drawn, not\nrefused. Empty means the editor draws none, which is the default.",
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
           },
           "schema_version": {
             "description": "Schema version of this document, so migrations are explicit.",

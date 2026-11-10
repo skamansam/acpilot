@@ -869,7 +869,7 @@ Three rules:
     CLI command currently opens one local path; `workspace list` and `workspace rm` remain P5-2, and
     `acpilot-host::ssh`'s own `SshConfig` still owns agent/password auth and reconnect in P8-1.
 
-- [ ] **P4-7 · Preferences schema + live reload** (1d)
+- [x] **P4-7 · Preferences schema + live reload** (1d)
   - `Preferences { schema_version, editor, theme, keymap, ui, lsp, agents }`, typed in
     `acpilot-profile::prefs` and exported to `acpilot-proto` for the API.
   - Defaults are data (a checked-in `defaults.toml`), so adding a preference is a one-line change
@@ -897,6 +897,21 @@ Three rules:
     is a secret in a log line, a history entry and a `Referer` — which is only defensible because
     the frame carries the palette the page already inlines and nothing else. Applying a frame to
     the desktop window, and the preferences past the theme, are what is left of this task.
+  - **Result (2026-11-10):** `Preferences` stays the flat wire shape the docs and settings
+    already use, and gained `rulers` plus a typed `diagnostics_min_severity`; `acpilot-profile::prefs`
+    is the profile-side door and `defaults()` reads the checked-in `defaults.toml`. The watcher
+    now follows the whole cascade through `settings::watch_paths`, including every `extends`
+    parent, and a save that does not parse sends `prefs_error { message }` instead of silently
+    doing nothing. The TUI applies a `prefs` frame live: tab width, tabs-vs-spaces indentation,
+    trailing-whitespace trimming before save, and the diagnostic severity floor; it also reloads
+    `keymap.toml` (the profile's own file, else the global one) on save. The GUI handles
+    `prefs_error` without losing its colours. Tests cover the parent-profile watch, the error
+    frame on both the daemon and client, indentation, trimming, the severity floor, and a
+    keymap that stays in force when a save does not parse.
+  - **Open:** `format_on_save` has no formatter interface yet, so it is carried and not acted on;
+    `wrap` and `rulers` are in the schema but no TUI/web editor consumes them yet. The daemon
+    announces `prefs`/`prefs_error`; there is no separate `profile.changed` event. The read and
+    patch routes for preferences remain P4-8.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 

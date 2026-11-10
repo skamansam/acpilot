@@ -59,10 +59,11 @@ object the daemon would apply, sent as the first frame of a connection and again
 whenever the user's or the project's `config.toml` settles after a save, so a
 window or a browser can follow `theme` without seeing this machine's files and
 without a restart. Preferences are state rather than history, which is why they
-are the one thing the stream sends on connect; a file that does not parse
-announces nothing, and the last good preferences stay in force. The TUI resolves
-the same frames, so a client behind a socket and one sitting in the daemon's
-directory end up with the same palette from two paths.
+are the one thing the stream sends on connect; a file that does not parse is
+announced as a `prefs_error` frame with the parser's sentence, and the last good
+preferences stay in force. The TUI resolves the same frames, so a client behind a
+socket and one sitting in the daemon's directory end up with the same palette from
+two paths.
 
 `WS /v1/terminals/{id}/attach` is the one route that upgrades instead of
 answering. Binary frames are the terminal in both directions — keystrokes one

@@ -9,6 +9,7 @@ use acpilot_demo::{Command, CommandAction, Diff, FileNode, Run};
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
+use acpilot_proto::profile::Preferences;
 use acpilot_proto::session::{SessionStatus, SessionSummary};
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use acpilot_stats::Row;
@@ -2093,6 +2094,13 @@ pub struct App {
     /// be able to run a table nobody's file chose, and because `?` lists what this
     /// app actually answers to rather than what the crate used to.
     pub keymap: Keymap,
+    /// The preferences the panes apply.
+    ///
+    /// Loaded from the shipped defaults at construction, then replaced by the
+    /// daemon's `prefs` frame or the local settings watcher. A pane reads this
+    /// rather than a config file, because a client may not be where the daemon's
+    /// files are.
+    pub preferences: Preferences,
     /// The size the terminal pane was last drawn at.
     ///
     /// The event loop tells the app every frame and the program only when this
@@ -2771,6 +2779,7 @@ impl App {
             layout_path: None,
             layout_saved: Layout::default(),
             keymap: Keymap::default(),
+            preferences: acpilot_profile::prefs::defaults().expect("the shipped defaults load"),
             pane_size: None,
             // The assistant's panes are the shell's other half, and a state built
             // with them is a state that starts in them; a launch starts in the text.
@@ -3824,6 +3833,7 @@ impl App {
                     })
                     .collect();
                 let mut pane = EditorPane::from_text(&path, &text, marks, &mut self.grammars);
+                pane.set_preferences(&self.preferences);
                 pane.set_etag(etag);
                 self.editor = Some(pane);
                 self.apply_vim_mode();
@@ -3864,6 +3874,19 @@ impl App {
                 }
             }
             Update::Status(message) => self.status = message,
+            Update::Preferences(preferences) => {
+                self.preferences = preferences;
+                self.apply_preferences();
+                self.status = "preferences updated".to_owned();
+            }
+            Update::PreferencesError(message) => {
+                self.status = format!("settings not applied · {message}");
+            }
+            Update::Keymap(keymap) => {
+                self.keymap = keymap;
+                self.apply_vim_mode();
+                self.status = format!("keymap · {} · keys reloaded", self.keymap.preset_name());
+            }
             Update::Theme(theme) => {
                 // A settings file this client could read itself changed. Once the
                 // daemon has said what the preferences are, this is the weaker of
@@ -5159,7 +5182,8 @@ impl App {
     }
 
     fn save(&mut self) -> Option<Request> {
-        let Some(editor) = &self.editor else {
+        let trim = self.preferences.trim_trailing_whitespace;
+        let Some(editor) = self.editor.as_mut() else {
             self.notice("no file is open · nothing to save");
             return None;
         };
@@ -5171,8 +5195,12 @@ impl App {
             self.notice("this buffer did not come from a file · nothing to save");
             return None;
         };
+        let trimmed = trim && editor.trim_trailing_whitespace(std::time::Instant::now());
         let path = editor.path().to_owned();
         let text = editor.document().text();
+        if trimmed {
+            self.notice("trimmed trailing whitespace before saving");
+        }
         self.status = format!("saving {path}…");
         Some(Request::SaveFile { path, text, etag })
     }
@@ -5208,6 +5236,7 @@ impl App {
         // held is two borrows of one thing.
         let visual = self.action(Context::Visual, key);
         let editing = self.action(Context::Editor, key);
+        let indent = self.indent_style();
         let Some(editor) = self.editor.as_mut() else {
             self.notice("no file is open · pick one in the files pane");
             return None;
@@ -5254,14 +5283,14 @@ impl App {
                 KeyCode::Tab => {
                     editor.indent(
                         acpilot_text::edit::IndentMode::In,
-                        acpilot_text::edit::IndentStyle::Spaces(4),
+                        indent,
                         std::time::Instant::now(),
                     );
                 }
                 KeyCode::BackTab => {
                     editor.indent(
                         acpilot_text::edit::IndentMode::Out,
-                        acpilot_text::edit::IndentStyle::Spaces(4),
+                        indent,
                         std::time::Instant::now(),
                     );
                 }
@@ -6077,6 +6106,27 @@ impl App {
                 None
             }
             Err(error) => Some(error),
+        }
+    }
+
+    /// Apply the preferences that change how the editor behaves.
+    ///
+    /// The theme is a separate answer because it has to be resolved through the
+    /// extension registry first; these are values the pane reads directly.
+    pub fn apply_preferences(&mut self) {
+        if let Some(editor) = &mut self.editor {
+            editor.set_preferences(&self.preferences);
+        }
+    }
+
+    /// The indent a Tab or Shift-Tab applies.
+    #[must_use]
+    pub fn indent_style(&self) -> acpilot_text::edit::IndentStyle {
+        use acpilot_text::edit::IndentStyle;
+        if self.preferences.insert_spaces {
+            IndentStyle::Spaces(usize::from(self.preferences.tab_width.max(1)))
+        } else {
+            IndentStyle::Tabs
         }
     }
 
@@ -9479,6 +9529,38 @@ mod tests {
             Mode::Insert,
             "a file opened after the preset is read still types immediately"
         );
+    }
+
+    #[test]
+    fn preferences_choose_the_indent_the_editor_types() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.tab_width = 2;
+        preferences.insert_spaces = false;
+        app.preferences = preferences;
+        app.apply_preferences();
+        app.set_focus(Focus::Editor);
+        let before = app
+            .editor
+            .as_ref()
+            .expect("a buffer")
+            .document()
+            .text()
+            .matches('\t')
+            .count();
+        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(key(KeyCode::Tab));
+
+        let text = app.editor.as_ref().expect("a buffer").document().text();
+        assert_eq!(
+            text.matches('\t').count(),
+            before + 1,
+            "insert_spaces = false inserts one tab: {text:?}"
+        );
+        assert!(matches!(
+            app.indent_style(),
+            acpilot_text::edit::IndentStyle::Tabs
+        ));
     }
 
     #[test]

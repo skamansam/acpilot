@@ -19,6 +19,7 @@ use std::sync::Arc;
 use acpilot_agent::{AgentSpec, KeyringResolver, Registry, Transport};
 use acpilot_profile::Profile;
 use acpilot_profile::project::Root;
+use acpilot_profile::settings::Cascade;
 use acpilot_proto::API_PREFIX;
 
 /// Programs a person is likely to have already installed as an agent.
@@ -152,6 +153,11 @@ pub struct Report {
     pub config: PathBuf,
     /// The profile line, already resolved: a profile need not exist.
     pub profile: String,
+    /// The five roots the profile owns, and whether each is there.
+    pub roots: Vec<(String, PathBuf, bool)>,
+    /// Keys a settings file set that this build cannot use, with the file that
+    /// wrote them. An empty list is the ordinary case.
+    pub unknown: Vec<String>,
     /// The directory the launch is about.
     pub workspace: PathBuf,
     /// `.acpilot/config.toml`, when the workspace is a project.
@@ -214,6 +220,13 @@ impl Report {
         ));
         out.push_str(&format!("config     {}\n", self.config.display()));
         out.push_str(&format!("profile    {}\n", self.profile));
+        for (name, path, present) in &self.roots {
+            let state = if *present { "present" } else { "missing" };
+            out.push_str(&format!("  {name:<8} {} · {state}\n", path.display()));
+        }
+        for unknown in &self.unknown {
+            out.push_str(&format!("  unknown  {unknown}\n"));
+        }
         out.push_str(&format!("workspace  {}\n", self.workspace.display()));
         match &self.project {
             Some(path) => out.push_str(&format!("project    {}\n", path.display())),
@@ -335,6 +348,8 @@ pub fn collect(
     let profile_dir = acpilot_profile::profiles_dir().join(profile_name);
     let mut declared = Vec::new();
     let mut handshake = None;
+    let mut roots = Vec::new();
+    let mut unknown = Vec::new();
     let profile = if !profile_dir.exists() {
         format!(
             "{profile_name} · {} · not created yet (not required)",
@@ -354,6 +369,36 @@ pub fn collect(
                         &mut handshake,
                         &mut problems,
                     );
+                }
+                if let Some(id) = profile.id() {
+                    let owned = acpilot_profile::ProfileRoots::for_id(&id);
+                    roots = [
+                        ("config".to_owned(), owned.config),
+                        ("data".to_owned(), owned.data),
+                        ("cache".to_owned(), owned.cache),
+                        ("state".to_owned(), owned.state),
+                        ("runtime".to_owned(), owned.runtime),
+                    ]
+                    .into_iter()
+                    .map(|(name, path)| {
+                        let present = path.exists();
+                        (name, path, present)
+                    })
+                    .collect();
+                }
+                // The same cascade a launch reads, so a key this build ignores is
+                // reported from the file that set it rather than guessed at here.
+                let project_config = root
+                    .project()
+                    .map(acpilot_profile::project::Project::config_path);
+                if let Ok(cascade) = Cascade::for_launch(
+                    Some(&acpilot_profile::user_config_path()),
+                    project_config.as_deref(),
+                    Some(&profile),
+                ) {
+                    for warning in cascade.unknown_keys() {
+                        unknown.push(format!("{} · from {}", warning.key, warning.origin));
+                    }
                 }
                 format!("{profile_name} · {}", profile.root().display())
             }
@@ -391,6 +436,8 @@ pub fn collect(
         daemon,
         declared,
         handshake,
+        roots,
+        unknown,
         on_path,
         missing,
         servers,
@@ -466,6 +513,8 @@ mod tests {
         Report {
             config: PathBuf::from("/cfg"),
             profile: "default · /cfg/profiles/default · not created yet (not required)".into(),
+            roots: Vec::new(),
+            unknown: Vec::new(),
             workspace: PathBuf::from("/work"),
             project: None,
             daemon: Daemon {

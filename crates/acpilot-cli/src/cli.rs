@@ -34,6 +34,18 @@ use crate::secret;
     about = "Edit and run ACP agents over one daemon"
 )]
 pub struct Cli {
+    /// Profile name, or a profile directory.
+    ///
+    /// Accepted before or after the subcommand, because every verb that has an
+    /// opinion about identity reads one choice. A single segment is a profile
+    /// name under `<config>/profiles`; a path opens that directory. `tui` and
+    /// `serve` use it only when they start the daemon: a daemon already running
+    /// keeps the profile it was started with, and naming a different one there is
+    /// an error rather than a silent mismatch. A name that does not resolve is an
+    /// error, never a quieter fallback: guessing sends a work prompt with a
+    /// personal key.
+    #[arg(long, global = true, env = "ACPILOT_PROFILE", value_name = "NAME|DIR")]
+    pub profile: Option<String>,
     /// Command to run.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -112,15 +124,6 @@ pub enum Command {
         /// more useful than a daemon this client started without being asked.
         #[arg(long)]
         no_spawn: bool,
-        /// Profile name, or a profile directory.
-        ///
-        /// Only used when this command runs the daemon itself; a daemon that is
-        /// already running keeps the profile it was started with, and naming a
-        /// different one here is an error rather than a silent mismatch. Without
-        /// it, resolution follows `ACPILOT_PROFILE`, the project's marker, the
-        /// global `active_profile`, and finally `default`.
-        #[arg(long, value_name = "NAME|DIR")]
-        profile: Option<PathBuf>,
         /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
@@ -178,9 +181,6 @@ pub enum Command {
         /// across restarts.
         #[arg(long, value_name = "TOKEN")]
         token: Option<String>,
-        /// Profile directory the daemon serves.
-        #[arg(long, value_name = "DIR")]
-        profile: Option<PathBuf>,
         /// Workspace root the daemon serves. Defaults to this directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
@@ -196,12 +196,6 @@ pub enum Command {
         /// A directory, or a file inside one. Defaults to this directory.
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
-        /// Profile to report on, by name under the config root.
-        ///
-        /// The profile need not exist: a missing one is reported as not created,
-        /// not as a failure.
-        #[arg(long, env = "ACPILOT_PROFILE", default_value = "default")]
-        profile: String,
         /// The daemon's endpoint, when it is not the default.
         ///
         /// `doctor` asks `GET /v1/health` here and starts nothing. The same
@@ -243,9 +237,6 @@ pub enum ConfigCommand {
         /// A directory, or a file inside one. Defaults to this directory.
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
-        /// Profile whose files are part of the cascade.
-        #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
-        profile: Option<String>,
     },
 }
 
@@ -259,13 +250,6 @@ pub enum WorkspaceCommand {
     Open {
         /// Directory to open.
         path: PathBuf,
-        /// Profile to open it under.
-        ///
-        /// The daemon dispatches by this header. Without it, the daemon's active
-        /// profile is used — which is the right choice for a one-profile machine
-        /// and the wrong one when a client is about to switch.
-        #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
-        profile: Option<String>,
         /// Take the root from the profile that opened it first.
         ///
         /// The daemon records the new owner and logs the transfer. Without this,
@@ -470,7 +454,7 @@ pub enum ExtCommand {
         /// Extension id, `publisher.name`.
         id: String,
         #[command(flatten)]
-        profile: ProfileArgs,
+        config: ConfigArgs,
         #[command(flatten)]
         store: StoreArgs,
     },
@@ -479,7 +463,7 @@ pub enum ExtCommand {
         /// Extension id, `publisher.name`.
         id: String,
         #[command(flatten)]
-        profile: ProfileArgs,
+        config: ConfigArgs,
         #[command(flatten)]
         store: StoreArgs,
     },
@@ -488,7 +472,7 @@ pub enum ExtCommand {
         /// Preset or agent id, for example `rust-analyzer`.
         id: String,
         #[command(flatten)]
-        profile: ProfileArgs,
+        config: ConfigArgs,
         #[command(flatten)]
         store: StoreArgs,
     },
@@ -510,61 +494,47 @@ pub struct ConfigArgs {
     pub config: Option<PathBuf>,
 }
 
-/// Which profile to act on.
-#[derive(Debug, Args)]
-pub struct ProfileArgs {
-    /// Profile to act on.
-    #[arg(long, env = "ACPILOT_PROFILE", default_value = "default")]
-    pub profile: String,
-    #[command(flatten)]
-    pub config: ConfigArgs,
-}
-
-/// Which profile a secret verb acts on, when it is not the launch's choice.
+/// Where a secret verb reads its config root.
 ///
-/// Unlike [`ProfileArgs`], absence is meaningful: the five-layer launch resolver
-/// supplies the name, so `acpilot secret set` uses the active profile rather than
-/// writing every credential into `default`.
+/// The profile itself is the global `--profile`, or the five-layer launch
+/// resolution when that is absent: `acpilot secret set` writes into the active
+/// profile rather than into `default`.
 #[derive(Debug, Args)]
 pub struct SecretProfileArgs {
-    /// Profile to act on. Defaults to the launch resolution.
-    #[arg(long, env = "ACPILOT_PROFILE", value_name = "NAME")]
-    pub profile: Option<String>,
     #[command(flatten)]
     pub config: ConfigArgs,
 }
 
 /// Run a parsed command and return the process exit code.
 pub fn run(cli: Cli) -> u8 {
-    match cli.command {
+    let Cli { profile, command } = cli;
+    match command {
         Some(Command::Version) => {
             println!("acpilot {}", acpilot_core::VERSION);
             println!("api      {API_PREFIX}");
             exit::SUCCESS
         }
-        Some(Command::Ext { command }) => run_ext(command),
-        Some(Command::Secret { command }) => run_secret(command),
+        Some(Command::Ext { command }) => run_ext(command, profile.as_deref()),
+        Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),
-        Some(Command::Config { command }) => run_config(command),
+        Some(Command::Config { command }) => run_config(command, profile.as_deref()),
         Some(Command::Profile { command }) => run_profile(command),
-        Some(Command::Workspace { command }) => run_workspace(command),
+        Some(Command::Workspace { command }) => run_workspace(command, profile.as_deref()),
         Some(Command::Serve {
             http: _,
             bind,
             token,
-            profile,
             workspace,
         }) => run_serve(ServeFlags {
             bind,
             token,
-            profile,
+            profile: profile.map(PathBuf::from),
             workspace,
         }),
         Some(Command::Tui {
             path,
             api_url,
             no_spawn,
-            profile,
             workspace,
             token,
             demo,
@@ -573,7 +543,7 @@ pub fn run(cli: Cli) -> u8 {
             path,
             api_url,
             no_spawn,
-            profile,
+            profile: profile.map(PathBuf::from),
             workspace,
             token,
             demo,
@@ -581,10 +551,16 @@ pub fn run(cli: Cli) -> u8 {
         }),
         Some(Command::Doctor {
             path,
-            profile,
             api_url,
             token,
-        }) => run_doctor(path.as_deref(), &profile, api_url.as_deref(), token),
+        }) => run_doctor(
+            path.as_deref(),
+            profile
+                .as_deref()
+                .unwrap_or(acpilot_profile::launch::DEFAULT_PROFILE),
+            api_url.as_deref(),
+            token,
+        ),
 
         None => {
             // `clap` prints usage on --help; with no subcommand, do the same
@@ -634,10 +610,9 @@ fn run_doctor(
 }
 
 /// Open a workspace against a running daemon, starting one when it is not there.
-fn run_workspace(command: WorkspaceCommand) -> u8 {
+fn run_workspace(command: WorkspaceCommand, profile: Option<&str>) -> u8 {
     let WorkspaceCommand::Open {
         path,
-        profile,
         steal,
         api_url,
         token,
@@ -660,7 +635,7 @@ fn run_workspace(command: WorkspaceCommand) -> u8 {
     // `--profile` is a name at this surface, and `acpilotd` wants the directory
     // that name resolves to. Resolving here keeps `workspace open --profile work`
     // from starting a daemon that treats `work` as a relative path.
-    let profile_directory = match profile.as_deref() {
+    let profile_directory = match profile {
         Some(name) => match acpilot_profile::Profile::named(name) {
             Ok(profile) => Some(profile.root().to_path_buf()),
             Err(error) => {
@@ -706,7 +681,7 @@ fn run_workspace(command: WorkspaceCommand) -> u8 {
             return exit::FAILURE;
         }
     };
-    match runtime.block_on(running.client.open_workspace(profile.as_deref(), &request)) {
+    match runtime.block_on(running.client.open_workspace(profile, &request)) {
         Ok(opened) => {
             println!(
                 "opened {} (profile {})",
@@ -1354,8 +1329,8 @@ fn run_profile(command: ProfileCommand) -> u8 {
 }
 
 /// Explain one setting's winner, from the same cascade a launch reads.
-fn run_config(command: ConfigCommand) -> u8 {
-    let ConfigCommand::Explain { key, path, profile } = command;
+fn run_config(command: ConfigCommand, profile: Option<&str>) -> u8 {
+    let ConfigCommand::Explain { key, path } = command;
     let root = match Root::resolve(path.as_deref()) {
         Ok(root) => root,
         Err(error) => {
@@ -1367,7 +1342,7 @@ fn run_config(command: ConfigCommand) -> u8 {
     // name that does not resolve is exit 3 with the command that fixes it, not
     // a quiet read of `default`.
     let resolved = match ProfileResolver::new()
-        .flag(profile.as_deref().map(Path::new))
+        .flag(profile.map(Path::new))
         .process_environment()
         .resolve(&root)
     {
@@ -2002,7 +1977,10 @@ fn expected_workspace_id(root: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn run_ext(command: ExtCommand) -> u8 {
+fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
+    // `ext` verbs act on one profile; without the global flag that is `default`,
+    // the same identity the launch resolution falls back to.
+    let named = profile.unwrap_or(acpilot_profile::launch::DEFAULT_PROFILE);
     match command {
         ExtCommand::Add { from, store } => {
             let paths = match Paths::resolve(store.store, None) {
@@ -2084,12 +2062,12 @@ fn run_ext(command: ExtCommand) -> u8 {
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Activate { id, profile, store } => {
-            let paths = match Paths::resolve(store.store, profile.config.config) {
+        ExtCommand::Activate { id, config, store } => {
+            let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            match ext::activate(&paths, &profile.profile, &id) {
+            match ext::activate(&paths, named, &id) {
                 Ok(line) => {
                     println!("{line}");
                     exit::SUCCESS
@@ -2097,12 +2075,12 @@ fn run_ext(command: ExtCommand) -> u8 {
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Deactivate { id, profile, store } => {
-            let paths = match Paths::resolve(store.store, profile.config.config) {
+        ExtCommand::Deactivate { id, config, store } => {
+            let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            match ext::deactivate(&paths, &profile.profile, &id) {
+            match ext::deactivate(&paths, named, &id) {
                 Ok(line) => {
                     println!("{line}");
                     exit::SUCCESS
@@ -2110,12 +2088,12 @@ fn run_ext(command: ExtCommand) -> u8 {
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Why { id, profile, store } => {
-            let paths = match Paths::resolve(store.store, profile.config.config) {
+        ExtCommand::Why { id, config, store } => {
+            let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            match ext::why(&paths, &profile.profile, &id) {
+            match ext::why(&paths, named, &id) {
                 Ok(text) => {
                     print!("{text}");
                     exit::SUCCESS
@@ -2163,9 +2141,9 @@ type ResolvedSecretProfile = Result<(String, PathBuf), (String, u8)>;
 ///
 /// The flag may be a name; an explicit directory is accepted only when its last
 /// segment is a valid profile id, because that segment is the keyring namespace.
-fn resolve_secret_profile(profile: &SecretProfileArgs) -> ResolvedSecretProfile {
+fn resolve_secret_profile(config: &SecretProfileArgs, flag: Option<&str>) -> ResolvedSecretProfile {
     let root = Root::resolve(None).map_err(|error| (error.to_string(), exit::FAILURE))?;
-    let config_root = profile
+    let config_root = config
         .config
         .config
         .clone()
@@ -2173,7 +2151,7 @@ fn resolve_secret_profile(profile: &SecretProfileArgs) -> ResolvedSecretProfile 
     let user_config = config_root.join(acpilot_profile::CONFIG_FILE);
     let resolved =
         ProfileResolver::new_in(config_root.join("profiles"), Some(user_config.as_path()))
-            .flag(profile.profile.as_deref().map(Path::new))
+            .flag(flag.map(Path::new))
             .process_environment()
             .resolve(&root)
             .map_err(|error| {
@@ -2199,7 +2177,7 @@ fn resolve_secret_profile(profile: &SecretProfileArgs) -> ResolvedSecretProfile 
     ))
 }
 
-fn run_secret(command: SecretCommand) -> u8 {
+fn run_secret(command: SecretCommand, flag: Option<&str>) -> u8 {
     match command {
         SecretCommand::Set { name, profile } => {
             let reference = match secret::reference(&name) {
@@ -2209,7 +2187,7 @@ fn run_secret(command: SecretCommand) -> u8 {
                     return exit::USAGE;
                 }
             };
-            let (profile, _) = match resolve_secret_profile(&profile) {
+            let (profile, _) = match resolve_secret_profile(&profile, flag) {
                 Ok(resolved) => resolved,
                 Err((message, code)) => {
                     eprintln!("acpilot secret set: {message}");
@@ -2236,7 +2214,7 @@ fn run_secret(command: SecretCommand) -> u8 {
             }
         }
         SecretCommand::List { profile } => {
-            let (profile, directory) = match resolve_secret_profile(&profile) {
+            let (profile, directory) = match resolve_secret_profile(&profile, flag) {
                 Ok(resolved) => resolved,
                 Err((message, code)) => {
                     eprintln!("acpilot secret list: {message}");
@@ -2265,7 +2243,7 @@ fn run_secret(command: SecretCommand) -> u8 {
                     return exit::USAGE;
                 }
             };
-            let (profile, _) = match resolve_secret_profile(&profile) {
+            let (profile, _) = match resolve_secret_profile(&profile, flag) {
                 Ok(resolved) => resolved,
                 Err((message, code)) => {
                     eprintln!("acpilot secret rm: {message}");

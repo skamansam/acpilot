@@ -973,7 +973,7 @@ Three rules:
     than global: it is still the profile's stream, and the activation switch does not re-target an
     open one.
 
-- [ ] **P4-9 · CLI** (0.5d)
+- [x] **P4-9 · CLI** (0.5d)
   - **Started (2026-11-10):** `new`, `ls`, `show`, `use`, `import` and `diff` are in
     `acpilot-cli`, and every one is a filesystem verb: a profile is a directory plus a
     registry row, so none of them needs a daemon. `new` writes the five roots, a
@@ -986,10 +986,19 @@ Three rules:
     removal takes away what a creation made. **Tests:** two in
     `crates/acpilot-cli/tests/cli.rs` (create, list, show, diff and use in one home; export
     then import into a second home, where a second import is `409`).
-  - **Open:** `--profile` is not global yet: `clap` refuses a global argument that a
-    subcommand also declares, so accepting it before the subcommand needs the per-verb
-    flags moved first. `doctor` still reports the resolved profile, but not its five roots
-    or the cascade's unknown keys.
+  - **Result (2026-11-10):** `--profile` is one global argument now, accepted before or
+    after the subcommand, and `tui`, `serve`, `doctor`, `config explain`, `workspace open`,
+    `ext` and `secret` all read that one value. The per-verb flags are gone, so the
+    surface has one spelling of the choice. `doctor` prints the profile's five roots with
+    `present` or `missing` on each, and every unknown key with the file that wrote it,
+    from `Cascade::unknown_keys` — the same scan that prints the warning. **Tests:** the
+    four help snapshots moved, because a global flag is listed under every subcommand;
+    `crates/acpilot-cli/tests/precedence.rs` proves both positions of the flag and the
+    doctor lines.
+  - **Open:** the profile verbs still take their subject as an argument, so
+    `acpilot profile ls --profile work` accepts the flag and ignores it. That is the
+    registry's design rather than an omission: a profile verb acts on the profile it was
+    given, and a default here would make `profile show` depend on the active row.
   - `acpilot profile new|ls|show|use|rm|import|diff`; `export` is already served by P4-5.
     Global `--profile`, accepted before or after the subcommand.
   - `acpilot profile diff a b` prints the effective merged config with per-key origin — the tool
@@ -997,6 +1006,28 @@ Three rules:
   - `acpilot doctor` reports the resolved profile, its roots, and every unknown key.
 
 - [ ] **P4-10 · Tests** (0.5d)
+  - **Started (2026-11-10):** the filesystem half is a table in
+    `crates/acpilot-cli/tests/precedence.rs`, one fresh home per row, driven through the
+    binary rather than the library:
+
+    | Row | Setup | What is asserted |
+    | --- | --- | --- |
+    | defaults | nothing | the origin is `built-in defaults` |
+    | global file | `<config>/config.toml` | that file wins, value 2 |
+    | profile file | `profiles/work/config.toml` | the profile file beats the global one, value 4 |
+    | project file | `<project>/.acpilot/config.toml` | the project file beats the profile one, value 6 |
+    | environment | `ACPILOT_TAB_WIDTH=8` | the environment beats the project file, value 8 |
+    | flag position | `--profile work` before and after the verb | the two outputs are byte-identical |
+    | missing profile | `--profile ghost` | exit `3` and the `profile new ghost` hint |
+    | isolation | two profiles started at once | each process names its own file and value |
+    | doctor | five roots, a typed key | every root with `present`, the key with its file |
+    | diff | `work` against `personal` | the key with both values and both origins |
+
+  - **Open:** two rows need something the CLI test binary does not have. The
+    cross-profile `404` and `409` answers need a running daemon, and keyring namespacing
+    needs an OS keyring; the daemon's own suite covers the first, and neither is claimed
+    here. Export redaction is already a row in `cli.rs`
+    (`profile_export_redacts_by_default_and_gates_secrets`).
   - Precedence matrix; missing-profile marker; cross-profile denial; keyring namespacing;
     `profile diff` snapshot; concurrent profiles without env/cwd bleed; export redaction.
   - **DoD:** `acpilot --profile work agents list` and `--profile personal agents list` differ in

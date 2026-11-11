@@ -16,6 +16,18 @@ names nothing.
 Usage: acpilot serve [OPTIONS]
 
 Options:
+      --profile <NAME|DIR>
+          Profile name, or a profile directory.
+          
+          Accepted before or after the subcommand, because every verb that has an opinion about
+          identity reads one choice. A single segment is a profile name under `<config>/profiles`; a
+          path opens that directory. `tui` and `serve` use it only when they start the daemon: a
+          daemon already running keeps the profile it was started with, and naming a different one
+          there is an error rather than a silent mismatch. A name that does not resolve is an error,
+          never a quieter fallback: guessing sends a work prompt with a personal key.
+          
+          [env: ACPILOT_PROFILE=]
+
       --bind <ADDR>
           The address to bind, for example `0.0.0.0:7777`.
           
@@ -26,9 +38,6 @@ Options:
           
           It is written to the runtime token file the daemon reads. Without it a token is generated
           on first use and reused, so a browser keeps working across restarts.
-
-      --profile <DIR>
-          Profile directory the daemon serves
 
       --workspace <DIR>
           Workspace root the daemon serves. Defaults to this directory

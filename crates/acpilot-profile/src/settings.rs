@@ -524,6 +524,17 @@ impl Cascade {
     /// # Errors
     ///
     /// The key is not in the merged settings.
+    /// Every key a layer set that this build does not know, with the file that
+    /// wrote it.
+    ///
+    /// A save by a newer build is read rather than refused, so the warning is the
+    /// only sign that a key is being ignored; `acpilot doctor` reports the list so
+    /// a typo has somewhere to appear besides a terminal that has scrolled on.
+    #[must_use]
+    pub fn unknown_keys(&self) -> &[Warning] {
+        &self.warnings
+    }
+
     pub fn explain(&self, key: &str) -> Result<Explanation, SettingsError> {
         let key = normalize_key(key);
         let Some(value) = lookup(&self.raw, &key) else {

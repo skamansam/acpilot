@@ -407,25 +407,26 @@ jobs:
   #
   # The individual jobs stay listed in the PR's checks tab either way; this is the
   # one a rule points at.
-  # The ruleset on `main` asks for one context, `required checks`, and only a pull
-  # request may publish that name.
+  # The ruleset on `main` requires the single context `required checks` and allows no
+  # bypass. GitHub records a check run for every job of a run, a cancelled one
+  # included, and a `cancelled` entry under a required name counts as not-success in
+  # that commit's rollup: #302 read `BLOCKED` with every job green, and deleting its
+  # cancelled push run moved the pull request to `clean` with no other change.
   #
   # Pushing a branch and then opening its pull request puts a push run and a pull
   # request run of the same commit in one concurrency group, so the later cancels the
-  # earlier. GitHub records a check run for every job of a cancelled run, with
-  # conclusion `cancelled`, and a cancelled entry under a required name counts as
-  # not-success in that commit's rollup: #302 read `BLOCKED` with every job green
-  # until the cancelled run was deleted. Skipping the job does not avoid this, because
-  # the entry is recorded either way. So the push run publishes a name of its own and
-  # still aggregates its own jobs, which is what reports on a commit nobody is
-  # reviewing; the required name comes from the event that merges.
+  # earlier, and the two events cannot publish one name. A job's `name` is a literal —
+  # an expression there becomes the name, which is how the first attempt at this
+  # published a check called `github.event_name == ...` — so the two events get two
+  # jobs over one assertion.
   required:
-    name: ${{ github.event_name == 'pull_request' && 'required checks' || 'required checks (branch)' }}
+    name: required checks
     needs: [check, web, gui, probes, frame-budget, deny, docs, history]
     # `always()` also fired inside a cancelled run, where every dependency reports
     # `cancelled`; `!cancelled()` runs the job after a dependency fails, which is the
     # case it exists for, and stays out of a cancelled run, where it has nothing to say.
-    if: ${{ !cancelled() }}
+    # Only the event that merges publishes the name the ruleset asks for.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Every required job succeeded
@@ -452,5 +453,42 @@ jobs:
           done
           if [ -n "$failed" ]; then
             echo "required job(s) did not pass:$failed"
+            exit 1
+          fi
+
+  # The same assertion under a name of its own, for the runs that are not a pull
+  # request: a push run is cancelled the moment its pull request run starts, so it
+  # cannot be the one holding the required name. Keep the two step bodies in step;
+  # they are the same check because they are the same gate.
+  required-branch:
+    name: required checks (branch)
+    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: >-
+            check=${{ needs.check.result }}
+            web=${{ needs.web.result }}
+            gui=${{ needs.gui.result }}
+            probes=${{ needs.probes.result }}
+            frame-budget=${{ needs.frame-budget.result }}
+            deny=${{ needs.deny.result }}
+            docs=${{ needs.docs.result }}
+            history=${{ needs.history.result }}
+        run: |
+          set -euo pipefail
+          failed=""
+          for pair in $RESULTS; do
+            name=${pair%%=*}
+            result=${pair#*=}
+            echo "$name: $result"
+            if [ "$result" != "success" ]; then
+              failed="$failed $name($result)"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "job(s) did not pass:$failed"
             exit 1
           fi

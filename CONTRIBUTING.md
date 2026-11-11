@@ -342,14 +342,17 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
   pass. The ruleset below therefore points
   at one name instead of a list that has to be edited whenever a job is added or
   renamed.
-- Only a pull request publishes that name. A push run publishes
-  `required checks (branch)` instead. Pushing a branch and then opening its pull
-  request cancels the push run, and GitHub records a check run for every job of a
-  cancelled run, with conclusion `cancelled`. A `cancelled` entry under a required
-  name counts as not-success in the commit's rollup, so a pull request whose every
-  job was green stayed `BLOCKED` until the cancelled run was deleted. Two names keep
-  the required one to the event that merges; the push run still aggregates its own
-  jobs, which is what reports on a commit nobody is reviewing.
+- Only a pull request publishes that name. `on: push` covers `main` alone, so a
+  branch's checks come from its pull request, and a push to `main` reports under
+  `required checks (branch)`. The reason is measured. A push run and the pull request
+  run of one branch share a concurrency group, so the pull request cancels the push.
+  GitHub records a check run for every job of a cancelled run, with conclusion
+  `cancelled`, and that entry counts as not-success for a required check: #302 read
+  `BLOCKED` with all thirteen jobs green and went `clean` only when its cancelled
+  push run was deleted. A job skipped by `if:` still publishes its name, so the gate
+  cannot be hidden on push; the run itself has to not exist. A branch pushed before
+  its pull request exists gets no checks until the pull request opens, or until
+  `workflow_dispatch` asks for them.
 
 ### One pull request per phase, and a stack under it
 

@@ -1077,7 +1077,7 @@ Three rules:
     that answers "why is it doing that?".
   - `acpilot doctor` reports the resolved profile, its roots, and every unknown key.
 
-- [ ] **P4-10 · Tests** (0.5d)
+- [x] **P4-10 · Tests** (0.5d)
   - **Started (2026-11-10):** the filesystem half is a table in
     `crates/acpilot-cli/tests/precedence.rs`, one fresh home per row, driven through the
     binary rather than the library:
@@ -1098,12 +1098,15 @@ Three rules:
     | daemon: a workspace another profile owns | no `--steal` | `409 profile_mismatch` with the owner in `details` (same suite) |
     | keyring namespacing | `work` and `personal` | two accounts, two values, no look-alike fallback (`acpilot-agent/src/keyring.rs`) |
 
-  - **Open:** one DoD row is still unproven. A `work` session must be `404` to
-    `personal` rather than an empty list. That case needs a stored session in one
-    profile's database and a request under the other profile's header, and the daemon
-    suite does not build that state yet. The other daemon rows and the keyring row above
-    point at tests that exist, so they are covered rather than claimed. Export redaction
-    is a row in `cli.rs` (`profile_export_redacts_by_default_and_gates_secrets`).
+  - **Result (2026-11-11):** the last DoD row is proven.
+    `a_work_session_is_not_found_in_the_personal_profile` in
+    `crates/acpilotd/tests/profiles.rs` gives each profile its own in-memory store.
+    It stores one session in `work`'s database and then asks for that id under the
+    `personal` header. The answer is `404 not_found`, and the same id under `work`
+    is `200`. Every row in the table above now names a test that exists.
+  - **Open:** the desktop shell's profile switcher is not in this matrix. It reads
+    the same routes, so it can fail only by not sending the header, and
+    `cargo xtask gui-check` does not exercise that path.
   - Precedence matrix; missing-profile marker; cross-profile denial; keyring namespacing;
     `profile diff` snapshot; concurrent profiles without env/cwd bleed; export redaction.
   - **DoD:** `acpilot --profile work agents list` and `--profile personal agents list` differ in

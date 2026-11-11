@@ -302,6 +302,44 @@ ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
   at one name instead of a list that has to be edited whenever a job is added or
   renamed.
 
+### One pull request per phase, and a stack under it
+
+A phase in `TODO.md` gets one pull request. That PR is the unit that matches a
+phase in the roadmap project. Its body lists the tasks it closes.
+
+Each capability in that phase gets its own pull request. It targets the phase
+branch, not `main`. Merge it into the phase branch when its checks are green.
+The phase PR then reaches `main` once, and its history names every ticket it
+closed.
+
+```
+main
+└── phase/p4-profiles            one PR, merged once
+    ├── p4-9-global-profile      one PR per capability
+    ├── p4-10-precedence-matrix
+    └── p4-11-provider-registry
+```
+
+The rules that keep the stack traceable:
+
+- A phase branch is named `phase/<phase code>`, for example `phase/p4-profiles`.
+- A capability branch carries its ticket code, for example `p4-10-precedence`.
+  Its PR title starts with the same code.
+- Every PR body links the ticket it closes in the roadmap project. A PR with no
+  ticket is either a task `TODO.md` does not have yet, or work that does not
+  belong in the phase.
+- A capability PR never targets `main` while its phase PR is open. That breaks
+  the stack, and the phase PR then carries the same change twice.
+- The phase PR merges only after its capability PRs are in and
+  `cargo xtask check` is green on the phase branch.
+- Delete a capability branch after its merge. The phase branch stays until the
+  phase PR merges.
+
+A merge that lands a phase is one commit on `main`, so a reader can see what a
+phase shipped without reading the whole branch.
+
+### The protection rule
+
 The rule itself is repository settings, not a file. It is a ruleset called
 `protect main`, not legacy branch protection. Rulesets are what GitHub maintains now.
 They cover deletion and force pushes as rules rather than as flags. The old

@@ -9,7 +9,8 @@
 
 use std::sync::Arc;
 
-use acpilot_store::Index;
+use acpilot_proto::session::SessionSummary;
+use acpilot_store::{Index, Store};
 use acpilotd::profiles::{self, Profiles};
 use acpilotd::state_for_profile;
 use axum::Router;
@@ -416,4 +417,69 @@ async fn a_profile_that_cannot_load_does_not_take_the_others_with_it() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.as_array().expect("rows").len(), 1);
     assert_eq!(body[0]["id"], "good");
+}
+
+#[tokio::test]
+async fn a_work_session_is_not_found_in_the_personal_profile() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let work = profile(root.path(), "work", "work-agent");
+    let personal = profile(root.path(), "personal", "personal-agent");
+
+    // One store per profile: the isolation under test is that a row written to
+    // work's database is not a row personal can read. Sending the header is the
+    // whole difference between the two requests below.
+    let work_store = Arc::new(Store::in_memory().expect("a work store"));
+    let personal_store = Arc::new(Store::in_memory().expect("a personal store"));
+    let stored: SessionSummary = serde_json::from_value(serde_json::json!({
+        "id": "work-session",
+        "profile": "work",
+        "workspace_id": "work:local:/tmp",
+        "agent_id": "work-agent",
+        "title": "a work session",
+        "status": "idle",
+        "created_at": "2026-11-11T00:00:00Z",
+        "updated_at": "2026-11-11T00:00:00Z"
+    }))
+    .expect("a session summary");
+    work_store
+        .save_session(&stored)
+        .expect("the work session is stored");
+
+    let work_state = state_for_profile(&work, workspace.path())
+        .expect("work loads")
+        .with_store(Arc::clone(&work_store));
+    let personal_state = state_for_profile(&personal, workspace.path())
+        .expect("personal loads")
+        .with_store(Arc::clone(&personal_store));
+    let registry = Arc::new(Profiles::from_states(
+        vec![
+            ("work".to_owned(), work_state),
+            ("personal".to_owned(), personal_state),
+        ],
+        "work".to_owned(),
+    ));
+    let app = profiles::router(registry);
+
+    let (status, body) = send(
+        app.clone(),
+        "GET",
+        "/v1/sessions/work-session",
+        Some("work"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The same id under the other profile's header is unknown, not empty. A
+    // `200 []` here would tell a client its session exists and has no history.
+    let (status, body) = send(app, "GET", "/v1/sessions/work-session", Some("personal")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "not_found");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("work-session"),
+        "the refusal names the id it could not find: {body}"
+    );
 }

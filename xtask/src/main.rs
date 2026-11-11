@@ -1716,6 +1716,35 @@ mod tests {
     }
 
     #[test]
+    fn the_web_job_runs_in_the_playwright_image_the_package_pins() {
+        // The job installs no browser and no fonts: the image carries both, and the
+        // `--with-deps` call that used to fetch them failed on a runner that could
+        // not reach `security.ubuntu.com`. That bargain holds only while the image
+        // tag and `@playwright/test` are one version — the browser inside the image
+        // is the revision that version launches, so a bump of one alone is an e2e
+        // run that cannot start a browser at all.
+        let manifest = fs::read_to_string(web_dir().join("package.json"))
+            .expect("web/package.json lists its dependencies");
+        let pinned = manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("\"@playwright/test\":"))
+            .expect("web/package.json still pins @playwright/test")
+            .trim()
+            .trim_end_matches(',')
+            .trim_matches('"')
+            .trim_start_matches('^')
+            .to_owned();
+
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+        assert!(
+            workflow.contains(&format!("mcr.microsoft.com/playwright:v{pinned}-noble")),
+            "CI's web job does not run in the Playwright image for playwright {pinned}; \
+             the tag in .github/workflows/ci.yml and the pin in web/package.json move together"
+        );
+    }
+
+    #[test]
     fn the_gui_job_runs_the_task_that_checks_the_shell() {
         // Same reason as the web job: one `cargo xtask` line means a renamed
         // subcommand is a red runner rather than a job that quietly checks less.

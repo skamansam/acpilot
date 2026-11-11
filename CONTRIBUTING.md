@@ -95,8 +95,13 @@ The web UI's half is a task of its own, `cargo xtask web-check`. It runs:
 - `npm run test:e2e` in Chromium against `acpilot serve`
 - `npm run build`, then a comparison of the result with the committed page
 
-The e2e test needs the browser once: `cd web && npx playwright install chromium` (CI
-installs it with `--with-deps`). `cargo xtask check` calls it, and CI's `web` job calls
+The e2e test needs the browser once locally: `cd web && npx playwright install chromium`.
+CI's `web` job runs in the official Playwright image instead. That image carries the
+browser, its system libraries and its fonts, so the job installs nothing and its first
+step cannot fail on a package mirror. The image tag is the `@playwright/test` version
+from `web/package.json`, and a test in `xtask` fails when the two drift apart.
+
+`cargo xtask check` calls it, and CI's `web` job calls
 it, so that list exists once. It does not live in a workflow and a local habit that
 agree until somebody edits one. A `.svelte` edit that was never rebuilt, or a type
 error only `svelte-check` sees, therefore fails locally instead of on a runner. When

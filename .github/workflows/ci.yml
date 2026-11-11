@@ -87,6 +87,21 @@ jobs:
   web:
     name: web UI matches web/
     runs-on: ubuntu-latest
+    # The browser, its system libraries and the fonts it measures text with are
+    # already in this image, so the job installs none of them. What it replaces is
+    # `npx playwright install --with-deps`, whose first act is `apt-get update`:
+    # on a runner that cannot resolve `security.ubuntu.com` that step fails before
+    # a test runs, and the log blames fonts rather than the network. The tag is the
+    # `@playwright/test` version from `web/package.json`, because the browser in the
+    # image is the revision that version launches; a test in `xtask` fails when the
+    # two drift apart.
+    #
+    # `--user root`: the image's own user cannot write the checkout or
+    # `$HOME/.cargo`, and rustup installs into the latter. Nothing is published from
+    # this job, so a disposable container's root is the cheap fix.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble
+      options: --user root
     steps:
       - uses: actions/checkout@v4
 
@@ -102,17 +117,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # `web-check` installs when `node_modules` is missing, but the browser has to
-      # be installed after the package is there and before the run that uses it:
-      # `playwright` is a devDependency, and its Chromium revision is the one that
-      # package expects rather than an `npx` download that may be newer.
-      - name: Web dependencies
-        working-directory: web
-        run: npm ci
-
-      - name: Playwright browser
-        working-directory: web
-        run: npx playwright install --with-deps chromium
+      # No dependency step and no browser step: `web-check` runs `npm ci` itself
+      # when `node_modules` is missing, and the image already holds the Chromium
+      # revision this package launches. A copy of either here would be the second
+      # place to change the same thing.
 
       # Install, types, both test runs and the embedded page, in the task's order.
       # A drift failure names the page to commit and exits non-zero; the rebuilt

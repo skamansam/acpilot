@@ -1971,6 +1971,11 @@ mod tests {
             workflow.contains("fetch-depth: 0"),
             "the history job needs both parents of every merge, which a shallow clone lacks"
         );
+        assert!(
+            workflow.contains("github.event.pull_request.head.sha"),
+            "the history job must check the branch's own tip; GitHub's merge commit for a pull \
+             request has one parent's tree whenever the branch already contains the base"
+        );
         Cli::try_parse_from(["xtask", "history-check"]).expect("`history-check` is a task");
     }
 

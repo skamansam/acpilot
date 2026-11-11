@@ -5,210 +5,282 @@ interfaces, zero rewrites.**
 
 ## How to read this
 
-- Phases have a name and a code. Prose says "the desktop phase (P10)"; the code is
-the stable identifier commits and issues cite, so a name can be reworded without
-breaking a reference.
-- Tasks are `P<phase>-<n>`, so `feat(acp): P2-4` still resolves: `P0` design, `P1`
-foundation, `P2` engine, `P3` service, `P4` profiles, `P4.5` models, `P4.6` mod
-shop, `P5` command line, `P6` editor, `P6.5` version control, `P7` language
-intelligence, `P8` remote hosts, `P9` Windows, `P10` desktop, `P11` web, `P12`
-release, `P13` chat, `P14` studio.
+- Phases have a name and a code. Prose says "the desktop phase (P10)". The code is
+  the stable identifier commits and issues cite, so a name can change without
+  breaking a reference.
+- Tasks are `P<phase>-<n>`, so `feat(acp): P2-4` still resolves. The codes are:
+  `P0` design, `P1` foundation, `P2` engine, `P3` service, `P4` profiles,
+  `P4.5` models, `P4.6` mod shop, `P5` command line, `P6` editor,
+  `P6.5` version control. Then `P7` language intelligence, `P8` remote hosts,
+  `P9` Windows, `P10` desktop, `P11` web, `P12` release, `P13` chat,
+  `P14` studio.
 - A phase is done when every box is checked **and** the phase's acceptance test passes.
-- "DoD" (definition of done) is stated per phase; it is deliberately testable.
+- "DoD" (definition of done) is stated per phase. It is deliberately testable.
 - Anything marked **[decide]** needs a short ADR in `docs/adr/` before code lands.
 - Estimates are ideal engineering days, not calendar promises.
 
-Ordering rule: **no UI work before the daemon API works.** UIs are clients; if a UI needs
-something, add it to the API first. That single rule is what stops the four frontends from
-becoming four products.
+Ordering rule: **no UI work before the daemon API works.** UIs are clients. If a UI
+needs something, add it to the API first. That single rule is what stops the four
+frontends from becoming four products.
 
 ---
 
 ## Design phase (P0) — De-risking probes (≈9 days)
 
-Throwaway code in `probes/`, no workspace integration, no polish. Each probe answers one
-question that would be expensive to get wrong.
+Throwaway code in `probes/`, with no workspace integration and no polish. Each
+probe answers one question that would be expensive to get wrong.
 
 - [x] **P0-1 · ACP handshake against a real agent** (2d) — **done 2026-10-21**
-  - `cargo new probes/acp-handshake`; deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
-  - Implement the `Client` trait: `initialize` (protocol v1) → `session/new` → `session/prompt` "list the files here" → print every `session/update`.
-  - Handle `session/request_permission` with an auto-deny and log the payload.
+  - `cargo new probes/acp-handshake`. Deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
+  - Implement the `Client` trait. Run `initialize` (protocol v1), then `session/new`,
+    then `session/prompt` "list the files here", then print every `session/update`.
+  - Handle `session/request_permission` with an auto-deny, and log the payload.
   - Run against `npx -y @zed-industries/claude-code-acp` and `gemini --experimental-acp`.
-  - **Answer:** exact capabilities advertised by each agent; which `session/update` kinds arrive; what `stopReason` values appear; does `session/load` work.
-  - **Exit criteria:** transcript of two different agents driving the same 40 lines of client code, checked into `docs/notes/acp-transcripts.md`.
-  - **Result:** the client is `probes/acp-handshake` (613 lines, standalone crate, SDK 3.4.0) and
-    the transcript is `docs/notes/acp-transcripts.md`. It ran Claude Agent 0.94.0 and OpenCode
-    1.19.3 through one code path: both advertise `loadSession`, and both replay a **condensed**
-    history (5 and 7 updates for turns that streamed 29 and 16), so `session/load` cannot replace
-    our own transcript. Seven update kinds appeared, none of them `plan` or `thought`. A denied
-    write is a `failed` tool call with `end_turn`, not a protocol error. OpenCode 1.15.13 answered
-    `end_turn` with zero tokens and no text and no error — agent versions must be recorded. Usage
-    on `PromptResponse` is behind `unstable_end_turn_token_usage` and was dropped by the typed view.
-    Two plan details changed in the doing: the Claude package is now
-    `@agentclientprotocol/claude-agent-acp` (the old name is deprecated), and Gemini CLI was not
-    installed or signed in on this machine, so OpenCode 1.19.3 was the second agent.
+  - **Answer:** the exact capabilities of each agent, the `session/update` kinds that
+    arrive, the `stopReason` values, and whether `session/load` works.
+  - **Exit criteria:** a transcript of two different agents driving the same 40 lines
+    of client code, checked into `docs/notes/acp-transcripts.md`.
+  - **Result:** the client is `probes/acp-handshake` (613 lines, standalone crate,
+    SDK 3.4.0), and the transcript is `docs/notes/acp-transcripts.md`. It ran Claude
+    Agent 0.94.0 and OpenCode 1.19.3 through one code path. Both advertise
+    `loadSession`, and both replay a **condensed** history: 5 and 7 updates for turns
+    that streamed 29 and 16. So `session/load` cannot replace our own transcript.
+    Seven update kinds appeared, and none of them was `plan` or `thought`. A denied
+    write is a `failed` tool call with `end_turn`, not a protocol error. OpenCode
+    1.15.13 answered `end_turn` with zero tokens, no text and no error, so agent
+    versions must be recorded. Usage on `PromptResponse` is behind
+    `unstable_end_turn_token_usage`, and the typed view dropped it. Two plan details
+    changed in the doing. The Claude package is now
+    `@agentclientprotocol/claude-agent-acp`, and the old name is deprecated. Gemini
+    CLI was not installed or signed in on this machine, so OpenCode 1.19.3 was the
+    second agent.
 
 - [x] **P0-2 · Program-as-agent over a PTY** (2d) — **done 2026-10-21**
-  - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, render its screen with `vt100`, detect "turn complete" from a sentinel (prompt string reappearing / idle timeout).
-  - **Answer:** is a transcript adapter viable, or do we need per-program adapter profiles? What breaks with alternate-screen TUIs, colours, and bracketed paste?
-  - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns the final screen text + exit state for two programs.
-  - **Result:** `probes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query answers,
-    submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude Code 2.1.306 through a
-    real turn each, plus a deterministic `fake-tui.sh` double. The transport is generic; the
-    **semantics are per-program** — submit key, answer region, completion sentinel, and startup
-    dialogs all differ, so `transport = "pty"` must carry a profile rather than a parser guess.
-    An idle timeout below 5 s truncated the answer in 4 of 5 real turns (largest mid-turn gap
-    3.4 s, from the model thinking); 5 s never lied and added 5 s of latency, versus ~200 ms for a
-    per-program sentinel. Both programs run on the alternate screen, so the screen must be captured
-    before exit — after `quit` it is empty. Sending `text` and Enter in one write silently fails to
-    submit in Freebuff and looks exactly like a completed turn. Both probe the terminal (`CSI ? u`,
-    `CSI > 0 q`, plus `6 n`/`c`) and both gate the first prompt behind a dialog. Numbers, screens and
-    commands: `docs/notes/pty-agents.md`. All runs were on WSL2 (kernel
-    6.18.33.2-microsoft-standard-WSL2): a real Linux PTY, so these numbers say nothing about Windows
-    ConPTY, which the design phase's task P0-5 owns.
+  - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, and render its
+    screen with `vt100`. Detect "turn complete" from a sentinel, which is the prompt
+    string reappearing or an idle timeout.
+  - **Answer:** is a transcript adapter viable, or do we need per-program adapter
+    profiles? What breaks with alternate-screen TUIs, colours and bracketed paste?
+  - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns
+    the final screen text and the exit state for two programs.
+  - **Result:** `probes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query
+    answers, submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude
+    Code 2.1.306 through a real turn each.
+    Plus a deterministic `fake-tui.sh` double.
+    The transport is generic. The **semantics are per-program**: the submit key, the
+    answer region, the completion sentinel and the startup dialogs all differ. So
+    `transport = "pty"` must carry a profile rather than a parser guess. An idle
+    timeout below 5 s truncated the answer in 4 of 5 real turns (largest mid-turn gap
+    3.4 s, from the model thinking). A 5 s timeout never lied and added 5 s of
+    latency, against ~200 ms for a per-program sentinel. Both programs run on the
+    alternate screen, so the screen must be captured before exit: after `quit` it is
+    empty. A single write of `text` plus Enter silently fails to submit in Freebuff,
+    and it looks exactly like a completed turn. Both programs probe the terminal
+    (`CSI ? u`, `CSI > 0 q`, plus `6 n`/`c`), and both gate the first prompt behind a
+    dialog. Numbers, screens and commands: `docs/notes/pty-agents.md`. All runs were
+    on WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2), which is a real Linux PTY.
+    So these numbers say nothing about Windows ConPTY, which the design phase's task
+    P0-5 owns.
 
-- [x] **P0-3 · gpui text benchmark** (2d) — **closed 2026-10-22; D1 stands**
-  - Render a 100k-line Rust file in gpui, scroll, select, type, undo; build the screen against the `text_system` shaped-line API and a `uniform_list` row window rather than one giant element.
-  - Measure: first paint, keystroke→paint, scroll frame time, and the cost of highlighting a 3k-line visible window with tree-sitter.
-  - Also measure a minimal `iced` build of the same screen, so the fallback is priced rather than assumed.
-  - Verify the pin actually builds clean from crates.io alone (no `zed/` checkout, no network beyond the lockfile): this is where the `zed-font-kit` git dependency and any missing feature will bite.
-  - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
-  - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
-  - **Result (2026-10-22): both frameworks meet the frame budget, both miss first paint, and the fallback is the
-    slower of the two — so the veto does not fire and D1 stands.** The GPU was there all along: WSL2 has the
-    RTX 5060 (`/dev/dxg`, driver 616.56) but no Vulkan ICD for it (`dzn` is not in Ubuntu's
-    `mesa-vulkan-drivers`), and gpui's Linux renderer is Vulkan-only, so both benchmarks ran **natively on
-    Windows** through the WSL interop — the same hardware, the platform the budget is about.
-    `probes/gpui-bench` and `probes/iced-bench` draw the same screen (100k rows, 50 visible at 18 px, 13 px
-    Consolas, generated rows, three phases after warm-up, one cold 3k-line shaping probe) and were run
-    interleaved so neither got a colder system. **Frame pacing: p95 4.3–4.6 ms at 240 Hz for both**, 0–1 dropped
-    intervals per run — the 16 ms budget met with room, though vsync-bound so headroom above 240 Hz is
-    unmeasured. **First paint: gpui 277–326 ms, iced 851–896 ms, against 150 ms.** The fallback is not a fix:
-    iced boots 4–5× faster (50 ms vs 231–273 ms) and spends it several times over in window/device creation
-    (853–898 ms vs 272–313 ms), i.e. ~3× worse in total at the same pacing. Shaping 3 000 lines cold is ~50 ms
-    in both (~17 µs/line), which is why shaped lines are cached rather than re-shaped.
-    **The >2× clause needs care, and this is the finding that changes:** on a warm machine gpui is 1.85–2.17×
-    over (median 1.90×), so it does not fire — but the same binary measured 580–968 ms (3.9–6.5×) earlier in the
-    session before the DLL and driver caches were warm, and iced misses by 5.7–6.0×. A first-paint budget that
-    does not state the machine state measures the OS file cache, and the clause read as an absolute number
-    rejects the fallback harder than the framework it protects. So it is restated as a comparison: a framework
-    is vetoed when the alternative is >2× better, which no measurement here supports. The lever left is
-    window/device creation (iced: 51 ms boot → 750–800 ms to a window), not the view, which costs ~0 ms per
-    frame in both; a profile of that phase is the next useful measurement, and §Perf should say that a 150 ms
-    first paint is a property of how the app starts, not of the framework.
-    The pin still needs **`libc` held at ≤ 0.2.189** on Linux (`xattr` 0.2.3 uses `libc::ENOATTR`) and
-    `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method and limitations:
-    `docs/notes/gui-bench.md`. Still unmeasured: tree-sitter highlight cost for a 3k-line window, a profile of
-    the window/device phase, and a macOS run.
+- [x] **P0-3 · gpui text benchmark** (2d) — **closed 2026-10-22, D1 stands**
+  - Render a 100k-line Rust file in gpui, then scroll, select, type and undo. Build
+    the screen against the `text_system` shaped-line API and a `uniform_list` row
+    window, not one giant element.
+  - Measure first paint, keystroke→paint, scroll frame time, and the cost of
+    highlighting a 3k-line visible window with tree-sitter.
+  - Also measure a minimal `iced` build of the same screen, so the fallback is priced
+    rather than assumed.
+  - Check the pin builds clean from crates.io alone, with no `zed/` checkout and no
+    network beyond the lockfile. The `zed-font-kit` git dependency and any missing
+    feature will bite here.
+  - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list
+    we and the GUI-builder project can push on together. That list, not a wish, is
+    what justifies escalating to a git `rev`.
+  - **Exit criteria:** numbers in `docs/notes/gui-bench.md` against the budgets
+    (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot build from a
+    clean vendored tree, fall back to `iced` 0.14 → Tauri **now**. Say so in the
+    ADR.
+  - **Result (2026-10-22): both frameworks meet the frame budget, both miss first
+    paint, and the fallback is the slower of the two. So the veto does not fire, and
+    D1 stands.** The GPU was there all along. WSL2 has the RTX 5060 (`/dev/dxg`,
+    driver 616.56) but no Vulkan ICD for it (`dzn` is not in Ubuntu's
+    `mesa-vulkan-drivers`). gpui's Linux renderer is Vulkan-only, so both benchmarks
+    ran **natively on Windows** through the WSL interop. That is the same hardware, and
+    the platform the budget is about. `probes/gpui-bench` and `probes/iced-bench` draw
+    the same screen. It has 100k rows, 50 visible at 18 px, 13 px Consolas, generated
+    rows, three phases after warm-up, and one cold 3k-line shaping probe. They were run
+    interleaved so neither got a colder system. **Frame pacing: p95 4.3–4.6 ms at
+    240 Hz for both**, with 0–1 dropped intervals per run. The 16 ms budget is met
+    with room, though vsync-bound, so headroom above 240 Hz is unmeasured. **First
+    paint: gpui 277–326 ms, iced 851–896 ms, against 150 ms.** The fallback is not a
+    fix. iced boots 4–5× faster (50 ms vs 231–273 ms). It spends that
+    several times over in window and device creation (853–898 ms vs 272–313 ms).
+    That is ~3× worse in total at the same pacing. Shaping 3 000 lines cold is ~50 ms in
+    both (~17 µs/line), which is why shaped lines are cached rather than re-shaped.
+    **The >2× clause needs care, and this is the finding that changes.** On a warm
+    machine gpui is 1.85–2.17× over (median 1.90×), so the clause does not fire. But
+    the same binary measured 580–968 ms (3.9–6.5×) earlier in the session, before
+    the DLL and driver caches were warm, and iced misses by 5.7–6.0×. A first-paint
+    budget that does not state the machine state measures the OS file cache. The
+    clause read as an absolute number rejects the fallback harder than the framework
+    it protects. So it is restated as a comparison: a framework is vetoed when the
+    alternative is >2× better, and no measurement here supports that. The lever left
+    is window and device creation (iced: 51 ms boot → 750–800 ms to a window).
+    The view costs ~0 ms per frame in both. A profile of that phase is the
+    next useful measurement. §Perf should say that a 150 ms first paint is a
+    property of how the app starts, not of the framework. The pin still needs
+    **`libc` held at ≤ 0.2.189** on Linux (`xattr` 0.2.3 uses `libc::ENOATTR`) and
+    `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method and
+    limitations: `docs/notes/gui-bench.md`. Still unmeasured: the tree-sitter
+    highlight cost for a 3k-line window, a profile of the window and device phase,
+    and a macOS run.
 
 - [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
-  - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.
-  - **Answer:** does ACP over an SSH `exec` channel behave (line buffering, stderr, exit codes, resize)?
-  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-probe` prints a real ACP session from inside the container.
-  - **Result:** `probes/ssh` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, `russh` 0.64.1.
-    No usable container runtime here (Docker Desktop's WSL integration is off, rootless podman's socket
-    refuses), so `sshd.sh` runs the distro's own `sshd` unprivileged on `127.0.0.1:2222` with a throwaway
-    host key and key-only auth — same server, same channels, minus the process boundary, which the design phase's P0-4 was not
-    about. **The exec channel is a byte stream, not a message channel:** 103 JSON lines written one at a
-    time arrived in 20–33 `DATA` events, up to 37 frames in one event (largest 6,007 B), so the client
-    must buffer and split on `\n`; zero frames straddled an event on loopback, which is the conservative
-    case and not a guarantee. stderr arrives as `EXTENDED_DATA ext=1` and the exit code survives (probe
-    exits 3), so a frame stream is never polluted by an agent's warnings — the probe fails the run if it is.
-    A PTY over the hop takes a `window_change` from `40 100` to `50 120` while a program watches, and `tty`
-    answers a real `/dev/pts/N`, so resize is a channel message rather than a reconnect. Cost is the
-    connection, not the messages: connect+auth 70.7–113.9 ms, then an exec round trip 44.7–49.8 ms and the
-    whole 103-frame ACP exchange 43.1–51.4 ms (5 runs) — connect once per host and multiplex, the same
-    verdict as the design phase's task P0-5 from a different transport. Numbers, the harness and what the remote-hosts phase's task P8-1 inherits:
-    `docs/notes/ssh-agent.md`. The agent is a mock speaking real ACP methods; the design phase's task P0-1 already ran two real
-    agents over stdio, and the question here was whether SSH preserves their framing.
+  - `russh` connects to a local `sshd` container, opens a session with a PTY, and
+    runs `bash -lc 'echo hi'`. Then it runs an ACP agent over the channel.
+  - **Answer:** does ACP over an SSH `exec` channel behave, with line buffering,
+    stderr, exit codes and resize?
+  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-probe` prints a
+    real ACP session from inside the container.
+  - **Result:** `probes/ssh` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, with
+    `russh` 0.64.1. There is no usable container runtime here: Docker Desktop's WSL
+    integration is off, and rootless podman's socket refuses. So `sshd.sh` runs the
+    distro's own `sshd` unprivileged on `127.0.0.1:2222`, with a throwaway host key
+    and key-only auth. That is the same server and the same channels, minus the
+    process boundary, which the design phase's P0-4 was not about. **The exec
+    channel is a byte stream, not a message channel.** 103 JSON lines written one at
+    a time arrived in 20–33 `DATA` events. One event held up to 37 frames (largest
+    6,007 B). So the client must buffer and split on `\n`. Zero frames straddled an
+    event on loopback, which is the conservative case and not a guarantee. stderr
+    arrives as `EXTENDED_DATA ext=1`, and the exit code survives (the probe exits 3).
+    So a frame stream is never polluted by an agent's warnings, and the probe fails
+    the run if it is. A PTY over the hop takes a `window_change` from `40 100` to
+    `50 120` while a program watches, and `tty` answers a real `/dev/pts/N`. So
+    resize is a channel message rather than a reconnect. Cost is the connection, not
+    the messages. Connect plus auth is 70.7–113.9 ms, an exec round trip is
+    44.7–49.8 ms, and the whole 103-frame ACP exchange is 43.1–51.4 ms (5 runs). So
+    connect once per host and multiplex, which is the same verdict as the design
+    phase's task P0-5 from a different transport. Numbers, the harness and what the
+    remote-hosts phase's task P8-1 inherits: `docs/notes/ssh-agent.md`. The agent is
+    a mock that speaks real ACP methods. The design phase's task P0-1 already ran two
+    real agents over stdio, and the question here was whether SSH preserves their
+    framing.
 
 - [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
-  - On a Windows box (CI runner or VM): enumerate distros, `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON line, get one back.
-  - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box: `wsl.exe -l -q` works
-    through interop (135 ms) but prints **UTF-16LE** — NUL-interleaved output that a naive line reader
-    turns into garbage; the box has `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things,
-    not one prefix: `/home/sam` → `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
-    `C:\Users\SamTyler` → `/mnt/c/Users/SamTyler`. So the translation function is a pair of mappings
-    (mounted drives ↔ `/mnt/<letter>`, and the distro root ↔ its UNC path), and the harness must decode UTF-16.
-    The interop path does not cover ConPTY or `wsl.exe` invoked from Windows, which is what the helper
-    actually ships against — that half still needs a Windows runner.
-  - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), interop quirks.
-  - **Exit criteria:** latency table + a path-translation function with unit tests that we can lift into `acpilot-host`.
+  - On a Windows box (CI runner or VM), enumerate the distros, run
+    `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON
+    line, and get one back.
+  - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box:
+    `wsl.exe -l -q` works through interop (135 ms) but prints **UTF-16LE**.
+    NUL-interleaved output turns a naive line reader into garbage. The box has
+    `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things, not one
+    prefix. `/home/sam` becomes `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
+    `C:\Users\SamTyler` becomes `/mnt/c/Users/SamTyler`. So the translation function
+    is a pair of mappings: mounted drives ↔ `/mnt/<letter>`, and the distro root ↔
+    its UNC path. The harness must decode UTF-16. The interop path does not cover
+    ConPTY or `wsl.exe` invoked from Windows, which is what the helper actually
+    ships against. That half still needs a Windows runner.
+  - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), and
+    interop quirks.
+  - **Exit criteria:** a latency table plus a path-translation function with unit
+    tests that we can lift into `acpilot-host`.
   - **Result:** `probes/wsl-helper` (Windows driver, `wsl.exe` 2.7.10.0) plus
-    `helper/acpilotd-helper.rs` (dependency-free Linux end, installed with `rustc -O` through stdin).
-    Measured on Windows 11 26300 / Ubuntu-24.04: one helper **spawn costs ~140 ms** to the first
-    response and ~197 ms through exit, while a message on the warm session costs **0.1 ms** (p50, 30
-    samples); a 1 MiB request line arrived intact in 1.3 ms. So the helper is a session, not a call:
-    The engine phase's task P2-2 and the service phase's task P3-1 must spawn it once per host and multiplex ids. `wsl.exe -- <cmd>` goes through the user's
-    shell and eats backslashes (missing binary → 127); `-e` execs directly and keeps them (missing
-    binary → relay error, exit 1). `-e` does **not** expand `~` in the program path, so the helper path
-    is resolved from `$HOME` and `--cd ~` is passed explicitly. `-l -q` is UTF-16LE+CRLF (as the
-    starting points said); enumeration also returns `docker-desktop`, which is not a usable distro.
-    Translation is two rules and only one is unconditional: `C:\x` ↔ `/mnt/c/x` for **mounted** drives
-    only (`ls /mnt` gave `c` and `e` here; `D:` has no Linux path and `wslpath` refuses it too), and
-    `/home/sam` ↔ `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
-    `probes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from `ls /mnt`, with an
-    unmounted drive or a foreign distro as a typed refusal; `..` is left to the policy layer. Under
-    ConPTY `wsl.exe` sends `CSI 6 n` and waits, so the helper never starts until DSR is answered — with
-    an answer it works, echoing the request and ending lines with CRLF. Pipes are the transport for the
-    JSON channel; ConPTY stays for terminals, where a query responder is mandatory anyway. Numbers,
-    the `wslpath` oracle table and every quirk: `docs/notes/wsl-helper.md`. The suite runs on both
-    sides: fmt/clippy/`cargo test` (23) under Windows and inside the distro, the helper's 4 unit tests
-    with `rustc --test` on either OS, and `helper/check_protocol.py` against a native helper build in
-    both. CI (`.github/workflows/ci.yml`, job `p0-5 probe`) runs that suite on both OSes on every push.
-    The round trip is a second, opt-in job (`wsl-bench`) because WSL2 needs nested virtualisation, which
-    standard hosted Windows runners do not have (they can offer WSL1 only); the bench reads the
-    `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and `--require-wsl2` makes a
-    WSL1 distro a hard failure instead of a quietly different table. Enable it with `WSL_BENCH=true`
-    and `WSL_RUNNER` pointing at a self-hosted Windows runner with the `wsl2` label; it uploads
-    `wsl-helper-bench` for the note's tables. The user story is measured end to end too
-    (`wsl-helper workspace`): a folder opened as `\\wsl.localhost\Ubuntu-24.04\...` becomes
-    `wsl://Ubuntu-24.04` + `/home/sam/workspace-other/acpilot`, the helper starts in that
-    directory (cwd asserted) at ~124 ms with 0.1 ms per message, and the same 37 KB file
-    costs **13.0 ms/read over UNC vs 0.096 ms in-distro (136×)** — so the daemon reads files
-    in-distro and UNC stays a read-only fallback, as README §5.6 claims. Cold start after a
-    reboot is **not** measured: terminating the distro would kill this checkout's own processes.
+    `helper/acpilotd-helper.rs`, a dependency-free Linux end installed with
+    `rustc -O` through stdin. Measured on Windows 11 26300 / Ubuntu-24.04. One helper
+    **spawn costs ~140 ms** to the first response and ~197 ms through exit. A
+    message on the warm session costs **0.1 ms** (p50, 30 samples). A 1 MiB request
+    line arrived intact in 1.3 ms. So the helper is a session, not a call. The engine
+    phase's task P2-2 and the service phase's task P3-1 must spawn it once per host
+    and multiplex ids. `wsl.exe -- <cmd>` goes through the user's shell and eats
+    backslashes (a missing binary gives 127). `-e` execs directly and keeps them (a
+    missing binary gives a relay error and exit 1). `-e` does **not** expand `~` in
+    the program path, so the helper path is resolved from `$HOME`, and `--cd ~` is
+    passed explicitly. `-l -q` is UTF-16LE+CRLF, as the starting points said.
+    Enumeration also returns `docker-desktop`, which is not a usable distro.
+    Translation is two rules, and only one is unconditional. `C:\x` ↔ `/mnt/c/x`
+    works for **mounted** drives only (`ls /mnt` gave `c` and `e` here, `D:` has no
+    Linux path, and `wslpath` refuses it too), and `/home/sam` ↔
+    `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
+    `probes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from
+    `ls /mnt`, with an unmounted drive or a foreign distro as a typed refusal. `..`
+    is left to the policy layer. Under ConPTY `wsl.exe` sends `CSI 6 n` and waits, so
+    the helper never starts until DSR is answered. With an answer it works, echoing
+    the request and ending lines with CRLF. Pipes are the transport for the JSON
+    channel. ConPTY stays for terminals, where a query responder is mandatory
+    anyway. Numbers, the `wslpath` oracle table and every quirk:
+    `docs/notes/wsl-helper.md`. The suite runs on both sides. fmt, clippy and
+    `cargo test` (23) run under Windows and inside the distro. The helper's 4 unit
+    tests run with `rustc --test` on either OS, and `helper/check_protocol.py` runs
+    against a native helper build in both. CI (`.github/workflows/ci.yml`, job `p0-5 probe`) runs that
+    suite on both OSes on every push. The round trip is a second, opt-in job
+    (`wsl-bench`), because WSL2 needs nested virtualisation. Standard hosted
+    Windows runners do not have it (they can offer WSL1 only). The bench reads the
+    `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and
+    `--require-wsl2` makes a WSL1 distro a hard failure instead of a quietly
+    different table. Enable it with `WSL_BENCH=true` and `WSL_RUNNER` pointing at a
+    self-hosted Windows runner with the `wsl2` label. It uploads `wsl-helper-bench`
+    for the note's tables. The user story is measured end to end too
+    (`wsl-helper workspace`). A folder opened as
+    `\\wsl.localhost\Ubuntu-24.04\...` becomes `wsl://Ubuntu-24.04` plus
+    `/home/sam/workspace-other/acpilot`. The helper starts in that directory (cwd
+    asserted) at ~124 ms, with 0.1 ms per message. The same 37 KB file costs
+    **13.0 ms/read over UNC vs 0.096 ms in-distro (136×)**. So the daemon reads files
+    in-distro, and UNC stays a read-only fallback, as README §5.6 claims. Cold start
+    after a reboot is **not** measured, because terminating the distro would kill
+    this checkout's own processes.
 
 - [x] **P0-6 · API shape review (paper)** (0.5d) — **done 2026-10-21**
-  - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event taxonomy, and the error envelope. Review it against: CLI needs, TUI needs, permission answering from a script, web reconnect.
-  - **Exit criteria:** endpoint list frozen for the service phase (P3); anything missing from the README added there.
-  - **Result:** `docs/api.md` freezes the v1 route list, the SSE taxonomy (`session`, `permission`,
-    `heartbeat` and `resync` frames; `Last-Event-ID` replay from the transcript; a 15 s heartbeat;
-    `resync` instead of silence when an id cannot be replayed), the prompt contract (`202` with
-    `turn_id`, `idempotency_key`, `409` for a turn already in flight), the permission rules
-    (idempotent for the same answer, `409` for a different one, no timeout in v1) and the error
-    envelope with its HTTP mapping. The review found six gaps and fixed each rather than noting it:
-    no way out of `AgentStatus::untrusted` (`POST /v1/agents/{id}/trust`), no host connection test,
-    no profile activate/export, no directory listing (`GET /v1/files/list`), no profile-wide
-    `GET /v1/events`, and no error envelope in the README at all. It also settled three names where
-    two documents disagreed: `permissions/{id}/resolve` (not `/decide`), `/v1/lsp/servers`
-    (not `/v1/lsp`), and the flat `/v1/terminals?session=` (not nested). Providers, models, recipes
-    and the ACP bridge stay explicitly post-v1. The proto doc comments and the committed OpenAPI
-    snapshot were corrected to the frozen names; those snapshot edits are description-only, so no
-    wire type moved.
+  - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event
+    taxonomy and the error envelope. Review it against the CLI needs, the TUI needs,
+    permission answering from a script, and web reconnect.
+  - **Exit criteria:** the endpoint list is frozen for the service phase (P3), and
+    anything missing from the README is added there.
+  - **Result:** `docs/api.md` freezes the v1 route list, the SSE taxonomy, the prompt
+    contract, the permission rules, and the error envelope with its HTTP mapping. The
+    SSE taxonomy is `session`, `permission`, `heartbeat` and `resync` frames,
+    `Last-Event-ID` replay from the transcript, a 15 s heartbeat, and `resync`
+    instead of silence when an id cannot be replayed. The prompt contract is `202`
+    with `turn_id` and `idempotency_key`, and `409` for a turn already in flight. The
+    permission rules are idempotent for the same answer, `409` for a different one,
+    and no timeout in v1. The review found six gaps and fixed each rather
+    than noting it. The gaps were: no way out of `AgentStatus::untrusted`
+    (`POST /v1/agents/{id}/trust`), no host connection test, no profile
+    activate/export, and no directory listing (`GET /v1/files/list`). There was also
+    no profile-wide `GET /v1/events`, and no error envelope in the README. It also settled
+    three names where two documents disagreed: `permissions/{id}/resolve` (not
+    `/decide`), `/v1/lsp/servers` (not `/v1/lsp`), and the flat
+    `/v1/terminals?session=` (not nested). Providers, models, recipes and the ACP
+    bridge stay explicitly post-v1. The proto doc comments and the committed OpenAPI
+    snapshot were set to the frozen names. Those snapshot edits are
+    description-only, so no wire type moved.
 
 - [x] **P0-7 · LSP client round-trip + position encodings** (1d) — **done 2026-10-21**
-  - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), `initialize` advertising
-    `general.positionEncodings = ["utf-8", "utf-16"]`, then `didOpen` a file containing emoji,
-    CJK, and combining marks; assert a `definition`/`diagnostics` range lands on the right column.
-  - Run `rust-analyzer`, `typescript-language-server`, and `pyright`: record which encoding each
-    picks, whether pull diagnostics (`textDocument/diagnostic`) are supported, and what
-    `$/progress` traffic arrives during the first index.
-  - Try `async-lsp` 0.2 as the client loop (it supports `LanguageClient` + `ServerSocket`) and
-    report what it costs to run it over a non-stdio transport.
-  - **Answer:** UTF-16 vs UTF-8 conversion cost per keystroke; does any server send malformed
-    URIs (Windows drive letters, percent-encoding, `file://` with a host)?
-  - **Exit criteria:** `docs/notes/lsp-servers.md` capability table + a position-conversion
-    function with proptests, liftable into `acpilot-lsp`.
-  - **Result:** the conversion lives in `acpilot-lsp::position` (proptested over emoji, CJK,
-    combining marks, CRLF) and says **negotiate both, honour the server, default to UTF-16**.
-    rust-analyzer chose `utf-8`; `typescript-language-server` and `pyright` sent no
-    `positionEncoding` and used UTF-16. Definitions landed on the expected byte in all three,
-    including a path with a space and `ü`. Conversion is 18–28 ns; the whole-file index build
-    (2.26 ms per 100k lines) is what must become incremental in the language-intelligence phase (P7). `rust-analyzer` answers
-    pull diagnostics only after one `-32802` cancellation, and is the only server that sends
-    substantial `$/progress` traffic (133 notifications for a one-file index). Measurements,
-    commands and the `async-lsp` 0.2 assessment: `docs/notes/lsp-servers.md`.
+  - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), and send
+    `initialize` advertising `general.positionEncodings = ["utf-8", "utf-16"]`. Then
+    `didOpen` a file containing emoji, CJK and combining marks, and assert a
+    `definition` or `diagnostics` range lands on the right column.
+  - Run `rust-analyzer`, `typescript-language-server` and `pyright`. Record which
+    encoding each picks, whether pull diagnostics (`textDocument/diagnostic`) are
+    supported, and what `$/progress` traffic arrives during the first index.
+  - Try `async-lsp` 0.2 as the client loop (it supports `LanguageClient` +
+    `ServerSocket`), and report what it costs to run over a non-stdio transport.
+  - **Answer:** the UTF-16 vs UTF-8 conversion cost per keystroke, and whether any
+    server sends malformed URIs (Windows drive letters, percent-encoding, `file://`
+    with a host).
+  - **Exit criteria:** a capability table in `docs/notes/lsp-servers.md` plus a
+    position-conversion function with proptests, liftable into `acpilot-lsp`.
+  - **Result:** the conversion lives in `acpilot-lsp::position` (proptested over
+    emoji, CJK, combining marks and CRLF). The rule is **negotiate both, honour the
+    server, default to UTF-16**. rust-analyzer chose `utf-8`, while
+    `typescript-language-server` and `pyright` sent no `positionEncoding` and used
+    UTF-16. Definitions landed on the expected byte in all three, including a path
+    with a space and `ü`. Conversion is 18–28 ns. The whole-file index build
+    (2.26 ms per 100k lines) is what must become incremental in the
+    language-intelligence phase (P7). `rust-analyzer` answers pull diagnostics only
+    after one `-32802` cancellation, and it is the only server that sends
+    substantial `$/progress` traffic (133 notifications for a one-file index).
+    Measurements, commands and the `async-lsp` 0.2 assessment:
+    `docs/notes/lsp-servers.md`.
 
 ---
 

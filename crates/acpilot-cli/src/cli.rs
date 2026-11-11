@@ -3,14 +3,16 @@
 //! Every command here is either a filesystem operation or (later) a call into
 //! `acpilot-proto`; none of them reimplements daemon policy.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use acpilot_agent::keyring::KeyringResolver;
 use acpilot_core::error::exit;
 use acpilot_extensions::ExtensionError;
+use acpilot_profile::catalog::{ProfileRecord, Registry};
 use acpilot_profile::launch::ProfileResolver;
 use acpilot_profile::project::Root;
-use acpilot_profile::settings::Settings;
+use acpilot_profile::settings::{Cascade, Settings};
 use acpilot_profile::{ProfileId, ProfileRoots};
 use acpilot_proto::API_PREFIX;
 use acpilot_proto::profile::ThemeSurface;
@@ -281,11 +283,75 @@ pub enum WorkspaceCommand {
 
 /// Everything under `acpilot profile`.
 ///
-/// `new`, `list` and `use` are P4-9; `rm` is here because P4-4 owns deleting the
-/// state a profile created, and `export` is here because P4-5 owns keeping its
-/// secrets out of the document.
+/// Every verb here is a filesystem operation: a profile is a directory and a row
+/// in the registry, so none of them needs a daemon, and one that did would fail
+/// on the machine that most needs it — a first install with nothing running.
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommand {
+    /// Create a profile: its directories, its `config.toml` and its registry row.
+    ///
+    /// The profile is usable from the next command. The first profile created on
+    /// a machine becomes the active one, because that is what a launch would have
+    /// created on its own.
+    New {
+        /// Profile name: lower-case letters, digits and hyphens, 2 to 32 characters.
+        name: String,
+        /// Human label to draw. The name when absent.
+        #[arg(long, value_name = "TEXT")]
+        label: Option<String>,
+        /// Profile whose preferences this one inherits beneath its own.
+        #[arg(long, value_name = "NAME")]
+        extends: Option<String>,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// List the profiles on this machine, marking the active one.
+    Ls {
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Print one profile's registry row and the directories it owns.
+    Show {
+        /// Profile name under `<config>/profiles`.
+        name: String,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Make a profile the one a launch picks when nothing names another.
+    ///
+    /// Writes `active_profile` in the registry, which is the layer a launch reads
+    /// after the flag, the environment and the project's marker. A daemon that is
+    /// already running keeps the profile it was started with.
+    Use {
+        /// Profile name under `<config>/profiles`.
+        name: String,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Import a profile from a document `acpilot profile export` wrote.
+    ///
+    /// Configuration files only. A `secrets` map is reported and skipped, because
+    /// a credential travels through `acpilot secret set` and never through a
+    /// document that may have been copied or committed.
+    Import {
+        /// File written by `acpilot profile export`.
+        file: PathBuf,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Print every effective setting of two profiles, with the file that set it.
+    ///
+    /// The answer to "why is it doing that?": a key that differs names the value
+    /// on each side and the layer that won, which is the same cascade a launch
+    /// reads rather than a second implementation of it.
+    Diff {
+        /// Left profile.
+        a: String,
+        /// Right profile.
+        b: String,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
     /// Move a profile and its state to the OS trash, or delete them with `--purge`.
     ///
     /// The config directory and every separate state root are moved, so the
@@ -675,9 +741,480 @@ fn run_workspace(command: WorkspaceCommand) -> u8 {
     }
 }
 
+/// Where a profile verb looks for profiles and the registry.
+fn profile_config_root(config: &ConfigArgs) -> PathBuf {
+    config
+        .config
+        .clone()
+        .unwrap_or_else(acpilot_profile::config_dir)
+}
+
+/// The registry file: `config.toml` at the config root.
+fn profile_registry_path(root: &Path) -> PathBuf {
+    root.join(acpilot_profile::CONFIG_FILE)
+}
+
+/// The directories `id` owns, under the root this command was given.
+///
+/// The platform's split (config, data, cache, state, runtime) when the root is the
+/// platform's own; one root with the same shape when `--config` names another,
+/// which is what a portable install and a test own. `profile rm` uses this too, so
+/// a removal takes away exactly what a creation made.
+fn profile_roots(root: &Path, id: &ProfileId) -> ProfileRoots {
+    if root == acpilot_profile::config_dir() {
+        ProfileRoots::for_id(id)
+    } else {
+        ProfileRoots::under(root, id)
+    }
+}
+
+/// `acpilot profile new`.
+fn create_profile(
+    name: &str,
+    label: Option<String>,
+    extends: Option<String>,
+    config: &ConfigArgs,
+) -> u8 {
+    let id = match ProfileId::user(name) {
+        Ok(id) => id,
+        Err(error) => {
+            eprintln!("acpilot profile new: {error}");
+            return exit::USAGE;
+        }
+    };
+    let root = profile_config_root(config);
+    let registry_path = profile_registry_path(&root);
+    let mut registry = match Registry::load(&registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("acpilot profile new: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let extends = match extends.as_deref().map(ProfileId::parse).transpose() {
+        Ok(extends) => extends,
+        Err(error) => {
+            eprintln!("acpilot profile new: {error}");
+            return exit::USAGE;
+        }
+    };
+    if extends.as_ref() == Some(&id) {
+        eprintln!("acpilot profile new: a profile cannot extend itself");
+        return exit::USAGE;
+    }
+    if let Some(parent) = &extends {
+        // A row or a directory is enough: a profile written by hand is one a new
+        // profile may inherit from, and `profile rm` leaves no row behind.
+        let row = registry.profile(parent).is_some();
+        let directory = root.join("profiles").join(parent.as_str()).is_dir();
+        if !row && !directory {
+            eprintln!("acpilot profile new: no profile `{parent}` to extend");
+            return exit::NOT_FOUND;
+        }
+    }
+    let roots = profile_roots(&root, &id);
+    if registry.profile(&id).is_some() || roots.config_file().exists() {
+        eprintln!("acpilot profile new: profile `{id}` already exists");
+        return exit::CONFLICT;
+    }
+    if let Err(error) = roots.create() {
+        eprintln!("acpilot profile new: {}: {error}", roots.config.display());
+        return exit::FAILURE;
+    }
+    if let Err(error) = std::fs::write(roots.config_file(), "schema_version = 1\n") {
+        let _ = std::fs::remove_dir_all(&roots.config);
+        eprintln!(
+            "acpilot profile new: {}: {error}",
+            roots.config_file().display()
+        );
+        return exit::FAILURE;
+    }
+    let label = label
+        .map(|label| label.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| id.as_str().to_owned());
+    registry.insert(
+        id.clone(),
+        ProfileRecord {
+            label,
+            extends,
+            ..ProfileRecord::default()
+        },
+    );
+    if registry.active_profile.is_none() {
+        registry.active_profile = Some(id.clone());
+    }
+    if let Err(error) = registry.save(&registry_path) {
+        let _ = std::fs::remove_dir_all(&roots.config);
+        eprintln!("acpilot profile new: {error}");
+        return exit::FAILURE;
+    }
+    println!("created {id} at {}", roots.config.display());
+    exit::SUCCESS
+}
+
+/// `acpilot profile ls`.
+fn list_profiles(config: &ConfigArgs) -> u8 {
+    let root = profile_config_root(config);
+    let registry = match Registry::load(&profile_registry_path(&root)) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("acpilot profile ls: {error}");
+            return exit::FAILURE;
+        }
+    };
+    if registry.profiles.is_empty() {
+        println!("no profiles in {}", root.display());
+        println!("  acpilot profile new work creates one");
+        return exit::SUCCESS;
+    }
+    for (id, record) in &registry.profiles {
+        let marker = if registry.active_profile.as_ref() == Some(id) {
+            "*"
+        } else {
+            " "
+        };
+        let extends = record
+            .extends
+            .as_ref()
+            .map_or_else(String::new, |parent| format!("  extends {parent}"));
+        println!(
+            "{marker} {:<16} {}{extends}",
+            id.as_str(),
+            record.label_or(id)
+        );
+    }
+    exit::SUCCESS
+}
+
+/// `acpilot profile show`.
+fn show_profile(name: &str, config: &ConfigArgs) -> u8 {
+    let id = match ProfileId::parse(name) {
+        Ok(id) => id,
+        Err(error) => {
+            eprintln!("acpilot profile show: {error}");
+            return exit::USAGE;
+        }
+    };
+    let root = profile_config_root(config);
+    let registry = match Registry::load(&profile_registry_path(&root)) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("acpilot profile show: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let roots = profile_roots(&root, &id);
+    let record = registry.profile(&id);
+    if record.is_none() && !roots.config_file().exists() {
+        eprintln!(
+            "acpilot profile show: no profile `{id}`; create it with `acpilot profile new {id}`"
+        );
+        return exit::NOT_FOUND;
+    }
+    println!("profile    {id}");
+    match record {
+        Some(record) => {
+            println!("label      {}", record.label_or(&id));
+            println!(
+                "extends    {}",
+                record.extends.as_ref().map_or("none", ProfileId::as_str)
+            );
+            println!(
+                "created    {}",
+                record.created_at.as_deref().unwrap_or("not recorded")
+            );
+        }
+        None => println!("registry   no row · the directory exists without one"),
+    }
+    let active = registry.active_profile.as_ref() == Some(&id);
+    println!("active     {active}");
+    for (label, path) in [
+        ("config", &roots.config),
+        ("data", &roots.data),
+        ("cache", &roots.cache),
+        ("state", &roots.state),
+        ("runtime", &roots.runtime),
+    ] {
+        let state = if path.exists() { "present" } else { "missing" };
+        println!("{label:<10} {} · {state}", path.display());
+    }
+    exit::SUCCESS
+}
+
+/// `acpilot profile use`.
+fn use_profile(name: &str, config: &ConfigArgs) -> u8 {
+    let id = match ProfileId::parse(name) {
+        Ok(id) => id,
+        Err(error) => {
+            eprintln!("acpilot profile use: {error}");
+            return exit::USAGE;
+        }
+    };
+    let root = profile_config_root(config);
+    let registry_path = profile_registry_path(&root);
+    let mut registry = match Registry::load(&registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("acpilot profile use: {error}");
+            return exit::FAILURE;
+        }
+    };
+    if registry.profile(&id).is_none() {
+        eprintln!(
+            "acpilot profile use: no profile `{id}`; create it with `acpilot profile new {id}`"
+        );
+        return exit::NOT_FOUND;
+    }
+    if registry.active_profile.as_ref() == Some(&id) {
+        println!("{id} is already the active profile");
+        return exit::SUCCESS;
+    }
+    registry.active_profile = Some(id.clone());
+    if let Err(error) = registry.save(&registry_path) {
+        eprintln!("acpilot profile use: {error}");
+        return exit::FAILURE;
+    }
+    println!("active profile is now {id}");
+    exit::SUCCESS
+}
+
+/// `acpilot profile import`.
+fn import_profile(file: &Path, config: &ConfigArgs) -> u8 {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!("acpilot profile import: {}: {error}", file.display());
+            return exit::NOT_FOUND;
+        }
+    };
+    let document: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(document) => document,
+        Err(error) => {
+            eprintln!(
+                "acpilot profile import: {}: not an export document: {error}",
+                file.display()
+            );
+            return exit::USAGE;
+        }
+    };
+    let Some(name) = document.get("profile").and_then(serde_json::Value::as_str) else {
+        eprintln!("acpilot profile import: the document names no profile");
+        return exit::USAGE;
+    };
+    let id = match ProfileId::user(name) {
+        Ok(id) => id,
+        Err(error) => {
+            eprintln!("acpilot profile import: {error}");
+            return exit::USAGE;
+        }
+    };
+    let Some(files) = document.get("files").and_then(serde_json::Value::as_object) else {
+        eprintln!("acpilot profile import: the document has no files table");
+        return exit::USAGE;
+    };
+    let root = profile_config_root(config);
+    let registry_path = profile_registry_path(&root);
+    let mut registry = match Registry::load(&registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("acpilot profile import: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let roots = profile_roots(&root, &id);
+    if registry.profile(&id).is_some() || roots.config_file().exists() {
+        eprintln!("acpilot profile import: profile `{id}` already exists");
+        return exit::CONFLICT;
+    }
+    if let Err(error) = roots.create() {
+        eprintln!(
+            "acpilot profile import: {}: {error}",
+            roots.config.display()
+        );
+        return exit::FAILURE;
+    }
+    let mut written = 0;
+    for (name, value) in files {
+        // The allow-list is the export's own, so an import cannot write a database,
+        // a lock or a file a newer binary invented into a profile directory.
+        if !acpilot_profile::export::FILES.contains(&name.as_str()) {
+            let _ = std::fs::remove_dir_all(&roots.config);
+            eprintln!("acpilot profile import: `{name}` is not a configuration file");
+            return exit::USAGE;
+        }
+        let Some(value) = value.as_str() else {
+            let _ = std::fs::remove_dir_all(&roots.config);
+            eprintln!("acpilot profile import: `{name}` is not text");
+            return exit::USAGE;
+        };
+        if let Err(error) = std::fs::write(roots.config.join(name), value) {
+            let _ = std::fs::remove_dir_all(&roots.config);
+            eprintln!("acpilot profile import: `{name}`: {error}");
+            return exit::FAILURE;
+        }
+        written += 1;
+    }
+    if document.get("secrets").is_some() {
+        eprintln!(
+            "acpilot profile import: `secrets` are not imported; set each one with `acpilot secret set`"
+        );
+    }
+    if !roots.config_file().exists()
+        && let Err(error) = std::fs::write(roots.config_file(), "schema_version = 1\n")
+    {
+        let _ = std::fs::remove_dir_all(&roots.config);
+        eprintln!("acpilot profile import: {error}");
+        return exit::FAILURE;
+    }
+    registry.insert(id.clone(), ProfileRecord::new(id.as_str()));
+    if registry.active_profile.is_none() {
+        registry.active_profile = Some(id.clone());
+    }
+    if let Err(error) = registry.save(&registry_path) {
+        let _ = std::fs::remove_dir_all(&roots.config);
+        eprintln!("acpilot profile import: {error}");
+        return exit::FAILURE;
+    }
+    println!("imported {id} from {} · {written} files", file.display());
+    exit::SUCCESS
+}
+
+/// One effective setting: the value, and the layer that set it.
+type Effective = BTreeMap<String, (String, String)>;
+
+/// Every preference of a cascade, with the layer that won it.
+fn effective(cascade: &Cascade) -> Result<Effective, String> {
+    let settings = cascade.settings().map_err(|error| error.to_string())?;
+    let mut values = Effective::new();
+    let document = serde_json::to_value(&settings.preferences)
+        .map_err(|error| format!("cannot read the preferences: {error}"))?;
+    let mut keys = Vec::new();
+    flatten_keys("preferences", &document, &mut keys);
+    for key in keys {
+        if let Ok(explanation) = cascade.explain(&key) {
+            values.insert(
+                explanation.key.clone(),
+                (explanation.render_value(), explanation.origin.clone()),
+            );
+        }
+    }
+    if let Some(profile) = &settings.profile {
+        values.insert(
+            "profile".to_owned(),
+            (profile.clone(), "a settings file".to_owned()),
+        );
+    }
+    Ok(values)
+}
+
+/// The dotted paths of every scalar in a settings document.
+fn flatten_keys(prefix: &str, value: &serde_json::Value, keys: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(table) => {
+            for (name, value) in table {
+                flatten_keys(&format!("{prefix}.{name}"), value, keys);
+            }
+        }
+        _ => keys.push(prefix.to_owned()),
+    }
+}
+
+/// `acpilot profile diff`.
+fn diff_profiles(a: &str, b: &str, config: &ConfigArgs) -> u8 {
+    let root = profile_config_root(config);
+    let profiles = root.join("profiles");
+    let left = match acpilot_profile::Profile::named_in(&profiles, a) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("acpilot profile diff: {error}");
+            return exit::NOT_FOUND;
+        }
+    };
+    let right = match acpilot_profile::Profile::named_in(&profiles, b) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("acpilot profile diff: {error}");
+            return exit::NOT_FOUND;
+        }
+    };
+    let project = match Root::resolve(None) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("acpilot profile diff: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let user = acpilot_profile::user_config_path();
+    let project_config = project
+        .project()
+        .map(acpilot_profile::project::Project::config_path);
+    // The same cascade a launch reads, so this answers the question a launch
+    // would: an explanation built from a second copy of the rules would agree
+    // with itself and disagree with the daemon.
+    let left_values = match Cascade::for_launch(Some(&user), project_config.as_deref(), Some(&left))
+        .and_then(|cascade| cascade.settings().map(|_| cascade))
+        .map_err(|error| error.to_string())
+        .and_then(|cascade| effective(&cascade))
+    {
+        Ok(values) => values,
+        Err(message) => {
+            eprintln!("acpilot profile diff: {message}");
+            return exit::FAILURE;
+        }
+    };
+    let right_values =
+        match Cascade::for_launch(Some(&user), project_config.as_deref(), Some(&right))
+            .and_then(|cascade| cascade.settings().map(|_| cascade))
+            .map_err(|error| error.to_string())
+            .and_then(|cascade| effective(&cascade))
+        {
+            Ok(values) => values,
+            Err(message) => {
+                eprintln!("acpilot profile diff: {message}");
+                return exit::FAILURE;
+            }
+        };
+    println!("{a} -> {b}");
+    let mut keys: Vec<&String> = left_values.keys().chain(right_values.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    let mut differences = 0;
+    for key in keys {
+        let left = left_values.get(key);
+        let right = right_values.get(key);
+        if left == right {
+            continue;
+        }
+        differences += 1;
+        println!("  {key}");
+        let (value, origin) =
+            left.map_or(("not set", "-"), |pair| (pair.0.as_str(), pair.1.as_str()));
+        println!("    {a}: {value}\n       from {origin}");
+        let (value, origin) =
+            right.map_or(("not set", "-"), |pair| (pair.0.as_str(), pair.1.as_str()));
+        println!("    {b}: {value}\n       from {origin}");
+    }
+    if differences == 0 {
+        println!("  no effective difference");
+    }
+    exit::SUCCESS
+}
+
 /// Remove a profile's config and state, or move them to the OS trash.
 fn run_profile(command: ProfileCommand) -> u8 {
     match command {
+        ProfileCommand::New {
+            name,
+            label,
+            extends,
+            config,
+        } => create_profile(&name, label, extends, &config),
+        ProfileCommand::Ls { config } => list_profiles(&config),
+        ProfileCommand::Show { name, config } => show_profile(&name, &config),
+        ProfileCommand::Use { name, config } => use_profile(&name, &config),
+        ProfileCommand::Import { file, config } => import_profile(&file, &config),
+        ProfileCommand::Diff { a, b, config } => diff_profiles(&a, &b, &config),
         ProfileCommand::Export {
             name,
             output,

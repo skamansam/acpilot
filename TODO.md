@@ -914,7 +914,7 @@ Three rules:
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 
-- [ ] **P4-8 · API** (1d)
+- [x] **P4-8 · API** (1d)
   - **Preferences routes (2026-11-10):** `GET /v1/profiles/{id}/preferences` answers the merged
     preferences a client draws with, and `PATCH` accepts a `PreferencesPatch` naming only the keys
     to change. The patch is written into that profile's `profile.toml`, preserving every other key
@@ -974,6 +974,22 @@ Three rules:
     open one.
 
 - [ ] **P4-9 · CLI** (0.5d)
+  - **Started (2026-11-10):** `new`, `ls`, `show`, `use`, `import` and `diff` are in
+    `acpilot-cli`, and every one is a filesystem verb: a profile is a directory plus a
+    registry row, so none of them needs a daemon. `new` writes the five roots, a
+    `schema_version = 1` `config.toml` and the row, and makes the profile active when the
+    machine has none. `use` writes `active_profile`, the layer a launch reads after the
+    flag, the environment and the project marker. `import` accepts the export's
+    allow-listed files and reports a `secrets` map instead of writing it. `diff` prints
+    each key that differs, with the value and the winning layer on both sides, from the
+    same cascade a launch reads. `profile rm` takes its roots from `--config` now, so a
+    removal takes away what a creation made. **Tests:** two in
+    `crates/acpilot-cli/tests/cli.rs` (create, list, show, diff and use in one home; export
+    then import into a second home, where a second import is `409`).
+  - **Open:** `--profile` is not global yet: `clap` refuses a global argument that a
+    subcommand also declares, so accepting it before the subcommand needs the per-verb
+    flags moved first. `doctor` still reports the resolved profile, but not its five roots
+    or the cascade's unknown keys.
   - `acpilot profile new|ls|show|use|rm|import|diff`; `export` is already served by P4-5.
     Global `--profile`, accepted before or after the subcommand.
   - `acpilot profile diff a b` prints the effective merged config with per-key origin — the tool

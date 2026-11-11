@@ -706,3 +706,131 @@ fn secret_list_does_not_need_a_keyring_to_report_a_missing_manifest() {
         stdout(&output)
     );
 }
+
+#[test]
+fn a_profile_is_created_listed_shown_used_and_diffed_without_a_daemon() {
+    let home = TempDir::new();
+
+    let created = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "work", "--label", "Work"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert!(
+        stdout(&created).contains("created work"),
+        "{}",
+        stdout(&created)
+    );
+    assert!(
+        home.path().join("profiles/work/config.toml").is_file(),
+        "the profile has the config.toml `Profile::open` requires"
+    );
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "ls"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile ls");
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let text = stdout(&listed);
+    assert!(
+        text.contains("* work"),
+        "the first profile is active: {text}"
+    );
+    assert!(
+        text.contains("Work"),
+        "the label is drawn, not the id: {text}"
+    );
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "show", "work"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile show");
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("profile    work"), "{text}");
+    assert!(text.contains("present"), "the roots are reported: {text}");
+
+    let second = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(second.status.success(), "{}", stderr(&second));
+
+    let diff = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "diff", "work", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile diff");
+    assert!(diff.status.success(), "{}", stderr(&diff));
+    let text = stdout(&diff);
+    assert!(text.contains("work -> personal"), "{text}");
+    assert!(
+        text.contains("no effective difference"),
+        "two fresh profiles hold the defaults: {text}"
+    );
+
+    let used = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "use", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile use");
+    assert!(used.status.success(), "{}", stderr(&used));
+    assert!(
+        stdout(&used).contains("active profile is now personal"),
+        "{}",
+        stdout(&used)
+    );
+}
+
+#[test]
+fn a_profile_export_imports_and_a_second_import_is_a_conflict() {
+    let source = TempDir::new();
+    let created = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "work"])
+        .env("ACPILOT_HOME", source.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let file = source.path().join("work.json");
+    let exported = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--output",
+            file.to_str().expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", source.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert!(exported.status.success(), "{}", stderr(&exported));
+
+    let target = TempDir::new();
+    let imported = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "import", file.to_str().expect("utf-8 path")])
+        .env("ACPILOT_HOME", target.path())
+        .output()
+        .expect("run acpilot profile import");
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    assert!(
+        target.path().join("profiles/work/config.toml").is_file(),
+        "the imported profile is one `Profile::open` accepts"
+    );
+
+    let again = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "import", file.to_str().expect("utf-8 path")])
+        .env("ACPILOT_HOME", target.path())
+        .output()
+        .expect("run acpilot profile import twice");
+    assert_eq!(
+        again.status.code(),
+        Some(4),
+        "an existing profile is a conflict: {}",
+        stderr(&again)
+    );
+}

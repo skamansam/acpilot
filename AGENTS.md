@@ -105,6 +105,10 @@ If the TUI cannot do something, the GUI must not be able to either.
   fails the build otherwise.
 - **No `unsafe`.** It is forbidden at the workspace level. A job object on Windows
   is not a reason to add it.
+- **No force pushes, no `-s ours` merges, no rebase of a pushed branch.** A merge that
+  keeps one side's tree records the base as merged and drops its work, and no later
+  merge can conflict over what went missing. `cargo xtask history-check` fails on it,
+  and CI's `history` job runs it.
 - **A new dependency needs a sentence** on why the existing ones do not do the job,
   plus a clean `cargo deny`.
 - **`agents.toml` is schemad.** The published schema is

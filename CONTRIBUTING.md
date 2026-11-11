@@ -299,13 +299,47 @@ docs: record the GUI framework decision
 Body explains *why*, not *what*, because the diff already says what. Reference the task
 ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
 
+## Git history
+
+One trunk: `main`. A branch starts there, lives for days rather than weeks, and merges
+back. Every rule below prevents a state this repository has already been in.
+
+- **Merge `main` into your branch. Never rebase a branch you have pushed.** A rebase
+  rewrites commits somebody else may have fetched, and the force push that follows is
+  history nobody can review. `git pull --merge` is the habit; set `pull.rebase false`
+  if your copy defaults the other way.
+- **Never resolve a merge with `-s ours`, or with `-X ours` across a whole tree.** The
+  result records the base as merged and drops its work. The base is then an ancestor,
+  so no later merge can conflict over what went missing. On 2026-11-11 that hid 1,457
+  lines of `main`, and the next real merge looked clean because of it.
+- **A merge commit must differ from both of its parents.** One that equals a parent
+  dropped the other side, whatever the log says.
+- **Do not merge a change the base already has.** A squash leaves the same patch under
+  a second hash, and the next merge carries it twice.
+- **`main` takes merge commits only.** Squash and rebase rewrite shared history, and
+  they are how one change gets two identities. The ruleset allows `merge` alone.
+- **Never force push, on any branch.** `main` refuses it. Every other branch is
+  somebody's work in progress. To correct a commit, add a commit that corrects it.
+
+`cargo xtask history-check` is the mechanical half. CI's `history` job runs it on every
+push and pull request:
+
+```bash
+cargo xtask history-check                          # against origin/main
+cargo xtask history-check --base origin/phase/p4-profiles
+```
+
+It answers three questions about `<base>..HEAD`. Does the branch still merge into its
+base? Did a merge drop a side? Is a commit's patch already upstream?
+
 ## Pull requests
 
 - `cargo xtask check` green locally. CI runs the same commands on Linux, macOS
   and Windows, so a platform-specific shortcut will be caught.
 - One check is required to merge: **`required checks`**, the job at the bottom of
-  `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`, `deny` and
-  `docs`, and it passes only when all of them pass. The ruleset below therefore points
+  `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`,
+  `frame-budget`, `deny`, `docs` and `history`, and it passes only when all of them
+  pass. The ruleset below therefore points
   at one name instead of a list that has to be edited whenever a job is added or
   renamed.
 
@@ -381,7 +415,7 @@ gh api -X POST "repos/:owner/:repo/rulesets" --input - <<'JSON'
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false,
-        "allowed_merge_methods": ["merge", "squash", "rebase"]
+        "allowed_merge_methods": ["merge"]
       }
     }
   ]
@@ -398,6 +432,9 @@ Each rule earns its place:
   purpose: the hold-up is the CI run, not a second person on a repository that has one
   maintainer. Leaving the rule out leaves direct pushes to `main` allowed, which is the
   whole thing this exists to prevent.
+- `allowed_merge_methods` is `merge` alone. Squash and rebase are how one change ends
+  up under two hashes, which is the duplicate this repository spent a day unravelling.
+  A merge commit keeps the branch's commits, their authors and their order.
 - `deletion` and `non_fast_forward` are branch deletion and force pushes. Without them,
   whoever may write to a branch can still rewrite its history or remove its ref.
 - `bypass_actors` is absent, which means nobody. A rule the people who wrote it can skip

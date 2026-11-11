@@ -360,6 +360,32 @@ jobs:
       - name: Fail if the snapshot changed
         run: git diff --exit-code -- crates/acpilot-proto/tests/snapshots
 
+  # CONTRIBUTING's "Git history" rules, checked. Each of them is a state this
+  # repository has been in: a merge that kept one side's tree, so `main`'s work was
+  # recorded as merged and then vanished; and a pull request that could not merge at
+  # all. Both are cheap to see here and expensive to find at the merge button.
+  #
+  # A full history, because the check compares every merge with both of its parents.
+  # A shallow clone has neither the merge commits nor the base to compare them with.
+  history:
+    name: branch history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `github.base_ref` is the pull request's target and is empty on a push, where
+      # the branch has not said where it is going: `main` is the only answer.
+      - name: History rules
+        run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
+
   # One check to require in branch protection, so the rule does not have to be
   # restated every time a job is added — and cannot silently stop covering one
   # when a job is renamed. It needs every gate above and passes only if all of
@@ -378,7 +404,7 @@ jobs:
   # one a rule points at.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, deny, docs]
+    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -392,6 +418,7 @@ jobs:
             frame-budget=${{ needs.frame-budget.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
+            history=${{ needs.history.result }}
         run: |
           set -euo pipefail
           failed=""

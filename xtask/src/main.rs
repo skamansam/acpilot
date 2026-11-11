@@ -42,6 +42,18 @@ enum Task {
     /// developer's shell does not. It is the mirror of `check --no-web`, which is
     /// everything except this.
     WebCheck,
+    /// Check a branch's history against the branch it will merge into.
+    ///
+    /// CI's `history` job runs this, and it is the mechanical half of CONTRIBUTING's
+    /// "Git history" rules. Every rule is a state this repository has been in: a merge
+    /// that kept one side's tree, a pull request that could not merge, and the same
+    /// patch twice under two hashes.
+    HistoryCheck {
+        /// The ref this branch will merge into. `origin/main` locally; CI passes the
+        /// pull request's base branch.
+        #[arg(long, value_name = "REF", default_value = "origin/main")]
+        base: String,
+    },
     /// Write the web client's copy of the daemon's OpenAPI document, or compare it
     /// with the committed one.
     ///
@@ -149,6 +161,13 @@ fn main() -> ExitCode {
         Task::Check { no_web } => run_check(no_web),
         Task::WebCheck => {
             if check_web() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Task::HistoryCheck { base } => {
+            if check_history(&base) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -536,6 +555,156 @@ const GUI_CLIPPY: [&str; 9] = [
     "-D",
     "warnings",
 ];
+
+/// The branch rules from CONTRIBUTING's "Git history" section, checked against one
+/// base.
+///
+/// Three questions about `<base>..HEAD`, each of them a state this repository has
+/// been in rather than a hypothetical:
+///
+/// - does the branch still merge into its base? A pull request that cannot is a
+///   review nobody can finish, and the merge button is a day late to learn it.
+/// - did a merge keep one parent's tree? `git merge -s ours` records the base as
+///   merged and drops its work. The base is then an ancestor, so no later merge can
+///   conflict over what went missing — which is how 1,457 lines of `main` vanished
+///   from a branch that then merged cleanly.
+/// - is a commit's patch already on the base? A squash merge leaves the same change
+///   under a second hash, and the next merge carries it twice.
+fn check_history(base: &str) -> bool {
+    let mut ok = true;
+
+    match run_git(&["merge-tree", "--write-tree", "--name-only", base, "HEAD"]) {
+        Some((0, _)) => println!("==> history: this branch merges into {base}"),
+        Some((_, conflicted)) => {
+            eprintln!("==> history: this branch does not merge into {base}:");
+            for line in conflicted.lines().take(20) {
+                eprintln!("    {line}");
+            }
+            eprintln!(
+                "    merge {base} into this branch and resolve it now; never rebase a branch \
+                 you have pushed"
+            );
+            ok = false;
+        }
+        None => {
+            eprintln!("==> history: git cannot be asked; is this a checkout of the repository?");
+            return false;
+        }
+    }
+
+    let Some((0, merges)) = run_git(&["rev-list", "--merges", &format!("{base}..HEAD")]) else {
+        eprintln!("==> history: cannot list the merges in {base}..HEAD");
+        return false;
+    };
+    for merge in merges
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some((0, parents)) = run_git(&["rev-list", "--parents", "-n", "1", merge]) else {
+            eprintln!("==> history: cannot read the parents of {merge}");
+            return false;
+        };
+        let mut fields = parents.split_whitespace();
+        let (Some(_), Some(first), Some(second)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if let Some(dropped) = discarded_side(merge, first, second, trees_match) {
+            eprintln!(
+                "==> history: merge {merge} kept one parent's tree whole, so the {dropped} \
+                 side's changes are gone"
+            );
+            eprintln!(
+                "    that records {base} as merged while its changes are gone, and no later merge \
+                 can conflict over them"
+            );
+            eprintln!("    merge {base} again and resolve the conflicts as they are");
+            ok = false;
+        }
+    }
+
+    match run_git(&["cherry", base, "HEAD"]) {
+        Some((0, out)) => {
+            let already: Vec<&str> = out.lines().filter(|line| line.starts_with('-')).collect();
+            if !already.is_empty() {
+                eprintln!(
+                    "==> history: {} commit(s) here are already in {base} under another hash:",
+                    already.len()
+                );
+                for line in already.iter().take(10) {
+                    eprintln!("    {line}");
+                }
+                eprintln!(
+                    "    a squash leaves the same patch twice; start the branch from {base} \
+                     instead of merging the duplicate"
+                );
+                ok = false;
+            }
+        }
+        Some((_, complaint)) => {
+            eprintln!("==> history: git cherry failed: {complaint}");
+            return false;
+        }
+        None => return false,
+    }
+
+    if ok {
+        println!("==> history: {base} is merged, both parents kept, and nothing is duplicated");
+    }
+    ok
+}
+
+/// Which parent's changes a merge dropped, when it kept the other parent's tree.
+///
+/// `git merge -s ours` produces this shape, and so does a hand resolution that threw
+/// one side away. History cannot tell the difference afterwards: both parents are
+/// ancestors and every later merge is clean. `same` answers whether two commits hold
+/// the same content.
+fn discarded_side(
+    merge: &str,
+    first: &str,
+    second: &str,
+    same: impl Fn(&str, &str) -> Option<bool>,
+) -> Option<&'static str> {
+    if same(first, second) == Some(true) {
+        // Both parents already agreed, so the merge had nothing to drop.
+        return None;
+    }
+    if same(merge, first) == Some(true) {
+        return Some("second");
+    }
+    if same(merge, second) == Some(true) {
+        return Some("first");
+    }
+    None
+}
+
+/// Whether two commits have identical trees. `git diff --quiet` answers 0 or 1.
+fn trees_match(first: &str, second: &str) -> Option<bool> {
+    match run_git(&["diff", "--quiet", first, second])?.0 {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
+    }
+}
+
+/// Run git in the repository, returning its exit code with whatever it printed.
+///
+/// The code is kept rather than folded into a `bool` because these commands use it as
+/// an answer: `diff --quiet` says "different" with 1, and `merge-tree` says "conflicts"
+/// with 1. Stdout is preferred and stderr is the fallback, because `merge-tree` names
+/// the conflicted paths on one and `cherry` explains itself on the other.
+fn run_git(args: &[&str]) -> Option<(i32, String)> {
+    let output = Command::new("git").args(args).output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let text = if stdout.trim().is_empty() {
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    } else {
+        stdout
+    };
+    Some((output.status.code().unwrap_or(-1), text))
+}
 
 /// The web UI's half of the gate: types, both test runs, and the built page.
 ///
@@ -1750,6 +1919,59 @@ mod tests {
             "CI's web job must install no system package: a package mirror is one more \
              thing between a push and the page's tests"
         );
+    }
+
+    #[test]
+    fn a_merge_that_keeps_one_parents_tree_dropped_the_other_side() {
+        // The shape `git merge -s ours` makes: the merge's tree is one parent's, so the
+        // other side's changes are absent while history records the base as merged.
+        // Comparing the merge with both parents is what catches it; comparing it with
+        // the merge base does not, because the base is already an ancestor.
+        // A commit named after the side it matches is a commit whose tree *is* that
+        // side's: `discarded_side` is handed ids, and `same` is identity here.
+        let same = |a: &str, b: &str| Some(a == b);
+        assert_eq!(
+            discarded_side("branch", "branch", "main", same),
+            Some("second"),
+            "the merge is the branch's tree, so main's work is gone"
+        );
+        assert_eq!(
+            discarded_side("main", "branch", "main", same),
+            Some("first"),
+            "the merge is main's tree, so the branch's work is gone"
+        );
+        assert_eq!(
+            discarded_side("merged", "branch", "main", same),
+            None,
+            "a real merge differs from both parents"
+        );
+        assert_eq!(
+            discarded_side("twin", "twin", "twin", same),
+            None,
+            "two parents that already agreed drop nothing"
+        );
+        assert_eq!(
+            discarded_side("branch", "branch", "main", |_, _| None),
+            None,
+            "no answer from git is not a finding"
+        );
+    }
+
+    #[test]
+    fn the_history_job_checks_the_branch_and_fetches_both_parents() {
+        // The check compares a merge with both of its parents, so a shallow clone has
+        // nothing to compare: `fetch-depth: 0` is the other half of the job's promise.
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+        assert!(
+            workflow.contains("run: cargo xtask history-check"),
+            "CI no longer runs `cargo xtask history-check`, so the branch rules are unenforced"
+        );
+        assert!(
+            workflow.contains("fetch-depth: 0"),
+            "the history job needs both parents of every merge, which a shallow clone lacks"
+        );
+        Cli::try_parse_from(["xtask", "history-check"]).expect("`history-check` is a task");
     }
 
     #[test]

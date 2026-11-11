@@ -1022,12 +1022,16 @@ Three rules:
     | isolation | two profiles started at once | each process names its own file and value |
     | doctor | five roots, a typed key | every root with `present`, the key with its file |
     | diff | `work` against `personal` | the key with both values and both origins |
+    | daemon: no header on a mutation | two profiles | `400 invalid_request` naming the header (`acpilotd/tests/profiles.rs`) |
+    | daemon: a workspace another profile owns | no `--steal` | `409 profile_mismatch` with the owner in `details` (same suite) |
+    | keyring namespacing | `work` and `personal` | two accounts, two values, no look-alike fallback (`acpilot-agent/src/keyring.rs`) |
 
-  - **Open:** two rows need something the CLI test binary does not have. The
-    cross-profile `404` and `409` answers need a running daemon, and keyring namespacing
-    needs an OS keyring; the daemon's own suite covers the first, and neither is claimed
-    here. Export redaction is already a row in `cli.rs`
-    (`profile_export_redacts_by_default_and_gates_secrets`).
+  - **Open:** one DoD row is still unproven. A `work` session must be `404` to
+    `personal` rather than an empty list. That case needs a stored session in one
+    profile's database and a request under the other profile's header, and the daemon
+    suite does not build that state yet. The other daemon rows and the keyring row above
+    point at tests that exist, so they are covered rather than claimed. Export redaction
+    is a row in `cli.rs` (`profile_export_redacts_by_default_and_gates_secrets`).
   - Precedence matrix; missing-profile marker; cross-profile denial; keyring namespacing;
     `profile diff` snapshot; concurrent profiles without env/cwd bleed; export redaction.
   - **DoD:** `acpilot --profile work agents list` and `--profile personal agents list` differ in

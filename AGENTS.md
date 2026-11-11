@@ -8,11 +8,10 @@ they win.
 <!-- gstack:begin harness-routing -->
 ## gstack skills
 
-gstack's engineering workflows are installed at ../gstack.
-For a coding, review, test, plan or release task, read
-../gstack/SKILL.md, pick the one skill whose line matches,
-then read that skill's SKILL.md and follow it step by step, starting with its
-Preamble command. Load nothing else up front.
+gstack installs its engineering workflows at ../gstack.
+For a coding, review, test, plan or release task, read ../gstack/SKILL.md, and
+pick the one skill whose line matches. Then read that skill's SKILL.md and follow
+it step by step. Run its Preamble command first. Load nothing else up front.
 <!-- gstack:end harness-routing -->
 
 This file's own sections still apply: the routing block is about which workflow
@@ -22,7 +21,7 @@ to run, not about which documents describe this codebase.
 
 - Bug, failing test, panic, or wrong output: `investigate` (root cause before any fix).
 - Done with a change, before calling it finished: `verify`, then `review` on the diff.
-- New feature or vague idea: `spec`; for a non-trivial design, `plan-eng-review` before writing code.
+- New feature or vague idea: `spec`. For a non-trivial design, run `plan-eng-review` before you write code.
 - Ready to open a PR: `ship`.
 - Code touching auth, input parsing, `unsafe`, FFI, or network boundaries: `cso`.
 - Web UI work: `qa` to exercise it in a real browser, `design-review` for visual polish,
@@ -37,24 +36,25 @@ to run, not about which documents describe this codebase.
 - Format: `cargo fmt --all -- --check`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo nextest run --workspace` (fall back to `cargo test --workspace`)
-- Gate at workspace level; `-p <crate>` alone can pass where the workspace fails.
+- Run the gate at workspace level. `-p <crate>` alone can pass where the workspace fails.
   `cargo nextest` does not run doctests, which is why CI has a separate
   `docs`-feature job.
 
 ### Web checks
 
-- `cargo xtask web-check` is the whole list: `npm ci` when `web/node_modules` is
-  missing, `npm run check` (svelte-check: types and accessibility), `npm test`,
-  the live test against a built `acpilotd`, the e2e test in Chromium against
-  `acpilot serve` and the mock agent (`npx playwright install chromium` once),
-  `npm run build`, and a comparison of the rebuilt page with the committed one.
+- `cargo xtask web-check` is the whole list. It runs `npm ci` when
+  `web/node_modules` is missing, then `npm run check` (svelte-check: types and
+  accessibility) and `npm test`. After that come the live test against a built
+  `acpilotd`, and the e2e test in Chromium against `acpilot serve` and the mock
+  agent (`npx playwright install chromium` once). It ends with `npm run build` and
+  a comparison of the rebuilt page with the committed one.
 - Never `npm install` unless the task is changing dependencies.
 
 ## Read these first
 
 | File | Why |
 | --- | --- |
-| `TODO.md` | The plan. Every task has a code (`P2-7`, `XT-1`) that is also a commit reference and an issue title. Check the box state before you start: a task can be half-done with its `Open:` list at the bottom. |
+| `TODO.md` | The plan. Every task has a code (`P2-7`, `XT-1`) that is also a commit reference and an issue title. Check the box state first: a task can be half-done with its `Open:` list at the bottom. |
 | `CONTRIBUTING.md` | The gate, the test rules, the platform rule, commits and releases. |
 | `README.md` §3 and §6 | The process model and the crate list. Read §3 before touching anything that crosses a process boundary. |
 | `docs/adr/` | Decisions that bind this codebase. An ADR is superseded, never edited. |
@@ -71,7 +71,7 @@ cargo xtask check --no-web # the Rust-only loop, when Node is not the point
   `cargo test --workspace`. Focused runs are `cargo test -p <crate> --test <name>`
   or `cargo test -p <crate> <filter>`.
 - `prek install` writes the commit hook, which runs the same commands. Do not use
-  `git commit --no-verify`; the same failure is waiting in CI.
+  `git commit --no-verify`. The same failure is waiting in CI.
 - A wire change also moves `crates/acpilot-proto/tests/snapshots/openapi_snapshot__openapi.snap`:
   regenerate with `INSTA_UPDATE=always cargo test -p acpilot-proto` and review the
   diff. `crates/acpilot-proto/tests/wire_contract.rs` is a contract, not coverage —
@@ -103,7 +103,7 @@ If the TUI cannot do something, the GUI must not be able to either.
 - **`cfg` naming an operating system only under a crate's `src/platform/`.** One
   file per platform, same signature. `crates/acpilot-host/tests/platform_boundary.rs`
   fails the build otherwise.
-- **No `unsafe`.** It is forbidden at the workspace level; a job object on Windows
+- **No `unsafe`.** It is forbidden at the workspace level. A job object on Windows
   is not a reason to add it.
 - **A new dependency needs a sentence** on why the existing ones do not do the job,
   plus a clean `cargo deny`.
@@ -111,10 +111,10 @@ If the TUI cannot do something, the GUI must not be able to either.
   `site/public/schema/agents-v1.json`, generated from the loader's own types and
   frozen once shipped. A new *field* is an `agents-v2.json` decision, not a patch.
 - **The UI copy is not the contract.** `docs/api.md`, `site/src/content/docs/` and
-  `docs/notes/` describe behaviour; if you change the behaviour and leave them
+  `docs/notes/` describe behaviour. If you change the behaviour and leave them
   saying the old thing, the change is not finished.
 - **A probe answers one question and is deletable.** Its numbers go in
-  `docs/notes/<topic>.md`; see CONTRIBUTING §Probes.
+  `docs/notes/<topic>.md`. See CONTRIBUTING §Probes.
 - **Tests are not the place to make a claim true.** A failing test is the finding.
 
 ## Working a ticket
@@ -122,8 +122,8 @@ If the TUI cannot do something, the GUI must not be able to either.
 1. Read the task in `TODO.md` and every document it cites. A task's code and its
    `Open:` list are usually more current than the prose above it.
 2. Write the test that says the behaviour exists, then make it pass. Unit tests
-   sit in `#[cfg(test)]` beside the code; anything crossing a process, file or wire
-   boundary gets an integration suite in `crates/<crate>/tests/`.
+   sit in `#[cfg(test)]` beside the code. Anything that crosses a process, file or
+   wire boundary gets an integration suite in `crates/<crate>/tests/`.
 3. Update `TODO.md`: tick the box, add a `Result:` paragraph saying what shipped
    and — in an `Open:` line — what deliberately did not. A tick with no result is a
    claim nobody can audit.
@@ -161,8 +161,8 @@ promise the tool.
 
 - `rustfmt` is authoritative. Import order is std, then external, then crate.
 - Comments explain intent and the failure they prevent. A comment that restates the
-  next line is noise; the one that explains why the obvious approach was wrong is
-  the most valuable thing in the file.
+  next line is noise. The comment that explains why the obvious approach was wrong
+  is the most valuable thing in the file.
 - Match the surrounding module's tone and its habit of justifying a refusal.
 - Prefer editing an existing module to adding a parallel one.
 

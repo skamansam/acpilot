@@ -52,14 +52,15 @@ acpilot runs ls|show|replay|compare
 acpilot acp pair|token show|token rotate|drivers|revoke
 acpilot ext add --from <dir> | import-theme --from <file> --id <publisher.name>
 acpilot ext verify --all | prune [--dry-run]
-acpilot ext activate|deactivate <id> --profile <name>
-acpilot ext why <preset> --profile <name>
-acpilot secret set|list|rm [--profile <name>]
+acpilot [--profile <name|dir>] <command>
+acpilot ext activate|deactivate <id>
+acpilot ext why <preset>
+acpilot secret set|list|rm
 acpilot token rotate
-acpilot config explain <key> [PATH] [--profile <name>]
-acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--profile <name|dir>] [--workspace <dir>] [--no-mouse]
-acpilot serve [--bind <addr>] [--token <token>] [--profile <dir>] [--workspace <dir>]
-acpilot doctor [PATH] [--profile <name>] [--api-url <url|path>] [--token <token>]
+acpilot config explain <key> [PATH]
+acpilot tui [PATH] [--api-url <url|path>] [--token <token>] [--no-spawn] [--workspace <dir>] [--no-mouse]
+acpilot serve [--bind <addr>] [--token <token>] [--workspace <dir>]
+acpilot doctor [PATH] [--api-url <url|path>] [--token <token>]
 ```
 
 <Aside type="note" title="`doctor` earns its place">
@@ -90,6 +91,10 @@ Language servers
   typescript   typescript-language-server     installed
   javascript   typescript-language-server    installed
 ```
+
+When the profile exists, its five roots follow the profile line. Each is marked
+`present` or `missing`. A settings key this build does not know is listed under
+them as `unknown`, with the file that set it.
 
 A machine with nothing set up exits `0`. That is the first-run state, not a
 fault. The only failure is a declaration that cannot run. That includes a profile

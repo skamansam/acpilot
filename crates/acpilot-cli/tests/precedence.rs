@@ -190,23 +190,32 @@ fn the_precedence_matrix_is_a_table() {
             stderr(&output)
         );
         let text = stdout(&output);
-        let got = origin(&text);
-        let expected = match case.expected {
-            "global" => home.path().join("config.toml").display().to_string(),
-            "profile" => home
-                .path()
-                .join("profiles/work/config.toml")
-                .display()
-                .to_string(),
-            "project" => home
-                .path()
-                .join("proj/.acpilot/config.toml")
-                .display()
-                .to_string(),
-            "environment" => "ACPILOT_* environment".to_owned(),
-            other => other.to_owned(),
-        };
-        assert_eq!(got, expected, "{}: {text}", case.name);
+        // The origin is a canonical path, and a canonical path differs by
+        // platform: macOS resolves /var to /private/var, and Windows may write a
+        // verbatim prefix. Compare the tail below the temporary directory, which
+        // is what says which layer won.
+        let got = origin(&text).replace('\\', "/");
+        match case.expected {
+            "global" => assert!(
+                got.ends_with("/config.toml") && !got.contains("/profiles/"),
+                "{}: {text}",
+                case.name
+            ),
+            "profile" => assert!(
+                got.ends_with("/profiles/work/config.toml"),
+                "{}: {text}",
+                case.name
+            ),
+            "project" => assert!(
+                got.ends_with("/proj/.acpilot/config.toml"),
+                "{}: {text}",
+                case.name
+            ),
+            "environment" => {
+                assert_eq!(got, "ACPILOT_* environment", "{}", case.name);
+            }
+            other => assert_eq!(got, other, "{}: {text}", case.name),
+        }
         if !case.value.is_empty() {
             assert!(
                 text.contains(&format!("= {}", case.value)),
@@ -254,7 +263,7 @@ fn doctor_reports_the_five_roots_and_every_unknown_key() {
     let home = Home::new();
     let created = home.run(&["profile", "new", "work"]);
     assert!(created.status.success(), "{}", stderr(&created));
-    let config = home.write(
+    home.write(
         "profiles/work/config.toml",
         "schema_version = 1\n[preferences]\ntab_wide = 3\n",
     );
@@ -276,7 +285,8 @@ fn doctor_reports_the_five_roots_and_every_unknown_key() {
         "the typed key is named: {text}"
     );
     assert!(
-        text.contains(&config.display().to_string()),
+        text.replace('\\', "/")
+            .contains("profiles/work/config.toml"),
         "with the file that wrote it: {text}"
     );
 }
@@ -304,28 +314,13 @@ fn two_profiles_resolve_independently_and_at_the_same_time() {
     assert!(personal.status.success(), "{}", stderr(&personal));
     assert!(stdout(&work).contains("= 3"), "{}", stdout(&work));
     assert!(stdout(&personal).contains("= 5"), "{}", stdout(&personal));
-    assert!(
-        stdout(&work).contains(
-            &home
-                .path()
-                .join("profiles/work/config.toml")
-                .display()
-                .to_string()
-        ),
-        "{}",
-        stdout(&work)
-    );
-    assert!(
-        stdout(&personal).contains(
-            &home
-                .path()
-                .join("profiles/personal/config.toml")
-                .display()
-                .to_string()
-        ),
-        "{}",
-        stdout(&personal)
-    );
+    for (output, profile) in [(&work, "work"), (&personal, "personal")] {
+        let text = stdout(output).replace('\\', "/");
+        assert!(
+            text.contains(&format!("profiles/{profile}/config.toml")),
+            "{text}"
+        );
+    }
 }
 
 #[test]

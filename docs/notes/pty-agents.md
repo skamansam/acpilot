@@ -2,8 +2,8 @@
 
 Measured 2026-10-21 on Linux under WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2,
 x86_64), Rust 1.97.0. WSL2 runs a real kernel and hands out a real Linux PTY, so
-these are Linux PTY numbers — not Windows ConPTY ones, which no run here
-exercised.
+these are Linux PTY numbers, not Windows ConPTY ones. No run here exercised
+ConPTY.
 
 | program | version | invocation |
 | --- | --- | --- |
@@ -12,9 +12,10 @@ exercised.
 | `fake-tui.sh` | this repository | `bash probes/fixtures/tui/fake-tui.sh` |
 
 The instrument is `probes/pty-agent`: a standalone crate that opens a PTY with
-`portable-pty` 0.9, feeds every byte into a `vt100` 0.18 screen, sends a prompt,
-and records the screen at every candidate turn boundary. It writes a JSON report
-per run; the reports stay in `/tmp` and only the numbers below are committed.
+`portable-pty` 0.9 and feeds every byte into a `vt100` 0.18 screen. It sends a
+prompt and records the screen at every candidate turn boundary. It writes a JSON
+report per run. The reports stay in `/tmp`, and only the numbers below are
+committed.
 
 ```bash
 # startup: what the program needs before it will take a prompt
@@ -34,37 +35,37 @@ bash probes/fixtures/tui/fake-tui.sh   # the deterministic double
 
 ## Verdict
 
-1. **The transport is generic; the semantics are not.** One `PtyAgent` — spawn,
-   render, write, snapshot — drove all three programs unchanged. What differed
-   per program was every question that matters for an adapter: which key submits,
-   whether the text and the Enter may share a write, where the answer is on the
-   screen, what a finished turn looks like, and which startup dialog has to be
-   answered first. `transport = "pty"` must therefore carry a **profile**, not a
-   parser guess.
+1. **The transport is generic. The semantics are not.** One `PtyAgent` (spawn,
+   render, write, snapshot) drove all three programs unchanged. Every question
+   that matters for an adapter differed per program. It differed on the submit
+   key, on whether the text and the Enter may share a write, and on where the
+   answer appears. It also differed on what a finished turn looks like and which
+   startup dialog comes first. `transport = "pty"` must therefore carry a **profile**, not a parser
+   guess.
 2. **An idle timeout is a lie at every threshold below 5 s.** The program's own
    screen says when it finished (`Churned for 2s · done 2:46 PM` in Claude,
-   `• 3s` in Freebuff). At 300 ms every run returned a truncated answer; at
-   2,000 ms four of the five real turns did. Only 5 s never lied — and it adds
-   5 s of latency to every turn, which for a chat UI is the difference between
+   `• 3s` in Freebuff). At 300 ms every run returned a truncated answer. At
+   2,000 ms four of the five real turns did. Only 5 s never lied, and it adds 5 s
+   of latency to every turn. For a chat UI, that is the difference between
    "instant" and "broken".
 3. **The turn boundary has to come from the screen, and the screen has to be
    captured before the program exits.** Both real programs run on the alternate
-   screen (`CSI ? 1049 h`): after `quit`, the captured screen is **empty** in
+   screen (`CSI ? 1049 h`). After `quit`, the captured screen is **empty** in
    every run. A driver that exits the child and then reads the terminal has
    nothing to read.
-4. **A bare PTY is not a terminal.** Both programs probe the terminal before
-   they settle: `CSI ? u` (kitty keyboard), `CSI > 0 q` (XTVERSION), and — Freebuff
-   — `CSI 6 n` (cursor position) three times, Claude — `CSI c` (DA1). Nothing
-   answers a bare PTY, and a driver that does not answer is relying on the
+4. **A bare PTY is not a terminal.** Both programs probe the terminal before they
+   settle: `CSI ? u` (kitty keyboard), `CSI > 0 q` (XTVERSION), and, for
+   Freebuff, `CSI 6 n` (cursor position) three times. Claude asks `CSI c` (DA1).
+   Nothing answers a bare PTY. A driver that does not answer is relying on the
    program's fallback path rather than on the path a user gets.
 5. **Sending `text` and `\r` in one write does not submit.** Four runs left the
-   prompt sitting in the box with no turn started — and the idle detector then
+   prompt sitting in the box with no turn started, and the idle detector then
    declared that non-turn complete. Splitting the write (text, ~250 ms, Enter)
    worked every time. This is the single most expensive line in the probe.
 6. **The answer is not the screen.** Freebuff renders rotating ads, a spinner,
-   and the model's `• Thinking` text in the same region as the answer; Claude
+   and the model's `• Thinking` text in the same region as the answer. Claude
    prefixes the answer with `●` and puts a status bar under it. Screen text is
-   the raw material, not the transcript: extracting messages needs the program's
+   the raw material, not the transcript. Extracting messages needs the program's
    own markers.
 
 ## Startup: what each program demands
@@ -75,22 +76,22 @@ bash probes/fixtures/tui/fake-tui.sh   # the deterministic double
 | startup bytes / SGR | 31–33 KB / 855–926 | 2.5 KB / 51, plus a 1.3 KB dialog |
 | alternate screen | yes, from the first frame | no for the trust dialog, yes for the TUI |
 | bracketed paste | enabled | enabled |
-| startup gate | none at the git root; a "you started this in a subdirectory" modal elsewhere | **"Is this a project you created or one you trust?"** on first run in a directory |
+| startup gate | none at the git root. A "you started this in a subdirectory" modal appears elsewhere | **"Is this a project you created or one you trust?"** on first run in a directory |
 | gates answered by | `--pre` (Enter) | `--pre` (Enter) |
 | submits on | `\r`, in a separate write | `\r`, in a separate write |
 | leaves on | `/exit` → code 0 | `/exit` → code 0 |
 | on Ctrl-D | stays alive | stays alive |
 
-Neither program takes a prompt before its gate is answered, and Claude's gate is
-drawn **outside** the alternate screen — so a driver that only captures the
+Neither program takes a prompt before its gate is answered. Claude's gate is
+drawn **outside** the alternate screen, so a driver that only captures the
 alternate screen never sees the dialog that is blocking it. Both `Ctrl-D` paths
-did nothing within 5 s; `/exit` exited cleanly with code 0 in both.
+did nothing within 5 s. `/exit` exited cleanly with code 0 in both.
 
 ## The turn boundary, measured
 
 Each run evaluates every threshold during the same turn and keeps the screen it
 would have returned. "Matches" means the screen at that threshold is byte-for-byte
-the screen at the 5 s truth-teller; "cut" means the answer was still arriving.
+the screen at the 5 s truth-teller. "Cut" means the answer was still arriving.
 
 | run | first byte | largest gap | real turn (screen) | 300 | 500 | 800 | 1,200 | 2,000 | 5,000 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -99,37 +100,37 @@ the screen at the 5 s truth-teller; "cut" means the answer was still arriving.
 | Claude Code | 20 ms | 2,914 ms | 2 s | cut | cut | cut | cut | cut | ok |
 | Claude Code (second turn) | 20 ms | 3,364 ms | 2 s | cut | cut | cut | cut | cut | ok |
 
-The gap that kills the short thresholds is the model thinking, not the network:
-2.4 s and 2.9–3.4 s of silence in the middle of a live turn, after the first
-token had already arrived. A 2 s timeout is not "a bit eager" — it truncated
-every real turn in this sample.
+The gap that kills the short thresholds is the model thinking, not the network.
+The middle of a live turn had 2.4 s and 2.9–3.4 s of silence, after the first
+token arrived. A 2 s timeout is not "a bit eager". It truncated every
+real turn in this sample.
 
-The cost is visible in the detector latency: Claude answered in 2 s and the
-driver declared the turn over at **10.9 s**; Freebuff answered in 3 s and the
-driver took **13.3 s**. Five seconds of that is the truth-teller, the rest is the
-program's own trailing repaints. A per-program sentinel — an empty `❯` row in
-Claude, an empty input box in Freebuff — is the difference between 2 s and 200 ms.
+The cost is visible in the detector latency. Claude answered in 2 s, and the
+driver declared the turn over at **10.9 s**. Freebuff answered in 3 s, and the
+driver took **13.3 s**. Five seconds of that is the truth-teller, and the rest is
+the program's own trailing repaints. A per-program sentinel (an empty `❯` row in
+Claude, an empty input box in Freebuff) is the difference between 2 s and 200 ms.
 
 ## What actually breaks
 
-**Alternate screen.** The transcript is not in scrollback and not in the
-terminal after exit: `final_screen` was the empty string in every run, for all
-three programs. Capture at the sentinel, never after `quit`.
+**Alternate screen.** The transcript is not in scrollback and not in the terminal
+after exit. `final_screen` was the empty string in every run, for all three
+programs. Capture at the sentinel, never after `quit`.
 
 **Colours.** `contents()` throws away 855–926 SGR sequences' worth of meaning in
-Freebuff's startup alone. Usually that is fine; here it is not, because the one
-distinction the consumer needs — the model's *thinking* versus its *answer* — is
-carried by a glyph and a colour in Freebuff (`• Thinking` followed by the plain
-answer) and by `●` in Claude. Text-only scraping merges them.
+Freebuff's startup alone. Usually that is fine. Here it is not. The one
+distinction the consumer needs is the model's *thinking* versus its *answer*.
+Freebuff carries it with a glyph and a colour (`• Thinking` followed by the plain
+answer), and Claude carries it with `●`. Text-only scraping merges them.
 
 **Bracketed paste.** The markers arrive *inside* the input line
-(`^[[200~write a long answer^[[201~` at the reference program, which is what a
-program that has not implemented paste handling sees). Freebuff strips them and
-shows a clean `Chat: …` line; the reference double does not, which is exactly why
+(`^[[200~write a long answer^[[201~` at the reference program). That is what a
+program that has not implemented paste handling sees. Freebuff strips them and
+shows a clean `Chat: …` line. The reference double does not, which is exactly why
 the double is useful. Paste is still required: a multi-line prompt sent as raw
 keystrokes submits on the first newline.
 
-**Same-write Enter.** The failure is silent and it looks like a completed turn:
+**Same-write Enter.** The failure is silent, and it looks like a completed turn:
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────╮
@@ -141,17 +142,17 @@ That screen is the 5 s truth-teller's answer for a turn that never started. The
 text arrived, the Enter was consumed with it, and nothing else happened. Two
 writes fixed it in every subsequent run.
 
-**Terminal queries.** `CSI ? u`, `CSI > 0 q`, `CSI 6 n`, `CSI c` are asked in the
-first second. The driver answers them (DA1, DA2, XTVERSION, `?0u` for kitty,
-cursor position, text-area size). Answering is not optional in principle — a
-terminal always answers — though these two programs happen to keep working
-without it.
+**Terminal queries.** `CSI ? u`, `CSI > 0 q`, `CSI 6 n` and `CSI c` are asked in
+the first second. The driver answers them (DA1, DA2, XTVERSION, `?0u` for kitty,
+cursor position, text-area size). Answering is not optional in principle. A
+terminal always answers, though these two programs happen to keep working without
+it.
 
 **Startup gates.** Claude's trust dialog and Freebuff's "subdirectory of a git
-repo" modal are the first screen either program shows, and neither is the input
-box. A PTY adapter needs a per-program "answer the gates" step before it can send
-anything, and it needs to detect that a gate is showing rather than guess from
-the clock: Claude's dialog appears *after* a loading spinner has already been
+repo" modal are the first screen either program shows. Neither is the input box.
+A PTY adapter needs a per-program "answer the gates" step before it can send
+anything. It also needs to detect that a gate is showing rather than guess from
+the clock. Claude's dialog appears *after* a loading spinner has already been
 quiet for 1.2 s.
 
 ## What the answer looks like
@@ -183,9 +184,9 @@ Claude, same turn:
   ⏵⏵ auto mode on (shift+tab to cycle)
 ```
 
-Both contain the answer, the timing, and the sentinel in a fixed place — and
-both need the program's own grammar to separate them from ads, spinners, the
-status bar, and the thought. That is a profile, not a heuristic.
+Both contain the answer, the timing, and the sentinel in a fixed place. Both need
+the program's own grammar to separate them from ads, spinners, the status bar, and
+the thought. That is a profile, not a heuristic.
 
 ## Consequences for the engine phase's task P2-7
 
@@ -194,25 +195,26 @@ status bar, and the thought. That is a profile, not a heuristic.
   command. The two shipped parsers (`plain-transcript`, `ansi-transcript`) are the
   fallback for programs without a profile, not the primary mechanism.
 - Completion = the program's sentinel, with a 5 s idle **backstop**. The backstop
-  is what catches a sentinel that changed in a new version; the sentinel is what
-  keeps the turn fast.
+  catches a sentinel that changed in a new version. The sentinel keeps the turn
+  fast.
 - The adapter returns the screen **at the sentinel**, and the `Turn` record keeps
-  the raw screen next to the extracted messages, so a profile regression is a
-  diff and not a mystery.
+  the raw screen next to the extracted messages. A profile regression is then a
+  diff, not a mystery.
 - The driver owns terminal-query answering, the two-write submit, and paste
-  framing; no profile should have to repeat that.
-- `thought` is a separate event from `message` — the screen makes the distinction
+  framing. No profile should have to repeat that.
+- `thought` is a separate event from `message`. The screen makes the distinction
   cheap to keep and expensive to recover later.
 
 ## Limitations
 
-- Two programs, one turn each, all on WSL2's Linux PTY. The Windows side —
-  ConPTY, and `wsl.exe` starting a distro from Windows — was untouched here.
-  The design phase's task P0-5 covered it separately (`docs/notes/wsl-helper.md`): under ConPTY,
-  `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same query
-  problem this note found in the TUIs. It is not the same terminal. No resize,
-  cancellation, tool-permission prompt, or multi-turn context was exercised.
-- The probe returns screen text; it does **not** extract messages. That is the
+- Two programs, one turn each, all on WSL2's Linux PTY. The Windows side (ConPTY,
+  and `wsl.exe` starting a distro from Windows) was untouched here. The design
+  phase's task P0-5 covered it separately (`docs/notes/wsl-helper.md`). Under
+  ConPTY, `wsl.exe` starts by sending `CSI 6 n` and waits for an answer, the same
+  query problem this note found in the TUIs. It is not the same terminal. No
+  resize, cancellation, tool-permission prompt, or multi-turn context was
+  exercised.
+- The probe returns screen text. It does **not** extract messages. That is the
   engine phase's task P2-7, and it is deliberately left undone here.
 - Query replies are sent once per chunk rather than once per occurrence, so
   Freebuff's three `CSI 6 n` probes in one chunk get one answer. Harmless here,

@@ -23,10 +23,10 @@ flowchart LR
     human --> audit
 ```
 
-Every request is classified — file write, file read, terminal, tool call, other —
-and evaluated against rules scoped by agent, tool, and path. Unclassified
-requests are treated as the strictest case, because "we did not recognise it" is
-not a reason to allow it.
+The broker classifies every request: file write, file read, terminal, tool call,
+or other. It evaluates the request against rules scoped by agent, tool, and path.
+The broker treats unclassified requests as the strictest case. "We did not
+recognise it" is not a reason to allow it.
 
 ## Defaults
 
@@ -37,43 +37,43 @@ not a reason to allow it.
 | Anything outside the workspace | **ask** — refused if nobody is watching |
 | Shell command, or any unknown tool | **ask**, one request at a time |
 
-A write inside the workspace is allowed because the engine phase (P2) has no interface to ask
-with; a profile that wants to be asked raises it with `[policy] default =
-"ask"`, and the first client that can show a dialog ships with that as its
+The engine phase (P2) has no interface to ask with, so the broker allows a write
+inside the workspace. A profile that wants to be asked raises it with `[policy]
+default = "ask"`. The first client that can show a dialog ships with that as its
 default.
 
 <Aside type="note" title="Allow is a scope, not a mood">
 `allow once` and `allow always` are different decisions with different audit
-lines. The UI never offers a bare "allow" button, because "allow what, for how
-long" is the only interesting question.
+lines. The UI never offers a bare "allow" button. "Allow what, for how long" is
+the only interesting question.
 </Aside>
 
 ## The shadow-write guard
 
-A write is decided before it is performed. The broker is given the path, the tool
-and a line of detail, answers, and only then does the host write anything. If the
-policy says ask, the agent's call **blocks** — it does not fail and retry, it
-waits, which is what keeps a multi-file edit coherent instead of half-applied.
-While it waits, the file is untouched: a diff is against the contents the editor
-had open, and a crash leaves the disk as it was.
+The broker decides before the host writes. It receives the path, the tool, and a
+line of detail. It answers. Only then does the host write anything. If the policy
+says ask, the agent's call **blocks**. It does not fail and retry. It waits,
+which keeps a multi-file edit coherent instead of half-applied. While it waits,
+the host leaves the file untouched. A diff is against the contents the editor
+opened, and a crash leaves the disk as it was.
 
 ## Path canonicalisation
 
-Every path is resolved on the host it belongs to — `..` segments collapsed,
-symlinks followed — before it is compared with the workspace or matched against a
-rule. Comparing the text an agent sent would pass `workspace/link`, which is a
-path that looks contained and points at `/etc`; the test suite has exactly that
-case. Globs fold case on Windows and do not elsewhere, because the platforms
-differ there and a rule should mean the same thing on the machine it was written
-for. Treating WSL's `C:\x` and `/mnt/c/x` as one origin is the Windows phase's
-work, not this one's.
+The broker resolves every path on the host it belongs to before it compares the
+path with the workspace or matches it against a rule. That resolution collapses
+`..` segments and follows symlinks. Comparing the text an agent sent would pass
+`workspace/link`, a path that looks contained and points at `/etc`. The test
+suite has exactly that case. Globs fold case on Windows and do not elsewhere.
+The platforms differ there, and a rule should mean the same thing on the machine
+where you wrote it. Treating WSL's `C:\x` and `/mnt/c/x` as one origin is the
+Windows phase's work, not this one's.
 
 ## Audit
 
-Every decision is appended with who decided — `user`, `policy:<rule-id>`,
-`default`, `session` (an earlier `allow always`), `timeout` or `unattended` — and
-the request that produced it. The log is the difference between "the agent did
-something" and "the agent did something and we can prove what".
+The daemon appends every decision with who decided: `user`, `policy:<rule-id>`,
+`default`, `session` (an earlier `allow always`), `timeout`, or `unattended`.
+The daemon also appends the request that produced it. The log is the difference between
+"the agent did something" and "the agent did something and we can prove what".
 
 ## Rules
 
@@ -89,30 +89,32 @@ tool = "execute"
 path = "/work/repo/**"
 ```
 
-Rules are tried in file order and the first match wins — no scoring, no
-specificity contest. A rule may leave any of `agent`, `tool` and `path` unset,
-which means "anything"; a glob is anchored and path-shaped, so `*` stops at a
-separator and `**` does not. The audit line names the rule that fired, which is
-the answer to every later argument about why something was allowed.
+The broker tries rules in file order. The first match wins: no scoring, no
+specificity contest. A rule may leave any of `agent`, `tool`, and `path` unset,
+which means "anything". The matcher anchors a glob and treats it as path-shaped,
+so `*` stops at a separator and `**` does not. The audit line names the rule that
+fired. That name answers every later argument about why the broker allowed
+something.
 
 ## Answering a request
 
-A client that did not raise the request answers it over the API: the list is
-`GET /v1/permissions?status=pending`, and the answer is
+A client that did not raise the request answers it over the API. The list is
+`GET /v1/permissions?status=pending`. The answer is
 `POST /v1/permissions/{id}/resolve` with one of the options that same object
-listed. Repeating the same answer returns the same decision; choosing a different
-one is a conflict, because the agent has already acted on the first. The daemon
-waits for as long as a request is pending — the five-minute deadline is the
-broker's default for a session with no client at all, not a promise to anyone
-watching.
+listed. Repeating the same answer returns the same decision. Choosing a
+different one is a conflict, because the agent has already acted on the first.
+The daemon waits for as long as a request is pending. The five-minute deadline
+is the broker's default for a session with no client at all. It is not a promise
+to anyone watching.
 
 ## Status
 
-The broker, task P2-6 of the engine phase, is built: rules and globs, `allow always` scoped to one
-session, an audit row per decision. Task P3-2 of the service phase serves the pending list and the answer
-route, announces each new request on `GET /v1/events` so a client is told rather
-than polling, and reads a profile's `[policy]` table at startup (`acpilotd
---profile`), so a rule in a file is a rule a running daemon obeys. What is not
-built: a UI that shows the dialog (the command-line phase, P5, and the editor phase, P6) and persistence — the audit log lives
-in memory until the service phase's P3-7 table, and the transcript (engine phase, task P2-8) is what survives a
-restart.
+We built the broker as task P2-6 of the engine phase: rules and globs,
+`allow always` scoped to one session, and an audit row per decision. Task P3-2 of
+the service phase serves the pending list and the answer route. It announces each
+new request on `GET /v1/events`, so a client is told rather than polling. It
+reads a profile's `[policy]` table at startup (`acpilotd --profile`), so a rule in
+a file is a rule a running daemon obeys. Two things are not built. A UI that
+shows the dialog is the command-line phase (P5) and the editor phase (P6).
+Persistence is the service phase's P3-7 table. Until then the audit log lives in
+memory. The transcript (engine phase, task P2-8) is what survives a restart.

@@ -32,19 +32,19 @@ Each step is a thing you can look at, diff, and throw away:
 
 <Aside type="note" title="The autopilot is still the autopilot">
 The point of the lab is not to make the model smarter. It is to make the model's
-limits *visible* before it is allowed to touch your files: which parameters the
-server actually honours, how much window it really has, whether it can emit a
-tool call at all, and how often that tool call parses.
+limits *visible* before it can touch your files. The lab shows which parameters
+the server honours and how much window it really has. It also shows whether the
+model can emit a tool call and how often that tool call parses.
 </Aside>
 
 ## Why a lab instead of a settings pane
 
-Because prompt tuning is an experiment, and an experiment without a record is a
+Because prompt tuning is an experiment. An experiment without a record is a
 rumour. The lab keeps the four things you need to answer "why was it better
 yesterday?":
 
 - **The exact request.** System prompt hash, sampling values, resolved corpus
-  files, budget split. Replay re-sends it unchanged.
+  files, and budget split. Replay re-sends it unchanged.
 - **The exact answer.** Token usage, time to first token, stop reason, and any
   parameter the server refused, with the retry that omitted it.
 - **The comparison.** Two runs side by side, with a delta in tokens and latency.
@@ -58,19 +58,18 @@ yesterday?":
 - **Not a hosted service.** No model, no key, and no prompt leaves your machine
   unless you declare a provider that lives somewhere else.
 - **Not a second brain for the editor.** The lab talks to the daemon API like
-  every other surface; it holds no state of its own. There is one transcript, and
+  every other surface. It holds no state of its own. There is one transcript, and
   it is the daemon's.
 
-## What is built today
+## What exists today
 
-The contract is: this page and the five beside it, the OpenAPI types behind them,
-and an ADR that says why. No server has been probed yet. The models phase (P4.5) will build the crate,
-the shim agent, and the lab in that order — with the API first, because a
-workbench that invents its own state would be the sixth thing to disagree about
-what happened.
+The contract is this page, the five beside it, the OpenAPI types behind them, and
+an ADR that says why. The project does not probe a server yet. The models phase (P4.5) will
+build the crate, the shim agent, and the lab in that order. The API comes first,
+because a workbench that invents its own state would be the sixth thing to
+disagree about what happened.
 
 <Aside type="caution" title="Altitude check">
-Pages in this section describe the models phase (P4.5). The [flight status](../status/) page is the
-one that tells you whether it flies; this page tells you which runway was
-planned.
+Pages in this section describe the models phase (P4.5). The [flight status](../status/) page
+tells you whether it flies. This page tells you which runway we planned.
 </Aside>

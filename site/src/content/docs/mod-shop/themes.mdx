@@ -3,13 +3,13 @@ title: Themes
 description: One token set, four cockpits, and a contrast check that fails the build.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-import ThemeGallery from '../../../components/ThemeGallery.astro';
+import { Aside } from '@astrojs/starlight/components'
+import ThemeGallery from '../../../components/ThemeGallery.astro'
 
 <span class="pill pill--hangar">hangar</span> &nbsp; Mod shop phase (P4.6-6)
 
 A theme is the most-installed extension and the easiest to get wrong. It is also
-the one thing every surface must agree on: the TUI, the desktop app, the browser,
+the one thing every surface must agree on. The TUI, the desktop app, the browser,
 and the docs should not each invent what "muted text" means.
 
 ```toml
@@ -46,59 +46,59 @@ punctuation = "#97a5b8"
 | Status | `success`, `warning`, `danger` | Diagnostics, permission prompts, failed turns |
 | Syntax | `comment`, `keyword`, `string`, `number`, `type`, `function`, `variable`, `constant`, `operator`, `punctuation` | Highlighting, code blocks, diffs |
 
-Token tables are a closed set: `text_mutted` is an error naming the key, not a
+Token tables are a closed set. `text_mutted` is an error naming the key, not a
 token that silently does nothing. A theme that omits a token inherits it from the
-theme named by `extends`; a theme with no `extends` must set every token, because
+theme named by `extends`. A theme with no `extends` must set every token, because
 there is nothing left to inherit from.
 
 ## Contrast is enforced, not reviewed
 
-Every built-in theme is measured in CI. Seventeen foreground tokens — seven
-interface, ten syntax — are checked against **both** surfaces (`bg` and
-`bg_panel`), so **34 pairs per theme**, and each must clear WCAG AA (4.5:1). A
-pair below the line fails the build with the token names and both ratios printed.
+CI measures every built-in theme. It checks seventeen foreground tokens (seven
+interface, ten syntax) against **both** surfaces (`bg` and `bg_panel`). That is
+**34 pairs per theme**, and each must clear WCAG AA (4.5:1). A pair below the line
+fails the build with the token names and both ratios printed.
 
-`bg`, `bg_panel`, and `border` are excluded, and deliberately: the first two are
-the paper rather than the ink, and WCAG 1.4.11 covers boundaries needed to
-identify a control, not a hairline separator. Forcing 3:1 hairlines would make
-every theme look like a wireframe.
+`bg`, `bg_panel`, and `border` are excluded, and deliberately. The first two are
+the paper rather than the ink. WCAG 1.4.11 covers boundaries needed to identify a
+control, not a hairline separator. Forcing 3:1 hairlines would make every theme
+look like a wireframe.
 
-The two surfaces have a rule of their own, because text contrast cannot see it: a
+The two surfaces have a rule of their own, because text contrast cannot see it. A
 panel can be invisible while every token on it passes. `bg_panel` must sit
 between **1.10:1 and 1.35:1** of `bg`. Below the floor the panel reads as the
-background — both built-ins were once at 1.06:1 and 1.08:1, panels you could only
-find with a colour picker; above the ceiling the panel has spent contrast the text
+background. Both built-ins were once at 1.06:1 and 1.08:1, panels you could only
+find with a colour picker. Above the ceiling the panel has spent contrast the text
 drawn on it needs, so the AA rule gets harder for every token at once. The window
 is ratcn's well ladder, adopted with its numbers.
 
-That rule exists because of a real bug in this very manual: the sidebar's selected
+That rule exists because of a real bug in this very manual. The sidebar's selected
 item once painted near-black text on a dark panel, and it was unreadable until
 somebody measured it. "It looked fine on my monitor" is how a theme ships broken.
 
-A theme outside the window still loads — it is a shade, not a broken file — and
-`acpilot tui` prints the measurement with the token names when it does. Both
-built-ins sit at 1.17:1, and CI fails if a change moves either out.
+A theme outside the window still loads. It is a shade, not a broken file. `acpilot
+tui` prints the measurement with the token names when it does. Both built-ins sit
+at 1.17:1, and CI fails if a change moves either out.
 
 The gate lives in `crates/acpilot-extensions` and runs as
-`built_in_themes_meet_wcag_aa`; CI gives it a step of its own so a red build says
+`built_in_themes_meet_wcag_aa`. CI gives it a step of its own, so a red build says
 which check failed.
 
 ## Every built-in, rendered
 
 <ThemeGallery />
 
-The gallery is generated, not drawn by hand: `cargo xtask docs-data` writes
+The gallery is generated, not drawn by hand. `cargo xtask docs-data` writes
 `site/src/data/themes.json` from the extensions the binary embeds, and a test
 fails if the committed file drifts. The ratios shown are the ones the gate
-enforces, which is the only way a preview can be trusted to describe the product.
+enforces. That is the only way a preview can be trusted to describe the product.
 
 The second row is not a built-in. It is the outcome of `theme_follow_terminal`
-for two terminals — a black one and a cream one, one at each end of the ramp —
-solved when the page was generated by the same function the TUI calls, and audited
-before it was written. It is there because "a palette is solved around your
-terminal" is a claim a reader should be able to look at: the black terminal gets a
-dark theme with a panel you can see, the cream one gets a light theme with the same
-window and the same hue families, and neither was chosen by hand.
+for two terminals: a black one and a cream one, one at each end of the ramp. The
+page generated it with the same function the TUI calls, and it was audited before
+it was written. It is there because "a palette is solved around your terminal" is
+a claim a reader should be able to look at. The black terminal gets a dark theme
+with a panel you can see. The cream one gets a light theme with the same window
+and the same hue families. Neither was chosen by hand.
 
 ## Importing a TextMate theme
 
@@ -107,22 +107,22 @@ acpilot ext import-theme --from ~/Downloads/Dracula.tmTheme --id you.dracula \
   --activate work
 ```
 
-The importer reads the plist (dict, array, string, number, no external
-entities), maps the global background, foreground, caret, gutter and line
-highlight onto the interface tokens, and maps scope rules onto the syntax tokens.
-Everything the file does not define is inherited from the built-in with the same
-appearance, so a minimal theme still works.
+The importer reads the plist (dict, array, string, number, no external entities).
+It maps the global background, foreground, caret, gutter and line highlight onto
+the interface tokens. It maps scope rules onto the syntax tokens. Everything the
+file does not define is inherited from the built-in with the same appearance, so
+a minimal theme still works.
 
-It is honest about the edges: eight-digit colours lose their alpha (and say so),
-unknown scopes are ignored, and any pair below WCAG AA is printed as a warning
-with both tokens and the ratio. The result is an ordinary extension — stored,
-checksummed, and blockable like any other — which is why the id must be
-namespaced and why `acpilot.night-flight` itself cannot be replaced.
+It is honest about the edges. Eight-digit colours lose their alpha, and the
+importer says so. Unknown scopes are ignored. Any pair below WCAG AA is printed as
+a warning with both tokens and the ratio. The result is an ordinary extension:
+stored, checksummed, and blockable like any other. That is why the id must be
+namespaced, and why `acpilot.night-flight` itself cannot be replaced.
 
 ## Switching, without a restart
 
-The theme is a preference in `config.toml`, and saving the file is the switch —
-naming another id is enough:
+The theme is a preference in `config.toml`, and saving the file is the switch.
+Naming another id is enough:
 
 ```toml
 [preferences]
@@ -130,18 +130,18 @@ theme = "acpilot.night-flight-syntax"
 ```
 
 `acpilot tui` watches the user's and the project's settings and recolours the open
-client, naming the theme in its status bar, so an edit in one window lands in the
-other. The daemon sends the whole preferences object as the first frame of its
-profile stream and again after every save, so a browser or a window that cannot
-see this machine's files follows without a restart; `/app` listens on its palette
-stream and repaints an open tab. A file that does not parse, or an id no loaded
-extension provides, leaves what is on screen alone and is reported; the next save
-is read normally.
+client. It names the theme in its status bar, so an edit in one window lands in
+the other. The daemon sends the whole preferences object as the first frame of its
+profile stream and again after every save. A browser or a window that cannot see
+this machine's files therefore follows without a restart. `/app` listens on its
+palette stream and repaints an open tab. A file that does not parse, or an id no
+loaded extension provides, leaves what is on screen alone and is reported. The
+next save is read normally.
 
 ### Following the terminal
 
 Naming a theme is not the only option. `theme_follow_terminal = true` asks the
-terminal what its own background and foreground are and solves a complete palette
+terminal what its own background and foreground are. It solves a complete palette
 around that pair:
 
 ```toml
@@ -149,22 +149,23 @@ around that pair:
 theme_follow_terminal = true
 ```
 
-The panel is pushed out of the background into the window above, the ink is pushed
-out until it clears AA on that panel, and the roles the terminal has no colour for
-(a red for `danger`, an amber for `accent`) start from a hue and take the lightness
-that clears the same floor. The result goes through the same audit as a file: a
-palette that fails it is not shown. Two consequences are deliberate — a terminal
+The panel is pushed out of the background into the window above. The ink is pushed
+out until it clears AA on that panel. The roles the terminal has no colour for
+start from a hue. That covers a red for `danger` and an amber for `accent`. Each
+takes the lightness that clears the same floor. The result goes through the same
+audit as a file. A
+palette that fails it is not shown. Two consequences are deliberate. A terminal
 whose background sits near the middle of the ramp gets a palette solved around a
-deepened background, because white on `#808080` cannot clear AA, and the terminal's
+deepened background, because white on `#808080` cannot clear AA. The terminal's
 own foreground is kept verbatim when it already passes. Turning the key off is the
 switch back to the named theme, without a restart. Two terminals at opposite ends
-of the ramp are in the gallery below — the black one and the cream one — so the
-result can be seen rather than only described.
+of the ramp are in the gallery below, the black one and the cream one. The result
+can therefore be seen rather than only described.
 
 <Aside type="note" title="Pairing, not guessing">
-`appearance` says which half of a pair a theme is, so a surface can hold one id for
-each mode — light beside dark in the same window — instead of recolouring a single
-theme in the dark.
+`appearance` says which half of a pair a theme is. A surface can therefore hold
+one id for each mode. That allows light beside dark in the same window, instead
+of recolouring a single theme in the dark.
 </Aside>
 
 ## Where the built-ins live
@@ -182,10 +183,10 @@ extensions/acpilot.paper/
 ```
 
 `include_str!` embeds them, so a manifest that points at a missing asset is a
-build error. They are loaded through the same loader as an installed extension,
-marked `built_in`, and cannot be uninstalled — only a different theme can be
-selected for a profile. If the schema is incomplete, our own two themes are the
-first to say so, which is the cheapest possible time to find out.
+build error. They load through the same loader as an installed extension, and the
+loader marks them `built_in`. They cannot be uninstalled. Only a different theme
+can be selected for a profile. If the schema is incomplete, our own two themes are
+the first to say so. That is the cheapest possible time to find out.
 
-Theme ids are namespaced (`publisher.name`), which is why a variant pack ships
+Theme ids are namespaced (`publisher.name`). That is why a variant pack ships
 `acpilot.night-flight-syntax` and never `night-flight`.

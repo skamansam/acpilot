@@ -5,10 +5,10 @@ description: One control plane for every client, with an error envelope you can 
 
 <span class="pill pill--flying">flying</span> &nbsp; health + OpenAPI &nbsp;·&nbsp; <span class="pill pill--hangar">hangar</span> &nbsp; everything else
 
-Every client — CLI, TUI, desktop, browser — uses this API. There is no privileged
-back channel, which is why the API is designed before the UIs rather than
-extracted from them afterwards. `docs/api.md` in the repository is the frozen v1
-contract, including the event taxonomy and the reconnect rules; this page is the
+Every client uses this API: CLI, TUI, desktop, and browser. There is no privileged
+back channel. That is why we design the API before the UIs, rather than
+extract it from them afterwards. `docs/api.md` in the repository is the frozen v1
+contract, including the event taxonomy and the reconnect rules. This page is the
 short version.
 
 ## Today
@@ -35,50 +35,51 @@ GET /                          # the web app: build version, About, quit; no tok
 GET /app/stats                  # the shell's stats bar, measured by the daemon; needs the token
 ```
 
-`GET /v1/health` also reports the workspace the daemon was started with
-(`workspace`, omitted when it serves none), which is how a client confirms that
-the daemon it found is the one for the directory it was asked about — the check
-behind `acpilot tui --workspace <dir>` refusing a mismatch instead of showing
-another project's sessions. It also reports `profile`, the profile directory's
-name, omitted when the daemon was started without one: the web page writes it into its
-`/p/:profile/...` addresses, and a page that guessed would be addressing a profile
-nobody started.
+`GET /v1/health` also reports the workspace the daemon opened with. The daemon
+omits the `workspace` field when it serves none. A client uses it to confirm that
+the daemon it found is the one for the directory the client asked about. That is
+the confirmation behind `acpilot tui --workspace <dir>` refusing a mismatch
+instead of showing another project's sessions. The answer also reports `profile`,
+the profile directory's name, omitted when the daemon started without one. The
+web page writes that name into its `/p/:profile/...` addresses. A page that
+guessed would address a profile nobody started.
 
-`GET /v1/agents` answers from the profile the daemon was started with —
-`acpilotd --profile <dir>` reads that directory's `agents.toml` — and reports
-availability from a `PATH` lookup on the daemon's host. No process is started, so
-listing agents cannot launch one. With no profile loaded the list is empty;
-handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
+`GET /v1/agents` answers from the profile the operator chose at daemon start.
+`acpilotd --profile <dir>` reads that directory's `agents.toml`. The route reports
+availability from a `PATH` lookup on the daemon's host. It starts no process, so
+listing agents cannot start one. With no profile loaded the list is empty.
+Handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
 
-`GET /v1/events` is what makes a prompt immediate instead of polled: a request
-raised after the client connects arrives as a `permission` frame carrying the
-same object the pending list returns, so the client can answer it without asking
-again. It is profile-wide, and it does not replay — a request that arrived while
-the client was away is recovered from the pending list, which is state.
+`GET /v1/events` makes a prompt immediate instead of polled. A request raised
+after the client connects arrives as a `permission` frame. That frame carries the
+same object the pending list returns, so the client can answer without asking
+again. The stream is profile-wide, and it does not replay. A request that arrived
+while the client was away comes from the pending list, which is state.
 
 The same stream carries the theme. A `prefs` frame is the whole `Preferences`
-object the daemon would apply, sent as the first frame of a connection and again
-whenever the user's or the project's `config.toml` settles after a save, so a
-window or a browser can follow `theme` without seeing this machine's files and
-without a restart. Preferences are state rather than history, which is why they
-are the one thing the stream sends on connect; a file that does not parse is
-announced as a `prefs_error` frame with the parser's sentence, and the last good
-preferences stay in force. `PATCH /v1/profiles/{id}/preferences` changes only the
-keys it names and sends the new object immediately, so a client can offer a
-preference control without polling. The TUI resolves the same frames, so a client
-behind a socket and one sitting in the daemon's directory end up with the same
-palette from two paths.
+object the daemon would apply. The daemon sends it as the first frame of a
+connection. It sends it again whenever the user's or the project's `config.toml`
+settles after a save. A window or a browser can therefore follow `theme` without seeing
+this machine's files and without a restart. Preferences are state rather than
+history, which is why they are the one thing the stream sends on connect. A file
+that does not parse gets a `prefs_error` frame with the parser's sentence, and
+the last good preferences stay in force. `PATCH
+/v1/profiles/{id}/preferences` changes only the keys it names and sends the new
+object immediately. A client can therefore offer a preference control without
+polling. The TUI resolves the same frames. A client behind a socket and one
+sitting in the daemon's directory therefore end up with the same palette from
+two paths.
 
 `WS /v1/terminals/{id}/attach` is the one route that upgrades instead of
-answering. Binary frames are the terminal in both directions — keystrokes one
-way, output the other — and text frames are control: `resize` from the client,
-`attached` and `exit` from the daemon. `attached` announces how many bytes of
-screen follow, and those bytes are the escape sequences that redraw what the
-terminal already shows, so attaching late is the normal case rather than a race.
-Closing the socket leaves the process running: a pane is a view, not an owner.
-The same route serves the terminals an agent opens — they are listed under an
-`agent-` id, over the PTY the agent already has, so a person can watch and type
-into the shell an agent started without a second process behind it.
+answering. Binary frames are the terminal in both directions: keystrokes one way,
+output the other. Text frames are control: `resize` from the client, `attached`
+and `exit` from the daemon. `attached` announces how many bytes of screen follow.
+Those bytes are the escape sequences that redraw what the terminal already shows,
+so attaching late is the normal case rather than a race. Closing the socket
+leaves the process running. A pane is a view, not an owner. The same route serves
+the terminals an agent opens. The daemon lists them under an `agent-` id, over
+the PTY the agent already has. A person can therefore watch and type into the
+shell an agent started without a second process behind it.
 
 ## Planned
 
@@ -92,11 +93,11 @@ into the shell an agent started without a second process behind it.
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
 | Models (post-v1) | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
-| Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`; ACP itself at `/acp` |
+| Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`. ACP itself at `/acp` |
 
 ## The error envelope
 
-Every failure is the same shape, whether it came from a route, an agent, or a
+Every failure has the same shape, whether it came from a route, an agent, or a
 host that stopped answering:
 
 ```json
@@ -120,13 +121,13 @@ host that stopped answering:
 | `protocol` | 500 | Malformed frame, bad version |
 | `io` | 500 | Filesystem or process I/O |
 
-`502` versus `500` matters: it tells a client whether to offer "retry" or "file a
+`502` versus `500` matters. It tells a client whether to offer "retry" or "file a
 bug". A host that is asleep is not a bug in the daemon.
 
 ## Two rules that shape every route
 
 **The API is a control plane, not a keystroke pipe.** Edits live in the client's
-text buffer; the API handles saves, reads, and intent. HTTP never sits between a
+text buffer. The API handles saves, reads, and intent. HTTP never sits between a
 keypress and a character appearing.
 
 **Mutations must name their profile.** A mutating request without
@@ -134,8 +135,9 @@ keypress and a character appearing.
 how code gets sent with the wrong key.
 
 <Aside type="note" title="Why SSE and not WebSockets everywhere">
-Agent output is a stream of events with sequence numbers — `session.*`, `permission.*`,
-`lsp.*`, `model.run.*` — and the same replay guarantee applies to all of them. SSE gives replay via
-`Last-Event-ID`, survives proxies, and reconnects for free. WebSockets are used
-where they earn it — terminal attach, LSP bridge — not as a default.
+Agent output is a stream of events with sequence numbers: `session.*`,
+`permission.*`, `lsp.*`, and `model.run.*`. The same replay guarantee applies to
+all of them. SSE gives replay via `Last-Event-ID`, survives proxies, and
+reconnects for free. WebSockets serve where they earn it, such as terminal
+attach and the LSP bridge. They are not the default.
 </Aside>

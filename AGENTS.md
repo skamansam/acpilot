@@ -165,3 +165,18 @@ promise the tool.
   the most valuable thing in the file.
 - Match the surrounding module's tone and its habit of justifying a refusal.
 - Prefer editing an existing module to adding a parallel one.
+
+## Prose style
+
+Use the `asd-ste100` skill for every new or changed piece of prose. This rule
+covers code comments, documentation, commit messages, PR descriptions, manuals
+and docs.
+
+- Use STE-flavored mode for explanatory prose. Keep sentences at or below 25
+  words. Use active voice and simple tenses. Do not use semicolons.
+- Use Strict mode for error messages, tool descriptions and instructions another
+  agent must parse.
+- Preserve facts, conditions, hedges and technical terms. Do not add a claim the
+  source did not make.
+- Apply this rule when you touch text. Do not rewrite existing prose only to
+  apply this rule.

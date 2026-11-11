@@ -407,23 +407,25 @@ jobs:
   #
   # The individual jobs stay listed in the PR's checks tab either way; this is the
   # one a rule points at.
+  # The ruleset on `main` asks for one context, `required checks`, and only a pull
+  # request may publish that name.
+  #
+  # Pushing a branch and then opening its pull request puts a push run and a pull
+  # request run of the same commit in one concurrency group, so the later cancels the
+  # earlier. GitHub records a check run for every job of a cancelled run, with
+  # conclusion `cancelled`, and a cancelled entry under a required name counts as
+  # not-success in that commit's rollup: #302 read `BLOCKED` with every job green
+  # until the cancelled run was deleted. Skipping the job does not avoid this, because
+  # the entry is recorded either way. So the push run publishes a name of its own and
+  # still aggregates its own jobs, which is what reports on a commit nobody is
+  # reviewing; the required name comes from the event that merges.
   required:
-    name: required checks
+    name: ${{ github.event_name == 'pull_request' && 'required checks' || 'required checks (branch)' }}
     needs: [check, web, gui, probes, frame-budget, deny, docs, history]
-    # Only a pull request publishes this name. Pushing a branch and then opening its
-    # pull request puts a push run and a pull request run of the same commit in one
-    # concurrency group, and the later one cancels the earlier: a cancelled run's
-    # dependencies all report `cancelled`, and `always()` fired anyway, so the
-    # assertion published a second `required checks` against the same SHA — a failed
-    # one from the cancelled run beside a green one from the pull request. The ruleset
-    # wants that name successful and strictly up to date, and it does not find it, so
-    # a mergeable pull request sat blocked. The push run's own jobs are still there
-    # to report on a commit nobody is reviewing; the aggregate is a merge gate and
-    # belongs to the event that merges.
-    #
-    # `!cancelled()` still runs the job after a dependency fails, which is the case
-    # it exists for, and stays out of a cancelled run, where it has nothing to say.
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    # `always()` also fired inside a cancelled run, where every dependency reports
+    # `cancelled`; `!cancelled()` runs the job after a dependency fails, which is the
+    # case it exists for, and stays out of a cancelled run, where it has nothing to say.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Every required job succeeded

@@ -410,15 +410,20 @@ jobs:
   required:
     name: required checks
     needs: [check, web, gui, probes, frame-budget, deny, docs, history]
-    # `always()` also fires inside a run that is already cancelled, and there every
-    # dependency reports `cancelled`, so the assertion below published a `FAILURE`
-    # named `required checks` against a commit. Pushing a branch and then opening
-    # its pull request cancels the push run in favour of the pull request run, so
-    # the SHA a reviewer is asked to merge carried a failed required check beside a
-    # green one, and the ruleset blocked the merge. `!cancelled()` still runs after
-    # a dependency fails — which is the case the job exists for — and stays out of
-    # a cancelled run, where it has nothing to report.
-    if: ${{ !cancelled() }}
+    # Only a pull request publishes this name. Pushing a branch and then opening its
+    # pull request puts a push run and a pull request run of the same commit in one
+    # concurrency group, and the later one cancels the earlier: a cancelled run's
+    # dependencies all report `cancelled`, and `always()` fired anyway, so the
+    # assertion published a second `required checks` against the same SHA — a failed
+    # one from the cancelled run beside a green one from the pull request. The ruleset
+    # wants that name successful and strictly up to date, and it does not find it, so
+    # a mergeable pull request sat blocked. The push run's own jobs are still there
+    # to report on a commit nobody is reviewing; the aggregate is a merge gate and
+    # belongs to the event that merges.
+    #
+    # `!cancelled()` still runs the job after a dependency fails, which is the case
+    # it exists for, and stays out of a cancelled run, where it has nothing to say.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Every required job succeeded

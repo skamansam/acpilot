@@ -19,6 +19,10 @@ pub enum Context {
     Shell,
     /// The command palette is open.
     Palette,
+    /// The source-control pane has the keys.
+    Source,
+    /// The commit composer is over it.
+    Commit,
 }
 
 impl Context {
@@ -28,6 +32,8 @@ impl Context {
         match self {
             Self::Shell => "Shell",
             Self::Palette => "Palette",
+            Self::Source => "Source",
+            Self::Commit => "Commit",
         }
     }
 }
@@ -53,6 +59,48 @@ pub enum Action {
     PreviousProfile,
     /// Swap the stats bar's figures for the source behind each one.
     ToggleStatsSources,
+    /// Open or close the source-control pane.
+    ToggleSource,
+    /// Choose the next changed file.
+    SourceNext,
+    /// Choose the previous changed file.
+    SourcePrevious,
+    /// Choose the next unstaged hunk.
+    SourceNextHunk,
+    /// Choose the previous unstaged hunk.
+    SourcePreviousHunk,
+    /// Scroll the selected file's diff down a page.
+    SourcePageDown,
+    /// Scroll it up a page.
+    SourcePageUp,
+    /// Ask the daemon for the index again.
+    SourceRefresh,
+    /// Put the selected path in the index.
+    SourceStage,
+    /// Put the selected unstaged hunk in the index.
+    SourceStageHunk,
+    /// Remove the selected path from the index.
+    SourceUnstage,
+    /// Arm a discard of the selected path's unstaged changes.
+    SourceDiscard,
+    /// Arm a checkout of the selected path from HEAD.
+    SourceCheckout,
+    /// Confirm the armed discard or checkout.
+    SourceConfirm,
+    /// Cancel the armed discard or checkout.
+    SourceCancel,
+    /// Open the commit composer.
+    SourceCompose,
+    /// Open it and ask the session for a draft.
+    SourceGenerate,
+    /// Close the source-control pane.
+    CloseSource,
+    /// Choose the next session a draft may be asked of.
+    ComposerNextSession,
+    /// Choose the previous session a draft may be asked of.
+    ComposerPreviousSession,
+    /// Close the composer without writing.
+    CloseComposer,
     /// Leave the app.
     Quit,
 }
@@ -71,7 +119,7 @@ pub struct Binding {
     pub description: &'static str,
 }
 
-use Context::{Palette, Shell};
+use Context::{Commit, Palette, Shell, Source};
 
 /// The shell's keys.
 pub const DEFAULT: &[Binding] = &[
@@ -106,6 +154,146 @@ pub const DEFAULT: &[Binding] = &[
         action: Action::ToggleStatsSources,
         contexts: &[Shell],
         description: "Where the stats came from",
+    },
+    // The same function key the terminal uses. It is not a printable key, so a
+    // pane that will later take text cannot want it.
+    Binding {
+        keys: "f6",
+        action: Action::ToggleSource,
+        contexts: &[Shell],
+        description: "Source control",
+    },
+    Binding {
+        keys: "escape",
+        action: Action::CloseSource,
+        contexts: &[Source],
+        description: "Close source control",
+    },
+    Binding {
+        keys: "down",
+        action: Action::SourceNext,
+        contexts: &[Source],
+        description: "Next changed file",
+    },
+    Binding {
+        keys: "j",
+        action: Action::SourceNext,
+        contexts: &[Source],
+        description: "Next changed file",
+    },
+    Binding {
+        keys: "up",
+        action: Action::SourcePrevious,
+        contexts: &[Source],
+        description: "Previous changed file",
+    },
+    Binding {
+        keys: "k",
+        action: Action::SourcePrevious,
+        contexts: &[Source],
+        description: "Previous changed file",
+    },
+    Binding {
+        keys: "h",
+        action: Action::SourcePreviousHunk,
+        contexts: &[Source],
+        description: "Previous unstaged hunk",
+    },
+    Binding {
+        keys: "l",
+        action: Action::SourceNextHunk,
+        contexts: &[Source],
+        description: "Next unstaged hunk",
+    },
+    Binding {
+        keys: "pagedown",
+        action: Action::SourcePageDown,
+        contexts: &[Source],
+        description: "Scroll the diff down",
+    },
+    Binding {
+        keys: "pageup",
+        action: Action::SourcePageUp,
+        contexts: &[Source],
+        description: "Scroll the diff up",
+    },
+    Binding {
+        keys: "r",
+        action: Action::SourceRefresh,
+        contexts: &[Source],
+        description: "Refresh the index",
+    },
+    Binding {
+        keys: "s",
+        action: Action::SourceStage,
+        contexts: &[Source],
+        description: "Stage the selected path",
+    },
+    Binding {
+        keys: "shift-s",
+        action: Action::SourceStageHunk,
+        contexts: &[Source],
+        description: "Stage the selected unstaged hunk",
+    },
+    Binding {
+        keys: "u",
+        action: Action::SourceUnstage,
+        contexts: &[Source],
+        description: "Unstage the selected path",
+    },
+    Binding {
+        keys: "d",
+        action: Action::SourceDiscard,
+        contexts: &[Source],
+        description: "Discard the selected path's unstaged changes",
+    },
+    Binding {
+        keys: "x",
+        action: Action::SourceCheckout,
+        contexts: &[Source],
+        description: "Check the selected path out from HEAD",
+    },
+    Binding {
+        keys: "y",
+        action: Action::SourceConfirm,
+        contexts: &[Source],
+        description: "Confirm the armed restore",
+    },
+    Binding {
+        keys: "n",
+        action: Action::SourceCancel,
+        contexts: &[Source],
+        description: "Cancel the armed restore",
+    },
+    Binding {
+        keys: "c",
+        action: Action::SourceCompose,
+        contexts: &[Source],
+        description: "Compose a commit message",
+    },
+    Binding {
+        keys: "g",
+        action: Action::SourceGenerate,
+        contexts: &[Source],
+        description: "Generate a commit message",
+    },
+    Binding {
+        keys: "tab",
+        action: Action::ComposerNextSession,
+        contexts: &[Commit],
+        description: "Next session for the draft",
+    },
+    Binding {
+        keys: "shift-tab",
+        action: Action::ComposerPreviousSession,
+        contexts: &[Commit],
+        description: "Previous session for the draft",
+    },
+    Binding {
+        keys: "escape",
+        action: Action::CloseComposer,
+        contexts: &[Commit],
+        description: "Close the composer",
     },
     Binding {
         keys: "down",
@@ -203,6 +391,27 @@ mod tests {
             Action::NextProfile,
             Action::PreviousProfile,
             Action::ToggleStatsSources,
+            Action::ToggleSource,
+            Action::SourceNext,
+            Action::SourcePrevious,
+            Action::SourceNextHunk,
+            Action::SourcePreviousHunk,
+            Action::SourcePageDown,
+            Action::SourcePageUp,
+            Action::SourceRefresh,
+            Action::SourceStage,
+            Action::SourceStageHunk,
+            Action::SourceUnstage,
+            Action::SourceDiscard,
+            Action::SourceCheckout,
+            Action::SourceConfirm,
+            Action::SourceCancel,
+            Action::SourceCompose,
+            Action::SourceGenerate,
+            Action::CloseSource,
+            Action::ComposerNextSession,
+            Action::ComposerPreviousSession,
+            Action::CloseComposer,
             Action::Quit,
         ] {
             assert!(

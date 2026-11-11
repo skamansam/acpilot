@@ -46,6 +46,190 @@
       ]
     },
     {
+      "keys": "f6",
+      "action": "ToggleSource",
+      "description": "Source control",
+      "contexts": [
+        "Shell"
+      ]
+    },
+    {
+      "keys": "escape",
+      "action": "CloseSource",
+      "description": "Close source control",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "down",
+      "action": "SourceNext",
+      "description": "Next changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "j",
+      "action": "SourceNext",
+      "description": "Next changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "up",
+      "action": "SourcePrevious",
+      "description": "Previous changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "k",
+      "action": "SourcePrevious",
+      "description": "Previous changed file",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "h",
+      "action": "SourcePreviousHunk",
+      "description": "Previous unstaged hunk",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "l",
+      "action": "SourceNextHunk",
+      "description": "Next unstaged hunk",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "pagedown",
+      "action": "SourcePageDown",
+      "description": "Scroll the diff down",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "pageup",
+      "action": "SourcePageUp",
+      "description": "Scroll the diff up",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "r",
+      "action": "SourceRefresh",
+      "description": "Refresh the index",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "s",
+      "action": "SourceStage",
+      "description": "Stage the selected path",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "shift-s",
+      "action": "SourceStageHunk",
+      "description": "Stage the selected unstaged hunk",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "u",
+      "action": "SourceUnstage",
+      "description": "Unstage the selected path",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "d",
+      "action": "SourceDiscard",
+      "description": "Discard the selected path's unstaged changes",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "x",
+      "action": "SourceCheckout",
+      "description": "Check the selected path out from HEAD",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "y",
+      "action": "SourceConfirm",
+      "description": "Confirm the armed restore",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "n",
+      "action": "SourceCancel",
+      "description": "Cancel the armed restore",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "c",
+      "action": "SourceCompose",
+      "description": "Compose a commit message",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "g",
+      "action": "SourceGenerate",
+      "description": "Generate a commit message",
+      "contexts": [
+        "Source"
+      ]
+    },
+    {
+      "keys": "tab",
+      "action": "ComposerNextSession",
+      "description": "Next session for the draft",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
+      "keys": "shift-tab",
+      "action": "ComposerPreviousSession",
+      "description": "Previous session for the draft",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
+      "keys": "escape",
+      "action": "CloseComposer",
+      "description": "Close the composer",
+      "contexts": [
+        "Commit"
+      ]
+    },
+    {
       "keys": "down",
       "action": "PaletteDown",
       "description": "Next command",
@@ -86,6 +270,10 @@
     {
       "label": "Where the stats came from",
       "detail": "Each figure's source, instead of its numbers"
+    },
+    {
+      "label": "Source control",
+      "detail": "Changed files, their diff, and a confirmed commit"
     },
     {
       "label": "Quit Acpilot",

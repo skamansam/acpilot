@@ -885,14 +885,44 @@ mod tests {
         assert!(!path.exists(), "the lock removes itself");
     }
 
-    /// A port that was free a moment ago: bound and dropped, so nothing is
-    /// listening on it. The same trick the spawn test uses, so neither guesses a
-    /// number.
-    fn nothing_listening() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    /// An endpoint that answers, but not as this API. The listener is held for the
+    /// test's lifetime: binding and dropping a port lets a parallel test take it,
+    /// which made these tests fail only in a full run.
+    struct NothingAnswering {
+        endpoint: String,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl NothingAnswering {
+        fn endpoint(&self) -> String {
+            self.endpoint.clone()
+        }
+    }
+
+    impl Drop for NothingAnswering {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn nothing_answering() -> NothingAnswering {
+        use axum::routing::get;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
         let address = listener.local_addr().expect("an address");
-        drop(listener);
-        format!("http://{address}")
+        let app = axum::Router::new().route(
+            "/v1/health",
+            get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+        );
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        NothingAnswering {
+            endpoint: format!("http://{address}"),
+            task,
+        }
     }
 
     /// A host that refuses to start, so a test can assert it was never asked.
@@ -969,7 +999,8 @@ mod tests {
     #[tokio::test]
     async fn nothing_running_means_the_daemon_runs_in_this_process() {
         let host = serving().await;
-        let running = ensure_or_embed_at(&options(), nothing_listening(), false, &host)
+        let down = nothing_answering().await;
+        let running = ensure_or_embed_at(&options(), down.endpoint(), false, &host)
             .await
             .expect("the embedded core answers");
 
@@ -1005,7 +1036,8 @@ mod tests {
         // endpoint somebody named would connect somewhere other than the address
         // they typed.
         let host = Never::new();
-        let error = ensure_or_embed_at(&options(), nothing_listening(), true, &host)
+        let down = nothing_answering().await;
+        let error = ensure_or_embed_at(&options(), down.endpoint(), true, &host)
             .await
             .expect_err("nothing is listening");
         assert!(matches!(error, ConnectError::NamedDown { .. }), "{error}");
@@ -1019,7 +1051,8 @@ mod tests {
             no_spawn: true,
             ..options()
         };
-        let error = ensure_or_embed_at(&options, nothing_listening(), false, &host)
+        let down = nothing_answering().await;
+        let error = ensure_or_embed_at(&options, down.endpoint(), false, &host)
             .await
             .expect_err("nothing is listening");
         assert!(matches!(error, ConnectError::NotRunning { .. }), "{error}");

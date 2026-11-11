@@ -257,6 +257,111 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CommitDraft": {
+        "description": "A generated message the person can edit before anything is committed.\n\nThis is a draft: the daemon neither stages nor commits, and the message is not\nstored. The transcript of the session that wrote it is the record of how it was\nproduced.",
+        "properties": {
+          "body": {
+            "description": "Everything after the blank line, empty when there is no body.",
+            "type": "string"
+          },
+          "breaking": {
+            "description": "Whether the subject marks a breaking change.",
+            "type": "boolean"
+          },
+          "emoji": {
+            "description": "The leading gitmoji, when the description starts with one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generator": {
+            "description": "What wrote it, for example `session:<id>`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The Conventional Commit type.",
+            "type": "string"
+          },
+          "message": {
+            "description": "The whole message: subject, a blank line, then the body when there is one.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The scope, when the subject names one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "The first line, after validation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "subject",
+          "body",
+          "kind",
+          "breaking",
+          "generator"
+        ],
+        "type": "object"
+      },
+      "CommitMessageRequest": {
+        "description": "A request to draft a commit message from what is staged.",
+        "properties": {
+          "prompt": {
+            "description": "A template for this request only, instead of the profile's or the default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "description": "The active session whose agent writes the message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "CommitPrompt": {
+        "description": "The effective commit-message prompt, as a client should show it.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/CommitPromptSource",
+            "description": "Where the template came from."
+          },
+          "template": {
+            "description": "The template before its placeholders are filled.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "source"
+        ],
+        "type": "object"
+      },
+      "CommitPromptSource": {
+        "description": "Which prompt a draft would be generated from.",
+        "enum": [
+          "default",
+          "profile"
+        ],
+        "type": "string"
+      },
       "ContextBudget": {
         "description": "The budget for one run, in tokens except where stated.",
         "properties": {
@@ -356,6 +461,26 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreateHostRequest": {
+        "description": "The body of `POST /v1/hosts`.\n\nThe kind decides what `address` means: `user@machine` or `machine` for `ssh`,\na distribution name for `wsl`, and nothing for `local`, which is always listed.",
+        "properties": {
+          "address": {
+            "description": "What the transport needs to name it, absent for the local host.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HostKind",
+            "description": "How the daemon would reach the host."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "description": "Request body for `POST /v1/sessions`.",
         "properties": {
@@ -382,7 +507,7 @@ expression: canonical(document)
         "type": "object"
       },
       "CreateTerminalRequest": {
-        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing;\na shell with no session would be a second, sessionless way to run commands on\nthe daemon's host.",
+        "description": "Request body for `POST /v1/terminals`.\n\nA terminal belongs to a session because that is who owns the work it is doing; a\nshell with no session on the daemon's own host would be a second, sessionless way to\nrun commands there. On a **remote** workspace the work is on that host and sessions\ndo not run there yet (P8-5), so a client with no session — a browser tab — may ask\nfor a terminal there without one.",
         "properties": {
           "args": {
             "description": "Arguments for `command`, verbatim.",
@@ -392,7 +517,7 @@ expression: canonical(document)
             "type": "array"
           },
           "command": {
-            "description": "Program to run. Defaults to the daemon host's own shell.",
+            "description": "Program to run. Defaults to the host's own shell — this machine's, or the\nremote host's, because which shell exists is a fact about where it runs.",
             "type": [
               "string",
               "null"
@@ -406,16 +531,29 @@ expression: canonical(document)
             ]
           },
           "session_id": {
-            "$ref": "#/components/schemas/String",
-            "description": "Session that owns the terminal."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Session that owns the terminal, when the client has one.\n\nRequired for the daemon's own workspace; optional for a workspace on another\nhost, where a sessionless terminal is the only kind a client without a session\ncan have."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
             "description": "Initial dimensions. Both must be non-zero: a terminal with no columns\ncannot display anything, and `vt100` takes `NonZeroU16` for the same reason."
+          },
+          "workspace": {
+            "description": "Workspace to start in, when it is not the one this daemon serves.\n\nA workspace id from `GET /v1/workspaces`. A remote workspace's terminal runs\non that workspace's host — the machine the files are on — through its helper,\nwhile the session that owns the pane is still this daemon's: sessions do not run\non a host yet (P8-5), so the pane is the session's without the workspace being.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "session_id",
           "size"
         ],
         "type": "object"
@@ -459,6 +597,103 @@ expression: canonical(document)
         "required": [
           "currency",
           "source"
+        ],
+        "type": "object"
+      },
+      "Diagnostic": {
+        "description": "One problem a language server reported about a file.\n\nLines and columns are 1-based here, as everywhere else on this wire, and the\ncolumns are counted in characters in [`FileDiagnostics::encoding`] — the daemon\nconverts the server's own numbers once, where the text is.",
+        "properties": {
+          "code": {
+            "description": "The server's code for it, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "column": {
+            "description": "1-based character column it starts at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_column": {
+            "description": "1-based character column it ends at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_line": {
+            "description": "1-based line it ends on.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "description": "1-based line the problem starts on.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "description": "What the server said.",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/DiagnosticSeverity",
+            "description": "How bad it is."
+          },
+          "source": {
+            "description": "Who said it, when the server names itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line",
+          "column",
+          "end_line",
+          "end_column",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
+      "DiagnosticSeverity": {
+        "description": "How bad a problem a language server reported is.\n\nThe protocol's four levels, named rather than numbered: a client that switched on\n`2` would be a client that changed meaning when a server did.",
+        "enum": [
+          "error",
+          "warning",
+          "information",
+          "hint"
+        ],
+        "type": "string"
+      },
+      "DiagnosticsRequest": {
+        "description": "Request body for `POST /v1/files/diagnostics`.\n\nThe path is the question; the text is the version it is about. A buffer edited and\nnot saved is the text the person is reading, and problems reported about the last\nsave are problems about a file nobody is looking at.",
+        "properties": {
+          "path": {
+            "description": "The file to ask about, workspace-relative.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it. Absent means the file on disk.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -748,12 +983,30 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "FileChange": {
+        "description": "What happened to a path since the last commit.\n\nOne letter per path, not git's two columns: a tree row is a name, and which half\nof a change is staged is a question for the source-control pane, which reads the\nindex and the working tree separately.",
+        "enum": [
+          "modified",
+          "added",
+          "untracked",
+          "deleted",
+          "conflicted"
+        ],
+        "type": "string"
+      },
       "FileContent": {
         "description": "File contents plus the token needed to write them back.",
         "properties": {
           "etag": {
             "description": "Opaque validator; send it back as `if_match` to write.",
             "type": "string"
+          },
+          "marks": {
+            "description": "The lines that differ from the last commit, for a gutter.\n\nWith the text rather than behind its own route: a pane opens a file once, and\na gutter that asked a second question about the same file would be a second\nround trip whose answer could disagree with the text it is drawn beside. Empty\nfor a file git does not track, for a workspace that is not a repository, and on\na host with no `git`.",
+            "items": {
+              "$ref": "#/components/schemas/LineMark"
+            },
+            "type": "array"
           },
           "path": {
             "description": "Workspace-relative path.",
@@ -771,9 +1024,44 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "FileDiagnostics": {
+        "description": "What a language server says is wrong with a file.\n\n`server` absent means nothing was asked: no server for the language, none\ninstalled, or one that would not start. That is deliberately different from an\nempty `items`, which is a server saying the file is clean — a pane that drew both\nas \"no problems\" would be claiming a check that never happened.",
+        "properties": {
+          "encoding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PositionEncoding",
+                "description": "The encoding the columns are counted in, when a server answered."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "description": "The problems, in the server's order.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "type": "array"
+          },
+          "server": {
+            "description": "The command that answered, when one did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "FileEntry": {
         "description": "One directory entry.",
         "properties": {
+          "ignored": {
+            "description": "Whether an ignore rule hides this entry.\n\nNever true unless the caller asked for hidden rows (`include_ignored` on the\nlist route): a tree's \"show hidden\" toggle is the only thing that asks, and\nthe flag travels with the row because a pane draws a hidden file as a hidden\none rather than pretending it was never ignored.",
+            "type": "boolean"
+          },
           "is_dir": {
             "description": "Whether this is a directory.",
             "type": "boolean"
@@ -794,12 +1082,110 @@ expression: canonical(document)
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FileChange",
+                "description": "How this path differs from the last commit, when it does.\n\nAbsent for a clean path, for a workspace that is not a repository, and for a\nhost with no `git` on it. A tree whose letters are unknowable draws no\nletters rather than claiming everything is committed, and the field travels\nwith the row so a listing is one answer rather than a listing plus a second\nquestion about the same directory."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "path",
           "is_dir",
           "size"
+        ],
+        "type": "object"
+      },
+      "FileFormat": {
+        "description": "What a formatter did with a buffer.\n\n`formatted` is true only when a language server answered. A language with no\nserver, an installed server that refused, or a refusal to start is not a\nformatting failure the save has to stop for: `text` is the buffer as it\narrived, and `reason` says why nothing changed. That lets format-on-save be\nsafe on every file rather than a command that can lose an edit.",
+        "properties": {
+          "formatted": {
+            "description": "Whether a language server answered and its edits were applied.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Workspace-relative path that was formatted.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the buffer was left alone, when it was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "server": {
+            "description": "The command that formatted, when one did.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The buffer after formatting, or the input when no formatter answered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text",
+          "formatted"
+        ],
+        "type": "object"
+      },
+      "FileFormatRequest": {
+        "description": "Request body for `POST /v1/files/format`.\n\nThe text is the buffer the editor holds, not the file on disk: a save is the\nmoment the formatter has to see what the person typed. Nothing here writes —\nthe caller saves the returned text through `PUT /v1/files`.",
+        "properties": {
+          "path": {
+            "description": "The file to format, workspace-relative.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
+      "FileRenameRequest": {
+        "description": "Request body for `POST /v1/files/rename`.\n\nA move is not a write: it changes the name of a file without touching its text,\nwhich is why it carries no `if_match`. The destination is required to be new, so\na rename can never replace a file the caller did not name.",
+        "properties": {
+          "path": {
+            "description": "The file to move, workspace-relative.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Its new path, workspace-relative. The destination must not exist.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "to"
         ],
         "type": "object"
       },
@@ -820,10 +1206,313 @@ expression: canonical(document)
           "text": {
             "description": "New UTF-8 contents.",
             "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one.\n\nAbsent is the workspace the daemon was started on, which is the only answer\nan older client could ask for.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "path",
+          "text"
+        ],
+        "type": "object"
+      },
+      "GitChangeKind": {
+        "description": "What happened to a path, on one side of the index.",
+        "enum": [
+          "unmodified",
+          "modified",
+          "added",
+          "deleted",
+          "renamed",
+          "copied",
+          "type_changed",
+          "unmerged",
+          "untracked",
+          "ignored"
+        ],
+        "type": "string"
+      },
+      "GitCommit": {
+        "description": "One commit, with enough structure to draw a graph.",
+        "properties": {
+          "author": {
+            "description": "Author name.",
+            "type": "string"
+          },
+          "authored_at": {
+            "description": "Author timestamp, RFC 3339 with the author's offset.",
+            "type": "string"
+          },
+          "email": {
+            "description": "Author email.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Full commit id.",
+            "type": "string"
+          },
+          "parents": {
+            "description": "Parent ids, in order. Empty for a root commit.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "description": "First line of the message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parents",
+          "author",
+          "email",
+          "authored_at",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "GitCommitRequest": {
+        "description": "A request to commit what the index holds.\n\nThe message is the whole thing, subject and body, with the blank line between\nthem: a client that split it into fields would have to put it back together, and\nthe subject git derives is the first line either way. Nothing here stages.",
+        "properties": {
+          "message": {
+            "description": "The whole commit message.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "GitDiff": {
+        "description": "A unified diff and the files it touches.\n\nThe patch is colour-free and external-diff-free, because a person reads it in a\npane rather than in a terminal that would render either. The file list is what a\ncommit composer iterates without parsing headers.",
+        "properties": {
+          "files": {
+            "description": "The files the patch touches.",
+            "items": {
+              "$ref": "#/components/schemas/GitDiffFile"
+            },
+            "type": "array"
+          },
+          "patch": {
+            "description": "The unified diff text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch",
+          "files"
+        ],
+        "type": "object"
+      },
+      "GitDiffFile": {
+        "description": "One file in a diff, independent of the patch text.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "What happened to it."
+          },
+          "old_path": {
+            "description": "The path before a rename or copy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Path after the change, relative to the repository root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change"
+        ],
+        "type": "object"
+      },
+      "GitHunkRequest": {
+        "description": "A request to stage one hunk from a path's unstaged diff.\n\n`hunk` is zero-based in the path's **unstaged** diff, not the combined diff\nagainst `HEAD`: the index is the base `git apply --cached` writes to, and a\ncombined hunk stops describing that base as soon as part of the file is staged.\nA client names a hunk; the daemon cuts git's own patch for it and applies that.",
+        "properties": {
+          "hunk": {
+            "description": "The zero-based hunk index in that path's unstaged diff.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The path whose unstaged hunk should move into the index.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "hunk"
+        ],
+        "type": "object"
+      },
+      "GitIndexRequest": {
+        "description": "A request to move repository-relative paths across the index or restore them.\n\nThe paths are the ones `GET /v1/git/status` reports, so a client never has to\ntranslate a workspace path into the repository's spelling. The answer is the new\nstatus, read after git ran, rather than the request echoed back.",
+        "properties": {
+          "paths": {
+            "description": "Paths relative to the repository root.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "GitStatus": {
+        "description": "Branch state and every changed path.",
+        "properties": {
+          "ahead": {
+            "description": "Commits ahead of the upstream. Always on the wire: zero is the answer.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behind": {
+            "description": "Commits behind the upstream.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "branch": {
+            "description": "Current branch, absent on a detached `HEAD`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "Every changed path, as git lists them.",
+            "items": {
+              "$ref": "#/components/schemas/GitStatusEntry"
+            },
+            "type": "array"
+          },
+          "head": {
+            "description": "The `HEAD` commit, absent before the first commit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream": {
+            "description": "Upstream branch, when one is configured.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ahead",
+          "behind",
+          "files"
+        ],
+        "type": "object"
+      },
+      "GitStatusEntry": {
+        "description": "One changed path, with the index's answer and the working tree's.",
+        "properties": {
+          "index": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "State in the index: what the next commit would contain."
+          },
+          "old_path": {
+            "description": "The path it was renamed or copied from, when it was.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Path relative to the repository root, with `/` as the separator.",
+            "type": "string"
+          },
+          "worktree": {
+            "$ref": "#/components/schemas/GitChangeKind",
+            "description": "State in the working tree: what the next `git add` would pick up."
+          }
+        },
+        "required": [
+          "path",
+          "index",
+          "worktree"
+        ],
+        "type": "object"
+      },
+      "GitTreeEntry": {
+        "description": "One path in the working tree, tracked or not.",
+        "properties": {
+          "path": {
+            "description": "Path relative to the repository root, with `/` as the separator.",
+            "type": "string"
+          },
+          "tracked": {
+            "description": "Whether the index knows about it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "tracked"
+        ],
+        "type": "object"
+      },
+      "GrepMatch": {
+        "description": "One line a content search matched.\n\nThe line's text travels with the match because a jump list has to be read\nbefore it is chosen from: a list of `src/main.rs:12` is a list nobody can pick\nthe right row out of without opening every one of them.",
+        "properties": {
+          "line": {
+            "description": "1-based line number, as an editor counts lines.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative path of the file the line is in.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The line as it reads, with trailing whitespace removed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line",
           "text"
         ],
         "type": "object"
@@ -994,6 +1683,35 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "LineChange": {
+        "description": "What happened to one line since the last commit, for a gutter.",
+        "enum": [
+          "added",
+          "modified",
+          "deleted"
+        ],
+        "type": "string"
+      },
+      "LineMark": {
+        "description": "One marked line, as a gutter counts them.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/LineChange",
+            "description": "What changed on it."
+          },
+          "line": {
+            "description": "1-based line number in the file as it is now.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line",
+          "change"
+        ],
+        "type": "object"
+      },
       "LspServerStatus": {
         "description": "Lifecycle state of a language server.",
         "enum": [
@@ -1034,6 +1752,15 @@ expression: canonical(document)
             },
             "type": "array"
           },
+          "round_trip_ms": {
+            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once, and a figure that mixed the two would make every report\nread as slow when only the first question was.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/LspServerStatus",
             "description": "Current state."
@@ -1047,6 +1774,36 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "MapArea": {
+        "description": "One part of the workspace, with what it is for and what it depends on.",
+        "properties": {
+          "depends_on": {
+            "description": "The areas and packages this one leans on, as the agent wrote them.\n\nNames rather than resolved edges: a map is a document, and a dependency the\nmap gets wrong is a sentence to argue with rather than a build to break.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "What the area is called in a sentence: `TUI shell`, `Daemon`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The directory this area owns, workspace-relative. Empty or `.` is the whole\nworkspace, which is how a map describes a repository that is not split up.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "What the area is for, in the agent's words. One paragraph rather than a list\nof files: the tree already lists files.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "summary"
+        ],
+        "type": "object"
+      },
       "MetadataSource": {
         "description": "Where a fact about a model came from.\n\nThe lab is explicit about this because the alternative — a plausible default\ncontext window — silently truncates prompts.",
         "enum": [
@@ -1055,6 +1812,27 @@ expression: canonical(document)
           "unknown"
         ],
         "type": "string"
+      },
+      "ModeState": {
+        "description": "The modes an agent offers, and the one it is in.",
+        "properties": {
+          "available": {
+            "description": "Every mode the agent advertised, in its own order.",
+            "items": {
+              "$ref": "#/components/schemas/SessionMode"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "description": "The mode in effect once this answer was written.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "available"
+        ],
+        "type": "object"
       },
       "ModelCapabilities": {
         "description": "What a model appears able to do, as far as the server admits.",
@@ -1318,8 +2096,8 @@ expression: canonical(document)
         "description": "Editor and UI preferences, per profile.\n\nDefaults are data (`defaults.toml`), not code: adding a preference should be a\none-line change that every UI picks up, and unknown keys are reported rather\nthan ignored.",
         "properties": {
           "diagnostics_min_severity": {
-            "description": "Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`.",
-            "type": "string"
+            "$ref": "#/components/schemas/DiagnosticSeverity",
+            "description": "Lowest diagnostic severity shown: `error`, `warning`, `information`, `hint`."
           },
           "format_on_save": {
             "description": "Run the formatter on save when one is available.",
@@ -1328,6 +2106,15 @@ expression: canonical(document)
           "insert_spaces": {
             "description": "Insert spaces instead of tab characters.",
             "type": "boolean"
+          },
+          "rulers": {
+            "description": "Columns to draw a vertical ruler at, in cells.\n\nRulers are a reading aid, not a hard limit: a line past one is drawn, not\nrefused. Empty means the editor draws none, which is the default.",
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
           },
           "schema_version": {
             "description": "Schema version of this document, so migrations are explicit.",
@@ -1370,6 +2157,10 @@ expression: canonical(document)
               "null"
             ]
           },
+          "tree_respect_gitignore": {
+            "description": "Leave paths a `.gitignore` excludes out of the file tree.\n\nOn, the tree is the project as git sees it: `target/`, `.venv/` and every\nother ignored directory are not rows, which is the difference between a\ntree a person can read and a listing of a directory. The daemon answers the\nlisting, so the matching happens where the ignore files are — a client that\nfiltered a listing it did not read would be guessing at patterns it has not\nseen.\n\nOff, every entry is a row. A workspace that is not a repository has no\n`.gitignore` to honour, so the key changes nothing there.",
+            "type": "boolean"
+          },
           "trim_trailing_whitespace": {
             "description": "Strip trailing whitespace on save.",
             "type": "boolean"
@@ -1391,6 +2182,215 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "PreferencesPatch": {
+        "additionalProperties": false,
+        "description": "A partial preferences update.\n\nEvery field is optional because a patch names only what changed. The daemon\nmerges the named fields into the profile's `[preferences]` table and leaves\nthe rest — including keys a newer binary wrote — alone. A full\n[`Preferences`] is deliberately not the body: a client that did not know\nabout a new field must not erase it by sending the object it read back.",
+        "properties": {
+          "diagnostics_min_severity": {
+            "default": null,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiagnosticSeverity",
+                "description": "Lowest diagnostic severity shown."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "format_on_save": {
+            "default": null,
+            "description": "Run the formatter on save when one is available.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "insert_spaces": {
+            "default": null,
+            "description": "Insert spaces instead of tab characters.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "rulers": {
+            "default": null,
+            "description": "Columns to draw a vertical ruler at, in cells.",
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tab_width": {
+            "default": null,
+            "description": "Columns per tab stop.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "theme": {
+            "default": null,
+            "description": "Theme identifier for every surface that does not name its own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_follow_terminal": {
+            "default": null,
+            "description": "Solve the terminal's palette from the terminal's own colours.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "theme_gui": {
+            "default": null,
+            "description": "Theme for the desktop app.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_tui": {
+            "default": null,
+            "description": "Theme for the terminal UI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_web": {
+            "default": null,
+            "description": "Theme for the browser UI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tree_respect_gitignore": {
+            "default": null,
+            "description": "Leave paths a `.gitignore` excludes out of the file tree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "trim_trailing_whitespace": {
+            "default": null,
+            "description": "Strip trailing whitespace on save.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wrap": {
+            "default": null,
+            "description": "Soft-wrap long lines.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProfileCreate": {
+        "additionalProperties": false,
+        "description": "`POST /v1/profiles` — create a profile directory and its registry row.",
+        "properties": {
+          "extends": {
+            "description": "The profile this one inherits settings beneath.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The directory name and keyring namespace for the new profile.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Human-readable label; the id when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "ProfileExport": {
+        "description": "`POST /v1/profiles/{id}/export` — the profile's configuration files.\n\nThe document deliberately has no secrets: a keyring reference is exported as\nthe reference it is, and resolving it is the CLI's opt-in flag, never an HTTP\nanswer.",
+        "properties": {
+          "files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "File name to contents, allow-listed to the configuration files a profile owns.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/String",
+            "description": "The profile the files belong to."
+          },
+          "schema_version": {
+            "description": "Schema version of the export document.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "files"
+        ],
+        "type": "object"
+      },
+      "ProfilePatch": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/profiles/{id}` — change the fields a profile's row owns.\n\nDetaching is a separate flag rather than `extends: null`: a nested option is\nflattened by serde, so absent and null would arrive as the same value and one\nof the two intentions would be lost.",
+        "properties": {
+          "clear_extends": {
+            "default": false,
+            "description": "Remove the current parent, leaving the profile with no inherited layer.",
+            "type": "boolean"
+          },
+          "extends": {
+            "default": null,
+            "description": "A new parent. Cannot be combined with `clear_extends`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "default": null,
+            "description": "Human-readable label; an empty label falls back to the id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ProfileSummary": {
         "description": "A profile as returned by `GET /v1/profiles`.",
         "properties": {
@@ -1403,6 +2403,17 @@ expression: canonical(document)
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "extends": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "The profile this one inherits settings beneath, when it does."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/String",
@@ -1425,6 +2436,38 @@ expression: canonical(document)
           "active",
           "agent_count",
           "workspace_count"
+        ],
+        "type": "object"
+      },
+      "ProjectMap": {
+        "description": "The workspace map, as `GET /v1/project/map` serves it.",
+        "properties": {
+          "areas": {
+            "description": "The areas, in the order the agent wrote them.\n\nAlways on the wire, empty included: this is the list the answer is about, and\n`written: false` is the field that says nobody has written one — a client\nshould not have to read absence as emptiness as well.",
+            "items": {
+              "$ref": "#/components/schemas/MapArea"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Where the map was read from, workspace-relative.\n\nAlways the same path today, and on the wire so a client can say where to look\nrather than have the location of the file compiled into two places.",
+            "type": "string"
+          },
+          "updated": {
+            "description": "When the agent says it wrote the map, as it wrote it.\n\nA string rather than a timestamp for the reason every timestamp on this wire\nis: the format should not track a library choice, and the map is the agent's\ndocument rather than the daemon's clock.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "written": {
+            "description": "Whether the file is there at all.\n\nA map nobody has written yet is the normal first state, not an error, so the\nanswer is an empty map with this false: a panel can say \"the agent has not\nwritten one\" without a 404 standing in for a sentence.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "written"
         ],
         "type": "object"
       },
@@ -1595,6 +2638,78 @@ expression: canonical(document)
           "base_url",
           "status",
           "model_count"
+        ],
+        "type": "object"
+      },
+      "Reference": {
+        "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
+        "properties": {
+          "column": {
+            "description": "1-based character column the name starts at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "description": "1-based line number, as an editor counts lines.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative path of the file the use is in.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The line as it reads, with trailing whitespace removed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "column",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ReferencesRequest": {
+        "description": "Request body for `POST /v1/files/references`.\n\nThe query-string form of the same question, plus the buffer the editor is holding.\nA file edited and not saved is the file the person is reading, so the search has\nto run over the text that was sent rather than over what the last save left on\ndisk — otherwise a use typed a moment ago is missing from the list and a use\ndeleted a moment ago is still in it.",
+        "properties": {
+          "offset": {
+            "description": "The caret's offset in that file, counted in characters, which is what a server\nresolves a name to a symbol with.\n\nCharacters rather than bytes because a caret is a glyph: the daemon converts to\nthe server's own unit, and a byte offset would drift left of the caret the first\ntime a line held a `日`. Absent means no caret: the text is still the version the\nsearch reads, and no server is asked, because resolving a name needs a place.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The file the caret is in, workspace-relative.",
+            "type": "string"
+          },
+          "q": {
+            "description": "The identifier to look for: one word.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer as the editor holds it, for the file `path` names.\n\nSent for the open file only: the rest of the workspace is read where it is,\nbecause a client for a remote daemon does not have it. Sending it is not a\nsave — nothing here writes — and the daemon never asks for a second copy of a\nfile it can read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace": {
+            "description": "Workspace id, when the client names one. The daemon serves exactly one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "q",
+          "path"
         ],
         "type": "object"
       },
@@ -1804,7 +2919,11 @@ expression: canonical(document)
             "description": "What happened."
           },
           "payload": {
-            "description": "Kind-specific payload.",
+            "additionalProperties": {},
+            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\", and a client generated from that refuses\nevery payload an adapter actually sends.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "seq": {
@@ -1839,6 +2958,31 @@ expression: canonical(document)
         ],
         "type": "string"
       },
+      "SessionMode": {
+        "description": "One mode an agent offers.",
+        "properties": {
+          "description": {
+            "description": "What the mode changes, when the agent says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Identifier the agent uses for this mode.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name shown in a picker.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "SessionStatus": {
         "description": "Where a session is in its lifecycle.",
         "enum": [
@@ -1865,6 +3009,10 @@ expression: canonical(document)
             "$ref": "#/components/schemas/String",
             "description": "Session identifier."
           },
+          "profile": {
+            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router; it is carried so a stored row and a live\nsummary say the same thing.",
+            "type": "string"
+          },
           "status": {
             "$ref": "#/components/schemas/SessionStatus",
             "description": "Lifecycle state."
@@ -1884,12 +3032,26 @@ expression: canonical(document)
         },
         "required": [
           "id",
+          "profile",
           "workspace_id",
           "agent_id",
           "title",
           "status",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "SetModeRequest": {
+        "description": "`POST /v1/sessions/{id}/mode` body.",
+        "properties": {
+          "mode": {
+            "description": "The id of the mode to switch to, as the agent advertised it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
         ],
         "type": "object"
       },
@@ -1939,22 +3101,42 @@ expression: canonical(document)
             "description": "Command that was started, for display.",
             "type": "string"
           },
+          "host": {
+            "description": "Host the pane runs on, when it is not this daemon's machine.\n\nThe id `GET /v1/hosts` lists (`ssh:user@machine`, `wsl:Ubuntu`). A shell whose\nbytes come from another host looks exactly like a local one in a picker, which is\nwhy the pane says which it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Terminal identifier."
           },
           "session_id": {
-            "$ref": "#/components/schemas/String",
-            "description": "Session that owns it."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Session that owns it, when one does.\n\nAbsent for a terminal a client asked for in a remote workspace without a\nsession: a browser tab on that workspace's shell has none, and sessions do not\nrun on a host yet (P8-5). A local terminal is always a session's."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "size": {
             "$ref": "#/components/schemas/TerminalSize",
             "description": "Current dimensions."
+          },
+          "workspace": {
+            "description": "Workspace the pane runs in, when it is not the one this daemon serves.\n\nA pane asked for in a named workspace runs in that tree, which on another host\nis a tree this daemon never walked. Absent means the daemon's own workspace: the\none implied by every other route.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "id",
-          "session_id",
           "size",
           "alive",
           "command"
@@ -2087,6 +3269,10 @@ expression: canonical(document)
           "root": {
             "description": "Absolute path on that host.",
             "type": "string"
+          },
+          "steal": {
+            "description": "Take the root from the profile that opened it first.\n\nThe default is to refuse: two profiles editing one checkout is the\nisolation this phase exists to prevent. A client that really means it says\nso here, and the daemon records the new owner and logs the transfer.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2110,6 +3296,10 @@ expression: canonical(document)
             "description": "Display name, defaulting to the directory's basename.",
             "type": "string"
           },
+          "profile": {
+            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path; the owner is what makes one\nprofile's workspace id unacceptable in another's request.",
+            "type": "string"
+          },
           "root": {
             "description": "Root path, as the host spells it (not translated to the client's platform).",
             "type": "string"
@@ -2124,6 +3314,7 @@ expression: canonical(document)
         "required": [
           "id",
           "name",
+          "profile",
           "host_id",
           "root",
           "session_count"

@@ -203,15 +203,474 @@ fn help_is_stable() {
     let secret = acpilot(&["secret", "--help"]);
     assert!(secret.status.success());
     insta::assert_snapshot!("secret_help", stdout(&secret));
+
+    let serve = acpilot(&["serve", "--help"]);
+    assert!(serve.status.success());
+    insta::assert_snapshot!("serve_help", stdout(&serve));
+}
+
+#[test]
+fn config_explain_names_the_winning_layer() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    fs::write(
+        config.path().join("config.toml"),
+        "[preferences]\ntab_width = 2\n",
+    )
+    .expect("global settings");
+    fs::create_dir_all(workspace.path().join(".acpilot")).expect("project marker");
+    fs::write(
+        workspace.path().join(".acpilot/config.toml"),
+        "[preferences]\ntab_width = 8\n",
+    )
+    .expect("project settings");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("config")
+        .arg("explain")
+        .arg("tab_width")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot config explain");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("preferences.tab_width = 8"), "{text}");
+    assert!(text.contains("from"), "{text}");
+    assert!(
+        text.contains(".acpilot/config.toml") || text.contains(".acpilot\\config.toml"),
+        "the project file is named as the winner: {text}"
+    );
+}
+
+#[test]
+fn a_marker_naming_a_missing_profile_exits_three_with_the_fix() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    fs::create_dir_all(workspace.path().join(".acpilot")).expect("project marker");
+    fs::write(
+        workspace.path().join(".acpilot/config.toml"),
+        "profile = \"work\"\n",
+    )
+    .expect("project settings");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("config")
+        .arg("explain")
+        .arg("tab_width")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot config explain");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a missing profile is not found, not a generic failure: {}",
+        stderr(&output)
+    );
+    let text = stderr(&output);
+    assert!(
+        text.contains("acpilot profile new work"),
+        "the hint is actionable: {text}"
+    );
+    assert!(
+        text.contains(".acpilot/config.toml") || text.contains(".acpilot\\config.toml"),
+        "{text}"
+    );
+    assert!(
+        !config.path().join("profiles/default").exists(),
+        "a missing marker must not fall back to default"
+    );
+}
+
+#[test]
+fn profile_rm_purges_the_config_state_and_index_row() {
+    let home = TempDir::new();
+    let profile = home.path().join("profiles").join("work");
+    fs::create_dir_all(profile.join("sessions/s1")).expect("profile state");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
+    fs::write(profile.join("profile.sqlite"), "a database").expect("database");
+    fs::write(profile.join("sessions/s1/session.jsonl"), "{}").expect("transcript");
+    let index = acpilot_store::Index::open(home.path().join("index.sqlite")).expect("index");
+    index
+        .remember_workspace("work", "/a/workspace")
+        .expect("index row");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "rm", "work", "--purge"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile rm");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains(&profile.display().to_string()),
+        "the removed path is printed: {}",
+        stdout(&output)
+    );
+    assert!(!profile.exists(), "the profile directory is gone");
+    assert!(
+        index.profiles().expect("profiles").is_empty(),
+        "the index row is gone with it"
+    );
+}
+
+#[test]
+fn profile_rm_of_a_missing_profile_is_not_found() {
+    let home = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "rm", "work", "--purge"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile rm");
+
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("config.toml"),
+        "the refusal says what is missing: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn doctor_reports_a_fresh_machine_and_writes_nothing() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        // An empty PATH makes detection deterministic: no agent or language
+        // server is found, which is the fresh-machine answer this asserts.
+        .env("PATH", workspace.path())
+        // Pin the health probe to a port with no listener, so a daemon running
+        // on the test machine cannot change the report.
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
+        .output()
+        .expect("run acpilot");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("default") && text.contains("not created yet (not required)"),
+        "{text}"
+    );
+    assert!(text.contains("declared   none"), "{text}");
+    assert!(
+        text.contains("temporary root, nothing is written"),
+        "{text}"
+    );
+    assert!(text.contains("daemon"), "{text}");
+    assert!(
+        text.contains("not reachable"),
+        "no daemon is reported, not demanded"
+    );
+    assert!(text.contains("Language servers"), "{text}");
+    assert!(
+        !config.path().join("profiles").exists(),
+        "doctor must not create a profile"
+    );
+}
+
+#[test]
+fn doctor_fails_only_when_a_declared_agent_cannot_run() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/default");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\nid = \"ghost\"\nname = \"Ghost\"\n\
+         transport = \"acp-stdio\"\ncommand = \"acpilot-doctor-no-such-program\"\n",
+    )
+    .expect("agent manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .env("PATH", workspace.path())
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
+        .output()
+        .expect("run acpilot");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Ghost"), "{text}");
+    assert!(text.contains("not on PATH"), "{text}");
+    assert!(text.contains("Problems"), "{text}");
+}
+
+#[test]
+fn doctor_reports_a_declared_agent_that_cannot_speak_acp() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/default");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+
+    // This binary is on disk but does not speak ACP: with no subcommand it
+    // prints help and exits. A handshake against it must fail, and that failure
+    // is a declared agent that cannot run — not a machine with nothing set up.
+    let program = env!("CARGO_BIN_EXE_acpilot");
+    fs::write(
+        profile.join("agents.toml"),
+        format!(
+            "schema_version = 1\n\n[[agents]]\nid = \"mute\"\nname = \"Mute\"\n\
+             transport = \"acp-stdio\"\ncommand = {program:?}\n"
+        ),
+    )
+    .expect("agent manifest");
+
+    let output = Command::new(program)
+        .arg("doctor")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .env("PATH", workspace.path())
+        .env("ACPILOT_API_URL", "http://127.0.0.1:1")
+        .output()
+        .expect("run acpilot");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Mute"), "{text}");
+    assert!(text.contains("handshake"), "{text}");
+    assert!(text.contains("Problems"), "{text}");
+}
+
+#[test]
+fn serve_picks_a_port_and_prints_both_facts_in_one_panel() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let config = TempDir::new();
+    let runtime = TempDir::new();
+    let workspace = TempDir::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("serve")
+        .arg("--workspace")
+        .arg(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        // The token is written under the runtime directory; a real one would be
+        // both a side effect and a secret this test should not touch.
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("PATH", workspace.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn acpilot serve");
+
+    let stdout = child.stdout.take().expect("stdout");
+    let mut panel = String::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.expect("stdout line");
+        panel.push_str(&line);
+        panel.push('\n');
+        if line.contains("Ctrl-C") {
+            break;
+        }
+    }
+    // Stopped before any assertion, so a failed expectation cannot leave a server
+    // holding the port for the rest of the suite.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(panel.contains("Local"), "{panel}");
+    assert!(panel.contains("http://127.0.0.1:"), "{panel}");
+    let token_line = panel
+        .lines()
+        .find(|line| line.contains("Token       "))
+        .expect("a token line");
+    let token = token_line.split_whitespace().last().expect("a token value");
+    assert_eq!(token.len(), 64, "{panel}");
+    assert!(token.chars().all(|c| c.is_ascii_hexdigit()), "{panel}");
+
+    let stored = fs::read_to_string(runtime.path().join("acpilot/token")).expect("token file");
+    assert_eq!(
+        stored.trim(),
+        token,
+        "the panel and the file are one secret"
+    );
+}
+
+#[test]
+fn serve_uses_a_token_it_was_given() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let config = TempDir::new();
+    let runtime = TempDir::new();
+    let workspace = TempDir::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .arg("serve")
+        .arg("--workspace")
+        .arg(workspace.path())
+        .arg("--token")
+        .arg("chosen-token")
+        .env("ACPILOT_HOME", config.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("PATH", workspace.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn acpilot serve");
+
+    let stdout = child.stdout.take().expect("stdout");
+    let mut panel = String::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.expect("stdout line");
+        panel.push_str(&line);
+        panel.push('\n');
+        if line.contains("Ctrl-C") {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(panel.contains("Token       chosen-token"), "{panel}");
+    let stored = fs::read_to_string(runtime.path().join("acpilot/token")).expect("token file");
+    assert_eq!(stored.trim(), "chosen-token");
 }
 
 #[test]
 fn secret_set_with_empty_stdin_fails_before_it_reaches_the_keyring() {
     // `acpilot()` pipes an empty stdin. The command must refuse that rather than
     // store a zero-length credential, and it must do so before any keyring call.
-    let output = acpilot(&["secret", "set", "anthropic"]);
+    // The config root is a temp one so profile resolution's first-run default is
+    // a test side effect rather than a write into the runner's home directory.
+    let config = TempDir::new();
+    let output = acpilot_with_env(
+        &[
+            "secret",
+            "set",
+            "anthropic",
+            "--config",
+            config.path().to_str().expect("utf-8 path"),
+        ],
+        "ACPILOT_HOME",
+        config.path().to_str().expect("utf-8 path"),
+    );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("empty"), "{}", stderr(&output));
+}
+
+#[test]
+fn profile_export_redacts_by_default_and_gates_secrets() {
+    let home = TempDir::new();
+    let profile = home.path().join("profiles").join("work");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\nid = \"claude\"\ntransport = \"acp-stdio\"\n\
+         command = \"npx\"\nenv = { ANTHROPIC_API_KEY = \"keyring:anthropic\" }\n",
+    )
+    .expect("manifest");
+    let output_path = home.path().join("work.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "export", "work", "--output"])
+        .arg(&output_path)
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let document = fs::read_to_string(&output_path).expect("export file");
+    assert!(document.contains("keyring:anthropic"), "{document}");
+    assert!(!document.contains("\"secrets\""), "{document}");
+
+    let without_risk = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--with-secrets",
+            "--output",
+            home.path()
+                .join("secret.json")
+                .to_str()
+                .expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert_eq!(
+        without_risk.status.code(),
+        Some(2),
+        "{}",
+        stderr(&without_risk)
+    );
+    assert!(
+        stderr(&without_risk).contains("--i-understand-the-risk"),
+        "{}",
+        stderr(&without_risk)
+    );
+
+    let without_output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--with-secrets",
+            "--i-understand-the-risk",
+        ])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert_eq!(
+        without_output.status.code(),
+        Some(2),
+        "{}",
+        stderr(&without_output)
+    );
+    assert!(
+        stderr(&without_output).contains("--output"),
+        "{}",
+        stderr(&without_output)
+    );
+}
+
+#[test]
+fn a_secret_uses_the_environment_profile_and_does_not_fall_back() {
+    let config = TempDir::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "secret",
+            "set",
+            "anthropic",
+            "--config",
+            config.path().to_str().expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", config.path())
+        .env("ACPILOT_PROFILE", "work")
+        .output()
+        .expect("run acpilot secret set");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a missing environment profile is not found: {}",
+        stderr(&output)
+    );
+    assert!(stderr(&output).contains("work"), "{}", stderr(&output));
+    assert!(
+        !config.path().join("profiles").join("default").exists(),
+        "a missing named profile must not create or use default"
+    );
 }
 
 #[test]
@@ -245,5 +704,133 @@ fn secret_list_does_not_need_a_keyring_to_report_a_missing_manifest() {
         stdout(&output).contains("agents.toml"),
         "{}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn a_profile_is_created_listed_shown_used_and_diffed_without_a_daemon() {
+    let home = TempDir::new();
+
+    let created = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "work", "--label", "Work"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert!(
+        stdout(&created).contains("created work"),
+        "{}",
+        stdout(&created)
+    );
+    assert!(
+        home.path().join("profiles/work/config.toml").is_file(),
+        "the profile has the config.toml `Profile::open` requires"
+    );
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "ls"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile ls");
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let text = stdout(&listed);
+    assert!(
+        text.contains("* work"),
+        "the first profile is active: {text}"
+    );
+    assert!(
+        text.contains("Work"),
+        "the label is drawn, not the id: {text}"
+    );
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "show", "work"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile show");
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("profile    work"), "{text}");
+    assert!(text.contains("present"), "the roots are reported: {text}");
+
+    let second = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(second.status.success(), "{}", stderr(&second));
+
+    let diff = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "diff", "work", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile diff");
+    assert!(diff.status.success(), "{}", stderr(&diff));
+    let text = stdout(&diff);
+    assert!(text.contains("work -> personal"), "{text}");
+    assert!(
+        text.contains("no effective difference"),
+        "two fresh profiles hold the defaults: {text}"
+    );
+
+    let used = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "use", "personal"])
+        .env("ACPILOT_HOME", home.path())
+        .output()
+        .expect("run acpilot profile use");
+    assert!(used.status.success(), "{}", stderr(&used));
+    assert!(
+        stdout(&used).contains("active profile is now personal"),
+        "{}",
+        stdout(&used)
+    );
+}
+
+#[test]
+fn a_profile_export_imports_and_a_second_import_is_a_conflict() {
+    let source = TempDir::new();
+    let created = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "new", "work"])
+        .env("ACPILOT_HOME", source.path())
+        .output()
+        .expect("run acpilot profile new");
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let file = source.path().join("work.json");
+    let exported = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "profile",
+            "export",
+            "work",
+            "--output",
+            file.to_str().expect("utf-8 path"),
+        ])
+        .env("ACPILOT_HOME", source.path())
+        .output()
+        .expect("run acpilot profile export");
+    assert!(exported.status.success(), "{}", stderr(&exported));
+
+    let target = TempDir::new();
+    let imported = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "import", file.to_str().expect("utf-8 path")])
+        .env("ACPILOT_HOME", target.path())
+        .output()
+        .expect("run acpilot profile import");
+    assert!(imported.status.success(), "{}", stderr(&imported));
+    assert!(
+        target.path().join("profiles/work/config.toml").is_file(),
+        "the imported profile is one `Profile::open` accepts"
+    );
+
+    let again = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args(["profile", "import", file.to_str().expect("utf-8 path")])
+        .env("ACPILOT_HOME", target.path())
+        .output()
+        .expect("run acpilot profile import twice");
+    assert_eq!(
+        again.status.code(),
+        Some(4),
+        "an existing profile is a conflict: {}",
+        stderr(&again)
     );
 }

@@ -14,16 +14,25 @@
 //! that *does* exist but has no `[policy]` table is a different thing: the
 //! profile has said nothing about permissions, so the shipped policy applies.
 
+pub mod catalog;
+pub mod export;
+pub mod launch;
+pub mod prefs;
 pub mod project;
 pub mod settings;
 pub mod watch;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use acpilot_agent::{Policy, PolicyError};
 use thiserror::Error;
+
+pub use catalog::{
+    ProfileId, ProfileIdError, ProfileRecord, ProfileRoots, Registry, RegistryError,
+};
 
 /// The file a profile keeps its settings in.
 pub const CONFIG_FILE: &str = "config.toml";
@@ -84,10 +93,36 @@ pub fn user_config_path() -> PathBuf {
     config_dir().join(CONFIG_FILE)
 }
 
+/// The global profile/workspace index: `<data>/index.sqlite`.
+///
+/// One file for every profile, because its question is cross-profile: a client
+/// listing profiles must not open each profile's database to find them. It holds
+/// no conversation, so it is safe to lose and rebuild.
+#[must_use]
+pub fn index_path() -> PathBuf {
+    data_dir().join(acpilot_store::INDEX_FILE)
+}
+
 /// One profile's directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     root: PathBuf,
+}
+
+/// The identity a profile uses for one host.
+///
+/// Hosts are global: the daemon knows one `ssh:box`, and every profile reaches the
+/// same machine. What may differ is who the profile connects as, which key it
+/// presents, and which jump host it goes through. The hostname is deliberately not
+/// here — two profiles cannot use one host id to mean two different machines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostIdentity {
+    /// SSH user, when it is not the one in the host address.
+    pub user: Option<String>,
+    /// Private key to present, as the profile spells its path.
+    pub identity_file: Option<PathBuf>,
+    /// `ProxyJump` target, for a host reached through another.
+    pub proxy_jump: Option<String>,
 }
 
 impl Profile {
@@ -117,7 +152,22 @@ impl Profile {
     ///
     /// The directory does not exist or does not hold a `config.toml`.
     pub fn named(name: &str) -> Result<Self, ProfileError> {
-        Self::open(profiles_dir().join(name))
+        Self::named_in(&profiles_dir(), name)
+    }
+
+    /// The profile a name resolves to under an explicit profiles root.
+    ///
+    /// The same name-to-directory rule as [`Self::named`], for a caller that
+    /// owns the root: the launch resolver's tests, a portable install, and the
+    /// desktop app's `--profile <name>` list.
+    ///
+    /// # Errors
+    ///
+    /// The name is not a profile id, or the directory does not exist or does not
+    /// hold a `config.toml`.
+    pub fn named_in(profiles: &Path, name: &str) -> Result<Self, ProfileError> {
+        let id = ProfileId::parse(name)?;
+        Self::open(profiles.join(id.as_str()))
     }
 
     /// The profile's directory.
@@ -130,6 +180,31 @@ impl Profile {
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
         self.root.join(CONFIG_FILE)
+    }
+
+    /// Where this profile's preferences live.
+    ///
+    /// `config.toml` is still a layer below it, because profiles written before
+    /// this file existed have to keep working. The name belongs to the settings
+    /// cascade that reads it, so a watcher asks this path rather than spelling
+    /// `profile.toml` a second time.
+    #[must_use]
+    pub fn preferences_path(&self) -> PathBuf {
+        self.root.join(settings::PROFILE_SETTINGS_FILE)
+    }
+
+    /// Where this profile keeps its state: transcripts, the database, caches.
+    ///
+    /// One directory per profile, under the platform's data root, so two profiles
+    /// cannot share a conversation list or a session id that means two things. A
+    /// path with no last segment (a filesystem root) names no profile and gets the
+    /// shared root, which is the same answer [`Self::name`] gives.
+    #[must_use]
+    pub fn data_dir(&self) -> PathBuf {
+        match self.name() {
+            Some(name) => data_dir().join("profiles").join(name),
+            None => data_dir(),
+        }
     }
 
     /// Where this profile declares its agents.
@@ -155,6 +230,43 @@ impl Profile {
         self.root.file_name().and_then(std::ffi::OsStr::to_str)
     }
 
+    /// The validated id this directory is addressed by, when its name is one.
+    ///
+    /// Temporary directories and hand-made paths are real profiles to the daemon,
+    /// so an invalid segment is `None` rather than an error: the catalogue is what
+    /// a named profile goes through, and this is how a caller asks whether this
+    /// handle has a row there.
+    #[must_use]
+    pub fn id(&self) -> Option<ProfileId> {
+        self.name().and_then(|name| ProfileId::parse(name).ok())
+    }
+
+    /// The five roots this profile owns, when its directory name is a valid id.
+    #[must_use]
+    pub fn roots(&self) -> Option<ProfileRoots> {
+        self.id().map(|id| ProfileRoots::for_id(&id))
+    }
+
+    /// The database that holds this profile's conversations (the service phase's task P3-7).
+    ///
+    /// The file name belongs to `acpilot-store`, because the crate that migrates the
+    /// schema is the thing that decides what it is called. Opening it through
+    /// `Store::open_profile` adopts the pre-P4-4 `acpilot.db` name when needed.
+    #[must_use]
+    pub fn database_path(&self) -> PathBuf {
+        self.data_dir().join(acpilot_store::FILE_NAME)
+    }
+
+    /// Where this profile's JSONL transcripts live.
+    ///
+    /// Under the profile's own data directory, not the shared root: two profiles
+    /// may use the same session id, and a shared directory would let one read the
+    /// other's conversation.
+    #[must_use]
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.data_dir().join("sessions")
+    }
+
     /// The `[policy]` table, or the shipped policy when the file has none.
     ///
     /// The whole file is handed to the parser, which is what makes a real
@@ -167,6 +279,98 @@ impl Profile {
             source,
         })?;
         Policy::from_toml(&text).map_err(|source| ProfileError::Policy { path, source })
+    }
+
+    /// The per-host identities this profile overrides.
+    ///
+    /// The file is `config.toml`, under `[hosts.<id>]`. A key may be the full host
+    /// id (`"ssh:box"`) or the address (`"box"`); the daemon checks both so a
+    /// profile written by hand reads the way its author expected. Unknown fields
+    /// are ignored: a newer profile should still run on this build.
+    ///
+    /// The hostname is not a field. One host id is one machine for every profile;
+    /// letting this table rename it would make `GET /v1/hosts` and the transport
+    /// disagree about what the id means.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read or parsed, or a known field has the wrong type or a
+    /// value SSH cannot take as one argument.
+    pub fn host_identities(&self) -> Result<BTreeMap<String, HostIdentity>, ProfileError> {
+        let path = self.config_path();
+        let text = fs::read_to_string(&path).map_err(|source| ProfileError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let document: toml::Value =
+            toml::from_str(&text).map_err(|source| ProfileError::Config {
+                path: path.clone(),
+                source: Box::new(source),
+            })?;
+        let Some(hosts) = document.get("hosts") else {
+            return Ok(BTreeMap::new());
+        };
+        let hosts = hosts.as_table().ok_or_else(|| ProfileError::Hosts {
+            path: path.clone(),
+            why: "`hosts` is not a table".to_owned(),
+        })?;
+        let mut identities = BTreeMap::new();
+        for (key, value) in hosts {
+            let table = value.as_table().ok_or_else(|| ProfileError::Hosts {
+                path: path.clone(),
+                why: format!("`hosts.{key}` is not a table"),
+            })?;
+            let field = |name: &str| -> Result<Option<String>, ProfileError> {
+                match table.get(name) {
+                    None => Ok(None),
+                    Some(value) => value
+                        .as_str()
+                        .map(|value| Some(value.to_owned()))
+                        .ok_or_else(|| ProfileError::Hosts {
+                            path: path.clone(),
+                            why: format!("`hosts.{key}.{name}` is not a string"),
+                        }),
+                }
+            };
+            let user = field("user")?;
+            if let Some(user) = &user
+                && (user.trim().is_empty()
+                    || user.contains('@')
+                    || user.chars().any(char::is_whitespace))
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.user` is not one ssh user name"),
+                });
+            }
+            let identity_file = field("identity_file")?.map(PathBuf::from);
+            if let Some(file) = &identity_file
+                && file.as_os_str().is_empty()
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.identity_file` is empty"),
+                });
+            }
+            let proxy_jump = field("proxy_jump")?;
+            if let Some(jump) = &proxy_jump
+                && (jump.trim().is_empty() || jump.chars().any(char::is_whitespace))
+            {
+                return Err(ProfileError::Hosts {
+                    path: path.clone(),
+                    why: format!("`hosts.{key}.proxy_jump` is not one ssh destination"),
+                });
+            }
+            identities.insert(
+                key.clone(),
+                HostIdentity {
+                    user,
+                    identity_file,
+                    proxy_jump,
+                },
+            );
+        }
+        Ok(identities)
     }
 }
 
@@ -197,6 +401,31 @@ pub enum ProfileError {
         /// Which key, and what it said.
         source: PolicyError,
     },
+
+    /// The file is not valid TOML.
+    #[error("{} is not valid TOML: {source}", path.display())]
+    Config {
+        /// The file that was read.
+        path: PathBuf,
+        /// The parser's own line and column.
+        /// Boxed because this error is carried in `ProfileResolveError`, and the
+        /// parser's error is large enough to trip `result_large_err` on Windows.
+        #[source]
+        source: Box<toml::de::Error>,
+    },
+
+    /// The `[hosts]` table is not usable.
+    #[error("{} has an invalid [hosts] table: {why}", path.display())]
+    Hosts {
+        /// The file that was read.
+        path: PathBuf,
+        /// Which host or field, and what it said.
+        why: String,
+    },
+
+    /// A name that is not a profile id was used to resolve a named profile.
+    #[error("not a profile name: {0}")]
+    Name(#[from] ProfileIdError),
 }
 
 #[cfg(test)]
@@ -316,6 +545,121 @@ command = "rust-analyzer"
             profile.name(),
             Some("work"),
             "the keyring namespace is the directory name"
+        );
+        assert_eq!(
+            profile.id().as_ref().map(ProfileId::as_str),
+            Some("work"),
+            "a valid directory name is also a profile id"
+        );
+    }
+
+    #[test]
+    fn a_named_profile_cannot_climb_out_of_the_profile_root() {
+        let error = Profile::named("../escape").expect_err("a path is not a profile name");
+        assert!(
+            matches!(error, ProfileError::Name(_)),
+            "the name is refused before any directory is opened: {error}"
+        );
+    }
+
+    #[test]
+    fn host_identities_read_the_hosts_table_by_id_or_address() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts."ssh:box"]
+user = "deploy"
+identity_file = "/home/me/.ssh/work"
+proxy_jump = "bastion"
+
+[hosts.builder]
+user = "personal"
+"#,
+        );
+        let identities = profile.host_identities().expect("hosts parse");
+        let boxed = identities.get("ssh:box").expect("the full id is a key");
+        assert_eq!(boxed.user.as_deref(), Some("deploy"));
+        assert_eq!(
+            boxed.identity_file.as_deref(),
+            Some(Path::new("/home/me/.ssh/work"))
+        );
+        assert_eq!(boxed.proxy_jump.as_deref(), Some("bastion"));
+        assert_eq!(
+            identities
+                .get("builder")
+                .and_then(|identity| identity.user.as_deref()),
+            Some("personal"),
+            "the bare address is a key too"
+        );
+    }
+
+    #[test]
+    fn a_host_identity_cannot_change_the_hostname() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts.box]
+hostname = "somewhere-else"
+user = "deploy"
+"#,
+        );
+        let identities = profile
+            .host_identities()
+            .expect("unknown fields are ignored");
+        assert!(
+            identities
+                .get("box")
+                .is_some_and(|identity| identity.user.as_deref() == Some("deploy")),
+            "the identity still applies; there is no field that could rename the host"
+        );
+    }
+
+    #[test]
+    fn a_malformed_host_identity_names_the_field() {
+        let (_dir, profile) = profile(
+            r#"
+schema_version = 1
+
+[hosts.box]
+user = "two users"
+"#,
+        );
+        let error = profile
+            .host_identities()
+            .expect_err("a space is not one user");
+        assert!(
+            error.to_string().contains("hosts.box.user"),
+            "the message names the field: {error}"
+        );
+        assert!(matches!(error, ProfileError::Hosts { .. }));
+    }
+
+    #[test]
+    fn state_paths_are_scoped_to_the_profile() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("work");
+        fs::create_dir(&root).expect("profile directory");
+        fs::write(root.join(CONFIG_FILE), "schema_version = 1\n").expect("write config");
+        let profile = Profile::open(&root).expect("the profile opens");
+
+        assert!(
+            profile
+                .database_path()
+                .ends_with("profiles/work/profile.sqlite"),
+            "the P4-4 database name: {}",
+            profile.database_path().display()
+        );
+        assert!(
+            profile.sessions_dir().ends_with("profiles/work/sessions"),
+            "transcripts are under this profile: {}",
+            profile.sessions_dir().display()
+        );
+        assert!(
+            crate::index_path().ends_with("index.sqlite"),
+            "the index is global: {}",
+            crate::index_path().display()
         );
     }
 }

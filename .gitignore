@@ -16,6 +16,10 @@
 # web (P11)
 web/node_modules
 web/dist
+# Playwright's failure traces, screenshots and report: artifacts of a run, not
+# files the repository keeps.
+web/test-results
+web/playwright-report
 
 # docs site
 site/node_modules
@@ -33,8 +37,10 @@ HISTORY.md
 __pycache__/
 *.pyc
 
-# local runtime state
-.acpilot/
+# local runtime state — except the project map, which is a document about the
+# repository and is reviewed with everything else in it (TODO: Panels).
+.acpilot/*
+!.acpilot/project-map.toml
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

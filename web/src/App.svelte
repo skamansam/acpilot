@@ -2,16 +2,34 @@
   import { onMount } from 'svelte';
   import {
     ApiError,
+    activateProfile,
+    agents as listAgents,
+    createSession,
     health,
     readToken,
     sessions as listSessions,
     stats as readStats,
+    terminals as listTerminals,
     writeToken,
+    profiles as listProfiles,
+    session as readSession,
+    setProfile,
+    workspaces as listWorkspaces,
+    type AgentSummary,
     type Health,
+    type ProfileSummary,
     type SessionSummary,
     type StatRow,
+    type TerminalSummary,
     type Track,
+    type WorkspaceSummary,
   } from './api';
+  import { DEFAULT_PROFILE, parseRoute, routePath, scopeSessions, type Route } from './routes';
+  import Editor from './Editor.svelte';
+  import Session from './Session.svelte';
+  import SourceControl from './SourceControl.svelte';
+  import Terminal from './Terminal.svelte';
+  import { paneWhere, panesFor } from './terminals';
 
   // The build the daemon injected into the page before anyone had a token. Its
   // health answer is preferred once there is one, because that is the process
@@ -19,17 +37,73 @@
   const buildVersion =
     document.querySelector<HTMLMetaElement>('meta[name="acpilot-version"]')?.content ?? 'unknown';
 
+  // The address the page was opened at, if it named one. A link with a profile in
+  // it is a decision the page keeps; a bare `/` is placed on the daemon's own
+  // profile and workspace after health answers.
+  const initialRoute = parseRoute(location.pathname);
+  let route = $state<Route>(initialRoute ?? { profile: DEFAULT_PROFILE });
+  // Whether the address's profile is one the daemon has confirmed. A bare `/`
+  // has not named one, so the first load asks without the header (the active
+  // profile) and adopts `health.profile`; every load after that names it. Sending
+  // the default before asking would be a header naming an identity the daemon
+  // may not serve, and it refuses that rather than ignoring it.
+  let adopted = false;
+
   let token = $state(readToken());
   let draft = $state('');
   let loading = $state(false);
   let error = $state<string | null>(null);
   let healthInfo = $state<Health | null>(null);
-  let rows = $state<SessionSummary[]>([]);
+  let allRows = $state<SessionSummary[]>([]);
+  // The rows the address is about: a workspace address scopes the table, a
+  // session address shows the workspace it belongs to (no scope) so the list it
+  // came from is still there. A function rather than an inline expression because
+  // `workspaceList` is declared below: the derivation runs after the component is
+  // set up, and a direct reference would read like a use before declaration.
+  const rows = $derived(scopeRows(allRows));
+
+  function scopeRows(list: SessionSummary[]): SessionSummary[] {
+    return scopeSessions(list, route.workspace, workspaceList);
+  }
   let integrations = $state<StatRow[]>([]);
   // Why the bar is empty when the daemon has nothing to say about it: a bar that
   // could not be read is not a roster of none, and an older daemon that never
   // heard of `/app/stats` must not take the whole page down with it.
   let statsNote = $state<string | null>(null);
+  // The panes this daemon owns, listed unfiltered. A pane with no session is still
+  // a process: a shell in another workspace on another host, or an agent's shell
+  // whose session the daemon could not map. Hiding it is how it becomes a process
+  // nobody can find.
+  let panes = $state<TerminalSummary[]>([]);
+  let panesNote = $state<string | null>(null);
+  // The pane being drawn, when one is. The process belongs to the daemon: closing
+  // this view detaches, and the program keeps running.
+  let openPane = $state<TerminalSummary | null>(null);
+  // The session whose transcript is open is the one the address names. It also
+  // narrows the terminal list: `panesFor` keeps that session's panes *plus* every
+  // pane nobody owns, and never drops a pane with no `session_id`.
+  const openSession = $derived(route.session ?? null);
+  // The agents this profile configured, and the one the form will start. An
+  // empty list is a daemon with no `agents.toml`: there is nothing to start, and
+  // the form says that instead of offering an empty picker.
+  let agentList = $state<AgentSummary[]>([]);
+  let agentsNote = $state<string | null>(null);
+  // The profiles `GET /v1/profiles` lists, empty on a daemon that serves one
+  // profile and has no profiles API (P4-8). The address's profile is still
+  // shown, because it is what every request names.
+  let profileList = $state<ProfileSummary[]>([]);
+  let workspaceList = $state<WorkspaceSummary[]>([]);
+  // A session an address names that the list does not have: asked for by id, so a
+  // shared link opens the conversation instead of an empty transcript.
+  let directSession = $state<SessionSummary | null>(null);
+  let routeError = $state<string | null>(null);
+  let chosenAgent = $state('');
+  let creating = $state(false);
+  let createError = $state<string | null>(null);
+  // Why a profile switch was refused. The address only moves once the daemon has
+  // accepted the activation, so a failed switch leaves the page on the profile it
+  // is actually talking to rather than on the one it asked for.
+  let profileError = $state<string | null>(null);
   // Provenance is one click away, the same key (F4) the terminal uses: a bar has no
   // room for where a number came from, and a bar that never says is a claim.
   let sources = $state(false);
@@ -39,6 +113,16 @@
 
   const version = $derived(healthInfo?.version ?? buildVersion);
   const connected = $derived(healthInfo !== null);
+  const viewSession = $derived(
+    route.session
+      ? (rows.find((row) => row.id === route.session) ??
+        (directSession?.id === route.session ? directSession : null))
+      : null,
+  );
+  const activeWorkspace = $derived(
+    workspaceList.find((row) => row.name === route.workspace || row.id === route.workspace) ??
+      null,
+  );
 
   let controller: AbortController | null = null;
 
@@ -71,38 +155,141 @@
     }
   }
 
+  /**
+   * Open the palette stream, replacing one that is already open.
+   *
+   * The stream is one of the two subscriptions that cannot carry
+   * `X-Acpilot-Profile` (an `EventSource` sends no headers), so it binds the
+   * active profile when it connects. A switch therefore reconnects it; leaving
+   * the old socket open would repaint the new profile's page with the previous
+   * profile's colours, which is the one way a theme can lie about identity.
+   */
+  function followPalette(): void {
+    paletteSource?.close();
+    paletteSource = new EventSource('/app/palette/events');
+    paletteSource.addEventListener('palette', (event) => {
+      applyPalette(event as MessageEvent<string>);
+    });
+  }
+
   async function load(): Promise<void> {
     if (!token) {
       return;
     }
+    setProfile(initialRoute !== null || adopted ? route.profile : '');
     controller?.abort();
     const current = new AbortController();
     controller = current;
     loading = true;
     error = null;
     try {
-      const [status, sessions, bar] = await Promise.all([
+      const [status, sessions, bar, terminals, agents, profiles, workspaces] = await Promise.all([
         health(token, current.signal),
         listSessions(token, current.signal),
         // The bar is the one part of the page a daemon older than this build may
         // not serve, so its absence is reported beside the bar rather than as a
         // failure of the page.
         readStats(token, current.signal).catch(() => null),
+        // Unfiltered, for the same reason: the picker keeps the open session's panes
+        // and every pane nobody owns, so a shell in another workspace is not hidden
+        // by a list that asked only for one session's.
+        listTerminals(token, current.signal).catch(() => null),
+        // As with the bar and the panes: an older daemon that does not answer
+        // for its agents costs the page the form, not the sessions.
+        listAgents(token, current.signal).catch(() => null),
+        // The profiles API is P4-8 and not in the frozen contract; a daemon that
+        // does not serve it answers 404, which costs the switcher its list, not
+        // the page.
+        listProfiles(token, current.signal).catch(() => null),
+        // The workspaces the picker offers. The daemon's own is in health even
+        // when this route is absent, so the address still has a workspace.
+        listWorkspaces(token, current.signal).catch(() => null),
       ]);
       healthInfo = status;
-      rows = sessions;
+      allRows = sessions;
+      profileList = profiles ?? [];
+      workspaceList = workspaces ?? [];
+      // A bare address takes the daemon's profile; a link with one in it keeps it.
+      // The URL is the state, so this is a `replaceState`: no extra history entry
+      // for a page that has not navigated anywhere.
+      if (!initialRoute && status.profile && route.profile !== status.profile) {
+        route = { ...route, profile: status.profile };
+        setProfile(route.profile);
+      }
+      if (!route.workspace && !route.session) {
+        const served = status.workspace ?? workspaceList[0]?.name;
+        if (served) {
+          navigate({ profile: route.profile, workspace: served }, true);
+        }
+      }
+      // From here on the address names a profile the daemon has just reported, so
+      // the panes that mount after this load can send it too. A daemon with no
+      // profile keeps geting no header: it has no name to accept.
+      adopted = Boolean(status.profile);
+      if (status.profile && route.profile !== status.profile) {
+        route = { ...route, profile: status.profile };
+      }
+      setProfile(adopted ? route.profile : '');
       integrations = bar ?? [];
+      panes = terminals ? panesFor(terminals, openSession) : [];
       statsNote = bar
         ? null
         : 'This daemon did not report its integrations; the bar needs a build that serves /app/stats.';
+      panesNote = terminals
+        ? null
+        : 'This daemon did not list its terminals; the terminal needs a build that serves /v1/terminals.';
+      agentList = agents ?? [];
+      agentsNote = agents
+        ? null
+        : 'This daemon did not list its agents; a session cannot be started from here.';
+      // Keep the picker on an agent that still exists, defaulting to the first one
+      // this host can actually run.
+      const runnable = agentList.filter((agent) => agent.status === 'available');
+      if (!agentList.some((agent) => agent.id === chosenAgent)) {
+        chosenAgent = (runnable[0] ?? agentList[0])?.id ?? '';
+      }
+      // A pane that ended while this view was open is a row nothing can attach to.
+      if (openPane && !panes.some((pane) => pane.id === openPane?.id)) {
+        openPane = null;
+      }
+      // An address that names a session the list does not have is one this
+      // process has not listed yet; ask for it by id rather than leaving a real
+      // address over an empty transcript. A session that is gone sends the page
+      // back to the workspace it came from, with the reason.
+      routeError = null;
+      if (route.session && !rows.some((row) => row.id === route.session)) {
+        try {
+          directSession = await readSession(route.session, token, current.signal);
+        } catch (cause) {
+          if (current.signal.aborted) {
+            return;
+          }
+          directSession = null;
+          routeError = `No session ${route.session} on this daemon.`;
+          const served = status.workspace ?? workspaceList[0]?.name;
+          navigate({ profile: route.profile, ...(served ? { workspace: served } : {}) }, true);
+        }
+      } else {
+        directSession = null;
+      }
     } catch (cause) {
       if (current.signal.aborted) {
         return;
       }
       healthInfo = null;
-      rows = [];
+      allRows = [];
+      profileList = [];
+      workspaceList = [];
+      directSession = null;
+      routeError = null;
       integrations = [];
       statsNote = null;
+      panes = [];
+      panesNote = null;
+      agentList = [];
+      agentsNote = null;
+      chosenAgent = '';
+      openPane = null;
       if (cause instanceof ApiError) {
         error = cause.message;
         // A rejected token is not going to start working; forget it so the form
@@ -140,12 +327,49 @@
     token = '';
     draft = '';
     healthInfo = null;
-    rows = [];
+    allRows = [];
+    profileList = [];
+    workspaceList = [];
+    directSession = null;
+    routeError = null;
     integrations = [];
     statsNote = null;
+    panes = [];
+    panesNote = null;
+    agentList = [];
+    agentsNote = null;
+    chosenAgent = '';
+    createError = null;
+    openPane = null;
     error = null;
     loading = false;
     writeToken('');
+  }
+
+  /**
+   * Start a session and open it.
+   *
+   * The daemon attaches the agent before it answers, so a failure here is the
+   * agent saying no, and the message is shown where the button was pressed
+   * rather than as a page-wide error.
+   */
+  async function startSession(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    if (!chosenAgent || creating) {
+      return;
+    }
+    creating = true;
+    createError = null;
+    try {
+      const created = await createSession(chosenAgent, token);
+      allRows = [created, ...allRows.filter((row) => row.id !== created.id)];
+      directSession = null;
+      navigate({ profile: route.profile, session: created.id });
+    } catch (cause) {
+      createError = cause instanceof ApiError ? cause.message : String(cause);
+    } finally {
+      creating = false;
+    }
   }
 
   function quit(): void {
@@ -184,15 +408,75 @@
     return Number.isNaN(at.valueOf()) ? iso : at.toLocaleString();
   }
 
+  /** Go to an address, and let the page follow it. */
+  function navigate(next: Route, replace = false): void {
+    const url = routePath(next);
+    if (replace) {
+      history.replaceState({}, '', url);
+    } else {
+      history.pushState({}, '', url);
+    }
+    route = next;
+    setProfile(next.profile);
+  }
+
+  /** Open a session by putting it in the address, which is where the page reads it. */
+  function open(id: string): void {
+    navigate({ profile: route.profile, session: id });
+  }
+
+  /** Back to the workspace, keeping the profile the address names. */
+  function closeSession(): void {
+    const served = activeWorkspace?.name ?? workspaceList[0]?.name ?? route.workspace;
+    navigate({ profile: route.profile, ...(served ? { workspace: served } : {}) });
+  }
+
+  function switchWorkspace(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    navigate({ profile: route.profile, ...(value ? { workspace: value } : {}) });
+  }
+
+  async function switchProfile(event: Event): Promise<void> {
+    const select = event.currentTarget as HTMLSelectElement;
+    const value = select.value;
+    if (!value || value === route.profile) {
+      return;
+    }
+    profileError = null;
+    try {
+      // Activation first: it is what a headerless read — and the palette stream
+      // about to reconnect — will be about. The address moves only after the
+      // daemon has agreed, so a refused switch is not a page showing one profile
+      // under another one's name.
+      await activateProfile(value, token);
+    } catch (cause) {
+      profileError = cause instanceof ApiError ? cause.message : String(cause);
+      select.value = route.profile;
+      return;
+    }
+    // The header is how every request names a profile, so the change re-reads the
+    // page's data rather than filtering rows fetched for the old identity.
+    navigate({ profile: value, ...(route.workspace ? { workspace: route.workspace } : {}) });
+    followPalette();
+    void load();
+  }
+
+  /** The back button: the address changed, so the page re-reads it. */
+  function followed(): void {
+    route =
+      parseRoute(location.pathname) ?? { profile: route.profile, workspace: route.workspace };
+    setProfile(route.profile);
+    void load();
+  }
+
   onMount(() => {
+    window.addEventListener('popstate', followed);
     if (token) {
       void load();
     }
-    paletteSource = new EventSource('/app/palette/events');
-    paletteSource.addEventListener('palette', (event) => {
-      applyPalette(event as MessageEvent<string>);
-    });
+    followPalette();
     return () => {
+      window.removeEventListener('popstate', followed);
       controller?.abort();
       paletteSource?.close();
       paletteSource = null;
@@ -217,6 +501,37 @@
 <div class="shell">
   <header class="topbar">
     <h1 class="brand">Acpilot</h1>
+    <div class="scope">
+      <label for="profile">Profile</label>
+      <select
+        id="profile"
+        value={route.profile}
+        onchange={(event) => void switchProfile(event)}
+        disabled={profileList.length < 2}
+        title={profileList.length < 2
+          ? 'This daemon serves one profile; there is nothing to switch to.'
+          : 'Switching activates the profile here and sends X-Acpilot-Profile on every request.'}
+      >
+        {#each profileList as entry (entry.id)}
+          <option value={entry.id}>{entry.label}</option>
+        {/each}
+        {#if !profileList.some((entry) => entry.id === route.profile)}
+          <option value={route.profile}>{route.profile}</option>
+        {/if}
+      </select>
+      <label for="workspace">Workspace</label>
+      <select id="workspace" value={route.workspace ?? ''} onchange={switchWorkspace}>
+        {#if !route.workspace}
+          <option value="">every workspace</option>
+        {/if}
+        {#each workspaceList as entry (entry.id)}
+          <option value={entry.name}>{entry.name}</option>
+        {/each}
+        {#if route.workspace && !workspaceList.some((entry) => entry.name === route.workspace)}
+          <option value={route.workspace}>{route.workspace}</option>
+        {/if}
+      </select>
+    </div>
     <span class="version">Version {version}</span>
   </header>
 
@@ -227,6 +542,9 @@
         Connected to the daemon at this address. Everything it will do for this
         browser needs the token you gave it, and nothing else is stored.
       </p>
+      {#if profileError}
+        <p class="error" role="alert">{profileError}</p>
+      {/if}
 
       <dl class="facts">
         <div>
@@ -307,9 +625,39 @@
         {/if}
       </section>
 
-      <div class="card">
-        <table>
-          <caption class="visually-hidden">Sessions this daemon knows about</caption>
+      <form class="new-session" onsubmit={(event) => void startSession(event)}>
+        <label for="agent">Start a session</label>
+        <div class="new-session-row">
+          <select id="agent" bind:value={chosenAgent} disabled={creating || agentList.length === 0}>
+            {#each agentList as agent (agent.id)}
+              <option value={agent.id}>{agent.name} · {agent.status}</option>
+            {/each}
+          </select>
+          <button type="submit" class="primary" disabled={creating || !chosenAgent}>
+            {creating ? 'Starting…' : 'Start session'}
+          </button>
+        </div>
+        {#if agentsNote}
+          <p class="note">{agentsNote}</p>
+        {:else if agentList.length === 0}
+          <p class="note">
+            This profile has no agents. Add an <code>agents.toml</code> and refresh.
+          </p>
+        {/if}
+        {#if createError}
+          <p class="error" role="alert">{createError}</p>
+        {/if}
+      </form>
+
+      <div class="panels">
+        <section class="panel" aria-labelledby="sessions-title">
+          <h3 id="sessions-title">Sessions</h3>
+          {#if routeError}
+            <p class="error" role="alert">{routeError}</p>
+          {/if}
+          <div class="card">
+            <table>
+              <caption class="visually-hidden">Sessions this daemon knows about</caption>
           <thead>
             <tr>
               <th scope="col">Session</th>
@@ -321,7 +669,12 @@
           <tbody>
             {#each rows as row (row.id)}
               <tr>
-                <td>{row.title || row.id}</td>
+                <td>
+                  <button type="button" class="link" onclick={() => open(row.id)}>
+                    Open
+                  </button>
+                  {row.title || row.id}
+                </td>
                 <td class="muted">{row.agent_id}</td>
                 <td><span class="status" data-status={row.status}>{row.status}</span></td>
                 <td class="muted">{when(row.updated_at)}</td>
@@ -334,8 +687,71 @@
               </tr>
             {/each}
           </tbody>
-        </table>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="transcript-title">
+          <h3 id="transcript-title">Transcript</h3>
+          {#if viewSession}
+            {#key viewSession.id}
+              <Session session={viewSession} {token} onclose={closeSession} />
+            {/key}
+          {:else}
+            <p class="note">
+              Pick a session on the left, or open the one in the address bar. A
+              session's turn is streamed here; the address keeps which one, so a
+              refresh does not lose it.
+            </p>
+          {/if}
+        </section>
       </div>
+
+      <section class="editor-panel" aria-labelledby="editor-title">
+        <h3 id="editor-title">Editor</h3>
+        <Editor {token} profile={route.profile} />
+      </section>
+
+      <SourceControl {token} sessions={rows} openSession={openSession} />
+
+      <section class="terminals" aria-labelledby="terminals-title">
+        <div class="stats-head">
+          <h3 id="terminals-title">Terminals</h3>
+          {#if panes.length}
+            <span class="pane-count">
+              {panes.length}
+              {panes.length === 1 ? 'pane' : 'panes'}
+            </span>
+          {/if}
+        </div>
+        {#if openPane}
+          <Terminal pane={openPane} {token} onclose={() => (openPane = null)} />
+        {:else if panes.length}
+          <ul class="pane-rows">
+            {#each panes as pane (pane.id)}
+              <li class="pane-row" data-session={pane.session_id ?? 'none'} data-alive={pane.alive}>
+                <span class="pane-name"><code>{pane.command}</code></span>
+                <span class="pane-where">{paneWhere(pane)}</span>
+                <span class="status" data-status={pane.alive ? 'idle' : 'closed'}>
+                  {pane.alive ? 'running' : 'exited'}
+                </span>
+                <button type="button" onclick={() => (openPane = pane)}>Attach</button>
+              </li>
+            {/each}
+          </ul>
+          <p class="note pane-note">
+            A pane with <strong>no session</strong> is not any session's — it may be a
+            shell in another workspace on another host. Attaching draws the same process
+            the terminal or the desktop app is using; leaving this page detaches it and
+            leaves the program running.
+          </p>
+        {:else}
+          <p class="note">
+            {panesNote ??
+              'No terminals on this daemon. Start one from the TUI or the desktop app, then refresh — this page attaches to panes, it does not own them.'}
+          </p>
+        {/if}
+      </section>
 
       <div class="actions">
         <button type="button" class="primary" onclick={() => void load()} disabled={loading}>
@@ -381,10 +797,6 @@
         {/if}
       </form>
 
-      <p class="note">
-        The editor, the transcript and the terminal arrive with the web phase
-        (P11) — until then the TUI and the desktop app are the cockpits.
-      </p>
     {/if}
 
     {#if quitNote}

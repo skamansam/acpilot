@@ -101,6 +101,7 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
 #[allow(dead_code)]
 #[utoipa::path(
     get,
+    operation_id = "read_stats",
     path = "/v1/stats",
     tag = "stats",
     summary = "Context and credits per integration",

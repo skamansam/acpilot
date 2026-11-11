@@ -17,6 +17,16 @@
 //! failure, because a client that has to parse a `WWW-Authenticate` header to find
 //! out what went wrong is a client with a second error path.
 //!
+//! A WebSocket a **browser** opens is the one request that cannot carry that
+//! header: `new WebSocket(url)` takes a URL and a protocol list, and nothing else.
+//! The page therefore offers the token as a subprotocol —
+//! `new WebSocket(url, ["acpilot.v1", token])` — and this module accepts a token
+//! from `Sec-WebSocket-Protocol` when there is no `Authorization`. That is still a
+//! header rather than a query string: it does not reach the daemon's log, the
+//! browser's history or a `Referer`, which are the three places the alternative
+//! would put a secret. The handshake answers with `acpilot.v1`, never with the
+//! token echoed back.
+//!
 //! One route answers without it: the Swagger page, because a browser cannot attach
 //! a header to a typed address and that page is where the token gets pasted. It
 //! holds no data — the document it renders and every call it makes still need the
@@ -34,14 +44,15 @@ use axum::response::{IntoResponse, Response};
 
 /// The paths that answer without a token: static HTML, and the two pages a person
 /// needs before they have a token — the Swagger UI, where one gets pasted, and the
-/// web shell, which is where a browser is pointed to find out what is listening.
+/// web shell at `/` (also `/app`), which is where a browser is pointed to find out
+/// what is listening.
 ///
 /// `/app/palette/events` is the web shell's own repaint stream. It is open because
 /// a browser cannot attach a header to an `EventSource`, and because it carries
 /// nothing a token would protect: the palette the shell already serves inline.
 /// Anything added to that frame is a change to this list's reason, not just to the
 /// frame.
-const OPEN: [&str; 3] = ["/docs", "/app", "/app/palette/events"];
+const OPEN: [&str; 4] = ["/", "/docs", "/app", "/app/palette/events"];
 
 /// Wrap `router` so every request needs the token in `path`.
 ///
@@ -108,12 +119,37 @@ async fn require(
             .filter(|token| !token.is_empty()),
         Expected::Token(token) => Some(token.clone()),
     };
-    match (presented, expected) {
-        (Some(presented), Some(expected)) if acpilot_host::token::same(presented, &expected) => {
-            Ok(next.run(request).await)
-        }
-        _ => Err(unauthorized()),
+    let accepted = match (presented, expected.as_deref()) {
+        (Some(presented), Some(expected)) => acpilot_host::token::same(presented, expected),
+        // Only when no header offered one: a request that sends the wrong bearer
+        // token must not be rescued by a subprotocol list it also happens to carry.
+        (None, Some(expected)) => offered_protocol(&request, expected),
+        _ => false,
+    };
+    if accepted {
+        Ok(next.run(request).await)
+    } else {
+        Err(unauthorized())
     }
+}
+
+/// Whether a browser offered the token as a WebSocket subprotocol.
+///
+/// `Sec-WebSocket-Protocol` is a comma-separated list of names the client accepts,
+/// so one of them may be the token: the page sends `["acpilot.v1", token]`. The
+/// comparison is constant-time like the header's, and a value that is not valid
+/// text — which for this header means not ASCII — is simply not the token.
+fn offered_protocol(request: &Request, expected: &str) -> bool {
+    request
+        .headers()
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|offered| {
+            offered
+                .split(',')
+                .map(str::trim)
+                .any(|name| acpilot_host::token::same(name, expected))
+        })
 }
 
 /// The one failure this module produces, in the envelope every route uses.

@@ -5,210 +5,282 @@ interfaces, zero rewrites.**
 
 ## How to read this
 
-- Phases have a name and a code. Prose says "the desktop phase (P10)"; the code is
-the stable identifier commits and issues cite, so a name can be reworded without
-breaking a reference.
-- Tasks are `P<phase>-<n>`, so `feat(acp): P2-4` still resolves: `P0` design, `P1`
-foundation, `P2` engine, `P3` service, `P4` profiles, `P4.5` models, `P4.6` mod
-shop, `P5` command line, `P6` editor, `P6.5` version control, `P7` language
-intelligence, `P8` remote hosts, `P9` Windows, `P10` desktop, `P11` web, `P12`
-release, `P13` chat, `P14` studio.
+- Phases have a name and a code. Prose says "the desktop phase (P10)". The code is
+  the stable identifier commits and issues cite, so a name can change without
+  breaking a reference.
+- Tasks are `P<phase>-<n>`, so `feat(acp): P2-4` still resolves. The codes are:
+  `P0` design, `P1` foundation, `P2` engine, `P3` service, `P4` profiles,
+  `P4.5` models, `P4.6` mod shop, `P5` command line, `P6` editor,
+  `P6.5` version control. Then `P7` language intelligence, `P8` remote hosts,
+  `P9` Windows, `P10` desktop, `P11` web, `P12` release, `P13` chat,
+  `P14` studio.
 - A phase is done when every box is checked **and** the phase's acceptance test passes.
-- "DoD" (definition of done) is stated per phase; it is deliberately testable.
+- "DoD" (definition of done) is stated per phase. It is deliberately testable.
 - Anything marked **[decide]** needs a short ADR in `docs/adr/` before code lands.
 - Estimates are ideal engineering days, not calendar promises.
 
-Ordering rule: **no UI work before the daemon API works.** UIs are clients; if a UI needs
-something, add it to the API first. That single rule is what stops the four frontends from
-becoming four products.
+Ordering rule: **no UI work before the daemon API works.** UIs are clients. If a UI
+needs something, add it to the API first. That single rule is what stops the four
+frontends from becoming four products.
 
 ---
 
 ## Design phase (P0) — De-risking probes (≈9 days)
 
-Throwaway code in `probes/`, no workspace integration, no polish. Each probe answers one
-question that would be expensive to get wrong.
+Throwaway code in `probes/`, with no workspace integration and no polish. Each
+probe answers one question that would be expensive to get wrong.
 
 - [x] **P0-1 · ACP handshake against a real agent** (2d) — **done 2026-10-21**
-  - `cargo new probes/acp-handshake`; deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
-  - Implement the `Client` trait: `initialize` (protocol v1) → `session/new` → `session/prompt` "list the files here" → print every `session/update`.
-  - Handle `session/request_permission` with an auto-deny and log the payload.
+  - `cargo new probes/acp-handshake`. Deps: `agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }`, `tokio`.
+  - Implement the `Client` trait. Run `initialize` (protocol v1), then `session/new`,
+    then `session/prompt` "list the files here", then print every `session/update`.
+  - Handle `session/request_permission` with an auto-deny, and log the payload.
   - Run against `npx -y @zed-industries/claude-code-acp` and `gemini --experimental-acp`.
-  - **Answer:** exact capabilities advertised by each agent; which `session/update` kinds arrive; what `stopReason` values appear; does `session/load` work.
-  - **Exit criteria:** transcript of two different agents driving the same 40 lines of client code, checked into `docs/notes/acp-transcripts.md`.
-  - **Result:** the client is `probes/acp-handshake` (613 lines, standalone crate, SDK 3.4.0) and
-    the transcript is `docs/notes/acp-transcripts.md`. It ran Claude Agent 0.94.0 and OpenCode
-    1.19.3 through one code path: both advertise `loadSession`, and both replay a **condensed**
-    history (5 and 7 updates for turns that streamed 29 and 16), so `session/load` cannot replace
-    our own transcript. Seven update kinds appeared, none of them `plan` or `thought`. A denied
-    write is a `failed` tool call with `end_turn`, not a protocol error. OpenCode 1.15.13 answered
-    `end_turn` with zero tokens and no text and no error — agent versions must be recorded. Usage
-    on `PromptResponse` is behind `unstable_end_turn_token_usage` and was dropped by the typed view.
-    Two plan details changed in the doing: the Claude package is now
-    `@agentclientprotocol/claude-agent-acp` (the old name is deprecated), and Gemini CLI was not
-    installed or signed in on this machine, so OpenCode 1.19.3 was the second agent.
+  - **Answer:** the exact capabilities of each agent, the `session/update` kinds that
+    arrive, the `stopReason` values, and whether `session/load` works.
+  - **Exit criteria:** a transcript of two different agents driving the same 40 lines
+    of client code, checked into `docs/notes/acp-transcripts.md`.
+  - **Result:** the client is `probes/acp-handshake` (613 lines, standalone crate,
+    SDK 3.4.0), and the transcript is `docs/notes/acp-transcripts.md`. It ran Claude
+    Agent 0.94.0 and OpenCode 1.19.3 through one code path. Both advertise
+    `loadSession`, and both replay a **condensed** history: 5 and 7 updates for turns
+    that streamed 29 and 16. So `session/load` cannot replace our own transcript.
+    Seven update kinds appeared, and none of them was `plan` or `thought`. A denied
+    write is a `failed` tool call with `end_turn`, not a protocol error. OpenCode
+    1.15.13 answered `end_turn` with zero tokens, no text and no error, so agent
+    versions must be recorded. Usage on `PromptResponse` is behind
+    `unstable_end_turn_token_usage`, and the typed view dropped it. Two plan details
+    changed in the doing. The Claude package is now
+    `@agentclientprotocol/claude-agent-acp`, and the old name is deprecated. Gemini
+    CLI was not installed or signed in on this machine, so OpenCode 1.19.3 was the
+    second agent.
 
 - [x] **P0-2 · Program-as-agent over a PTY** (2d) — **done 2026-10-21**
-  - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, render its screen with `vt100`, detect "turn complete" from a sentinel (prompt string reappearing / idle timeout).
-  - **Answer:** is a transcript adapter viable, or do we need per-program adapter profiles? What breaks with alternate-screen TUIs, colours, and bracketed paste?
-  - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns the final screen text + exit state for two programs.
-  - **Result:** `probes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query answers,
-    submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude Code 2.1.306 through a
-    real turn each, plus a deterministic `fake-tui.sh` double. The transport is generic; the
-    **semantics are per-program** — submit key, answer region, completion sentinel, and startup
-    dialogs all differ, so `transport = "pty"` must carry a profile rather than a parser guess.
-    An idle timeout below 5 s truncated the answer in 4 of 5 real turns (largest mid-turn gap
-    3.4 s, from the model thinking); 5 s never lied and added 5 s of latency, versus ~200 ms for a
-    per-program sentinel. Both programs run on the alternate screen, so the screen must be captured
-    before exit — after `quit` it is empty. Sending `text` and Enter in one write silently fails to
-    submit in Freebuff and looks exactly like a completed turn. Both probe the terminal (`CSI ? u`,
-    `CSI > 0 q`, plus `6 n`/`c`) and both gate the first prompt behind a dialog. Numbers, screens and
-    commands: `docs/notes/pty-agents.md`. All runs were on WSL2 (kernel
-    6.18.33.2-microsoft-standard-WSL2): a real Linux PTY, so these numbers say nothing about Windows
-    ConPTY, which the design phase's task P0-5 owns.
+  - Spawn `freebuff` (and one other TUI CLI) under `portable-pty`, and render its
+    screen with `vt100`. Detect "turn complete" from a sentinel, which is the prompt
+    string reappearing or an idle timeout.
+  - **Answer:** is a transcript adapter viable, or do we need per-program adapter
+    profiles? What breaks with alternate-screen TUIs, colours and bracketed paste?
+  - **Exit criteria:** a `PtyAgent` prototype that takes a prompt string and returns
+    the final screen text and the exit state for two programs.
+  - **Result:** `probes/pty-agent` (one driver: spawn, `vt100` screen, terminal-query
+    answers, submit, snapshot, exit state) drove Freebuff 0.0.106-wrapper and Claude
+    Code 2.1.306 through a real turn each.
+    Plus a deterministic `fake-tui.sh` double.
+    The transport is generic. The **semantics are per-program**: the submit key, the
+    answer region, the completion sentinel and the startup dialogs all differ. So
+    `transport = "pty"` must carry a profile rather than a parser guess. An idle
+    timeout below 5 s truncated the answer in 4 of 5 real turns (largest mid-turn gap
+    3.4 s, from the model thinking). A 5 s timeout never lied and added 5 s of
+    latency, against ~200 ms for a per-program sentinel. Both programs run on the
+    alternate screen, so the screen must be captured before exit: after `quit` it is
+    empty. A single write of `text` plus Enter silently fails to submit in Freebuff,
+    and it looks exactly like a completed turn. Both programs probe the terminal
+    (`CSI ? u`, `CSI > 0 q`, plus `6 n`/`c`), and both gate the first prompt behind a
+    dialog. Numbers, screens and commands: `docs/notes/pty-agents.md`. All runs were
+    on WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2), which is a real Linux PTY.
+    So these numbers say nothing about Windows ConPTY, which the design phase's task
+    P0-5 owns.
 
-- [x] **P0-3 · gpui text benchmark** (2d) — **closed 2026-10-22; D1 stands**
-  - Render a 100k-line Rust file in gpui, scroll, select, type, undo; build the screen against the `text_system` shaped-line API and a `uniform_list` row window rather than one giant element.
-  - Measure: first paint, keystroke→paint, scroll frame time, and the cost of highlighting a 3k-line visible window with tree-sitter.
-  - Also measure a minimal `iced` build of the same screen, so the fallback is priced rather than assumed.
-  - Verify the pin actually builds clean from crates.io alone (no `zed/` checkout, no network beyond the lockfile): this is where the `zed-font-kit` git dependency and any missing feature will bite.
-  - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list we and the GUI-builder project can push on together — that list, not a wish, is what justifies escalating to a git `rev`.
-  - **Exit criteria:** numbers in `docs/notes/gui-bench.md` vs budgets (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot be built from a clean vendored tree, fall back to `iced` 0.14 → Tauri **now** and say so in the ADR.
-  - **Result (2026-10-22): both frameworks meet the frame budget, both miss first paint, and the fallback is the
-    slower of the two — so the veto does not fire and D1 stands.** The GPU was there all along: WSL2 has the
-    RTX 5060 (`/dev/dxg`, driver 616.56) but no Vulkan ICD for it (`dzn` is not in Ubuntu's
-    `mesa-vulkan-drivers`), and gpui's Linux renderer is Vulkan-only, so both benchmarks ran **natively on
-    Windows** through the WSL interop — the same hardware, the platform the budget is about.
-    `probes/gpui-bench` and `probes/iced-bench` draw the same screen (100k rows, 50 visible at 18 px, 13 px
-    Consolas, generated rows, three phases after warm-up, one cold 3k-line shaping probe) and were run
-    interleaved so neither got a colder system. **Frame pacing: p95 4.3–4.6 ms at 240 Hz for both**, 0–1 dropped
-    intervals per run — the 16 ms budget met with room, though vsync-bound so headroom above 240 Hz is
-    unmeasured. **First paint: gpui 277–326 ms, iced 851–896 ms, against 150 ms.** The fallback is not a fix:
-    iced boots 4–5× faster (50 ms vs 231–273 ms) and spends it several times over in window/device creation
-    (853–898 ms vs 272–313 ms), i.e. ~3× worse in total at the same pacing. Shaping 3 000 lines cold is ~50 ms
-    in both (~17 µs/line), which is why shaped lines are cached rather than re-shaped.
-    **The >2× clause needs care, and this is the finding that changes:** on a warm machine gpui is 1.85–2.17×
-    over (median 1.90×), so it does not fire — but the same binary measured 580–968 ms (3.9–6.5×) earlier in the
-    session before the DLL and driver caches were warm, and iced misses by 5.7–6.0×. A first-paint budget that
-    does not state the machine state measures the OS file cache, and the clause read as an absolute number
-    rejects the fallback harder than the framework it protects. So it is restated as a comparison: a framework
-    is vetoed when the alternative is >2× better, which no measurement here supports. The lever left is
-    window/device creation (iced: 51 ms boot → 750–800 ms to a window), not the view, which costs ~0 ms per
-    frame in both; a profile of that phase is the next useful measurement, and §Perf should say that a 150 ms
-    first paint is a property of how the app starts, not of the framework.
-    The pin still needs **`libc` held at ≤ 0.2.189** on Linux (`xattr` 0.2.3 uses `libc::ENOATTR`) and
-    `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method and limitations:
-    `docs/notes/gui-bench.md`. Still unmeasured: tree-sitter highlight cost for a 3k-line window, a profile of
-    the window/device phase, and a macOS run.
+- [x] **P0-3 · gpui text benchmark** (2d) — **closed 2026-10-22, D1 stands**
+  - Render a 100k-line Rust file in gpui, then scroll, select, type and undo. Build
+    the screen against the `text_system` shaped-line API and a `uniform_list` row
+    window, not one giant element.
+  - Measure first paint, keystroke→paint, scroll frame time, and the cost of
+    highlighting a 3k-line visible window with tree-sitter.
+  - Also measure a minimal `iced` build of the same screen, so the fallback is priced
+    rather than assumed.
+  - Check the pin builds clean from crates.io alone, with no `zed/` checkout and no
+    network beyond the lockfile. The `zed-font-kit` git dependency and any missing
+    feature will bite here.
+  - Write down the upstream gaps we hit in 0.2.2 (accessibility is known) as a list
+    we and the GUI-builder project can push on together. That list, not a wish, is
+    what justifies escalating to a git `rev`.
+  - **Exit criteria:** numbers in `docs/notes/gui-bench.md` against the budgets
+    (§Perf). If gpui misses by >2×, needs a nightly toolchain, or cannot build from a
+    clean vendored tree, fall back to `iced` 0.14 → Tauri **now**. Say so in the
+    ADR.
+  - **Result (2026-10-22): both frameworks meet the frame budget, both miss first
+    paint, and the fallback is the slower of the two. So the veto does not fire, and
+    D1 stands.** The GPU was there all along. WSL2 has the RTX 5060 (`/dev/dxg`,
+    driver 616.56) but no Vulkan ICD for it (`dzn` is not in Ubuntu's
+    `mesa-vulkan-drivers`). gpui's Linux renderer is Vulkan-only, so both benchmarks
+    ran **natively on Windows** through the WSL interop. That is the same hardware, and
+    the platform the budget is about. `probes/gpui-bench` and `probes/iced-bench` draw
+    the same screen. It has 100k rows, 50 visible at 18 px, 13 px Consolas, generated
+    rows, three phases after warm-up, and one cold 3k-line shaping probe. They were run
+    interleaved so neither got a colder system. **Frame pacing: p95 4.3–4.6 ms at
+    240 Hz for both**, with 0–1 dropped intervals per run. The 16 ms budget is met
+    with room, though vsync-bound, so headroom above 240 Hz is unmeasured. **First
+    paint: gpui 277–326 ms, iced 851–896 ms, against 150 ms.** The fallback is not a
+    fix. iced boots 4–5× faster (50 ms vs 231–273 ms). It spends that
+    several times over in window and device creation (853–898 ms vs 272–313 ms).
+    That is ~3× worse in total at the same pacing. Shaping 3 000 lines cold is ~50 ms in
+    both (~17 µs/line), which is why shaped lines are cached rather than re-shaped.
+    **The >2× clause needs care, and this is the finding that changes.** On a warm
+    machine gpui is 1.85–2.17× over (median 1.90×), so the clause does not fire. But
+    the same binary measured 580–968 ms (3.9–6.5×) earlier in the session, before
+    the DLL and driver caches were warm, and iced misses by 5.7–6.0×. A first-paint
+    budget that does not state the machine state measures the OS file cache. The
+    clause read as an absolute number rejects the fallback harder than the framework
+    it protects. So it is restated as a comparison: a framework is vetoed when the
+    alternative is >2× better, and no measurement here supports that. The lever left
+    is window and device creation (iced: 51 ms boot → 750–800 ms to a window).
+    The view costs ~0 ms per frame in both. A profile of that phase is the
+    next useful measurement. §Perf should say that a 150 ms first paint is a
+    property of how the app starts, not of the framework. The pin still needs
+    **`libc` held at ≤ 0.2.189** on Linux (`xattr` 0.2.3 uses `libc::ENOATTR`) and
+    `libxkbcommon-x11`'s dev symlink even with X11 off. Numbers, method and
+    limitations: `docs/notes/gui-bench.md`. Still unmeasured: the tree-sitter
+    highlight cost for a 3k-line window, a profile of the window and device phase,
+    and a macOS run.
 
 - [x] **P0-4 · SSH PTY + agent spawn** (1d) — **done 2026-10-21**
-  - `russh` connect to a local `sshd` container, open a session with a PTY, run `bash -lc 'echo hi'`; then run an ACP agent over the channel.
-  - **Answer:** does ACP over an SSH `exec` channel behave (line buffering, stderr, exit codes, resize)?
-  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-probe` prints a real ACP session from inside the container.
-  - **Result:** `probes/ssh` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, `russh` 0.64.1.
-    No usable container runtime here (Docker Desktop's WSL integration is off, rootless podman's socket
-    refuses), so `sshd.sh` runs the distro's own `sshd` unprivileged on `127.0.0.1:2222` with a throwaway
-    host key and key-only auth — same server, same channels, minus the process boundary, which the design phase's P0-4 was not
-    about. **The exec channel is a byte stream, not a message channel:** 103 JSON lines written one at a
-    time arrived in 20–33 `DATA` events, up to 37 frames in one event (largest 6,007 B), so the client
-    must buffer and split on `\n`; zero frames straddled an event on loopback, which is the conservative
-    case and not a guarantee. stderr arrives as `EXTENDED_DATA ext=1` and the exit code survives (probe
-    exits 3), so a frame stream is never polluted by an agent's warnings — the probe fails the run if it is.
-    A PTY over the hop takes a `window_change` from `40 100` to `50 120` while a program watches, and `tty`
-    answers a real `/dev/pts/N`, so resize is a channel message rather than a reconnect. Cost is the
-    connection, not the messages: connect+auth 70.7–113.9 ms, then an exec round trip 44.7–49.8 ms and the
-    whole 103-frame ACP exchange 43.1–51.4 ms (5 runs) — connect once per host and multiplex, the same
-    verdict as the design phase's task P0-5 from a different transport. Numbers, the harness and what the remote-hosts phase's task P8-1 inherits:
-    `docs/notes/ssh-agent.md`. The agent is a mock speaking real ACP methods; the design phase's task P0-1 already ran two real
-    agents over stdio, and the question here was whether SSH preserves their framing.
+  - `russh` connects to a local `sshd` container, opens a session with a PTY, and
+    runs `bash -lc 'echo hi'`. Then it runs an ACP agent over the channel.
+  - **Answer:** does ACP over an SSH `exec` channel behave, with line buffering,
+    stderr, exit codes and resize?
+  - **Exit criteria:** `docker compose up sshd && cargo run --bin ssh-probe` prints a
+    real ACP session from inside the container.
+  - **Result:** `probes/ssh` (+ `sshd.sh`) against OpenSSH 9.6p1 on this box, with
+    `russh` 0.64.1. There is no usable container runtime here: Docker Desktop's WSL
+    integration is off, and rootless podman's socket refuses. So `sshd.sh` runs the
+    distro's own `sshd` unprivileged on `127.0.0.1:2222`, with a throwaway host key
+    and key-only auth. That is the same server and the same channels, minus the
+    process boundary, which the design phase's P0-4 was not about. **The exec
+    channel is a byte stream, not a message channel.** 103 JSON lines written one at
+    a time arrived in 20–33 `DATA` events. One event held up to 37 frames (largest
+    6,007 B). So the client must buffer and split on `\n`. Zero frames straddled an
+    event on loopback, which is the conservative case and not a guarantee. stderr
+    arrives as `EXTENDED_DATA ext=1`, and the exit code survives (the probe exits 3).
+    So a frame stream is never polluted by an agent's warnings, and the probe fails
+    the run if it is. A PTY over the hop takes a `window_change` from `40 100` to
+    `50 120` while a program watches, and `tty` answers a real `/dev/pts/N`. So
+    resize is a channel message rather than a reconnect. Cost is the connection, not
+    the messages. Connect plus auth is 70.7–113.9 ms, an exec round trip is
+    44.7–49.8 ms, and the whole 103-frame ACP exchange is 43.1–51.4 ms (5 runs). So
+    connect once per host and multiplex, which is the same verdict as the design
+    phase's task P0-5 from a different transport. Numbers, the harness and what the
+    remote-hosts phase's task P8-1 inherits: `docs/notes/ssh-agent.md`. The agent is
+    a mock that speaks real ACP methods. The design phase's task P0-1 already ran two
+    real agents over stdio, and the question here was whether SSH preserves their
+    framing.
 
 - [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
-  - On a Windows box (CI runner or VM): enumerate distros, `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON line, get one back.
-  - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box: `wsl.exe -l -q` works
-    through interop (135 ms) but prints **UTF-16LE** — NUL-interleaved output that a naive line reader
-    turns into garbage; the box has `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things,
-    not one prefix: `/home/sam` → `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
-    `C:\Users\SamTyler` → `/mnt/c/Users/SamTyler`. So the translation function is a pair of mappings
-    (mounted drives ↔ `/mnt/<letter>`, and the distro root ↔ its UNC path), and the harness must decode UTF-16.
-    The interop path does not cover ConPTY or `wsl.exe` invoked from Windows, which is what the helper
-    actually ships against — that half still needs a Windows runner.
-  - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), interop quirks.
-  - **Exit criteria:** latency table + a path-translation function with unit tests that we can lift into `acpilot-host`.
+  - On a Windows box (CI runner or VM), enumerate the distros, run
+    `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON
+    line, and get one back.
+  - **Starting points**, measured 2026-10-21 from *inside* WSL2 on the dev box:
+    `wsl.exe -l -q` works through interop (135 ms) but prints **UTF-16LE**.
+    NUL-interleaved output turns a naive line reader into garbage. The box has
+    `Ubuntu-24.04` and `docker-desktop`. `wslpath` maps **two** things, not one
+    prefix. `/home/sam` becomes `\\wsl.localhost\Ubuntu-24.04\home\sam`, while
+    `C:\Users\SamTyler` becomes `/mnt/c/Users/SamTyler`. So the translation function
+    is a pair of mappings: mounted drives ↔ `/mnt/<letter>`, and the distro root ↔
+    its UNC path. The harness must decode UTF-16. The interop path does not cover
+    ConPTY or `wsl.exe` invoked from Windows, which is what the helper actually
+    ships against. That half still needs a Windows runner.
+  - **Answer:** startup latency per call, path translation (`C:\x` ↔ `/mnt/c/x`), and
+    interop quirks.
+  - **Exit criteria:** a latency table plus a path-translation function with unit
+    tests that we can lift into `acpilot-host`.
   - **Result:** `probes/wsl-helper` (Windows driver, `wsl.exe` 2.7.10.0) plus
-    `helper/acpilotd-helper.rs` (dependency-free Linux end, installed with `rustc -O` through stdin).
-    Measured on Windows 11 26300 / Ubuntu-24.04: one helper **spawn costs ~140 ms** to the first
-    response and ~197 ms through exit, while a message on the warm session costs **0.1 ms** (p50, 30
-    samples); a 1 MiB request line arrived intact in 1.3 ms. So the helper is a session, not a call:
-    The engine phase's task P2-2 and the service phase's task P3-1 must spawn it once per host and multiplex ids. `wsl.exe -- <cmd>` goes through the user's
-    shell and eats backslashes (missing binary → 127); `-e` execs directly and keeps them (missing
-    binary → relay error, exit 1). `-e` does **not** expand `~` in the program path, so the helper path
-    is resolved from `$HOME` and `--cd ~` is passed explicitly. `-l -q` is UTF-16LE+CRLF (as the
-    starting points said); enumeration also returns `docker-desktop`, which is not a usable distro.
-    Translation is two rules and only one is unconditional: `C:\x` ↔ `/mnt/c/x` for **mounted** drives
-    only (`ls /mnt` gave `c` and `e` here; `D:` has no Linux path and `wslpath` refuses it too), and
-    `/home/sam` ↔ `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
-    `probes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from `ls /mnt`, with an
-    unmounted drive or a foreign distro as a typed refusal; `..` is left to the policy layer. Under
-    ConPTY `wsl.exe` sends `CSI 6 n` and waits, so the helper never starts until DSR is answered — with
-    an answer it works, echoing the request and ending lines with CRLF. Pipes are the transport for the
-    JSON channel; ConPTY stays for terminals, where a query responder is mandatory anyway. Numbers,
-    the `wslpath` oracle table and every quirk: `docs/notes/wsl-helper.md`. The suite runs on both
-    sides: fmt/clippy/`cargo test` (23) under Windows and inside the distro, the helper's 4 unit tests
-    with `rustc --test` on either OS, and `helper/check_protocol.py` against a native helper build in
-    both. CI (`.github/workflows/ci.yml`, job `p0-5 probe`) runs that suite on both OSes on every push.
-    The round trip is a second, opt-in job (`wsl-bench`) because WSL2 needs nested virtualisation, which
-    standard hosted Windows runners do not have (they can offer WSL1 only); the bench reads the
-    `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and `--require-wsl2` makes a
-    WSL1 distro a hard failure instead of a quietly different table. Enable it with `WSL_BENCH=true`
-    and `WSL_RUNNER` pointing at a self-hosted Windows runner with the `wsl2` label; it uploads
-    `wsl-helper-bench` for the note's tables. The user story is measured end to end too
-    (`wsl-helper workspace`): a folder opened as `\\wsl.localhost\Ubuntu-24.04\...` becomes
-    `wsl://Ubuntu-24.04` + `/home/sam/workspace-other/acpilot`, the helper starts in that
-    directory (cwd asserted) at ~124 ms with 0.1 ms per message, and the same 37 KB file
-    costs **13.0 ms/read over UNC vs 0.096 ms in-distro (136×)** — so the daemon reads files
-    in-distro and UNC stays a read-only fallback, as README §5.6 claims. Cold start after a
-    reboot is **not** measured: terminating the distro would kill this checkout's own processes.
+    `helper/acpilotd-helper.rs`, a dependency-free Linux end installed with
+    `rustc -O` through stdin. Measured on Windows 11 26300 / Ubuntu-24.04. One helper
+    **spawn costs ~140 ms** to the first response and ~197 ms through exit. A
+    message on the warm session costs **0.1 ms** (p50, 30 samples). A 1 MiB request
+    line arrived intact in 1.3 ms. So the helper is a session, not a call. The engine
+    phase's task P2-2 and the service phase's task P3-1 must spawn it once per host
+    and multiplex ids. `wsl.exe -- <cmd>` goes through the user's shell and eats
+    backslashes (a missing binary gives 127). `-e` execs directly and keeps them (a
+    missing binary gives a relay error and exit 1). `-e` does **not** expand `~` in
+    the program path, so the helper path is resolved from `$HOME`, and `--cd ~` is
+    passed explicitly. `-l -q` is UTF-16LE+CRLF, as the starting points said.
+    Enumeration also returns `docker-desktop`, which is not a usable distro.
+    Translation is two rules, and only one is unconditional. `C:\x` ↔ `/mnt/c/x`
+    works for **mounted** drives only (`ls /mnt` gave `c` and `e` here, `D:` has no
+    Linux path, and `wslpath` refuses it too), and `/home/sam` ↔
+    `\\wsl.localhost\Ubuntu-24.04\home\sam`. `acpilot-host` gets `WslPathMap` from
+    `probes/wsl-helper/src/paths.rs` (12 tests, no Windows APIs), populated from
+    `ls /mnt`, with an unmounted drive or a foreign distro as a typed refusal. `..`
+    is left to the policy layer. Under ConPTY `wsl.exe` sends `CSI 6 n` and waits, so
+    the helper never starts until DSR is answered. With an answer it works, echoing
+    the request and ending lines with CRLF. Pipes are the transport for the JSON
+    channel. ConPTY stays for terminals, where a query responder is mandatory
+    anyway. Numbers, the `wslpath` oracle table and every quirk:
+    `docs/notes/wsl-helper.md`. The suite runs on both sides. fmt, clippy and
+    `cargo test` (23) run under Windows and inside the distro. The helper's 4 unit
+    tests run with `rustc --test` on either OS, and `helper/check_protocol.py` runs
+    against a native helper build in both. CI (`.github/workflows/ci.yml`, job `p0-5 probe`) runs that
+    suite on both OSes on every push. The round trip is a second, opt-in job
+    (`wsl-bench`), because WSL2 needs nested virtualisation. Standard hosted
+    Windows runners do not have it (they can offer WSL1 only). The bench reads the
+    `VERSION` column from `wsl -l -v`, records `wsl_version` in its JSON, and
+    `--require-wsl2` makes a WSL1 distro a hard failure instead of a quietly
+    different table. Enable it with `WSL_BENCH=true` and `WSL_RUNNER` pointing at a
+    self-hosted Windows runner with the `wsl2` label. It uploads `wsl-helper-bench`
+    for the note's tables. The user story is measured end to end too
+    (`wsl-helper workspace`). A folder opened as
+    `\\wsl.localhost\Ubuntu-24.04\...` becomes `wsl://Ubuntu-24.04` plus
+    `/home/sam/workspace-other/acpilot`. The helper starts in that directory (cwd
+    asserted) at ~124 ms, with 0.1 ms per message. The same 37 KB file costs
+    **13.0 ms/read over UNC vs 0.096 ms in-distro (136×)**. So the daemon reads files
+    in-distro, and UNC stays a read-only fallback, as README §5.6 claims. Cold start
+    after a reboot is **not** measured, because terminating the distro would kill
+    this checkout's own processes.
 
 - [x] **P0-6 · API shape review (paper)** (0.5d) — **done 2026-10-21**
-  - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event taxonomy, and the error envelope. Review it against: CLI needs, TUI needs, permission answering from a script, web reconnect.
-  - **Exit criteria:** endpoint list frozen for the service phase (P3); anything missing from the README added there.
-  - **Result:** `docs/api.md` freezes the v1 route list, the SSE taxonomy (`session`, `permission`,
-    `heartbeat` and `resync` frames; `Last-Event-ID` replay from the transcript; a 15 s heartbeat;
-    `resync` instead of silence when an id cannot be replayed), the prompt contract (`202` with
-    `turn_id`, `idempotency_key`, `409` for a turn already in flight), the permission rules
-    (idempotent for the same answer, `409` for a different one, no timeout in v1) and the error
-    envelope with its HTTP mapping. The review found six gaps and fixed each rather than noting it:
-    no way out of `AgentStatus::untrusted` (`POST /v1/agents/{id}/trust`), no host connection test,
-    no profile activate/export, no directory listing (`GET /v1/files/list`), no profile-wide
-    `GET /v1/events`, and no error envelope in the README at all. It also settled three names where
-    two documents disagreed: `permissions/{id}/resolve` (not `/decide`), `/v1/lsp/servers`
-    (not `/v1/lsp`), and the flat `/v1/terminals?session=` (not nested). Providers, models, recipes
-    and the ACP bridge stay explicitly post-v1. The proto doc comments and the committed OpenAPI
-    snapshot were corrected to the frozen names; those snapshot edits are description-only, so no
-    wire type moved.
+  - Write `docs/api.md` with the v1 endpoint list from the README, the SSE event
+    taxonomy and the error envelope. Review it against the CLI needs, the TUI needs,
+    permission answering from a script, and web reconnect.
+  - **Exit criteria:** the endpoint list is frozen for the service phase (P3), and
+    anything missing from the README is added there.
+  - **Result:** `docs/api.md` freezes the v1 route list, the SSE taxonomy, the prompt
+    contract, the permission rules, and the error envelope with its HTTP mapping. The
+    SSE taxonomy is `session`, `permission`, `heartbeat` and `resync` frames,
+    `Last-Event-ID` replay from the transcript, a 15 s heartbeat, and `resync`
+    instead of silence when an id cannot be replayed. The prompt contract is `202`
+    with `turn_id` and `idempotency_key`, and `409` for a turn already in flight. The
+    permission rules are idempotent for the same answer, `409` for a different one,
+    and no timeout in v1. The review found six gaps and fixed each rather
+    than noting it. The gaps were: no way out of `AgentStatus::untrusted`
+    (`POST /v1/agents/{id}/trust`), no host connection test, no profile
+    activate/export, and no directory listing (`GET /v1/files/list`). There was also
+    no profile-wide `GET /v1/events`, and no error envelope in the README. It also settled
+    three names where two documents disagreed: `permissions/{id}/resolve` (not
+    `/decide`), `/v1/lsp/servers` (not `/v1/lsp`), and the flat
+    `/v1/terminals?session=` (not nested). Providers, models, recipes and the ACP
+    bridge stay explicitly post-v1. The proto doc comments and the committed OpenAPI
+    snapshot were set to the frozen names. Those snapshot edits are
+    description-only, so no wire type moved.
 
 - [x] **P0-7 · LSP client round-trip + position encodings** (1d) — **done 2026-10-21**
-  - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), `initialize` advertising
-    `general.positionEncodings = ["utf-8", "utf-16"]`, then `didOpen` a file containing emoji,
-    CJK, and combining marks; assert a `definition`/`diagnostics` range lands on the right column.
-  - Run `rust-analyzer`, `typescript-language-server`, and `pyright`: record which encoding each
-    picks, whether pull diagnostics (`textDocument/diagnostic`) are supported, and what
-    `$/progress` traffic arrives during the first index.
-  - Try `async-lsp` 0.2 as the client loop (it supports `LanguageClient` + `ServerSocket`) and
-    report what it costs to run it over a non-stdio transport.
-  - **Answer:** UTF-16 vs UTF-8 conversion cost per keystroke; does any server send malformed
-    URIs (Windows drive letters, percent-encoding, `file://` with a host)?
-  - **Exit criteria:** `docs/notes/lsp-servers.md` capability table + a position-conversion
-    function with proptests, liftable into `acpilot-lsp`.
-  - **Result:** the conversion lives in `acpilot-lsp::position` (proptested over emoji, CJK,
-    combining marks, CRLF) and says **negotiate both, honour the server, default to UTF-16**.
-    rust-analyzer chose `utf-8`; `typescript-language-server` and `pyright` sent no
-    `positionEncoding` and used UTF-16. Definitions landed on the expected byte in all three,
-    including a path with a space and `ü`. Conversion is 18–28 ns; the whole-file index build
-    (2.26 ms per 100k lines) is what must become incremental in the language-intelligence phase (P7). `rust-analyzer` answers
-    pull diagnostics only after one `-32802` cancellation, and is the only server that sends
-    substantial `$/progress` traffic (133 notifications for a one-file index). Measurements,
-    commands and the `async-lsp` 0.2 assessment: `docs/notes/lsp-servers.md`.
+  - Hand-roll `Content-Length` framing over stdio (it is ~150 lines), and send
+    `initialize` advertising `general.positionEncodings = ["utf-8", "utf-16"]`. Then
+    `didOpen` a file containing emoji, CJK and combining marks, and assert a
+    `definition` or `diagnostics` range lands on the right column.
+  - Run `rust-analyzer`, `typescript-language-server` and `pyright`. Record which
+    encoding each picks, whether pull diagnostics (`textDocument/diagnostic`) are
+    supported, and what `$/progress` traffic arrives during the first index.
+  - Try `async-lsp` 0.2 as the client loop (it supports `LanguageClient` +
+    `ServerSocket`), and report what it costs to run over a non-stdio transport.
+  - **Answer:** the UTF-16 vs UTF-8 conversion cost per keystroke, and whether any
+    server sends malformed URIs (Windows drive letters, percent-encoding, `file://`
+    with a host).
+  - **Exit criteria:** a capability table in `docs/notes/lsp-servers.md` plus a
+    position-conversion function with proptests, liftable into `acpilot-lsp`.
+  - **Result:** the conversion lives in `acpilot-lsp::position` (proptested over
+    emoji, CJK, combining marks and CRLF). The rule is **negotiate both, honour the
+    server, default to UTF-16**. rust-analyzer chose `utf-8`, while
+    `typescript-language-server` and `pyright` sent no `positionEncoding` and used
+    UTF-16. Definitions landed on the expected byte in all three, including a path
+    with a space and `ü`. Conversion is 18–28 ns. The whole-file index build
+    (2.26 ms per 100k lines) is what must become incremental in the
+    language-intelligence phase (P7). `rust-analyzer` answers pull diagnostics only
+    after one `-32802` cancellation, and it is the only server that sends
+    substantial `$/progress` traffic (133 notifications for a one-file index).
+    Measurements, commands and the `async-lsp` 0.2 assessment:
+    `docs/notes/lsp-servers.md`.
 
 ---
 
@@ -359,9 +431,57 @@ and deterministic.
     **The `Grants`/`PendingWrite`/`GRANT_TIMEOUT` from the engine phase's P2-4 are gone.** The filesystem now asks the broker, so a read is audited and a rule can refuse it — before that, it could only compare a path with the root. The session classifies a `session/request_permission` by the agent's own `ToolKind` plus its first location, answers with the agent's own option id for the decision (an agent that called its allow option `yolo` receives `yolo`; `AllowOnce`/`AllowAlways`/`Reject*` are matched, not renamed), and cancels the request when the agent offered no option of the kind the decision needs, because approving something nobody offered is not ours to do. Every answer is recorded as a `notice`: `Permission granted` at info, `Permission request denied` at warning, with who decided (`user`, `policy:<id>`, `default`, `session`, `timeout`, `unattended`) in the description. A session with no broker still refuses everything with the agent's reject option, so an unconfigured session cannot imply a grant; `SessionOptions::fs` supplies the filesystem's broker for callers that do not set one. A rule may be scoped to an agent, so the subject carries one: `SessionOptions::agent` is filled from the spec the supervisor started, and a rule naming the manifest's `id` therefore matches the agent that is actually running.
   - **Tests:** nineteen in `permission.rs` (the two glob forms and case folding, first-match-wins with its rule id, a rule needing every constraint it names, the shipped defaults, the documented `[config]` shape, a misspelled decision, an allow and its audit row, a denial that never becomes pending, an inside write needing no person, an ask published with three options and answered once, `allow always` covering the next identical request but not a different path, nobody listening, an expiry that is no longer answerable, and the per-session audit order), fourteen in `fs.rs` (the engine phase's task P2-4 set, with the write tests split by policy: inside allowed and audited, an asking policy refused at once with nobody there, an outside write waiting for approval, a denying policy writing nothing, an expiry), three new in `session.rs` (classification from kind and location, an allow selecting the agent's option with the notice naming the decider, an allow the agent never offered being cancelled), and three in `tests/process.rs` against the engine phase's P2-9 fixture: a write outside the workspace holds the turn while the test checks the file is absent and then writes it after the answer, a denial ends the turn with a refusal the agent can read, and a rule naming the running agent turns that agent's permission request into an allow (the audit says `policy:allow-mock` and the fixture reports the agent's own `allow` option).
   - **Open:** the loader exists — `acpilot-profile::Profile` reads a profile's `config.toml`, and `acpilotd --profile <dir>` puts that policy behind the permissions routes (P3-2) — but a profile *name* resolving to a directory is the profiles phase's P4-2, so a caller still spells the path. The audit lives in memory: the service phase's P3-3 `audit` table is the first thing that keeps it. `GET /v1/permissions` is served (P3-2) but lists pending requests; the audit is not on the wire yet. Rules cannot be reloaded without rebuilding the broker, and a running session holds its `Arc`. Terminal requests reach `Ask` with a registry behind them since the engine phase's task P2-5, so the answer is followed by a real PTY. An `fs/*` callback's audit row has no agent on it: one `Fs` serves every session on its workspace, so the id would be a guess — the session's permission requests do carry theirs.
-- [ ] **P2-7** `acpilot-agent::pty_agent`: the program-as-agent adapter from the design phase's task P0-2, behind `transport = "pty"`; ship two built-in parsers (`plain-transcript`, `ansi-transcript`), a shipped `freebuff` profile as the reference case, and an escape hatch `parser = "script:<path>"` later.
+- [x] **P2-7** `acpilot-agent::pty_agent`: the program-as-agent adapter from the design phase's task P0-2, behind `transport = "pty"`; ship two built-in parsers (`plain-transcript`, `ansi-transcript`), a shipped `freebuff` profile as the reference case, and an escape hatch `parser = "script:<path>"` later. — **done 2026-11-02**
+  - **Result:** `acpilot_agent::pty_agent` is a `PtyAgent` and a `transcript` function. The
+    driver starts a `pty` spec through `Host::spawn_pty`, so an SSH workspace opens its
+    agent on the remote box without this module knowing, and it owns the four things the
+    design phase's task P0-2 found every profile would otherwise repeat: terminal query
+    answers (`CSI ? u`, `CSI > 0 q`, `CSI > c`, `CSI c`, `CSI 6 n`, `CSI 5 n`, `CSI 18 t`),
+    the two-write submit (`text`, the profile's `submit_delay_ms`, then `\r` in its own
+    write, because `text\r` in one write is one paste and the box never submits), bracketed
+    paste framing, and screen capture at the boundary rather than after `exit` — both
+    measured programs run on the alternate screen and leave nothing behind.
+    **The sentinel is the turn boundary, the idle timeout is the backstop.** A sentinel is
+    only accepted once it has gone away since the prompt was submitted, because it is on
+    screen before the prompt is typed, and it must hold still for 150 ms, so a program that
+    redraws its input row mid-turn cannot end a turn on the frame before the answer. The
+    profile's `idle_timeout_ms` still ends a turn when the sentinel never comes back, and a
+    `TURN_DEADLINE` catches a program that animates forever and therefore never goes quiet.
+    **A turn is a transcript, not a screen.** `transcript` cuts everything at and below the
+    sentinel row (input box, status bar, Freebuff's ads), treats the last row repeating the
+    prompt as the user's own line, opens a thought block on `• Thinking` and closes it when
+    a row is indented no further, drops spinner rows and horizontal rules, and pushes
+    consecutive rows with the same author into one `Message`. `Turn` keeps the raw screen
+    beside the messages, so a program that changes its layout is a diff rather than a
+    mystery. Two parsers ship: `plain-transcript` (text) and `ansi-transcript`, which
+    re-renders each cell's fg colour, bold, italic, underline and inverse as SGR runs so the
+    thinking/answer distinction survives into a client.
+    **The escape hatch is refused, not missing.** `parser = "script:<path>"` is still
+    accepted by the loader — it records a path — and `PtyAgent::start` refuses it by name,
+    with the shipped parsers in the message: running a user's script is the extension
+    policy's decision (D18), not a side effect of starting an agent. A spec of any other
+    transport is refused by name too, which is the same rule the supervisor follows in the
+    other direction.
+    **Tests:** seven in the module (the Freebuff and Claude screens from the P0-2 note
+    verbatim, the ANSI parser keeping colour and closing its run, a missing sentinel still
+    yielding the answer, a prompt the program never echoed), and four against a real
+    process on a real PTY (`tests/fixtures/tui_agent.sh`, a shell script whose input row
+    leaves and comes back): a turn ending on the sentinel with the echo, thought and answer
+    in order, the idle backstop ending a turn whose row never returns, an ACP spec refused
+    by name, and a `script:` parser refused rather than run. Windows runs the ConPTY path in
+    `acpilot-host` but has no runner here, recorded rather than hidden — the same gap as the
+    engine phase's task P2-2.
+  - **Open:** nothing in the daemon dispatches `transport = "pty"` here yet. The
+    supervisor still refuses the transport, and a session that carries these turns over
+    `GET /v1/sessions/{id}/events` is the wiring that comes next: `Turn` would become the
+    same `SessionEvent` stream an ACP turn produces, which is why the transcript is
+    messages and not free text. Startup gates (Claude's trust dialog, Freebuff's
+    "subdirectory" modal) have no manifest field yet, so `PtyAgent::send` is how a caller
+    answers one; a profile field is a schema change and therefore a `agents-v2.json`.
 - [x] **P2-8** `acpilot-agent::transcript`: append-only `session.jsonl` (`events`, `grants`, `meta`), reader for replay, compaction into sqlite later. — **done 2026-10-25**
-  - **Result:** `acpilot_agent::transcript` is a writer and a reader for one JSON Lines file per conversation. `Transcript::create` opens with `create_new`, so an existing transcript is refused rather than truncated: if two conversations shared a file, one that neither reader could untangle, append-only would be a lie. The first line is `meta` (version, session, workspace, agent, created_at); `event` lines are the same `SessionEvent` the stream carried, sequence and all, so `replay(path, after)` has exactly the contract of `GET /v1/sessions/{id}/events?after=`; `grant` lines are permission decisions flattened to the words a person reads (`policy:allow-workspace`, not an enum with a rule id inside it), with paths made lossy rather than failing the write over bytes a log cannot spell. A record is one `write_all` of `line + '\n'` on an `O_APPEND` file, so a crash can only ever leave a partial *last* line — `read` stops there and keeps everything before it, while a corrupt line in the middle is an error naming its line number. Nothing is `fsync`ed per record: a turn is thousands of events, and a process crash loses nothing anyway. **The daemon writes them:** `acpilotd` gives each session `<data>/acpilot/transcripts/<id>/session.jsonl` (`ACPILOT_HOME` moves it with the rest of Acpilot's state) and appends every recorded event, with the broker's new audit rows flushed at the end of each turn (the cursor is the audit sequence, so a second conversation's grants are never written twice). A transcript that cannot be written is one warning per session, not a failed turn. `next_id` now skips an id that already has a transcript directory, so a restarted daemon's first conversation does not land on top of a stored one — which is what "never reused" claimed and did not do for a deleted session. **Tests:** five in `transcript.rs` (meta first and never rewritten, replay after a sequence, a grant keeping its decider, a torn tail costing only the last record, a corrupt middle line naming its line), and two in `acpilotd` (a session's events and grants read back from its file, and a stored transcript keeping its id from being reused).
+  - **Result:** `acpilot_agent::transcript` is a writer and a reader for one JSON Lines file per conversation. `Transcript::create` opens with `create_new`, so an existing transcript is refused rather than truncated: if two conversations shared a file, one that neither reader could untangle, append-only would be a lie. The first line is `meta` (version, session, workspace, agent, created_at); `event` lines are the same `SessionEvent` the stream carried, sequence and all, so `replay(path, after)` has exactly the contract of `GET /v1/sessions/{id}/events?after=`; `grant` lines are permission decisions flattened to the words a person reads (`policy:allow-workspace`, not an enum with a rule id inside it), with paths made lossy rather than failing the write over bytes a log cannot spell. A record is one `write_all` of `line + '\n'` on an `O_APPEND` file, so a crash can only ever leave a partial *last* line — `read` stops there and keeps everything before it, while a corrupt line in the middle is an error naming its line number. Nothing is `fsync`ed per record: a turn is thousands of events, and a process crash loses nothing anyway.    **The daemon writes them:** `acpilotd` gives each session
+    `<data>/profiles/<id>/sessions/<session>/session.jsonl` (`ACPILOT_HOME` moves it with the
+    rest of Acpilot's state) and appends every recorded event, with the broker's new audit rows flushed at the end of each turn (the cursor is the audit sequence, so a second conversation's grants are never written twice). A transcript that cannot be written is one warning per session, not a failed turn. `next_id` now skips an id that already has a transcript directory, so a restarted daemon's first conversation does not land on top of a stored one — which is what "never reused" claimed and did not do for a deleted session. **Tests:** five in `transcript.rs` (meta first and never rewritten, replay after a sequence, a grant keeping its decider, a torn tail costing only the last record, a corrupt middle line naming its line), and two in `acpilotd` (a session's events and grants read back from its file, and a stored transcript keeping its id from being reused).
   - **Open:** nothing reads a stored transcript back over the API yet — the file survives a restart, but the session list does not, so reverting to the service phase's task P3-7 (SQLite) is what makes a past conversation reachable. Compaction is the same item.
 - [x] **P2-9** Test fixture: `crates/acpilot-agent/tests/fixtures/mock_agent.rs` — a tiny ACP agent (using the SDK's `Agent` trait) that can be told to stream N chunks, request a permission, request a file write, open a terminal, and hang. — **done 2026-10-23**
   - **Result:** the fixture is a **process**, not an in-process helper, because the gap it was
@@ -398,9 +518,31 @@ and deterministic.
 
 ## Service phase (P3) — Daemon + API (≈10 days)
 
-- [ ] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per the profiles phase's task P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
+- [x] **P3-1** `acpilotd` bootstrap: config (`figment`, layered per the profiles phase's task P4-2), `tracing` (JSON to file + pretty to stderr), `--foreground`, socket binding (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `\\.\pipe\acpilot-$USER` on Windows, TCP `127.0.0.1:7777` opt-in), pidfile + single-instance lock.
   - **Started 2026-10-24:** the socket transport is ADR 0004 §3's step 2, and it landed with the client so the product was never half-moved. `acpilotd` binds `$XDG_RUNTIME_DIR/acpilot/acpilot.sock` (`$TMPDIR` on macOS) by default, creating the directory `0700` and the socket `0600` — the filesystem is the access control, which is the only reason "a local request needs no token" is true. A path another daemon still answers on is refused (`AddrInUse`, naming the flag to move it); one left by a killed daemon is removed and the log says `replaced_stale_socket=true`, which is what makes a crash recoverable without instructions. `--socket <path>` moves it, `--addr <host:port>` is the opt-in TCP listener, both at once is an error rather than a precedence rule, and `SIGTERM` as well as Ctrl-C removes the socket on the way out — a service manager that leaves a socket file behind makes the next start look like a crash. The client needed no new HTTP stack: `reqwest` 0.13 has `ClientBuilder::unix_socket`, so `Client::new` takes either a URL or a path and `--api-url`/`ACPILOT_API_URL` accept both. Defaults live in one place (`acpilot_host::default_endpoint`), so a client's probe and a daemon's bind are the same string by construction. Still open from this item: `figment` configuration, `--foreground`, the pidfile, and the discovery metadata under `daemons/<name>.json`. The bearer token on `--addr` was the last of them and is done — see P3-2 below. The Windows named pipe is P10-5's, so that platform defaults to loopback HTTP for now.
-- [ ] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
+  - **Result (2026-11-03):** the bootstrap is complete. Settings are a `figment` cascade —
+    the user's `config.toml`, then the profile's, then the flags — read as a `[daemon]`
+    table (`socket`, `addr`, `workspace`, `profile`, `database`, `pidfile`, `foreground`)
+    by `acpilotd::config`. A missing file *is* the defaults, a broken one names the file and
+    line, and a flag that was typed beats a file edited months ago; there is deliberately
+    no environment provider, because `--addr` and `--profile` already have one in `clap`
+    and a second spelling is a variable nobody can find in either place. `--foreground` is
+    not a fork — the daemon never forks — it is "stderr only": the default also appends
+    JSON to `<data>/logs/acpilotd.jsonl`, which is what a bug report reads, and the flag is
+    what a service unit sets when the journal owns the log. **Single instance is the
+    endpoint, not the file.** A socket path or a port cannot be bound twice, so the kernel
+    already refuses the second daemon; the pidfile (`<runtime>/acpilotd.pid`, `0600` in the
+    `0700` runtime directory) turns `EADDRINUSE` into "pid 4123 is already serving …".
+    There is no `flock` on purpose: a lock file left held by a process that crashed in a
+    container or on a network filesystem cannot be recovered, and the pidfile's staleness
+    test — does anything answer on the endpoint — is exactly as durable as the thing it
+    guards. A stale file is replaced, and a clean exit removes it.
+    **Open:** the `daemons/<name>.json` discovery metadata ADR 0004 §2 lists is not written
+    yet, so a client still probes the default endpoint rather than reading a registry of
+    them; the Windows transport is the named pipe (P10-5), and until then that platform
+    starts on loopback HTTP.
+- [x] **P3-2** axum router with the endpoints from `docs/api.md`; `tower-http` `TraceLayer`, `CompressionLayer`, `CorsLayer` (web only); `--token` bearer auth for non-loopback binds (`argon2` stored hash).
+  - **Progress 2026-11-03:** `WS /v1/sessions/{id}/stream?after=N` is served: the SSE feed's own `SessionEvent` frames over a socket, replayed from the ring and then followed live, a stored conversation replayed and closed the way its SSE stream ends, a missed broadcast announced as `{"type":"resync","latest_seq":N}` rather than silently skipped, and pings keeping an idle socket alive. Both refusals (`404` for an id neither live nor stored) are the API's envelope *before* the upgrade. Three tests drive a real listener and a real upgrade, since the handshake is most of what the route is. **Mode is served (2026-11-03):** the engine grew the caller ACP was missing — `Session::set_mode` sends `session/set_mode` and follows the agent's answer, and the modes the agent advertised at `session/new`/`session/load` are offered as `Session::modes()` in the API's own `ModeState` shape — and `POST /v1/sessions/{id}/mode` serves it. The daemon caches the advertised list, refuses an id the agent never offered as `400 invalid_request` with the alternatives in `details`, refuses an agent that offers no modes, an ended session and a turn in flight as `409`, and forwards an accepted switch to the session's owner task, which is where a mode change has to happen because only the task holding the `Session` may await it. The agent's own `mode_changed` events update the cached mode, so a second client's picker is right after the first switched; a route test drives a real fixture agent that advertises `ask`/`code`, switches to `code` and refuses `yolo` with the two it offers (`crates/acpilotd/tests/mode.rs`). **Trust is served, and the item is done (2026-11-03):** `POST /v1/agents/{id}/trust` records the SHA-256 of the program the agent's command runs as an `agent_pins` row (schema 2, `migrations/0002_agent_pins.sql`), and `GET /v1/agents` compares that pin with the file on disk, so a replaced binary reads `untrusted` until the route approves the new one — `missing` wins over `untrusted`, because nothing is there to approve. The route answers the agent's own summary, `400` for an agent with no program this host can resolve, `404` for an id the profile does not declare, and `409` for a daemon with no store, since a pin recorded there would be forgotten. Tests: `crates/acpilotd/tests/trust.rs` seeds a stale pin, sees `untrusted`, approves, and sees `available` with the pin replaced and the route in the served document; the store has its own replace-not-accumulate test. The endpoints in the frozen list that this item does not serve belong to other phases: the `/v1/profiles*` routes are P4-2's, and `/v1/workspaces` arrives with workspaces.
   - **Started 2026-10-24:** the token half is served, for a TCP listener rather than for a non-loopback one: a port does not inherit the socket's filesystem boundary, so it does not inherit the exemption either (ADR 0004 §3). 32 bytes from the system source, hex, written to `$XDG_RUNTIME_DIR/acpilot/token` `0600` and reused across restarts so a client is not re-taught a secret every launch. The client is given the token rather than looking it up — `Client::with_token`, with `acpilot tui --token` / `ACPILOT_TOKEN` / the file resolved in the binary that has a user — so a library call cannot mean two things in two processes. The file handling moved to `acpilot_host::token` when `acpilot token rotate` arrived: the daemon reads the file per request rather than at startup, so a rotation applies on the next call and nothing restarts, which is the only kind of rotation anyone performs on a token they think leaked. The constant-time comparison moved with it. **Not hashed with `argon2`** as this item first proposed, and the reason is worth recording: hashing protects a secret stored where someone can read it, and this file is already readable only by its owner — a hash would add a second secret that also has to be protected, and no protection. That changes if the token ever moves into `config.toml` (P4-2), where a hash is the difference between a leak and a leak of a verifier. The middleware compares in constant time, accepts `bearer` in any case (the scheme is case-insensitive; the token is not), and answers `401 unauthorized` in the standard envelope. A client that gets a `401` from its probe now reports "refused the token, it is in …" instead of "no daemon" — the difference between editing a file and starting a second daemon. The socket listener deliberately requires nothing. `/docs` is the one route on a TCP listener that answers without a token — a browser cannot attach a header to a typed address, and the page is where the token gets pasted — so the page asks for it in a field and sends it on the contract fetch and on every "Try it out" call, keeping nothing in web storage. Still open here: the `tower-http` layers, `CorsLayer` for the web phase, and the `argon2` path for a token that lives in configuration.
   - **Started 2026-10-22:** `GET /v1/agents` serves an injected `acpilot_agent::Registry` with
     `AgentStatus` from `acpilot_agent::supervisor::availability` (a `PATH` lookup on the daemon's host,
@@ -453,23 +595,145 @@ and deterministic.
     and the keyring namespace is the directory's last segment (`Profile::name`). Still open: the
     registry is loaded, not watched — an edit to `agents.toml` reaches a running daemon only after a
     restart.
-- [ ] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s, and answer an un-replayable id with `event: resync` carrying the latest seq instead of pretending to catch up (`docs/api.md`). Pending permissions are state, not history: the client fetches `GET /v1/permissions?status=pending` on connect and the stream only announces new requests.
+  - **Started 2026-11-03:** the layers are in and the routes are not all there. `TraceLayer` gives every request one span, `CompressionLayer` compresses JSON above 1 KiB and is told not to touch `text/event-stream` (a compressed stream is a stream that arrives when the compressor decides), and `CorsLayer` is applied only when `[daemon] cors = true` — off by default, because the page is same-origin and Vite proxies `/v1`, and a permissive layer on a token-guarded TCP listener lets any page that learns the token read every stream. Four tests in `acpilotd/tests/layers.rs` pin exactly those three claims. **Open:** "the endpoints from `docs/api.md`" is still not true: `POST /v1/agents/{id}/trust`, `POST /v1/sessions/{id}/mode` and `WS /v1/sessions/{id}/stream` are documented and have no route; the box stays unchecked until they exist or the document stops promising them.
+- [x] **P3-3** Event bus: per-session `tokio::broadcast` + monotonic seq; `GET /v1/sessions/{id}/events` as SSE with `Last-Event-ID` replay from the transcript (reconnect-safe). Include a heartbeat every 15 s, and answer an un-replayable id with `event: resync` carrying the latest seq instead of pretending to catch up (`docs/api.md`). Pending permissions are state, not history: the client fetches `GET /v1/permissions?status=pending` on connect and the stream only announces new requests.
   - **Started 2026-10-23:** the state half is served (see the service phase's task P3-2): the pending list and the resolve route are the two calls a reconnecting client needs, so the part of this item that does not depend on SSE exists. `GET /v1/events` now announces `permission.requested` with a heartbeat and `resync` (also the service phase's task P3-2), so the polling loop `docs/api.md` rules out is gone for permissions. Still open: the *session* stream (`GET /v1/sessions/{id}/events`), replay from the transcript with `Last-Event-ID`, the per-session monotonic `seq`, and `permission.resolved` — the broker does not broadcast decisions, so a client that watches another client resolve still refetches the list.
-- [ ] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
-- [ ] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
+  - **Result (2026-11-03):** the session stream, its per-session monotonic `seq`, transcript replay from `Last-Event-ID`, and the state-not-history rule for pending permissions were already served; the missing half was the answer. `Broker::answer` now broadcasts `(request id, option)` to `subscribe_resolved`, after the decision is delivered rather than before (a frame saying "decided" for a decision nobody received would close a dialog over a question still pending somewhere else), and `GET /v1/events` carries it as `event: permission` with `{"type":"resolved","request_id","option"}`. `acpilot_client::ProfileStream` grew a `Resolved` variant, and the TUI refetches the pending list when it sees one, so a second window that was showing the question stops showing it. The acceptance test asserts the frame arrives for the request it resolved.
+  - **Open:** a decision the *policy* made is not announced, because it never appeared on the pending list — there is no dialog to close. The profile stream still does not replay, by design: requests are state, and a client that missed one fetches the list.
+- [x] **P3-4** `POST /v1/sessions/{id}/prompt`: idempotency key, returns `202` + `turn_id`; stream deltas on SSE. `POST .../cancel` maps to ACP `session/cancel`.
+  - **Result (2026-11-03):** the prompt route already answered `202` with `PromptAccepted { session_id, turn_id, first_seq }` and `cancel` already mapped to ACP `session/cancel`; the missing half was the key. `Record` keeps the acceptance per `idempotency_key`, and the check happens **before** the busy test — a client that retries the request it just sent must get the same body even though that answer started a turn which is in flight by then. A different key while a turn runs is still `409`, which is the state a UI has to show; the same key after the turn ends is still the original body, so a retried prompt cannot start a second agent run. One unit test pins the memory, and the acceptance test exercises the route without a key.
+  - **Open:** the keys live in the process. A daemon restart forgets them, and a retried prompt then becomes a new turn — recording them in the session's database row is the next step, and it needs the session lifecycle before it means anything.
+- [x] **P3-5** Files API: `GET/PUT /v1/files` with workspace-relative paths, ETag (`mtime+size+hash`), `If-Match` for optimistic concurrency, 10 MiB cap, binary detection. Path traversal tests.
   - **Started 2026-10-24:** `GET /v1/files?path=`, `GET /v1/files/list?path=` and `PUT /v1/files` are served. The etag is `mtime-size-hash16`: the first two make a change visible without reading the file, the hash catches an edit that preserved both. `if_match` absent means create (and an existing file is `409`), present means replace only if it is still that version; neither is retried or resolved by the daemon. Traversal is refused in two independent ways rather than one: components are checked before joining (`..` is a `400`, not something to resolve, so the answer does not depend on whether the directory it climbs out of exists), and the resolved path is compared against the canonical root, which is the only check that catches a symlink inside the workspace pointing outside it (`403`). A directory is `409` naming the list route, and a file is `409` naming the read route, because "you asked the wrong question" is more useful than an empty answer. Binary is `400` on invalid UTF-8 *or* a NUL byte (a UTF-16 file is valid in the bytes it shares), the 10 MiB cap is checked before and after the read, and a missing parent directory is `404` — the route saves files, it does not build trees. Fifteen tests: the read/etag round trip, a directory, three spellings of `..`, an absolute path, a symlink escape, binary content, the cap, listing shape and sort order, listing a file, create/replace/conflict/stale-token/missing-file writes, a write into a missing directory, a write that escapes, unknown and absent workspaces, and the OpenAPI paths. Still open: no delete, no create-directory, no watch (the editor phase, P6, will say what a save needs), and no `acpilot` verb until the command-line phase (P5).
-- [ ] **P3-6** Terminals API: create/attach (`WS /v1/terminals/{id}/attach`), resize (cols/rows), detach-without-kill, replay last screen on attach (from `vt100` state).
+  - **Result (2026-11-03):** the read/list/write half was already served with the `mtime-size-hash16` etag and two independent traversal guards; this added the two operations the editor actually needs and kept the same rule for both. `DELETE /v1/files?path=` removes a file and refuses a directory (`409`: deleting a tree is a decision about somebody's day, not a path operation), `POST /v1/files/directory` makes a directory **and its parents** because a new-folder dialog names the folder, and it resolves the deepest existing ancestor before creating anything — a symlink in the middle of the path is how `create_dir_all` lands outside the workspace. Eight tests, including the symlink escape, the `../` refusal, and the recursive-delete refusal.
+  - **Open:** no watch — a save is what the editor phase (P6) will say a watcher is for, and a daemon polling every workspace file on a timer is not it. No recursive delete by design.
+- [x] **P3-6** Terminals API: create/attach (`WS /v1/terminals/{id}/attach`), resize (cols/rows), detach-without-kill, replay last screen on attach (from `vt100` state).
   - **Started 2026-10-24:** `POST /v1/terminals` starts a PTY and returns the summary once the process is running, so the id it hands back is attachable immediately; `GET /v1/terminals?session=` lists them. The terminal is a [`vt100::Parser`] fed by the thread that pumps the PTY, and a pane's replay and its subscription are taken under one lock — screen first, then subscription would drop whatever arrived in between, subscription first would repeat it. Replay is `contents_formatted()`, i.e. the escape sequences that reproduce the current screen, sent as the binary frame `attached.replay_bytes` announces, so a pane opening on a command that finished two minutes ago shows what it printed. Binary frames are bytes in both directions and text frames are control (`resize`, `detach` from a client; `attached`, `exit` from the daemon) because a shell can print `{"type":…}` and the two must not be confused. A `cwd` is resolved against the workspace and refused outside it (`403`); a zero dimension is `400` before anything is spawned; a command that will not start is `500 io`, naming the command. Closing the socket never ends the process — that is what "detach without kill" means — and a pane that stops reading is closed with an error code rather than queued without bound, which costs it one screen to reattach. The default shell lives in `acpilot-host`'s platform files (`$SHELL`, else `sh`; `%COMSPEC%`, else `cmd.exe`), so the daemon has no branch of its own. Nine tests: six route tests (empty list, no workspace, zero size, args without a command, unknown session, missing size) and, against real PTYs, a late pane's replay, typed bytes, a resize that `stty size` reports, a pane leaving without ending the process, a refused zero dimension, and the list's shape.
-  - **Started 2026-10-25 (an agent's terminals are panes too):** the agent side keeps its ring for `terminal/output`, but a pane needs the bytes as they arrive, somewhere to put a keystroke, and a wake-up when the program ends, so `acpilot_agent::terminal::TerminalHandle` hands over exactly those: a backlog-and-subscription pair taken under one lock (the pair is what makes a replay gapless), a write, a resize, a kill, and an exit watch. `Terminal::adopt` builds the same `vt100` screen and the same attach machinery over that handle, so `agent-terminal-1` appears in `GET /v1/terminals?session=` and is attached through the same socket. It is the same PTY, not a copy: what a person sees and what the agent polls cannot disagree, the agent's ring is untouched by a keystroke, and the process stays the agent's — the pane ends when it ends. The daemon mirrors at boot (`AppState::mirror_agent_terminals`), adopting each terminal as it opens and filing it under the session id a client holds — the agent's ACP id is mapped back through `Sessions::id_for_acp`, a scan rather than a second index that would have to stay in step with creation, removal and a failed start — and a session it cannot map is filed under the agent's own id rather than dropped.
+  - **Started 2026-10-25 (an agent's terminals are panes too):** the agent side keeps its ring for `terminal/output`, but a pane needs the bytes as they arrive, somewhere to put a keystroke, and a wake-up when the program ends, so `acpilot_agent::terminal::TerminalHandle` hands over exactly those: a backlog-and-subscription pair taken under one lock (the pair is what makes a replay gapless), a write, a resize, a kill, and an exit watch. `Terminal::adopt` builds the same `vt100` screen and the same attach machinery over that handle, so `agent-terminal-1` appears in `GET /v1/terminals?session=` and is attached through the same socket. It is the same PTY, not a copy: what a person sees and what the agent polls cannot disagree, the agent's ring is untouched by a keystroke, and the process stays the agent's — the pane ends when it ends. The daemon mirrors at boot (`AppState::mirror_agent_terminals`), adopting each terminal as it opens and filing it under the session id a client holds — the agent's ACP id is mapped back through `Sessions::id_for_acp`, a scan rather than a second index that would have to stay in step with creation, removal and a failed start — and a session it cannot map leaves the pane **sessionless** — `session_id: null` — rather than filed under an id no session resolves, so `GET /v1/terminals` with no filter lists it and a client can still offer it.
     **Two races the pump has to get right, both found by the tests.** A program that ended before the pane existed has already recorded its exit, so the loop checks for one at the top of every pass instead of waiting for a change to a value that is already there (that hangs forever); and because the exit and the program's last bytes can be ready at once, the pump drains the queue before closing, or a `select!` that picks the exit draws the screen without the program's final line. The handle is dropped before the pane reports itself over, so `alive: false` means there is nowhere left to type — and `write` says so instead of buffering into a closed PTY. **Tests:** eight, in `acpilotd/tests/agent_terminals.rs` and `acpilot-agent/tests/terminals.rs` — the announcement with what the terminal printed, a keystroke reaching the agent's process, the pane ending when the program does, a pane adopted after the program ended still showing its output and hearing its exit code, the daemon mirroring on its own, and `terminal/kill` through ACP ending the program a watcher sees. They spawn `/bin/sh`, so they live in `tests/` where a platform branch is allowed; the workspace's boundary test is why none of this is in the module's own test block.
   - **Open:** no HTTP resize or kill route on a pane (the WS control frame is the resize; ending an agent's terminal is the agent's `terminal/kill`), and no closing of a session's terminals when the session is deleted. A pane's replay is still only the visible screen (`SCROLLBACK` is zero in the daemon), so a client's history begins when it attaches — the client keeps its own ten thousand lines (P6-10). The client half is served: `acpilot_client::terminal::Terminal` upgrades the attach over a socket or plain TCP and speaks both frame kinds, and the TUI draws it — see task P6-10.
-- [ ] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
+  - **Result (2026-11-03):** create/list/attach, replay and agent terminals were already served; this closed the three ways a pane ends up unmanageable. `POST /v1/terminals/{id}/resize` relays a size for a pane with no socket yet (a restored layout), `DELETE /v1/terminals/{id}` ends the program and forgets the pane, and deleting a session closes its terminals — a shell nobody can list is a process nobody can find, which is the leak that follows from `terminal/release` being optional in ACP. A pane of an **agent's** terminal is refused by `DELETE` with `409`: that process belongs to the session, and `terminal/kill` over ACP is its owner's way to end it, so HTTP does not become a second owner. Tests: a real `/bin/sh` created, resized to 100×30 and deleted over the router, and both routes answering `404` for an unknown id.
+  - **Open:** scrollback is still zero, so an attach replays only the visible screen (the client keeps its own history, P6-10), and an agent's pane is ended by the agent rather than by this daemon.
+- [x] **P3-7** SQLite: `migrations/0001_init.sql` (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`); `rusqlite` with `bundled`; WAL; `PRAGMA foreign_keys=ON`; migration runner on boot; retention job (events older than 30 days compacted). One database
   per profile (P4-4), so migrations run once per open profile — keep them idempotent.
-- [ ] **P3-8** Hosts API: `POST /v1/hosts` (`local|ssh|wsl`), connection test endpoint, capability report (can spawn? can read fs? latency).
+  - **Result (2026-11-03):** `acpilot-store` is the crate, `migrations/0001_init.sql` the
+    schema (`workspaces`, `hosts`, `agents`, `sessions`, `events`, `grants`, `terminals`),
+    and `acpilotd` opens it on the first request that needs history, marks every session a
+    previous process left open as `closed`, and writes each session row, event and permission
+    decision as it happens. One database per profile (`Profile::data_dir()/profile.sqlite`), so a client's conversation
+    cannot sit beside a weekend project's; a daemon with no profile uses the shared data
+    directory. `WAL`, `foreign_keys = ON` and a `busy_timeout` are set per connection, not
+    hoped for per database. **The migration runner is 25 lines here, not
+    `rusqlite_migration`:** that crate links its own `sqlite3` and the workspace pins
+    `rusqlite`, which Cargo refuses (`links = "sqlite3"` twice). `PRAGMA user_version`, one
+    transaction per step with the bump inside it, and a database newer than this build is
+    refused rather than half-read. Retention is a deletion of events older than 30 days
+    (`RETENTION_DAYS`), swept at boot and every six hours; grants are kept, because a
+    decision is the audit and the transcript beside it is the copy that outlives the
+    window. **The routes read it:** `GET /v1/sessions` merges stored sessions with live
+    ones, `GET /v1/sessions/{id}` falls back to the store, and
+    `GET /v1/sessions/{id}/events` replays a stored conversation from `after` and then
+    ends, because a history has no live feed. `next_id` consults the stored ids as well as
+    the transcript directories, so a restart cannot reuse an id a client still holds.
+    Tests: eight in the crate (a second open is the same database at the same
+    `user_version`; WAL and the foreign key are on; replay is ordered; a re-delivered
+    sequence is an update; retention keeps the recent and the decisions; a status moves
+    without rewriting the conversation; a grant keeps its rule) plus the acceptance test
+    that restarts the daemon and reads the conversation back.
+    **Open:** `terminals` exists and nothing writes it yet — a pane is a live PTY, and what
+    survives is the session; grants are never compacted, which is the next schema's
+    retention question rather than a bug; and a stored session can be read but not resumed
+    (a prompt to one is `409`), because what "resume" means for an agent that keeps no
+    state is the engine's and the models phase's decision, not the storage layer's.
+- [x] **P3-8** Hosts API: `POST /v1/hosts` (`local|ssh|wsl`), connection test endpoint, capability report (can spawn? can read fs? latency).
+  - **Result (2026-11-03):** the routes the contract listed and the daemon did not have. `GET /v1/hosts` lists the daemon's own host first, `connected` with every capability true — that is a fact about this build, not a probe, since the daemon is running there. `POST /v1/hosts` takes `{ kind, address? }`, refuses `local` (it is already listed) and a remote host without an address, and derives the id from the transport and the address so the same host twice is a `409`. A remote host is added as `connected: false` with **no** capabilities: an optimistic `true` would be a client offering to spawn an agent on a machine nobody has reached. Added hosts are written to the `hosts` table the schema already had and seeded back at startup, so a restart does not forget them. `POST /v1/hosts/{id}/test` answers for the local host and for `ssh`/`wsl` starts `acpilotd-helper` over the host's own transport and shakes hands, answering the protocol-1 capabilities as `connected: true` or `502 host_unavailable` with `transport` in `details`; returning `connected: false` there would be indistinguishable from a host that is merely asleep.
+  - **Open:** latency is not reported. A handshake is one line each way, and a number from it would say more about where the helper runs than about the host. Remote hosts are reachable (2026-11-03): the test runs `acpilotd::helper::probe`, which starts the helper through `ssh -o BatchMode=yes <address> acpilotd-helper` or `wsl.exe -d <distro> -e acpilotd-helper` (the programs are `ACPILOT_SSH`/`ACPILOT_WSL` when they are not on `PATH`), so `connected` only becomes true when a helper answered in this process. What remains is reuse: each test is one helper, and a session that keeps one alive is the remote-workspace work P3-9 still lists.
   - WSL specifics, from the design phase's P0-5 `workspace` measurement (`docs/notes/wsl-helper.md`): discovery is one `wsl.exe -l -q`, and **absence must be silent** — no distro, a failing `wsl.exe`, or an empty list means no `wsl://` host, no prompt, no error; drop `docker-desktop`. That rule is already written and tested in the probe (`probes/wsl-helper/src/discovery.rs`, five real-process tests on both OSes), so the service phase's task P3-8 should reuse the code rather than restate the rule. A folder opened as `\\wsl.localhost\<distro>\...` becomes `wsl://<distro>` plus a Linux cwd (infer the distro from the path, don't ask). Spawn one helper per host and multiplex ids (0.1 ms per message vs ~125 ms per spawn), always with `--cd <linux path>` and an absolute helper path. Read files in-distro: the same 37 KB file costs 13.0 ms over UNC and 0.096 ms inside (136×), so UNC is for read-only browsing only.
-- [ ] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
-- [ ] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
+- [x] **P3-9** `acpilotd-helper`: a 300-line stdio JSON-RPC shim that the daemon drops into a remote/WSL host and reuses for fs+PTY+spawn+LSP, so remote behaviour is identical to local. Static musl build, embedded in the daemon binary (`include_bytes!`), uploaded on connect with a version handshake.
+  - **Result (2026-11-04):** the helper travels, and a far host is asked its own questions.
+    A build given `ACPILOT_HELPER_BIN` embeds the binary (`build.rs` writes an empty file
+    when it was not, so `include_bytes!` always has a path and `bundled()` turns the empty
+    case into `None`); the first connection to a host writes it to
+    `~/.local/bin/acpilotd-helper` with one `sh -s` — the bytes as base64 in a quoted
+    heredoc, `chmod 755`, then a rename, so a helper that is running is replaced rather
+    than truncated underneath itself — starts that copy with
+    `sh -c 'exec "$HOME/.local/bin/acpilotd-helper"'`, and falls back to a helper already
+    on the host's `PATH` when the write is refused: a read-only home is a machine
+    somebody prepared by hand, not an unreachable host, and a failure names both attempts
+    instead of the last one. It uploads once per host per process, because `Connections`
+    only dials when nothing is live; `ACPILOT_HELPER_DIR` moves the directory, which is
+    also the test seam that keeps a suite out of a developer's real `~/.local/bin`.
+    `helper::Transport` replaced the `(program, args)` pair at every call site, so the
+    commands for the three ways to reach a helper — on `PATH`, installed, installing — are
+    built in one place (`hosts::remote_command` and its `Step`). The release workflow
+    builds the musl helper before the daemon and sets the variable, so the packaged
+    daemon carries one. Tests: the transport, the install and its reuse against stand-in
+    hosts (`tests/helper_install.rs`, three), a unit test that the install script writes
+    four thousand bytes — NULs, newlines and the heredoc's own delimiter among them —
+    through a shell and back byte for byte, and the existing handshake suite on the
+    low-level `probe_with`/`request_with` seam.
+    **A remote tree knows what the far host knows.** `GET /v1/files/list` on a remote
+    workspace asks `git status --porcelain=v2 -z` through the helper's `exec` and draws
+    the same letters as the local listing — `acpilot_git::parse_status` became public for
+    exactly that reason, because one parser is one answer — and a new `fs.ignored` method
+    runs `git check-ignore -z --stdin` on the host for the hidden rows. `.git` is never a
+    row, `include_ignored` shows a hidden one marked `ignored: true`, and a host that
+    cannot answer — no `git`, not a repository, a helper from before `fs.ignored` — shows
+    every file rather than losing rows or claiming it checked. One thing worth writing
+    down: `-z` makes the separator NUL on the *input* as well as the output, so newlines
+    there read as paths git never saw and return an empty list that looks exactly like a
+    repository with no rules. Tests: three route tests over a stand-in host
+    (`tests/remote_git.rs`) and two in the helper's suite against a real `git` repository.
+  - **Open:** LSP over the helper is the language-intelligence phase's P7, not this
+    layer's — the helper says so in `hello` (it lists `fs.*` and `exec`), and a client is
+    only offered what the far side claimed. A PTY was on this list too and shipped as
+    P8-6, which is where its result and its remaining gaps are written down.
+    A remote `FileContent.marks` (gutter letters for one file) is still empty: it is a
+    second `git diff` question nobody has asked. The Windows build carries no helper, so
+    a Windows daemon reaches WSL only through one already installed in the distro (P9-3
+    uploads it); `git` must be on the host for letters and hidden rows; and there is no
+    watch on a remote workspace — polling is P8's.
+  - **Progress 2026-11-04:** a workspace can live on a remote host. `GET/POST /v1/workspaces`
+    records a host and an absolute root, and checks the root before it does: a local root is a
+    `stat`, a root on an ssh or wsl host is an `fs.list` through the helper — which makes the
+    workspace registry the first real caller of `Connection::request`, and a refusal says which
+    side said no (`404` for a missing directory, `502` naming the transport, `409` for a helper
+    that does not read files). Reading and listing that workspace's files goes through the same
+    transport: `GET /v1/files` and `GET /v1/files/list` take the workspace's id and ask
+    `fs.read`/`fs.list` with the root mailed onto a workspace-relative path, so a client that
+    picks a remote workspace gets that machine's text and rows rather than this one's. The routes
+    that walk the filesystem (search, grep, references, diagnostics) refuse a remote workspace by
+    naming its host instead of answering about the wrong machine. Tests: six for opening a
+    workspace, one over a stand-in `ssh` for the remote open, and four for remote read/list/path
+    rules against a stand-in helper. **Second slice (2026-11-04):** writing, deleting and making
+    a directory go through the same transport. `fs.remove` and `fs.mkdir` are the helper's two
+    new methods, `PUT /v1/files` carries the workspace in its body, and a remote `if_match` is
+    checked by reading the file again over the same transport — a create is a read that failed —
+    so a stale token and an unasked overwrite are the `409`s they are locally. Removal answers
+    `removed: false` for a directory rather than deleting a tree, and creation answers
+    `created: false` for a path that was already there, because only the far side can tell
+    "not a file" from "not found". Tests: three more in `remote_files.rs` over a stand-in that
+    answers `fs.write`/`fs.remove`/`fs.mkdir`, and two in the helper's own suite for the two new
+    methods. **Open:** ignore rules and git letters on a remote workspace; PTY and LSP over the
+    helper; and the static musl helper below.
+  - **Progress 2026-11-03:** the protocol half is served. `acpilotd-helper` is a held-open process speaking line-delimited JSON-RPC 2.0: `hello` answers this build's protocol number (1) and refuses another by number rather than half-answering, `fs.read`/`fs.write`/`fs.list` are the three operations `acpilot_host::Host` asks for, and `exec` runs a program with piped stdio and reports the exit code — absent when a signal ended it, so "exited 0" and "was killed" are not the same answer — with what it printed. A non-UTF-8 file is refused rather than lossily decoded, an unknown method is `-32601` naming it, and a line that is not a request is answered instead of dropped, because a caller waiting on a reply it will never get is worse than an error. Paths are spelled with forward slashes on the wire so one file has one spelling on two operating systems. Seven tests spawn the real binary and speak lines to it. **The daemon connects (2026-11-03).** `POST /v1/hosts/{id}/test` now starts the helper over the host's transport and handshakes with it: `crates/acpilotd/src/helper.rs` builds the transport command, writes one `hello`, reads one reply, and reports protocol 1's capabilities — or the reason it did not answer, as a `502` naming the transport rather than a stored `connected: false`. The handshake is version-checked from both sides, so a new daemon beside an old helper is refused by number instead of failing a call later. Tests: four for the daemon's half against standing-in programs (`sh` answering a canned handshake, answering another protocol number, answering nothing, and not existing), and the hosts route test now asserts the `transport` detail on an unreachable `.invalid` host. **A host's helper is kept (2026-11-03):** `helper::Connections` holds one connection per host, so testing the same host twice asks the helper that answered the first time instead of booting the transport again; a connection that stopped answering is dropped and dialled once more, which is what keeps a host that came back from reading as failed for the rest of the process. The stand-in test proves the reuse by exiting silently when it is started a second time, so only a kept connection can answer. **Still open in this item:** the PTY (`exec` is the half that runs; a terminal without `unsafe` needs the host crate's backend, which this dependency-light binary does not link), LSP proxying, the static musl build with the `include_bytes!` upload (so far the helper has to be on the host's `PATH`). **What the far side can do is its own answer (2026-11-03):** `hello` lists the methods the helper serves and `crates/acpilotd/src/helper.rs` turns that list into capabilities — `fs.*` is files, `exec` is programs, `pty.*` and `lsp.*` the two it has not grown yet — so a helper that gains a PTY is offered with one without a protocol bump, and one that does not offer `exec` is never a host to start an agent on. A helper from before the list gets protocol 1's files and programs; a helper that lists nothing offers nothing, because that is what it said. A test calls every advertised name so the list cannot promise what `call` does not serve. **A kept helper can be asked things (2026-11-03):** `Connection::request` writes one request and reads one answer off a reader thread whose channel gives every call a 20 s budget, checks the reply names the request it answers (so another conversation's answer is refused, not taken), and turns a refusal into `method: message (code -32000)` — the code the helper chose is kept, because -32601 and -32000 are different failures to a caller. `dial_within` is what lets a test prove the timeout with 300 ms instead of a hung suite.
+- [x] **P3-10** Tests: `axum` route tests with `tower::ServiceExt::oneshot`; a live-server test that opens SSE and asserts ordered delivery; `insta` snapshots of all error bodies.
   - **DoD:** `acpilotd` runs headless, a scripted `curl` session (create → prompt → stream → permission → resolve) works, and SSE replay after disconnect loses no events.
+  - **Result (2026-11-03):** `crates/acpilotd/tests/acceptance.rs` is that DoD as three
+    tests over a real socket, with the mock agent as a child process. Create → prompt →
+    stream → permission → resolve: the pending request is fetched, resolved with
+    `allow_once`, the turn ends, the session returns to `idle`, and a second turn on the
+    same session streams. Drop and reconnect: two events read, the stream dropped, and
+    `Last-Event-ID` replay delivers the rest with every sequence exactly once. And the
+    storage half: a daemon is stopped, a second opens the same directory, and the
+    conversation is listed as `closed` with its events replayed and the stream ending.
+    **One contract the test had to learn:** the broker refuses a request when nothing is
+    subscribed (`DecidedBy::Unattended`), so a request only becomes pending for a daemon
+    with a client on `GET /v1/events` — the test subscribes before prompting, which is
+    what a UI does, and that refusal is why a headless daemon cannot park a turn forever.
+    **Open:** the `insta` snapshots of every error body are still unwritten (each route's
+    suite asserts its envelope's fields instead), and the `curl` script the DoD names is
+    the test rather than a checked-in shell script, because the client speaks the same wire.
 
 ---
 
@@ -489,7 +753,7 @@ Three rules:
 3. **Isolation by construction.** Separate secrets namespace, separate SQLite, separate
    sessions. Cross-profile access needs an opt-in and leaves an audit line.
 
-- [ ] **P4-1 · `acpilot-profile` crate** (1.5d)
+- [x] **P4-1 · `acpilot-profile` crate** (1.5d) — **done 2026-11-08**
   - `ProfileId` newtype (slug `[a-z0-9][a-z0-9-]{1,31}`, case-insensitive input, reserved
     `default|global|system`); `Profile { id, label, extends, created_at }`.
   - `ProfileRoots { config, data, cache, state, runtime }` via `directories`: Linux
@@ -498,9 +762,23 @@ Three rules:
   - `ACPILOT_HOME` override for tests, portable installs, and CI; every test uses a temp root.
   - Global registry `config.toml`: `schema_version`, `active_profile`, `[daemon]` settings, one
     table per profile. No secrets in it, ever.
+  - **Result (2026-11-08):** the new `acpilot-profile::catalog` module has `ProfileId` (shape,
+    case folding, reserved names), `ProfileRoots` (five roots from `directories`, or all five
+    under one `ACPILOT_HOME`), and `Registry` (schema 1, `active_profile`, `[daemon]`, one
+    `[profiles.<id>]` table each; unknown top-level tables such as `[preferences]` survive a
+    save). The crate's existing `Profile` is the *opened directory* handle, so the registry row
+    is named `ProfileRecord` and is keyed by its id rather than repeating it inside the table.
+    `Profile` gained `id()`/`roots()`, and `Profile::named` now parses through `ProfileId`, which
+    closes the `../` traversal a raw `join` allowed. Five catalog tests plus the named-profile
+    traversal regression pass.
+  - **Open:** no `profile new/list/use` command writes the registry yet; `profile new` is P4-9.
+    `active_profile` is read by the P4-3 launch resolver. Creating a profile still does not create
+    its roots — P4-4 owns the first write. The macOS directory is the documented lower-case
+    `Application Support/acpilot` because that is the root this crate already resolves through
+    `directories`; the ticket's `Acpilot` spelling is not used anywhere else.
 
-- [ ] **P4-2 · Config cascade** (1.5d)
-  - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. Still open here: profile files, `ACPILOT_*` env, CLI flags, `extends`, the union rules for `disabled`/`deny`, the unknown-key warning, and `acpilot config explain`.
+- [x] **P4-2 · Config cascade** (1.5d) — **done 2026-11-09**
+  - **Started 2026-10-24 (the project half):** three of the six layers are real — built-in defaults (`acpilot-profile/defaults.toml`, data rather than code, as this item asked), the user's `config.toml`, and the project's `.acpilot/config.toml` — merged per key by `acpilot_profile::settings::Settings`, with figment so the remaining providers are one `merge` each. The project layer is the marker too: `acpilot_profile::project::Root` resolves a launch (see P4-3). A **temporary** root has no project layer at all: a directory with no `.acpilot/config.toml` runs on the user's file and the defaults, and nothing is written — the marker appears when settings are saved, not because a file was opened. The rest — profile files, `ACPILOT_*` env, flags, `extends`, the union rules, the warning and `explain` — is in the Result below.
   - Per-profile files: `profile.toml` (preferences), `agents.toml`, `lsp.toml`, `policy.toml`,
     `keymap.toml`, `theme.toml`.
   - `agents.toml` has **one reader**: `acpilot_agent::manifest::parse_definitions`, which
@@ -513,29 +791,91 @@ Three rules:
     `extends` merges beneath the child (max depth 4, cycles rejected).
   - Unknown keys warn once (so a newer config on an older binary still runs); invalid values
     fail with file, line, and key. `acpilot config explain <key>` prints the winner and its origin.
-  - [decide] D13: full `extends` inheritance vs copy-on-create. Recommend `extends` for
-    `agents`/`policy`/`lsp`, copy for preferences (easier to reason about, harder to surprise).
+  - **Result (2026-11-09):** the six layers are real. `acpilot_profile::settings::Cascade`
+    merges defaults < global `config.toml` < a profile's `config.toml` and `profile.toml` <
+    workspace `.acpilot/config.toml` < `ACPILOT_*` < flags, per key, and keeps the winning
+    origin for every leaf. `extends` is a layer order (parent first), capped at four profiles
+    with a named cycle refusal. Arrays replace except `disabled` and `deny`, which union. An
+    unknown key warns once and the read continues; a wrong type fails with the file, line and
+    key. `acpilot config explain <key>` prints the winner and its origin, and a bare key means
+    the same preference as `preferences.<key>`. `Settings::for_launch` is used by `Root`,
+    `acpilotd` and the TUI, so a launch under a profile reads and watches `profile.toml` as
+    well as `config.toml`. Environment overrides are `ACPILOT_PROFILE`,
+    `ACPILOT_PREFERENCES__TAB_WIDTH` and the bare `ACPILOT_TAB_WIDTH`; unrelated `ACPILOT_*`
+    variables are not settings. Seven new settings tests (41 in the crate) plus a CLI
+    integration test cover the order, inheritance, cycle/depth, union, warning and origin.
+  - **Open:** no command exposes a preference flag yet, so the flags layer is an API for P4-9.
+    `agents.toml`, `lsp.toml`, `policy.toml`, `keymap.toml` and `theme.toml` are still owned by
+    their readers; ADR 0012 chooses copy-on-create for those domains, so `extends` does not
+    merge them (P4-9's `profile new` copies them). `acpilot doctor` does not list unknown keys
+    or origins yet, and `acpilot profile diff` remains P4-9.
+  - [x] D13: **`extends` layers non-secret settings; security-sensitive files are copied when
+    a profile is created** (decided 2026-11-09, ADR 0012). The reverse — inheriting agents,
+    policy and language servers — was recommended in the plan, but it makes a child inherit a
+    credential reference or a permission rule it never named. Preferences are safe to layer and
+    surprising to copy, so the rule is the other way round.
 
-- [ ] **P4-3 · Resolution order + workspace marker** (0.5d)
-  - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected. Still open here: `--profile`/`ACPILOT_PROFILE` precedence over the marker (today `--profile` simply wins), `active_profile` in the global file, auto-creating `default`, the `acpilot profile new` hint, and the precedence matrix as a test table.
-  - `--profile` > `ACPILOT_PROFILE` > `.acpilot/profile` (committed, one line, no secrets) >
-    `config.toml:active_profile` > `default` (auto-created on first run).
+- [x] **P4-3 · Resolution order + workspace marker** (0.5d) — **done 2026-11-09**
+  - **Started 2026-10-24:** the marker and the path rules are served. `.acpilot/config.toml` is the marker, and its `profile` key is the equivalent of `.acpilot/profile` above — one file rather than two, because the profile name is one line of project settings and a second marker file would be a second thing to commit. A launch resolves a **path**: a directory is the root as named (no climbing, so naming `src/` does not silently edit its parent), a file climbs its parents to the nearest marker, and a file with no project above it is a temporary root at its own directory with nothing written. `acpilot tui <path>` and `acpilot-gui <path>` both use this one resolver, so two clients cannot open two roots; a name that is not a profile is refused with the file that asked and the path it expected.
+  - `--profile` > `ACPILOT_PROFILE` > `.acpilot/config.toml:profile` (committed, one line, no
+    secrets) > `config.toml:active_profile` > `default` (auto-created on first run).
   - A marker naming a missing profile exits `3` with the exact `acpilot profile new <name>`
     hint. Never fall back: falling back means sending work prompts with personal keys.
   - Table-driven precedence matrix, including "flag and marker disagree" and "marker inside a
     profile-less checkout".
+  - **Result (2026-11-09):** `acpilot_profile::launch::ProfileResolver` owns the five layers and
+    both native clients call it, so `acpilot tui` and `acpilot-gui` cannot disagree about the
+    profile. `--profile` still accepts a path-shaped directory for existing scripts; one segment
+    is a name under `<config>/profiles`. `ACPILOT_PROFILE` beats the marker, the marker beats
+    `active_profile`, and only the final fallback creates `default/config.toml` with
+    `schema_version = 1`. A missing name is `ProfileResolveError::Missing`, which `tui`,
+    `config explain` and the GUI print with exit `3` and `acpilot profile new <name>`; there is
+    no fallback path. The GUI's repeatable `--profile` accepts names or directories. Six
+    table-driven cases cover every layer, flag/marker disagreement, and a profile-less checkout;
+    separate tests cover a missing marker, a missing environment name, first-run creation, a
+    path-shaped flag, and `create_default(false)` for read-only callers. `acpilot config explain`
+    now uses the same resolver rather than its own copy. README, profile/config/CLI docs and the
+    GUI help carry the new order.
+  - **Open:** `acpilot profile new` is still P4-9; the resolver only creates the single fallback
+    `default`. `acpilot serve --profile` and `acpilotd --profile` still take a directory because
+    they discover a root rather than launch a client. `doctor` keeps its read-only,
+    non-creating `--profile default` probe. A profile created by the fallback has only
+    `config.toml`; P4-4 still owns creating the state roots.
 
-- [ ] **P4-4 · Profile-scoped state** (1d)
+- [x] **P4-4 · Profile-scoped state** (1d) — **done 2026-11-09**
   - One SQLite per profile (`<data>/profile.sqlite`) with the service phase's task P3-7 schema, plus a small global
     `index.sqlite` (`profiles`, `workspaces(profile, path, first_seen)`).
-  - Transcripts under `<data>/sessions/`. `profile rm` moves the directory to the OS trash and
-    prints the path; `--purge` is required to delete outright.
+  - Transcripts under `<data>/profiles/<id>/sessions/`. `profile rm` moves the directory to
+    the OS trash and prints the path; `--purge` is required to delete outright.
   - Daemon opens stores lazily and keeps at most 4 open (LRU) with per-store migration state.
-  - [decide] D11: DB-per-profile (recommended) vs one DB with a `profile` column.
+  - [x] D11: **one database per profile** (decided 2026-11-09, ADR 0007).
     `acpilot sessions ls --all` iterates stores sequentially in the first case; budget ≤50 ms
-    for 10 profiles, otherwise build the index.
+    for 10 profiles, otherwise build the index. The global index is built and populated now.
+  - **Result (2026-11-09):** `acpilot-store` names the profile database `profile.sqlite`
+    (`FILE_NAME`), and `Store::open_profile` adopts a pre-P4-4 `acpilot.db` (plus `-wal` and
+    `-shm`) by rename when the new name is absent. The global `index.sqlite` is a separate
+    schema (`profiles`, `workspaces`) with `remember_profile`, `remember_workspace`,
+    `profiles`, `workspaces` and `forget_profile`; the daemon records every profile and the
+    workspace it serves as discovery loads them. Each profile's transcripts live under its
+    own `<data>/profiles/<id>/sessions/<session>/session.jsonl`. `Stores` is the shared LRU
+    cache: at most four open (`OPEN_LIMIT`), with a `seen` set so a reopened database is not
+    mistaken for a first open and its live sessions are not closed. `AppState` holds a
+    `StoreSlot::{None, Ready, Lazy}`; the daemon attaches paths and opens each database on
+    the first route that needs history, while tests and embedded callers keep their explicit
+    stores. The retention sweep peeks at open stores, so it cannot defeat the laziness.
+    `acpilot profile rm <name>` moves the config directory and the separate data, cache,
+    state and runtime roots to the OS trash (`trash` 5.3), prints each path, and forgets the
+    index row; `--purge` deletes outright. A removal whose index write fails is a warning,
+    because the profile is already gone and discovery rebuilds the index. Tests: store
+    adoption, the four-store cap and reopen, index remember/forget, profile path scoping,
+    and CLI purge plus missing-profile exit `3`; the full `acpilot-store` and
+    `acpilot-profile` suites pass.
+  - **Open:** `acpilot sessions ls --all` does not exist yet, so the 50 ms budget for ten
+    profiles is not measured; the index is in place for it. `profile new/list/use` remain
+    P4-9. A profile's roots are still created on first write rather than by `profile new`, and
+    `acpilotd` keeps one workspace for every profile.
 
-- [ ] **P4-5 · Per-profile secrets** (1d)
+- [x] **P4-5 · Per-profile secrets** (1d) — **done 2026-11-09**
   - **Started 2026-10-22:** `acpilot-agent::keyring` implements the namespace. `KeyringResolver`
     reads the OS store through `keyring` 4.2's `v1` API (Keychain, Credential Manager, Secret Service),
     service `acpilot`, account `<profile>/<name>`, for both `keyring:<name>` and
@@ -544,11 +884,9 @@ Three rules:
     tested without a desktop session. `CredentialStore` gained write and delete so the CLI can use the
     same namespace rather than a second copy of the rule: `acpilot secret set` reads the value from
     stdin (no `--value`, which would land in shell history and `ps`), `rm` of an absent entry exits
-    `3`, and `list` parses the profile's `agents.toml` with a recording resolver and prints only
+    `3`, and    `list` parses the profile's `agents.toml` with a recording resolver and prints only
     `present`/`missing` per account — the keyring API cannot enumerate, so the manifest is the honest
-    list of what should exist. Still open: profile resolution (P4-2) supplies the name, legacy
-    unscoped entries are adopted into `default`, cross-profile resolutions warn on every use, and
-    `profile export` redacts.
+    list of what should exist.
   - Keyring service `acpilot`, account `<profile>/<name>`; `keyring:anthropic` resolves in the
     active profile only.
   - Cross-profile refs (`keyring:work/anthropic`) need `allow_cross_profile = true` on that
@@ -557,8 +895,30 @@ Three rules:
     `--with-secrets` additionally requires `--i-understand-the-risk` and a `0600` output file.
   - Test: the same env var name in two profiles resolves to two values, and neither appears in
     the other profile's child process environment.
+  - **Result (2026-11-09):** `secret set|list|rm` resolve their profile through
+    `ProfileResolver`, the same five-layer order as a launch, so a credential is written to the
+    active profile rather than always to `default`; a name that does not resolve exits `3`.
+    `KeyringResolver` adopts a pre-profile bare-name entry into `default/<name>` on the first read,
+    copying before deleting so a failed write leaves the only value in place, and no other profile
+    ever reads the legacy account. Every cross-profile read warns through `tracing` with the
+    resolving profile and the reference. `acpilot profile export <id>` writes the profile's
+    allow-listed configuration files as one JSON document; references stay references, so the
+    default export contains no credential. `--with-secrets` adds a separate `secrets` map keyed by
+    `<profile>/<name>`, requires `--i-understand-the-risk` and `--output`, refuses to overwrite an
+    existing file, makes the file `0600` (through `acpilot_host::private_file`), and refuses a
+    cross-profile reference rather than copying another profile's secret. Tests cover legacy
+    adoption only by `default`, the environment layer of secret resolution (a missing
+    `ACPILOT_PROFILE` exits `3` without creating `default`), two profiles resolving the same env
+    variable to different values with neither value present in the other's agent environment,
+    export redaction, the gated flags, the no-overwrite rule, and cross-profile refusal.
+  - **Open:** export covers the profile's configuration files, not sessions, chats or extension
+    payloads; `profile import`, `diff`, `new`, `ls`, `show` and `use` remain P4-9. Legacy adoption is
+    lazy per referenced entry rather than a one-time startup sweep, because the keyring API cannot
+    enumerate an account list. `profile rm` still removes the profile's directories and index row
+    but not its keyring entries; doing that needs the manifest read before the directory is moved
+    and a decision about whether a trashed profile should stay recoverable.
 
-- [ ] **P4-6 · Profiles in the domain** (1.5d)
+- [x] **P4-6 · Profiles in the domain** (1.5d)
   - `Workspace.profile` and `Session.profile`; every lookup takes a profile as an argument.
     `acpilot-core` has no ambient "current profile" — it is resolved at the edge and passed down.
   - Workspace owned by another profile → `409 profile_mismatch` with `details.owner`.
@@ -567,8 +927,21 @@ Three rules:
     profiles' mock agents concurrently and diffs their `env`.
   - Hosts are global; a profile may override per-host identity (`user`, `identity_file`,
     `ProxyJump`) but not the hostname — one machine, several identities.
+  - **Result (2026-11-09):** `WorkspaceSummary` and `SessionSummary` carry `profile`, the daemon's
+    `Workspace` and `Record` carry it, and the session row persists it (store schema v3, with old
+    rows reading as the empty profile). Workspace ids are namespaced by profile
+    (`work:local:/src`), and the global index records the first profile to open a host+root so a
+    second profile gets `409 profile_mismatch` with `details.owner`. `POST /v1/workspaces` now
+    accepts `steal: true`, which transfers only that index row and logs both owners; the CLI exposes
+    it as `acpilot workspace open --profile <name> --steal <path>`. A profile's `config.toml` may
+    set `[hosts.<id>]` with `user`, `identity_file`, and `proxy_jump`; the daemon applies them as
+    `ssh -l/-i/-J` while the host list and hostname stay global. Tests cover the 409, the explicit
+    transfer, the SSH argument construction, profile parsing, and two profiles' mock-agent children
+    running concurrently with different environments (`sk-work` and `sk-personal`). **Open:** the
+    CLI command currently opens one local path; `workspace list` and `workspace rm` remain P5-2, and
+    `acpilot-host::ssh`'s own `SshConfig` still owns agent/password auth and reconnect in P8-1.
 
-- [ ] **P4-7 · Preferences schema + live reload** (1d)
+- [x] **P4-7 · Preferences schema + live reload** (1d)
   - `Preferences { schema_version, editor, theme, keymap, ui, lsp, agents }`, typed in
     `acpilot-profile::prefs` and exported to `acpilot-proto` for the API.
   - Defaults are data (a checked-in `defaults.toml`), so adding a preference is a one-line change
@@ -596,10 +969,31 @@ Three rules:
     is a secret in a log line, a history entry and a `Referer` — which is only defensible because
     the frame carries the palette the page already inlines and nothing else. Applying a frame to
     the desktop window, and the preferences past the theme, are what is left of this task.
+  - **Result (2026-11-10):** `Preferences` stays the flat wire shape the docs and settings
+    already use, and gained `rulers` plus a typed `diagnostics_min_severity`; `acpilot-profile::prefs`
+    is the profile-side door and `defaults()` reads the checked-in `defaults.toml`. The watcher
+    now follows the whole cascade through `settings::watch_paths`, including every `extends`
+    parent, and a save that does not parse sends `prefs_error { message }` instead of silently
+    doing nothing. The TUI applies a `prefs` frame live: tab width, tabs-vs-spaces indentation,
+    trailing-whitespace trimming before save, and the diagnostic severity floor; it also reloads
+    `keymap.toml` (the profile's own file, else the global one) on save. The GUI handles
+    `prefs_error` without losing its colours. Tests cover the parent-profile watch, the error
+    frame on both the daemon and client, indentation, trimming, the severity floor, and a
+    keymap that stays in force when a save does not parse.
+  - **Open:** there is no separate `profile.changed` event. Format-on-save now goes through the
+    daemon's language-server formatter (`POST /v1/files/format`), and the TUI and browser both apply
+    `wrap` and `rulers`; the preference read/patch routes landed with P4-8's first half.
   - Preferences that must not fork per UI: `tab_width`, `insert_spaces`, `format_on_save`,
     `trim_trailing_whitespace`, `wrap`, `rulers`, `diagnostics.min_severity`.
 
-- [ ] **P4-8 · API** (1d)
+- [x] **P4-8 · API** (1d)
+  - **Preferences routes (2026-11-10):** `GET /v1/profiles/{id}/preferences` answers the merged
+    preferences a client draws with, and `PATCH` accepts a `PreferencesPatch` naming only the keys
+    to change. The patch is written into that profile's `profile.toml`, preserving every other key
+    and table; a write that would make the cascade unreadable is rolled back and refused. The
+    answer is announced immediately as a `prefs` frame as well as being picked up by the watcher.
+    **Tests:** the writer keeps an old key and another table, and an empty patch is refused before
+    it touches the file.
   - `GET/POST /v1/profiles`, `GET/PATCH/DELETE /v1/profiles/{id}`,
     `POST /v1/profiles/{id}/activate`, `GET/PATCH /v1/profiles/{id}/preferences`,
     `POST /v1/profiles/{id}/export`.
@@ -608,15 +1002,111 @@ Three rules:
     profile at connect; a global `GET /v1/events` carries only `profile.*` and `daemon.*`.
   - Generated TS/Rust clients take `profile` in their constructor, so forgetting it is a compile
     error, not a runtime surprise.
+  - **Started 2026-11-06 (the switcher's half):** `acpilotd` serves every profile directory under
+    `<config>/profiles` plus the one `--profile` named. `crates/acpilotd/src/profiles.rs` opens each
+    profile once — its policy, `agents.toml`, database, sessions, terminals and language servers —
+    and builds the router it would have had alone; a request is dispatched to the router its
+    `X-Acpilot-Profile` names, so a handler cannot reach another profile's state because its
+    `AppState` has no reference to it. `GET /v1/profiles` lists the `ProfileSummary` rows (the active
+    one marked, `agent_count` from that profile's registry), `GET /v1/profiles/{id}` answers one, and
+    `POST /v1/profiles/{id}/activate` makes a profile the answer for a headerless read — in memory
+    for the life of the process. An unknown name is `404` listing what the daemon serves; a mutating
+    request without the header is `400 invalid_request` when there are two or more profiles, while a
+    one-profile daemon keeps answering the TUI and CLI, which do not send it yet. A profile that
+    fails to load is skipped with a warning unless it is the one `--profile` named. The web page's
+    picker is now a real choice: it lists the profiles, activates the chosen one, moves the address
+    to `/p/<profile>/...`, reloads the page's data and reconnects the palette stream (an
+    `EventSource` sends no header, so it bound the previous active profile). **Tests:** 2 in the new
+    `crates/acpilotd/tests/profiles.rs` (listing and active marking; header selection of agents;
+    the missing-header `400`; the unknown-name `404` naming both profiles; activation changing
+    `/v1/health`; a broken profile not taking the good one with it) and 1 in `web/src/App.test.ts`
+    (activation POST, address, and the palette reconnect), with the document regenerated for the
+    three routes.
+  - **Create, update, delete and export (2026-11-10):** `POST /v1/profiles` writes the profile's five
+    roots, its `config.toml` and its `[profiles.<id>]` registry row, then opens the state immediately;
+    the new row is the active profile when the daemon had none. `PATCH /v1/profiles/{id}` changes the
+    label and parent, with `clear_extends` as an explicit flag because serde flattens a nested
+    `extends: null` into "absent". `DELETE /v1/profiles/{id}` stops the profile's language servers,
+    removes it from the registry and the daemon, and moves its directories to the OS trash unless
+    `?purge=true`; deleting the last profile is `409`, because a daemon with no identity cannot be
+    repaired through its own API. `POST /v1/profiles/{id}/export` answers the same allow-listed files
+    as `acpilot profile export` with keyring references intact — credentials never cross this boundary.
+    `acpilot-client` gained the typed calls for all of them. **Tests:** a lifecycle test creates two
+    profiles, patches one's label and parent, clears it, exports `config.toml` and `profile.toml` with
+    no `secrets` field, deletes one with purge and refuses to delete the last; the wire contract pins
+    the new request and export shapes.
+  - **Open:** Activation is not persisted: `active_profile` in the settings cascade (P4-2) is what the
+    next launch reads, so a browser's choice lasts as long as the daemon. The started profile stays
+    active by default, and a daemon serving one profile does not require the header (deliberate: its
+    older clients would break, and there is no second identity to guess); the `400` applies from two
+    profiles up. `acpilot-client`, the TUI and the CLI do not send `X-Acpilot-Profile` yet, so a
+    multi-profile daemon refuses their mutations until they do — that client half and the generated
+    constructors' `profile` argument are still this task. `GET /v1/events` stays per-profile rather
+    than global: it is still the profile's stream, and the activation switch does not re-target an
+    open one.
 
-- [ ] **P4-9 · CLI** (0.5d)
-  - `acpilot profile new|ls|show|use|rm|export|import|diff`; global `--profile`, accepted before
-    or after the subcommand.
+- [x] **P4-9 · CLI** (0.5d)
+  - **Started (2026-11-10):** `new`, `ls`, `show`, `use`, `import` and `diff` are in
+    `acpilot-cli`, and every one is a filesystem verb: a profile is a directory plus a
+    registry row, so none of them needs a daemon. `new` writes the five roots, a
+    `schema_version = 1` `config.toml` and the row, and makes the profile active when the
+    machine has none. `use` writes `active_profile`, the layer a launch reads after the
+    flag, the environment and the project marker. `import` accepts the export's
+    allow-listed files and reports a `secrets` map instead of writing it. `diff` prints
+    each key that differs, with the value and the winning layer on both sides, from the
+    same cascade a launch reads. `profile rm` takes its roots from `--config` now, so a
+    removal takes away what a creation made. **Tests:** two in
+    `crates/acpilot-cli/tests/cli.rs` (create, list, show, diff and use in one home; export
+    then import into a second home, where a second import is `409`).
+  - **Result (2026-11-10):** `--profile` is one global argument now, accepted before or
+    after the subcommand, and `tui`, `serve`, `doctor`, `config explain`, `workspace open`,
+    `ext` and `secret` all read that one value. The per-verb flags are gone, so the
+    surface has one spelling of the choice. `doctor` prints the profile's five roots with
+    `present` or `missing` on each, and every unknown key with the file that wrote it,
+    from `Cascade::unknown_keys` — the same scan that prints the warning. **Tests:** the
+    four help snapshots moved, because a global flag is listed under every subcommand;
+    `crates/acpilot-cli/tests/precedence.rs` proves both positions of the flag and the
+    doctor lines.
+  - **Open:** the profile verbs still take their subject as an argument, so
+    `acpilot profile ls --profile work` accepts the flag and ignores it. That is the
+    registry's design rather than an omission: a profile verb acts on the profile it was
+    given, and a default here would make `profile show` depend on the active row.
+  - `acpilot profile new|ls|show|use|rm|import|diff`; `export` is already served by P4-5.
+    Global `--profile`, accepted before or after the subcommand.
   - `acpilot profile diff a b` prints the effective merged config with per-key origin — the tool
     that answers "why is it doing that?".
   - `acpilot doctor` reports the resolved profile, its roots, and every unknown key.
 
-- [ ] **P4-10 · Tests** (0.5d)
+- [x] **P4-10 · Tests** (0.5d)
+  - **Started (2026-11-10):** the filesystem half is a table in
+    `crates/acpilot-cli/tests/precedence.rs`, one fresh home per row, driven through the
+    binary rather than the library:
+
+    | Row | Setup | What is asserted |
+    | --- | --- | --- |
+    | defaults | nothing | the origin is `built-in defaults` |
+    | global file | `<config>/config.toml` | that file wins, value 2 |
+    | profile file | `profiles/work/config.toml` | the profile file beats the global one, value 4 |
+    | project file | `<project>/.acpilot/config.toml` | the project file beats the profile one, value 6 |
+    | environment | `ACPILOT_TAB_WIDTH=8` | the environment beats the project file, value 8 |
+    | flag position | `--profile work` before and after the verb | the two outputs are byte-identical |
+    | missing profile | `--profile ghost` | exit `3` and the `profile new ghost` hint |
+    | isolation | two profiles started at once | each process names its own file and value |
+    | doctor | five roots, a typed key | every root with `present`, the key with its file |
+    | diff | `work` against `personal` | the key with both values and both origins |
+    | daemon: no header on a mutation | two profiles | `400 invalid_request` naming the header (`acpilotd/tests/profiles.rs`) |
+    | daemon: a workspace another profile owns | no `--steal` | `409 profile_mismatch` with the owner in `details` (same suite) |
+    | keyring namespacing | `work` and `personal` | two accounts, two values, no look-alike fallback (`acpilot-agent/src/keyring.rs`) |
+
+  - **Result (2026-11-11):** the last DoD row is proven.
+    `a_work_session_is_not_found_in_the_personal_profile` in
+    `crates/acpilotd/tests/profiles.rs` gives each profile its own in-memory store.
+    It stores one session in `work`'s database and then asks for that id under the
+    `personal` header. The answer is `404 not_found`, and the same id under `work`
+    is `200`. Every row in the table above now names a test that exists.
+  - **Open:** the desktop shell's profile switcher is not in this matrix. It reads
+    the same routes, so it can fail only by not sending the header, and
+    `cargo xtask gui-check` does not exercise that path.
   - Precedence matrix; missing-profile marker; cross-profile denial; keyring namespacing;
     `profile diff` snapshot; concurrent profiles without env/cwd bleed; export redaction.
   - **DoD:** `acpilot --profile work agents list` and `--profile personal agents list` differ in
@@ -911,6 +1401,7 @@ v0.1 (D18).
 - [ ] **P5-3** Output layer: human tables/colour (`anstyle`), `--json` (stable, documented as an API), `--no-color`, `NO_COLOR`, `TERM=dumb` fallbacks.
 - [ ] **P5-4** Completions + man pages generated at build time (`clap_complete`, `clap_mangen`) and shipped in release archives.
 - [ ] **P5-5** `acpilot doctor`: toolchain checks, agent commands resolvable, keyring access, daemon reachable, host latency, WSL/ssh config parse results.
+  - **Partially met (2026-11-08):** the detection half shipped under P12-4 — resolved root and profile, declared agents and whether their commands resolve, the four candidate agent programs on `PATH`, every language server this build knows, and one ACP `initialize` against the first declared local agent. Daemon reachability shipped the same day: `doctor` asks `GET /v1/health` at the endpoint a `tui` launch would use, with the resolved token, and reports running, a refused token, or no answer; it starts nothing and does not fail when none is running. Toolchain checks, keyring access beyond a manifest's own references, host latency and WSL/ssh parsing are still this task's.
 - [ ] **P5-6** Exit-code contract documented in `--help` and tested: `0` ok, `1` general, `2` usage, `3` not found, `4` permission denied, `5` host/agent failure.
 - [ ] **P5-7** Integration tests via `assert_cmd` + a temp daemon; snapshot help output.
   - **DoD:** every API endpoint reachable from the CLI; `acpilot prompt` streams a real agent's answer to stdout and exits non-zero on a failed turn.
@@ -935,7 +1426,7 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   - **Tests:** 14 in the module — the mapping, the four grammars, a range that stays inside its lines, the edit diff (including that it never splits a `😀`), the registry's caching, extension-to-language, and the two properties above — plus the oracle test against `tree-sitter-highlight`. The crate is 70 tests.
   - **Open:** no injections (markdown in a doc comment, HTML in a JS string), no locals query (so a grammar cannot dim an unused variable), and four grammars compiled in — the other eleven of README §5 and every extension grammar are P4.6-8. The P0-3 note's unmeasured item, highlight cost for a 3k-line window, is still unmeasured; the design makes it a per-edit rather than per-frame cost, but that wants a number.
 - [ ] **P6-3** TUI shell: ratatui `Layout` with editor pane, tab strip, status line (profile, mode, position), agent sidebar, transcript pane, command palette (`Ctrl-P`), which-key hints.
-  - **Started 2026-10-25 (the shell, drawn):** `acpilot tui --demo` draws the whole interface from `crates/acpilot-demo` — files tree, tab strip and editor, agent sidebar, status line, stats bar, command palette, which-key hints, toast, and the permission card with the diff in it. The demo is a *worker*, not a branch in the app: it speaks the same `Update` channel `backend::spawn` does, so every pane is the real pane and the design cannot promise something the product has no seam for. The seeded world is data only, in protocol types, in a crate of its own, so the desktop app (P10) renders the same sessions, tree, buffer and diff instead of a second guess — that is what "the same three panels in every UI" costs to keep true. **Keys:** `Tab` cycles files → editor → sessions → prompt and never lands in the terminal (a shell wants the byte); `?` lists the focused pane's keys; `Ctrl-P` opens the palette. A command that is not built is tagged with its task, and running it raises a toast (`planned · P6-9 · Review diff`, "not implemented in this build") that the next key dismisses, with the same sentence on the status line — a modal was rejected because the screen is being reviewed rather than used, and a dialog would turn every press into two. Under 100 columns the tree folds away rather than squeezing the editor, and the status line drops the address while the stats bar drops the model and latency. **Not in this pass:** the tree and the buffer are seeded (P6-6, P6-4), no split panes or mouse, and the transcript has no scrollback of its own. The layout, the keys and the questions it is meant to settle are `docs/notes/tui-shell.md`. **Tests:** six in `acpilot-demo` (the transcript's ordering, the permission naming the diff's file, the tree's flattening, every planned row naming a task, the seeded screen having colour and a prompt, and the palette holding both kinds of row), seven more in the TUI (the palette filtering and running a planned row, a query that matches nothing, a notice dismissed by the next key, the tree moving and a file naming P6-1, the editor's cursor and `Ctrl-S`, the demo seeded through the real renderer, and a narrow terminal dropping the tree) and three drawing tests (the three panels and both footer rows, the palette's task tags, and the toast). Verified by running `tui --demo` at 140×42 and 80×24: palette filtering, the toast, the tree's toggle and open, the editor cursor and the status line's position, the terminal picker, the seeded screen, and copy mode.
+  - **Started 2026-10-25 (the shell, drawn):** `acpilot tui --demo` draws the whole interface from `crates/acpilot-demo` — files tree, tab strip and editor, agent sidebar, status line, stats bar, command palette, which-key hints, toast, and the permission card with the diff in it. The demo is a *worker*, not a branch in the app: it speaks the same `Update` channel `backend::spawn` does, so every pane is the real pane and the design cannot promise something the product has no seam for. The seeded world is data only, in protocol types, in a crate of its own, so the desktop app (P10) renders the same sessions, tree, buffer and diff instead of a second guess — that is what "the same three panels in every UI" costs to keep true. **Keys:** `Tab` cycles files → editor → sessions → prompt and never lands in the terminal (a shell wants the byte); `?` lists the focused pane's keys; `Ctrl-P` opens the palette. A command that is not built is tagged with its task, and running it raises a toast (`planned · P7-4 · Go to definition`, "not implemented in this build") that the next key dismisses, with the same sentence on the status line — a modal was rejected because the screen is being reviewed rather than used, and a dialog would turn every press into two. Under 100 columns the tree folds away rather than squeezing the editor, and the status line drops the address while the stats bar drops the model and latency. **Not in this pass:** the tree and the buffer are seeded (P6-6, P6-4), no split panes or mouse, and the transcript has no scrollback of its own. The layout, the keys and the questions it is meant to settle are `docs/notes/tui-shell.md`. **Tests:** six in `acpilot-demo` (the transcript's ordering, the permission naming the diff's file, the tree's flattening, every planned row naming a task, the seeded screen having colour and a prompt, and the palette holding both kinds of row), seven more in the TUI (the palette filtering and running a planned row, a query that matches nothing, a notice dismissed by the next key, the tree moving and a file naming P6-1, the editor's cursor and `Ctrl-S`, the demo seeded through the real renderer, and a narrow terminal dropping the tree) and three drawing tests (the three panels and both footer rows, the palette's task tags, and the toast). Verified by running `tui --demo` at 140×42 and 80×24: palette filtering, the toast, the tree's toggle and open, the editor cursor and the status line's position, the terminal picker, the seeded screen, and copy mode.
 - [x] **P6-4** Editor pane: virtualised line rendering (only visible rows), horizontal scroll, gutter with line numbers + diff markers, current-line highlight, bracket matching, search-in-file (`/`), go-to-line. — **done 2026-10-28**
   - **Result:** the TUI's editor pane draws the seeded buffer as a real `acpilot_text::Document` now, and the arithmetic it needs is `acpilot-text::pane`, a new module of 20 tests. `Viewport` is two numbers — the first visible line and the first visible cell — plus a size, and it answers with the rows that fit and the cells of them the horizontal scroll left. `reveal` scrolls the least that puts a caret on screen, both ways, so a motion key never has to think about the view. `Find` is smart case, non-overlapping, per line, wrapping both directions, with `hit(offset)` telling the current match from the others by binary search because a pane asks once per cell it draws. `bracket_at` matches from the caret or the character just behind it, because the caret after typing `)` is past the bracket, and `parse_position` reads what a go-to-line box actually gets: `12`, `12:5`, `12 5`. The pane itself (`crates/acpilot-tui/src/editor.rs`) holds the document, one `Highlights` from the app's `Grammars`, the viewport, the git markers, the search and the two prompts, and paints rows as runs of a `SyntaxToken` plus a state — so the renderer maps tokens to theme colours and decides nothing about the text.
   - **The gutter is git's, since the same day:** `acpilot-git` grew `LineChanges` and a patch parser — `line_changes(patch, path)` reads a unified diff's hunk headers and its `+`/`-` runs for one file, keyed by the line number in the file as it is *now*, and a removal followed by an addition at the same place is one `~` rather than a `-` and a `+` for a line that never went anywhere. The editor is seeded with `line_changes(&demo.diff.patch(), path)`, so the marks beside the code and the diff in the permission card are the same edit read once instead of two lists that could drift; `Repo::line_changes(path)` answers the same type from the working tree, which is the call P6-6's tree will make. `EditorBuffer` lost its per-line `status` with it: what a line is, is the diff's question, not the buffer's.
@@ -944,21 +1435,60 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   - **Three bugs the tests caught before anybody typed:** a row that started inside a tab emitted blanks from the column it began at instead of from the left edge of the window, which made every later cell one column per scrolled tab too wide; the bracket scan treated an opener as nesting while looking leftwards, so `)` never found its `(`; and a pane created before it was drawn (1×1 cells) opened the file scrolled to the caret's line and the caret's column — the seed then stayed mid-line and half-way down the file, which the showcase capture is what made visible.
   - **Tests:** 20 in `pane` (the rows that fit, a tab and a wide character, the clip and its blank remainder, the scroll that stops at the end of the file, `reveal` both ways, the go-to-line formats, the bracket pairs, the search's wrapping and smart case, a rescan after an edit, and three properties: no row is wider than its viewport, `reveal` always puts the caret on screen, every cell still names the buffer character it came from), 13 in the TUI's editor (the seeded cursor, clamping, the horizontal scroll, the gutter's width, the search and its messages, `Esc` putting the caret back, go-to-line refusing a typo, the bracket under the caret, tokens painted without losing a character, the match states, and a language with no grammar), 2 in the app (a find box taking every key including `?`, `Ctrl-G` landing on a line), and 3 drawing tests (a numbered gutter with a git marker and `const` in the theme's keyword colour, the current line highlighted across the row, `End` scrolling the buffer sideways, the prompt in the tab strip). The gutter half added six tests to `acpilot-git` (a patch's additions and the line a removal paired with them changed, a removal alone marking the line above the gap, a patch that names another file answering with nothing, a bare hunk taken to be the file asked about, and the working tree's own lines before and after a commit), one to `pane` (a cell landing on the character under it, inside a tab and past the end of a line) and one to the editor (the marks arriving from a patch rather than from the fixture), and the mouse added three to the app (a click putting the caret and taking the keyboard, a click on the numbers doing neither, and a wheel scrolling the view while the caret and the focus stay put) and two to the editor (a click inside a tab landing on its character, and a click placed from the window's own column when it is scrolled). The showcase capture was regenerated, which is what made the gutter's new letters visible in `site/src/data/screens.json`.
   - **Open:** the buffer is the seeded one — opening a file from the tree is P6-6, and the pane is read-only until insert mode (P6-5); nothing saves, because a save goes through the daemon's files API (P7-10 serialises writes per file). No soft wrap: a long line scrolls, which is a layout a pane chooses and changes what "one row" means. `n`/`N` walk one buffer; a workspace-wide result list is P6-6, and the palette's two rows now move the keyboard to the editor rather than naming a task. The `?`/`Tab` globals are suppressed while a prompt is up, which is a special case a keymap layer (P6-5) should own.
-- [ ] **P6-5** Keymap layer: Vim (normal/insert/visual, `hjkl`, motions, `:` commands) and a VS Code-ish default; `keymap.toml` overrides; `?` shows effective bindings.
+- [x] **P6-5** Keymap layer: Vim (normal/insert/visual, `hjkl`, motions, `:` commands) and a VS Code-ish default; `keymap.toml` overrides; `?` shows effective bindings. — **done 2026-11-07**
+  - **Started 2026-11-01 (insert mode and undo):** the pane has two modes and says which. `Mode { Normal, Insert }` lives in `crates/acpilot-tui/src/editor.rs` because it is a property of the pane, not of the app: one mode's keys are text and the other's are commands, and the pane is the thing that knows which. Six keys get you in — `i` at the caret, `a` after it, `I` and `A` at the ends of the line, `o` and `O` on a line of their own (which leaves the caret on the new line, so `O` walks back up one because the newline lands at the old line's start). In insert mode every printable key is text and the rest are what a text field has: `Enter` a line, `Backspace`/`Delete` a character from either side, `Tab` and `Shift-Tab` a level in or out, arrows and Home/End move, `Ctrl-Z` undoes, `Esc` comes back. Undo is `u` or `Ctrl-Z` and redo is `Ctrl-Y` — not vim's `Ctrl-R`, because that is the client's refresh from every pane and a chord that means two things is a bug report.
+  - **`?` and `Tab` are the buffer's in insert mode, and the app's outside it.** Both are handled above the pane-specific match, so insert mode had to be asked for before them: `Tab` cycles panes and `?` opens the key list everywhere else, and a text field that did either would be a pane arguing with itself. The chords above stay the app's — a pane that could not be left with `Ctrl-T` would be a keyboard with no way out. `?` is a typed character in insert mode, which is why the panel cannot list those keys while they are the pane's: the normal-mode list names the way in, and the insert keys are in `docs/notes/tui-shell.md`.
+  - **Dirty is read off the history, not kept as a flag.** The history starts empty when a file is opened, so "there is a step to take back" is exactly "this text is not the text that was opened" — including after undoing all the way back to it, which a flag would get wrong. The tab shows `app.rs +` while it is true and drops the `+` when undo returns to the file. A save is still P7-10 and `Ctrl-S` still raises a toast naming it, so an edited buffer is honest about being unsaved rather than pretending it is a copy of the file.
+  - **The mode is in the title.** `app.rs · insert` replaces `app.rs · read-only` — a mode change nobody notices is a pane whose keyboard appears to have stopped working, and the status line changes word with it. The design pass's `seeded` marker left the title to make room, which a test caught the hard way: at the 48 columns the editor is drawn at in the shell test, `· normal · seeded` pushed the running search out of the title entirely, so the smaller fact kept and the larger one lost. `demo · seeded` is still on the status line.
+  - **Tests:** five in `editor` (typing landing in the document with undo back to the opened text and redo putting it back, backspace and delete from either side, `o`/`O` leaving the caret on the new line, a tab being one indent level, and a mode change saying so) and three in `app` (insert mode typing `!?` into the buffer with `?` not opening the key list and `Esc` giving the motions back, `Tab` indenting in insert mode and cycling a pane outside it, and undo/redo walking the edits with the dirty mark following) plus a drawing test that the title says which mode and the tab marks an edited buffer. 175 in the crate, 92 in `acpilot-text`.
+  - **Visual mode, `:` commands and a goal column (2026-11-07):** `v` enters visual mode, where the motions extend the run instead of moving a bare caret; the title says `visual`, `y` copies what is marked, `d`/`x` delete it in one undo step, and `v`, `Esc` or a click leave it. `:` opens a command line: `:w` saves through the same daemon write `Ctrl-S` uses, `:q` refuses while the buffer is dirty and `:q!` discards, `:N` goes to a line, and `:e path` opens a file; anything else is refused by name. A run of Up/Down keeps the column it started from across short lines and forgets it after a horizontal motion, and Shift-click extends a selection from its start. `?` lists the new keys. **Tests:** four in `editor` (visual extension with a yank and a delete, the goal column surviving a short line and being replaced after `l`, Shift-click extending one run, and the command box handing its text back) and three in `app` (`v`/`l`/`y` copying from the seeded buffer, `:w` producing the same `SaveFile` request as `Ctrl-S`, and `:q` refusing a dirty buffer while `:q!` leaves), 214 in the crate.
+  - **The keymap file (2026-11-07):** the keys are data now. `crates/acpilot-tui/src/keymap.rs` holds a `Context` (the app's keys, the editor's normal mode, visual mode), an `Action` per verb, a `Chord` per key and two presets: `vim`, which is the table this crate grew, and `vscode`, which moves with the arrows and Home/End instead of `hjkl`/`0`/`$` and puts the palette on `Ctrl-Shift-P` as well as `Ctrl-P`. The difference is the table, not the editor — a preset changes which key means `move-down`, not what `move-down` does. `keymap.toml` beside `config.toml` picks a preset and rebinds any verb by name under `[keys]`, and an empty list unbinds it. A name that is not a verb, a key that is not a key, or one key bound to two verbs in one context is refused with the word that was wrong, checked once the whole file is applied so swapping `palette` and `quit` is legal. A file that will not load leaves the client on the preset and says so on stderr before the screen is taken over. The client's keys (palette, key list, pane cycle, menus, terminal, review, transcript, stats sources, grep, refresh, quit, the two dividers, save) run through the table wherever they are answered, and the editor's normal and visual groups do too; `?` lists the bindings in force, client keys first, so rebinding the palette changes both the key and the panel.
+  - **A chord has one spelling.** The pane compares `Shift` by the letter's case: `Ctrl-Shift-F` arrives as `F` on some terminals and as `f` with shift held on others, and both are one chord — while `Ctrl-F`, the editor's find, has to stay a different one, which is why `Ctrl-Shift-F` keeps the shift as a modifier after the letter is folded. A capital outside a chord is the key (`N` and `Shift-N` are one press), so `next-match` and `prev-match` do not need two tables. `Shift-Tab` is folded the same way, because terminals send either `BackTab` or `Tab` with the shift held.
+  - **The other panes are data too (2026-11-08):** `Context` gained `Files`, `Sessions`, `Prompt`, `Permission` and `Copy`, and every key those panes answered now resolves through the table. `Activate`, `Collapse`, `Expand`, `ToggleHidden`, `Compose`, `NewSession`, `EndSession`, `CancelTurn`, `Submit`, `Newline`, `Complete`, `Backspace`, the permission answers and the copy-mode motions are names a file can rebind; the defaults are the keys those panes already had, in both presets. The prompt and insert mode keep their printable keys as text, and the permission card still checks the request's own option list after the action resolves. `?` reads the same rows for those panes, so a rebind changes the card and the key together. **Tests:** three in `keymap` (Shift-Tab's two spellings, a pane rebind leaving another context alone, and both presets binding every moved pane) and five in `app` (one rebind each for the tree, session list, composer, permission card and copy mode), plus one in `ui` for the pane's key card. 278 in the crate.
+  - **Vim mode is the preset (2026-11-08):** `preset = "vscode"` now turns modal editing off as well as moving the keys: the editor opens in insert, `Esc` clears a selection instead of leaving the text, and a file opened later keeps that model. `preset = "vim"` is unchanged. The toggle is the existing keymap setting rather than a second preference, so the keys and the editing model cannot disagree. **Tests:** two in `app` (a modeless pane typing `j` without an insert command and `Esc` keeping insert; a file opened after the preset still starting in insert) and assertions in `keymap` that each preset names its model. 280 in the crate.
+  - **Tests:** fourteen in `keymap` — parsing and display, the three ways a key can be wrong, the two spellings of a chord meeting, no chord twice in one context in either preset, every verb bound in the preset that owns it, a rebind unhooking the old key, an unbind, a swap, a conflict naming both verbs, an unknown action and an unknown preset, the two presets moving with different keys, a preset chosen by a file, no file being the default, and the rows listing every chord a verb has — three in `app` (a rebound palette refusing `Ctrl-P`, a rebound `visual` leaving `v` dead, and a key file that does not parse being reported while the default table stays in force) and one drawing test (the key list showing `f1` and not the `ctrl-p` the file replaced). 280 in the crate.  - **Open:** the menu bar, terminal picker, source-control pane, commit composer and diff review still keep
+    their own match arms in `app.rs`; moving them is the next piece of this work. Insert mode is a text field and
+    stays one — every printable key is a character — and the composer's printable keys are text for the same
+    reason. `F12`/`Shift-F12` are deliberately unbound: one of the two raises a task marker and a marker is not a key that works. Visual mode is character-wise only (`V` line mode is a motion set, not a fix), the goal column applies to Up/Down and not to `Ctrl-D`/`Ctrl-U`, and `:w`/`:q` are the whole command set until there is a command table. Indent style is four spaces hard-coded at the call site until the settings cascade is read for `tab_width` (P4-7). A keymap layer from an extension is P4.6-9, and the desktop and the page still read their own tables until P10-2 and P11.
 - [ ] **P6-6** File tree + fuzzy open (`ignore` + `nucleo` matcher), git status decorations, workspace-level grep (`grep-searcher`), results in a jump list.
-- [ ] **P6-7** Agent panel: session picker, live transcript (markdown → styled lines, collapsible tool calls), streaming cursor, token/cost line, cancel keybinding, prompt composer with multiline editing and `@file` completion.
-- [ ] **P6-8** Permission modal: title, tool, diff preview for writes, `once|session|always|deny` choices, keyboard-only, audited. Must render even while the transcript is streaming.
-- [ ] **P6-9** Diff review: split/inline diff of agent edits (`imara-diff`), accept/reject hunks → `fs/write_text_file` decision or revert.
-- [ ] **P6-10** Terminal pane: `tui-term` attachment to session PTYs; `Ctrl-T` to open; scrollback; copy mode with OSC 52 clipboard fallback for SSH.
+  - **Started 2026-11-01 (the tree, and opening a file):** the tree is the daemon's now, not a fixture's. `Client::files(path)` (`GET /v1/files/list?path=`) lists one directory and `Client::file(path)` (`GET /v1/files?path=`) reads one file — the same routes the CLI and the page use, which is the point: a tree that read `ignore` locally would be a tree that cannot show a workspace on another machine, and the daemon is already the one thing that knows where the files are. The client percent-encodes the path itself (`query_value`, hand-rolled for the same reason the clipboard's base64 is: one escape is not worth a dependency), so a path with a space or a `#` survives, and a test asserts the two route strings because a typo there is a 404 the daemon answers perfectly correctly.
+  - **The tree is flat with depths, and it expands one directory at a time.** A root listing replaces every row; opening a directory sends `ListDir`, and the answer is spliced in under that row with the parent's depth plus one. Closing is local: a row nobody is looking at costs nothing to forget, and a collapse that asked the daemon would be a round trip for a `drain`. Directories sort before the files beside them and then by name, because a tree that interleaved them is one nobody can scan. A listing that arrives after a refresh replaced the tree becomes the tree rather than being dropped — the race is real because the poll and the question are different paths.
+  - **`Enter` on a file reads it and opens it.** `EditorPane::from_text` builds the document, and the language comes off the path (`language_for`: `rs`, `py`, `json`, `toml`, and `""` for anything else, which draws plain text rather than refusing a file this build has no grammar for). The caret lands at the start, the keyboard follows the file into the editor pane, and the status line says how many lines arrived. The design pass answers `OpenFile` with the one file it has and says so for anything else, rather than pretending the fixture is a workspace.
+  - **`H` shows the rows an ignore rule hides (the same day):** `GET /v1/files/list` takes `include_ignored`, and with it a row that matched a rule is returned marked rather than dropped — `FileEntry.ignored`, serialised only when true, so an ordinary listing costs no bytes saying none of its rows is hidden. The matching stays in the daemon: a client deciding "looks hidden" from a name would call `target/` visible and `build.rs` hidden. `.git` is out either way, because it is the repository's bookkeeping rather than a file anybody edits. The toggle re-lists the root and then every open directory in tree order, so rows appear without the tree folding back to its root; `Ctrl-R`, the menu's Refresh and the palette's Refresh all carry the toggle, so a refresh cannot drop rows the status line says are on screen.
+  - **`/` searches paths, and follows the same rules (the same day):** `GET /v1/files/search?q=` walks the workspace with `ignore::WalkBuilder`, applying `.gitignore` only when `tree_respect_gitignore` is on, which is the answer the listing gives — a find that could see what the tree cannot would be two workspaces in one window. `.ignore` and the global excludes stay off for the reason the tree ignores them: they are per-machine, and the tree a person sees is the tree everybody should see. `.git` is never entered, an empty query matches nothing rather than walking everything, and the answer is sorted and capped at 200. The TUI compares the query before it takes an answer, because typing outruns a walk. It ranks a substring or initials, in the daemon (see below). The palette's `Open file…`, a `planned("P6-6")` row until now, is `Find a file…` on `Ctrl-O` and opens this box in the tree — a file is opened by picking it out of a list, not by typing a name into nothing — and `Search workspace` became `Search file contents`, because the paths it claimed are searched now and the contents are still the daemon's walk.
+  - **`/` ranks initials, and `Ctrl-Shift-F` greps contents into a jump list (the same day).** `GET /v1/files/search` no longer asks `contains`: `fuzzy_score` matches the query's characters in order and scores a character at a segment start (`/`, `_`, `-`, `.`) above one inside a word, and a run of consecutive characters above both, minus a length penalty — so `aptui` finds `crates/acpilot-tui/src/app.rs`, which no substring matches, and `src/app.rs` beats `examples/old/src/app.rs` for `app.rs`. The walk is ranked as a whole and truncated afterwards, because an initials match can be met late and a cap applied first would make the answer depend on directory order; the collection is bounded at 6 000 candidates so one keystroke cannot remember a monorepo. `GET /v1/files/grep` is the other half of a find: the matching lines of every text file the tree would show, with their 1-based numbers and their own text, at most 200, sorted by path and line, skipping binaries (the NUL test a read uses) and files over the read cap rather than reading around a route's limit. Both routes are one `walk`, so the ignore rules cannot become two answers to one preference.
+  - **The jump list is a card, and every row leads somewhere.** `Ctrl-Shift-F` — the palette's **Search file contents**, which is no longer a `planned` row — opens a query line and a row per match (`path:line` beside its text). Typing asks again, the arrows choose, `Enter` asks for the file and remembers the line, and an answer to a query that has been typed past is discarded by comparing the query. `EditorPane::goto_line` takes the jump once the text exists, clamping a line past the end to the last one: the file may have changed since the search read it, and the end of it is a better place to be than nowhere. `Ctrl-F` stays the editor's own find, which is why the chord needs the shift.
+  - **Tests:** four in `app` (a listing becoming a tree with directories first, opening a directory splicing its children in and closing dropping them, `Enter` on a file asking the daemon and the answer opening a buffer with its path, language and focus, plus the empty-tree and status-line cases inside those), three in `editor` (a file opening at its start with the grammar its path names and an unknown extension still opening, the extension map, and the mode and undo tests from P6-5 still passing against the new constructor), and two in the client (the query encoding, including a multi-byte path, and the two route strings). The toggle and the search added three more in `app` (a re-list that asks for the root and every open directory, a `/` query answered with `Esc` putting the tree back, and the status line summing the sessions' tokens) and three in the daemon's file tests (a nested `.gitignore` applying to the directory it sits in, the marked hidden rows, and a walk that follows the same rules), plus the wire contract's round trips of a row that is hidden and of a matched line. The content search added one in `app` (typing, the answer, a jump that names the file and the line, and the file arriving with the caret on it) and one drawing test (a row per match, with its path and number); the ranking added one in the daemon's file tests (initials first, the shorter path for the same letters, and a letter that is not there being no match) and the grep added two (lines with their numbers, case ignored and a binary skipped; and no workspace being a conflict).
+  - **The letters on the rows are git's, asked in the daemon (2026-11-01).** `GET /v1/files/list` marks every entry with `status` — `modified`, `added`, `untracked`, `deleted`, `conflicted`, from `acpilot-git`'s `status()` — one `git status` per listing on the host where the files are, and a directory with the most urgent change beneath it so a closed row is not a row that hides what is inside. The wire carries the state and the tree derives the letter, so `M` exists in one place. A workspace that is not a repository, or a host without `git`, answers with no letters at all rather than a listing that fails or a tree that claims everything is committed; a path git reports that is no longer on disk has no row, because a listing is the filesystem, and the deleted case belongs to the source-control pane. P6-6 closes here. Both searches walk the workspace per query and keep no index, which is fine for a repository and would not be for a monorepo; neither has been measured. A content search reads every file it walks, so its cost is the workspace's size rather than the query's length, and the candidate cap is what stops a keystroke paying for all of it.
+- [x] **P6-7** Agent panel: session picker, live transcript (markdown → styled lines, collapsible tool calls), streaming cursor, token/cost line, cancel keybinding, prompt composer with multiline editing and `@file` completion. — **done 2026-11-07**
+  - **Result:** the transcript is rendered rather than dumped. `crates/acpilot-tui/src/markdown.rs` is a line-oriented renderer — headings, bullets and numbered items, quotes, fences, inline code, bold, italic and links — that returns runs of an `Emphasis` token and no colours, so the pane resolves them through the theme. It keeps one row per line of the entry, which is what lets the pane count rows without building them; the rows it does build are the same list the copy cursor and the find read, so a yank copies what is on screen instead of the source's backticks. Tool calls are keyed by `tool_call_id`: `pending` then `completed` is one row whose status moved rather than two rows, and the result is kept on the entry and hidden until `Enter`, under the copy cursor, opens it (and closes it again). A turn in flight is read off the session the daemon reports as `busy` rather than remembered as a flag, so a dropped connection cannot leave a transcript claiming to stream for ever; the title says `streaming`, a cursor sits at the end of the newest line, and both go away when the status does. The token/cost line was already the stats bar and the status line; the session list is the picker, and `j`/`k` joined its arrows. Cancel was already `c` in the list and a menu row.
+  - **The composer is a text field with a caret.** `input` is the text and `cursor` is a character index, so typing, `Backspace`, `Delete`, the arrows, `Home`/`End` and Up/Down (which keep their column) all edit where the caret is rather than at the end; `Enter` sends, and `Alt-Enter`, `Shift-Enter` or `Ctrl-Enter` writes a newline because a prompt about code is a prompt with lines in it. The box grows from three rows to six and stops. `@` asks the daemon — `Request::CompleteFiles` over the same `GET /v1/files/search` walk the file find uses — and a bordered popup above the composer lists the answer; the arrows choose, `Enter`/`Tab` replaces the `@word` with the path, `Esc` closes it, and an answer about a word the caret has moved past is dropped. The design pass answers from its own fixture tree, so `--demo` shows the popup without a daemon.
+  - **Tests:** seven in `markdown` (headings lose their hashes, bullets and numbering keep their place, a fence marks every line in it, inline code/bold/italic/link are separate runs, an unmatched marker is a character rather than a swallowed one, prose keeps every character, and the row count never changes), eight in `app` (one row per tool call with its status and result, `Enter` opening and closing the call under the cursor, assistant text in the rows a person reads, a multiline composer sending both lines, the caret editing where it is, `@` asking the daemon and `Enter` taking the file, a stale completion dropped, and streaming read off the session status) and three drawing tests (a streaming turn's cursor and title, markdown drawn without its markers, and the completion popup over the transcript). 250 in the crate. The showcase was regenerated, because the seeded session is busy and the transcript and composer titles changed.
+  - **Open:** the markdown is the reading subset — tables, nested lists and HTML stay their markers rather than being rendered. Folding is per tool call (`Enter` on the row); there is no fold-all. The composer keeps no history and is not persisted across launches, and its `@` completion offers paths only, not commands or symbols. A long transcript builds every row on every frame: free at a session's length, and the thing to virtualise if conversations ever reach a file's size. The session list still does not scroll its selection into view when there are more sessions than its rows.
+- [x] **P6-8** Permission modal: title, tool, diff preview for writes, `once|session|always|deny` choices, keyboard-only, audited. Must render even while the transcript is streaming. — **done 2026-11-07**
+  - **Result:** the card is a real modal now. It names the tool (`file write`, `file read`, `terminal`, `tool call`, `request`), the session and the title, and gives each question its place in the queue (`request 2 of 3`, `Permission · 2/3`). The answers are the request's own `options`, not a fixed line: `y` allow once, `a` allow always (the wire's variant is session-scoped, so the card says `· this session`), `n` deny — a key that is drawn is a key that answers, and a request with no always option has no `a`. `Tab`/`Shift-Tab` walk the pending requests and the answer goes to the one on show; answering removes it locally and leaves the card up while another waits. The shown request is pinned by id across the one-second poll, so a refresh cannot move the card to a stranger mid-read. `Esc` puts the card down without answering, says where the queue went, and **Session → Answer Permission…** brings it back — put aside is not answered. The diff preview is drawn only for a `FileWrite` (a shell's question has a detail, not an edit), and the footer says every answer is audited, which the broker already does: each decision is an audit row with `decided_by: user`.
+  - **Tests:** four in `app` (a request offering only once/deny refuses `a` and answers `n`, `Tab` walking to the second question and answering it while the card stays up, a streamed chunk not dismissing the card, and `Esc` plus the menu row bringing it back) and two drawing tests (the tool, the queue position and only the offered options; and the card drawn over a transcript whose session is busy). 256 in the crate.
+  - **Open:** the wire has three options, not the task's four — `AllowOnce`, `AllowAlways` (this session) and `Deny`; a distinct "always, everywhere" would be a proto variant and an audit-policy decision, not a key. The queue is drawn in the daemon's order and there is a card for one request at a time. An answer is removed from the list before the daemon confirms it, so a poll that lands in between can briefly show the question again. The card is keyboard-only on purpose, and its detail is prose: only a write previews the structured diff the daemon sent.
+- [x] **P6-9** Diff review: split/inline diff of agent edits (`imara-diff`), accept/reject hunks → `fs/write_text_file` decision or revert. — **done 2026-11-01**
+  - **Result:** `Ctrl-D` (or the palette's `Review diff`) puts the diff on the card it answers, hunk by hunk. `Review` in `app.rs` holds the diff, one decision per hunk, the cursor and whether the two sides are side by side; `a` and `x` decide the hunk under the keyboard and move to the next, `A`/`X` decide all of them, `s` swaps the unified view for two columns aligned the way a diff aligns them (context on both, a removal on the left, an addition on the right), `y` answers and `n` declines. Drawn over the permission card rather than in a pane of its own: a review somewhere else is a review nobody reads before pressing `y`. `Esc` leaves without answering, and the question stays pending — looking at a diff must not be a way to lose an agent's request.
+  - **The decision is per hunk and the answer is per request, on purpose.** An agent asked to write one file, and the permission protocol offers allow or deny, not "these hunks but not those". A file written in part would be a file nobody asked for, so every hunk accepted answers `AllowOnce`, one rejected answers `Deny`, and the status line names the hunk that made it a no. The per-hunk part is still the work: it is how the one wrong hunk is found without re-reading the whole edit, and rejecting it is the revert — the agent is told no and nothing lands, because the write was always the agent's `fs/write_text_file`, not a client-side save.
+  - **The palette rows stopped lying.** `Review diff`, `Accept this diff` and `Reject this diff` were `planned("…", "P6-9")` rows that raised a toast; they are `Run` variants now, and the accept/reject pair answers from the diff as it stands without opening the review, for the person who has already read the card. They sit last of the working rows, so the list still opens on what a person reaches for first.
+  - **Tests:** six in `app` — the review opening over a pending question and leaving it pending, a rejected hunk naming itself and declining the write, rejecting then going back and accepting allowing it once, a review with nothing pending saying so rather than sending an answer nobody asked for, `s` drawing differently without changing a decision, and the palette's accept row answering without the review. Two drawing tests in `ui` — each hunk with its decision (and the hunk that scrolled to the cursor still on screen after a decision), and the two columns of a split hunk. 167 in the crate.
+  - **Open:** the diff is still the daemon's (and, in `--demo`, the fixture's) rather than one computed locally: `imara-diff` needs two texts, and the second one is what insert mode (P6-5) and opening a file (P6-6) produce. Partial acceptance therefore has no landing place until a client can write a subset of hunks through the daemon (P7-10); the review says what it is instead of pretending. Nobody has yet had an opinion about how much diff a 30-row card should hold — today the hunks scroll a hunk at a time and a tall hunk is clipped.
+- [x] **P6-10** Terminal pane: `tui-term` attachment to session PTYs; `Ctrl-T` to open; scrollback; copy mode with OSC 52 clipboard fallback for SSH. — **done 2026-11-07**
   - **Started 2026-10-25:** the pane attaches, types, resizes and ends, over the daemon's attach socket. The client half is `acpilot_client::terminal::Terminal`: one upgrade request built by hand (key, host, `Authorization` only for a TCP endpoint) so the socket transport and plain loopback TCP share one code path, and a frame reader where binary is the terminal and text is a control notice — a shell can print `{"type":…}` and the two must not be confused. No TLS, by name: the daemon serves none, so an `https://` endpoint is refused instead of spoken to in the clear. In the TUI the attach is its own task (`follow_terminal`) with an outbound channel, so a quiet terminal cannot delay a poll and a keystroke cannot wait for one; `Ctrl-T` opens the first terminal the open session has and leaves without ending the program, and the pane takes the keyboard while it is up — `Ctrl-C` is SIGINT there, not quit, which is what someone typing into a shell means. Keys become bytes (`\r` for Enter, `0x7f` for Backspace, `ESC[A` for Up, `Ctrl-A` as `0x01`), the screen is a `vt100` grid drawn as styled spans with runs of one style coalesced and trailing blanks dropped, and the pane's inner size is what the program is told — the layout is read from the drawing code rather than computed twice, so a resize reaches the shell once per change, which `stty size` confirms inside the pane. **Tests:** four on the client — three against a stub that speaks the daemon's frames (replay before live, a keystroke echoed back with `exit` and then a clean close, and the same attach over a unix socket) and one that a dead port fails instead of hanging; eight in the TUI (the toggle both ways, the keyboard taken with `Ctrl-C` as SIGINT, the keys that are not text, the control chords, bytes feeding the screen with an exit that keeps its last screen, a resize reaching the parser, and two drawing tests; three more unit tests in the client check the request itself, including that `https://` is refused). Verified end to end against a real daemon and the fixture agent's `terminal` prompt: `Ctrl-T` showed `agent-terminal-1`'s shell, `echo hi-from-pane` ran in it, and a window resize reflowed it to 82 columns. `tui-term` was not used because the pane needed control frames, not a widget.
+  - **Started 2026-11-04 (a shell of its own, on the workspace's host):** `Ctrl-T` answered "an agent opens one with its terminal tool" when a session had none, which is a refusal from the point of view of the person who pressed the key. It now starts a shell in the session's workspace — `POST /v1/terminals` with the session's `workspace_id`, which the daemon resolves to a local PTY or to that workspace's host through its helper, so a pane in a remote workspace types at the machine the files are on — and attaches when the daemon answers, because the daemon starts the program before it replies. `Client::create_terminal` is the contract's half and carries the request's own doc; the worker drops the old attach only after the new terminal exists, so a create that fails leaves the pane that was up alone. **Tests:** two in the TUI — a remote workspace id reaches the request verbatim with the pane's size, and an empty id (what this client's own sessions carry) asks for the daemon's workspace — and the design pass answers that it has no process to start.
   - **Started 2026-10-25 (reading back, and more than one pane):** the pane keeps ten thousand lines behind its screen (`SCROLLBACK`), and `F2` enters copy mode — a function key on purpose, because every printable key and every Ctrl chord is a byte a program can want. `j/k/h/l` move the copy cursor and scroll the view when it reaches an edge, `Ctrl-U`/`Ctrl-D` and Page Up/Down move a screen, `g`/`G` go to the ends, `v` starts a selection, `y` copies, and `Esc`/`q` leave. The scroll offset is the parser's own (`set_scrollback`), so the cells drawn and the cells yanked are the same ones — a copy taken at an offset cannot disagree with the screen. A copy leaves as OSC 52 through `clipboard.rs`, which writes the base64 alphabet itself rather than adding a dependency for one escape: over SSH the only clipboard involved is the one on the terminal a person is looking at, and a terminal that ignores the escape ignores it silently, which is why the status line also says how many lines went. When a session has several terminals, `Ctrl-T` asks which: a picker lists them with the command as the label, the id as the subtitle and `exited` on a program that ended, `j`/`k` choose, `Enter` attaches and `Esc` cancels; one terminal still attaches without a question, and the worker refetches the list the moment a session opens so `Ctrl-T` does not have to wait for the next poll. **Tests:** nine more in the TUI — six on the picker (one terminal, none, several, choosing the second, cancelling with `Esc` and with `Ctrl-T`, and a list that shrinks under it), three on copy mode (history reached and left with `Escape` giving the keyboard back, a selection of three cells, and a line yank arriving on the clipboard) — plus two in `clipboard.rs` for the padding and the escape, and two drawing tests for the picker and the copy-mode title.
-  - **Open:** the scroll offset stays where it is when a program prints while a person is reading, and a drag now scrolls past the pane's own edge only as far as one screen more — the copy view is kept in cells of the view rather than in absolute history for P6-12's reason — and there is no web-side copy mode yet (P11-5). Selections are character-wise; a line-mode `V` would be the next thing to add, not a fix.
+  - **Started 2026-11-04 (panes nobody owns):** the picker that `Ctrl-T` opens used to list only the open session's shells, so an agent's terminal whose session the daemon could not map was invisible: the daemon filed it under the ACP id, and no session filter would ever return it. The daemon now adopts that pane with **no session** (`session_id: null`), and the TUI reads `GET /v1/terminals` without a filter and keeps the open session's panes plus the ones no session owns — another session's shell is left out, because offering it here would be a pane a person could type into without the conversation it belongs to. A sessionless row says `no session` in the picker, one pane still attaches straight away, and `n` in the picker starts a shell in the session's workspace so a list of borrowed panes is not a trap. **Tests:** the daemon's mirror test asserts the unmapped pane has no owner, the filter is pinned by `backend::tests` (mine, an orphan, and another session's), and the TUI has a sessionless pane attaching with one press, `n` asking for a new shell, and a drawing test for the `no session` label. A sessionless row also says which workspace it is in and which host it runs on, from `TerminalSummary.workspace`/`host` — a pane whose bytes come from another machine is exactly the one a person needs an address for, and the daemon is the only end that knows it. The status line repeats the address while that pane has the keyboard: by then the picker is closed, and the pane being typed into is the one a person must not mistake for this machine's.
+  - **Result:** the pane is a terminal a person can live in from the TUI — attach, a shell on the workspace's own host, the picker, ten thousand lines of scrollback, find, copy mode, and now line-wise selections. `V` marks whole rows in the terminal and in the transcript: the yank takes each row from its left edge to its last non-blank cell, a blank line inside the run stays one, and `v` drops back to the character-wise selection. The paint and the yank read the same `selected`, so the reversed rows and the copied rows cannot disagree, and `has_selection`/`selected_lines` count a one-line mark as a selection rather than an empty one. **Tests:** two in `app` — a terminal line selection yanked as three whole lines, and a transcript one where `v` leaves the line-wise mode and a two-row mark copies as two lines — with the copy-mode title and the `?` card naming `V`.
+  - **Reading keeps its place (2026-11-07):** output that arrives while a person is scrolled back — by the wheel or in copy mode — joins the history behind them rather than pushing their line down. The offset grows by exactly the lines that scrolled off, so the row under the cursor is the same text afterwards, and a selection keeps the cells it was put on: a build that keeps printing while someone reads its error no longer moves the error out from under them. A pane following the program still follows it, because the answer to a command belongs below the fold, and the title's `behind n/history` counts the new lines. **Tests:** one in `app` — a scrolled copy-mode pane given two more lines keeps its offset two lines further back and yanks the same text.
+  - **Open:** there is no web-side copy mode yet (P11-5). Selections are character-wise (`v`) or whole-line (`V`); a block selection is not a thing this terminal has. The copy view's absolute-history coordinates landed with P6-12, so a drag can read back through the whole scrollback.
 - [x] **P6-11** Embedded mode: `acpilot tui` works with **no daemon** (in-process core) and attaches to a daemon when one exists — same code path, different `Host`/client impl. Guard with a trait so behaviour cannot fork. — **done 2026-10-29**
   - `acpilotd::embedded` serves the *same* router, auth middleware and wire types on `127.0.0.1:0`, on a thread of its own so it outlives the launch's temporary runtime; the token is generated for that process and never written, and dropping the handle stops the listener. The seam is `acpilot_client::daemon::Embedded` (`fn start() -> Started`): `ensure` attaches or spawns for callers that want a process, `ensure_or_embed` attaches or hosts. Anything after a launch holds the same `Client`, so no code can tell which answered — the fork the task was written to prevent. `InProcess` in the CLI is the only implementation and it builds the state with `acpilotd::startup`, the function the binary itself now calls, so the reaper, the terminal mirror and the settings watch cannot differ by launch path.
   - The order is deliberate: a daemon that answers is attached to first (its sessions outlive the window); a token refusal is reported rather than retried against a second listener; `--no-spawn` now means "attach or fail"; and an endpoint that was *named* (`--api-url`, `ACPILOT_API_URL`) is never stood in for, because an embedded listener takes the port the OS picks and connecting elsewhere would ignore the flag. `Options.daemon_args` is only read by the spawn path now.
   - **Verified** in a 100×30 pty with a scratch `XDG_RUNTIME_DIR`: with no daemon, the status line shows the `127.0.0.1` endpoint and the connected dot, the embedded daemon's theme arrives over `/v1/events`, `pgrep acpilotd` is empty and the runtime directory stays empty. With a real `acpilotd` on the socket, the window shows that socket and never a loopback port. `acpilot tui --no-spawn` with nothing running exits 1 naming the endpoint. Tests: two in `acpilotd/tests/embedded.rs` (the real client answers against the listener and a tokenless one is refused; dropping the listener stops the port) and four in `acpilot-client` over the decision (embeds when nothing answers, attaches and never embeds over a running daemon, refuses to stand in for a named endpoint, `--no-spawn` starts nothing here either).
   - **Open, and a decision rather than a chore:** nothing spawns `acpilotd` any more — the desktop window never did (its own note says so) and `acpilot tui` now hosts the core instead. `acpilot_client::daemon::ensure` and its lock/log/detach machinery are therefore library code with no product caller. Either it becomes a `cargo xtask`/`acpilot daemon start` path or it goes, and that is an ADR 0004 question (the note there promises "any client may start the daemon"), not a cleanup to do in silence.
-- [ ] **P6-12** Mouse support (optional), focus cycling, resize handling, `--no-mouse`, and a 60 fps budget on a 200×60 terminal.
+- [x] **P6-12** Mouse support (optional), focus cycling, resize handling, `--no-mouse`, and a 60 fps budget on a 200×60 terminal. — **done 2026-11-07**
   - **Started 2026-10-28 (the wheel, and the editor's click):** a click in the editor's text is a caret and a focus; the wheel scrolls the pane under the pointer by three lines without moving the caret, the copy cursor or the keyboard, and both work without the pane being focused first, because a pointer is aimed at what it is over. The same wheel reads back through the terminal's scrollback — the offset the yank and the find already read, so what is scrolled is what would be copied — and a scrolled pane says `behind n/history · any key returns` in its title, because a pane that went quiet and a pane that is being read look identical otherwise. Answering the program puts the view back at the newest line, which is what a terminal does and what stops a command's output printing below the fold. The panes report their own geometry (`PaneArea`, and `EditorArea` around one) so no second copy of the layout arithmetic exists to disagree with the first. **Tests:** two in the TUI — the wheel reading back through a program that printed more than a screen, coming forward again, and a key writing its byte while the view returns to live; and a drawing test for the scrolled title.
   - **A drag in the terminal selects what it covered (the same day):** the press is also what enters copy mode, anchored on the cell it landed on, because a pointer has no key to press first and a drag across a shell's output means the output; letting go keeps the selection and the status line names the two keys that finish it (`y` copies, `Esc` leaves), so nothing is written to the clipboard by a gesture that did not ask. A press that selected one cell or none ends the copy mode it began — copy mode is the one state where a keystroke goes nowhere near the program, and a person who clicked a shell and went back to typing must not be typing at a pane that quietly stopped listening. A drag that leaves the pane selects to the edge it left by rather than dropping the gesture, a drag on a scrolled pane keeps the offset it was drawn at, and a query being typed owns the keyboard, so a click does not move the selection out from under it. `Drag` is now what the button is holding — a divider or a selection — decided once at the press, so a drag that wanders off what it started on keeps doing what it was doing. **Tests:** three in the TUI (a drag across a shell's output yanked with `y` and the pane left following the program, an overshooting drag selecting to the pane's edge, and a click that selected nothing handing the keys back — including a click during a query being ignored) and one drawing test that the selected cells are drawn reversed and their neighbours are not, through the same viewports the frame reported.
   - **The editor selects and yanks too, a click focuses the list panes, and the budget is a number (the same day):** a press in the editor's text anchors a selection on the character under the cell, a drag grows it, and `y` puts the buffer's own slice on the clipboard over the same OSC 52 path the terminal's copy mode uses — the pane yanks text rather than cells, so no tab or wide glyph is reconstructed. The selection lives in the `Document` (anchor and head), which is why an edit or a motion collapses it and why the painted range and the copied text cannot disagree; the frame paints it with the `REVERSED` modifier, the mark the terminal's copy mode already uses, so a theme whose accent is close to its background cannot hide it. A click that selected nothing leaves a bare caret and no status line, and `Esc` clears a selection without moving it. A click in the files tree selects that row and takes the keyboard; a click in the session list selects that session and asks the worker to open it, and the empty rows under the last one move the keyboard and nothing else. `--no-mouse` is a real flag: mouse reporting costs the terminal's own click-drag selection, so a person who wants that keeps it, and every mouse action has a key. **The frame budget, measured** with `cargo run --release -p acpilot-tui --example frame -- 200 60 500` (the demo world: tree, editor with its parse, session list, transcript, composer, both footers, into a `TestBackend` so the number is the drawing and not the tty; ten warm-up frames are not counted): **mean 0.48 ms, p95 0.73–0.76 ms, worst 2.7–3.5 ms** at 200×60 — the worst frame is under a fifth of the 16.7 ms a 60 fps frame has. The same run in a debug build is mean 9.2 ms and worst 14.9 ms, which is a reason to measure in release and not a reason to worry: the number is unoptimised code, not a slow frame. **Tests:** thirteen in all — seven in the editor (a run yanked with its own text, two lines, a selection that stops at a line start not counting the next line, a drag back up shrinking the selection, a click leaving none, a drag past the edge of the pane, and a painted selection that keeps every character), five in the app (the drag, the bare click, the drag leaving the pane, a click in the tree, a click in the session list), and one drawing test that the selected cells are reversed and their neighbours are not. Verified end to end against the built binary in a 140×40 pty: a click in the tree, a drag across the seeded buffer and `y` put `ve(Debug, Clone, Copy, PartialEq, Eq)]\npub enum PaneMode {\n    Live,` on the terminal's clipboard as an OSC 52 escape — the frame's selection and the copied text being the same run — and the same launch with `--no-mouse` emits no mouse-reporting escape where the default emits one.
@@ -966,7 +1496,8 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   - **The widths a divider drag chose survive a restart,** in `crates/acpilot-tui/src/layout.rs`: `Layout` is two columns, clamped to the same 16–60 and 24–80 the drag and `Ctrl-←`/`Ctrl-→` already obey, read from `<data>/tui-layout.toml` at launch and written once on the way out — after the screen has been given back, so a failure can still say so where a person reads it. The data directory and not `config.toml`: a width is the client's memory of itself rather than a setting anyone edits, and a client that rewrote a hand-edited settings file to remember a column would be editing something it does not own. Nothing here fails a launch — a missing file is a first launch, and one that does not parse is the defaults — and a launch that changed nothing writes nothing, so opening a window is not a reason to touch the disk. The design pass has no path at all, because a screenshot must not edit the machine it was taken on.
   - **The frame budget is a CI gate,** `frame-budget` in `.github/workflows/ci.yml`: the example grew `--budget <ms>`, prints the four numbers either way, and exits 1 when the mean or the p95 misses it. 300 frames at 200×60 in a release build against 16.7 ms — measured at mean 0.45–0.63 ms and p95 0.61–1.01 ms across runs, so the gate has the room to catch a regression rather than a cold runner. The worst frame is printed and not gated: a shared runner produces one occasionally, and one scheduler hiccup is not a regression, while a sustained doubling is what the mean and the p95 see. The job is in `required`'s `needs`, so the promise to hold 60 fps at 200×60 is a red build and not a sentence in a note.
   - **Tests:** three more in the app (a drag resting at the editor's bottom edge scrolling a line at a time and growing the selection until the end of the file says so; a drag resting at the terminal's top edge reading further back while the line it began on stays the line it marks, then coming forward again at the bottom edge; and the widths from a drag being the widths the next launch opens, with a launch that changed nothing writing nothing) and four in `layout` (no file is the defaults, a nested directory is created and read back, a file that does not parse is the defaults, and a width no pane could use is clamped on the way in). Verified with `cargo run --release -p acpilot-tui --example frame -- 200 60 300 --budget 16.7` (exit 0, mean 0.45 ms) and the same run against 0.0001 ms (exit 1, naming both numbers), and the workflow parses with `frame-budget` in `required`'s list.
-  - **Open:** a scroll during a terminal drag stops once the selection's far end reaches the screen's edge, so a terminal selection is at most about two screens; reaching further wants the copy view in absolute history coordinates rather than in cells of the view, which is a change to the yank, the paint and every motion at once. Shift-extend is the keymap layer's (P6-5). A divider width is remembered per machine, not per project, and a client that is killed forgets the drag it was in the middle of, because the write happens on the way out.
+  - **The copy view is in history lines now (2026-11-07):** `CopyView` keeps the cursor and both selection ends as absolute lines — counted from the oldest line the pane holds — with `scroll` saying only which window of them is on screen. A drag held at an edge therefore keeps reading past one screen: the anchor stays on its line, the head follows the edge back through the history, and `y` reads each line at the offset it is visible at, so a run longer than two screens is one yank. The wheel and arriving output move the window, not the text under the selection, and the read-back position P6-10 added is the same rule seen through a growing history. **Tests:** one new in `app` — a drag held at the pane's top row to the oldest line, yanked as more than two screens with the line it began on still its far end — and the copy, find, line-mode and transcript suite retargeted at absolute lines.
+  - **Result:** the shell answers the pointer everywhere its panes are: a click puts the editor's caret or focuses a list row, the wheel scrolls the pane under the pointer without taking the keyboard, a drag selects text or cells and keeps growing at an edge, and the terminal's copy view can now read back through the whole scrollback. Focus cycling (`Tab`), resize handling (the pane is resized before its program is told), `--no-mouse`, remembered divider widths and the 60 fps gate at 200×60 all landed, the last as a CI job rather than a note. **Open:** Shift-extend is the keymap layer's (P6-5). A divider width is remembered per machine, not per project, and a client that is killed forgets the drag it was in the middle of, because the write happens on the way out.
 - [x] **P6-13** Integration stats bar, shared by TUI, GUI and web: one row per provider and agent,
   a context bar (`used/window`) and a credit bar (`used/limit`, or `remaining`), drawn from
   `IntegrationStats` with `acpilot_core::stats` for the fill. Unknown denominators render as an
@@ -978,10 +1509,16 @@ The largest single chunk. Editor first, agent pane second, but both in one binar
   - **A conversation's cost is counted, so the row has a figure (2026-10-30):** `crates/acpilotd/src/usage.rs` keeps a per-session count of the characters the conversation carries — message chunks, thoughts, tool calls (arguments and output), plans, and the prompt at the moment the daemon sends it — at four characters to a token. `/v1/stats` reports it as `ContextStats { used_tokens, window_tokens: None, source: estimated }` for the agent whose newest session has one, and an empty conversation reports **nothing** rather than a measured zero. Three things are deliberately not counted: the agent's echo of the user's own prompt (counted once, when sent), the daemon's own notices and the session's mode or command list, and framing fields (`role`, `type`, `status`, the ids and the JSON keys) — a per-chunk tax for the word `assistant` would add up to more than the estimate. An ACP `UsageUpdate` is taken as authoritative when an agent sends one (`source: server`, and the window it names), and a compaction starts the count again from the summary that replaced the context, dropping the reading that described the old one. The reading's `updated_at` is the session's last event rather than the request's clock, so a conversation that stopped goes `old` on the bar instead of looking fresh; `Sessions::reading` picks the newest session per agent, because the bar lists integrations rather than conversations.
   - **The browser cannot link the crate,** so the daemon measures for it: `GET /app/stats` is the same rows with `fill`, `text` and `source` worked out, served under the page's own prefix and behind the token, because an agent roster is not the page's own business. No second implementation of the arithmetic in TypeScript — the page lays out what the daemon measured. A daemon too old to serve it leaves the rest of the page standing: the bar says what it could not read instead of the whole load failing, and `npm run dev` proxies `/app` for the same reason.
   - **The TUI draws it** in the footer row the design pass reserved: `◇` a provider, `◆` an agent, eight cells per track, the fill coloured by source (green server, accent configured, amber estimated) rather than by level, so an estimate is never painted as a measurement. A row with nothing reported says `nothing reported`. `F4` swaps every figure for its provenance (`context server · credits —`) and the same key puts them back; it is a function key for the same reason `F2` and `F3` are — no pane whose keys are text gives one up.
+  - **The status line adds up the sessions (2026-11-01):** the footer carries `· 12.3k tokens`, summed from the same `IntegrationStats` readings the bar draws, so the two cannot disagree about a total; a `~` marks a figure the daemon estimated rather than one an agent reported, and a workspace where no session has done anything shows no figure at all rather than a measured zero. It is a sum and not a window: nothing states a denominator here, so there is no `used / window` to draw — that stays the bar's row, where the track can say it does not know.
   - **The bar shrinks before it drops a row** — full, then figures-without-credit-sentences, then tracks alone — and anything still not fitting is counted in a trailing `+n`, because a provider nobody can see is worse than a short bar. Every row stays put when one goes quiet, which is the rule the whole task exists for.
   - **Tests:** thirteen in `acpilotd::usage` (a prompt as an estimate with no window, nothing counted as nothing reported, one character as one token, the agent's words counted and its echo of the prompt not, a tool call's arguments and output, a reported reading replacing the estimate and carrying its window, a reading with no size, a non-usage notice, a compaction restarting from its summary, a second compaction not inheriting the first, a compaction dropping the old reading, a malformed usage payload) plus two in the sessions engine (a recorded conversation counted through `Record::context`, and `Sessions::reading` picking the newest conversation for an agent and ignoring another agent's), checked end to end against a real daemon and the mock agent: no session gives a row with no `context`, one prompt gives `20 / ?` with `source: estimated` and the session's own timestamp, a second prompt grows it to 42, and `/app/stats` serves the same as `fill: null`; nine in `acpilot-stats` (a ratio and its numbers, an unknown window as `None` rather than 1.0, a plan ceiling, a balance with no ceiling, an empty credit reading, order preserved with quiet rows, the staleness boundary and an undatable timestamp, compact formatting); five in `acpilot-demo` for the fixtures (one per drawing case, read through `acpilot_stats` so a fixture that stops producing a track fails here rather than in a screenshot); five drawing tests in the TUI (a track and a figure per row, the dashed track under an estimate, the shrink at 160 columns, the `+n` count at 80, the sources view) plus two in the app (`F4` both ways, and an `Update::Stats` measured on arrival); four in `acpilotd/tests/http.rs` (`/v1/stats` without a profile, one row per agent with nothing invented, `/app/stats` already measured, and the document naming the route); one in `acpilot-client` (the row round-trips and an absent credit bar stays absent); four in the page (`web/src/App.test.ts`: a track and its figures, an indeterminate track with no `aria-valuenow`, the sources button, and a daemon that cannot answer for the bar leaving the rest of the page standing).
   - **The desktop app draws the same rows (2026-10-30):** the window grows a bar under the profile list, fed by a poll of `GET /v1/stats` every fifteen seconds on a thread of its own (`daemon::follow_stats`), because the roster is the daemon's answer rather than the window's reading of `agents.toml`. `crates/acpilot-gui/src/stats.rs` is the window's half as data: the `◇`/`◆` glyphs, the token a source is drawn in — server green, configured accent, estimated amber, unknown muted, so an estimate is never painted as a measurement — a 72 px track, and the pixel length of a fill (a non-zero ratio always shows at least one). A figure with no denominator is a hairline rather than a full or an empty strip, a stale row keeps its label in the muted colour and says `old`, a quiet one says `nothing reported`, and `F4` — or **Where the stats came from** in the palette — swaps every figure for `context server · credits —` and back. A failed poll keeps the rows on screen and says so once per outage, so a daemon restarted under a running window refills the bar instead of leaving it blank. **Tests:** five in `stats` (the two glyphs, the four sources, only an unreported figure dimmed, a ratio as a length, a speck visible and an overfull track clamped), one in the palette and one in the keymap for the new verb, and two through gpui's headless harness — a snapshot arriving with `F4` both ways, and the window actually drawn with an empty bar, a measured row and the provenance view. `cargo xtask gui-check` passes, clippy with both features included.
   - **Open:** the page's bar is still a list rather than the footer strip the terminal has; that is P11's layout, not this task's shape. The window's bar does not count what did not fit (`+n`) the way the terminal's does — a menu needs no width budget at 1100 px — and nothing polls faster than fifteen seconds, because every row already says when it was observed.
+
+- [x] **P6-14** Editor-first launch, with an agent only on request. `acpilot tui README.md` resolves the file's project, opens the editor on `README.md`, and shows no assistant panel: the window is a text editor before it is an agent client. The assistant is absent until an agent is chosen from **Session → Select agent…** (or the palette's **Select agent**); only then do the sessions, transcript and composer appear. A profile with no `agents.toml` opens the same way, and the menu says there are no agents with a row into the model lab. Choosing an agent starts or attaches a session and reveals the panel. No launch or menu path writes `agents.toml`; the model lab writes one only when a person saves an agent.
+  - **DoD:** with no daemon, no profile and no `agents.toml`, `acpilot tui README.md` opens the file with the keyboard in the editor and no assistant pane; the menu lists no agents; adding an agent in the lab and choosing it reveals the panel; closing the panel leaves the editor open.
+  - **Result (2026-11-08):** a launch translates what it was pointed at into the daemon's workspace-relative path (`initial_file`) and sends the same `Request::OpenFile` the tree's `Enter` sends, so the command and a click cannot open two versions of "the file". `App::editor_first` is the launch state: the keyboard is in the editor and the assistant is absent rather than collapsed — `show_assistant` gates the column arithmetic and the panel stack, `set_focus` refuses the assistant's panes, and `Tab` cycles only what is on screen, so an update cannot put the keys in a pane nobody can see. **Session → Select agent…** (or the palette's **Select agent…**) chooses the only declared agent directly, and opens a `j`/`k` picker when several are declared; either way the agent's newest conversation is reopened rather than a second one started, the panel appears and the list takes the keyboard. A profile with no `agents.toml` has no rows, so the row names `agents.toml` and `acpilot doctor` instead of opening an empty picker, and **Build an Agent in the Model Lab…** is a permanent Session row that announces P4.5. **Close Assistant** puts the panel away and leaves the document open; nothing on the launch or the menu writes `agents.toml`. **Tests:** five in `app` (a launch is an editor and `Tab` skips the hidden panes; an arriving session cannot steal focus; choosing an agent reopens its conversation and closing returns to the editor; several agents ask which; an empty roster names P4.5), one in `ui` (the assistant column is absent until shown, then drawn), and one in the CLI (a named file becomes `src/main.rs`, a directory becomes no file).
+  - **Open:** the model lab is P4.5, so its row announces the task rather than opening the lab. Choosing an agent attaches its *newest* conversation; there is no list of an agent's older ones. The DoD's "add an agent in the lab" step is currently exercised by adding the `agents.toml` entry by hand — the client half is what this ticket owns, and the first use of a profile still writes nothing.
 
 ---
 
@@ -996,26 +1533,197 @@ what needs an editor shell waits for the editor shell.
   so config, filters, worktrees, submodules and signing stay consistent with the command line.
   Nine tests run against real temporary repositories, including a staged rename, an unborn
   repository, and a subdirectory discovery.
-- [ ] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
+- [x] **P6.5-2 · API surface** — `GET /v1/git/status`, `/diff?scope=`, `/tree`, `/log?limit=`;
   proto types mirroring `acpilot-git`; `404 not_found` for "not a repository" and a clear
-  `host_unavailable` when `git` is missing on the host.
-- [ ] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
+  `host_unavailable` when `git` is missing on the host. — **done 2026-11-07**
+  - **The tree's letters needed none of those routes (2026-11-01).** `GET /v1/files/list`
+    marks each row with a `FileChange`, so the decoration P6-6 was waiting on is done: one
+    `git status` per listing, a directory summarised by the most urgent change beneath it,
+    and silence rather than an error when there is no repository or no `git`. What is left
+    here is the routes themselves and the source-control pane that reads both halves of a
+    change.
+  - **Result:** the four routes are served from the host's own `git`, through the crate
+    that already parses porcelain, so a pane and the command line cannot disagree about
+    what is staged. `GitStatus` carries branch, upstream, ahead/behind and both sides of
+    every change; `GitDiff` the colour-free patch and its file list; `GitTreeEntry` every
+    working-tree path with whether the index knows it; `GitCommit` the parents a graph
+    needs. Scope defaults to `unstaged` and names the three spellings in a `400` rather
+    than silently answering a different question; `limit` defaults to 50 and is capped at
+    500 rather than refused. Paths are repository-relative — what git reports, and the
+    one spelling a status row and a patch header share — which is the same path as a
+    workspace file whenever the workspace is the repository's root, the ordinary case.
+    A directory that is not a repository is `404`; no `git` on the host is
+    `502 host_unavailable` with `details.field: "git"`; a workspace on another host is
+    `409`, because these routes walk this machine's filesystem. Nothing wrote at this task;
+    P6.5-7 later adds the index writes, and P6.5-3/4 the commit. **Tests:** nine route
+    tests over a real temporary repository (both halves of a change, the three diff
+    scopes and an unknown one, tracked and untracked tree rows, a log limit with its
+    parents and `limit=0`, not-a-repository, a remote workspace, no workspace, and the
+    four paths plus four schemas in the OpenAPI document), three unit tests in the
+    module, and three on the wire types' JSON shape.
+  - **Open:** the source-control pane that draws these is P6.5-4, and the commit writer is
+    P6.5-3. A remote workspace still gets letters only: its diff and log wait for a
+    helper method that runs `git` over there, and the refusal is the honest answer until
+    then. A patch is not capped by bytes — a repository-wide diff of a generated tree is
+    as large as git makes it — and neither `diff` nor `status` is pushed to a client, so a
+    pane refreshes by asking again.
+- [x] **P6.5-3 · Commit-message generation** — `acpilot_core::commit` has the editable default
   prompt (Conventional Commits with the gitmoji inside the description), the gitmoji table, and
   strict validation of the model's answer. Still open: per-profile prompt storage, a route that
   runs either a model-lab recipe or an active agent session, and a draft the editor can change
-  before committing.
+  before committing. — **done 2026-11-07**
   - The generator is selectable per request; the staged diff is what it sees, and nothing is
     committed until the user confirms.
   - Reject rather than repair: an unknown type, a missing description, a subject over 72
     characters, or a body without a blank line is a validation error, not something the daemon
     silently rewrites.
-- [ ] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
-  composer whose message can be generated then edited. `git` writes stay a separate, confirmed
-  action; the pane never stages or commits on its own.
-- [ ] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
+  - **Result:** the prompt now lives as `<profile>/commit-prompt.txt`, read per request, with the
+    core default as its fallback; `GET /v1/git/commit/prompt` serves the effective template and
+    says whether it is `default` or `profile`. `POST /v1/git/commit-message` renders the staged
+    patch, its file list and the recent subjects into that template and asks the **active session**
+    named in the request. The session engine gained the one synchronous call it lacked
+    (`Sessions::ask`): it sends the prompt through the same owner task as a normal turn, records
+    and streams every event, collects the assistant chunks, and returns the text. The response is
+    a validated `CommitDraft` whose `generator` is `session:<id>`; `prompt` overrides the template
+    for one request only. Nothing is staged, committed or stored. The format rules are the core
+    validator's, surfaced as `400 invalid_request` with `details.field: "message"`; an empty index
+    is `409` before the agent is asked, and a busy session, unknown session, missing repository or
+    failed answer keeps the meanings P6.5-2 gave those errors. **Tests:** seven route tests against
+    a real temporary repository and the fixture agent (a valid draft, default-then-profile prompt,
+    empty index, unknown session, an override whose prose answer is rejected, an empty session id,
+    and both paths plus four schemas in OpenAPI), six unit tests in the commit module, and three on
+    the wire types' JSON shape.
+  - **Open:** the model-lab recipe generator is blocked on P4.5 — there are no providers,
+    recipes or model-lab routes in this build, so a `recipe` request shape would be a promise the
+    daemon cannot keep. Only an active session can generate. The prompt is edited as a file, like
+    `agents.toml`; there is no save route. A draft is not persisted, and committing it is P6.5-4.
+    The generating prompt and answer stay in that session's transcript, which is the record of how
+    the draft was produced.
+- [x] **P6.5-4 · TUI** — source-control pane with the changed-file tree and diff, plus a commit
+  composer whose message can be generated then edited. At this task `git` writes stayed separate
+  actions; P6.5-7 later adds stage/unstage, and the commit remains confirmed.
+  - `F6` opens a modal pane built from `GET /v1/git/status` and `GET /v1/git/diff?scope=all`: the
+    changed paths on the left and the selected file's section of the patch on the right. It staged
+    nothing at this task; `j`/`k` choose a file while `PgUp`/`PgDn` scroll its diff.
+  - `c` opens the composer and `Ctrl-G` asks the open session for a draft through
+    `POST /v1/git/commit-message`, then puts it in the editable message. `Ctrl-S` asks for
+    confirmation and `y` sends the message to the new `POST /v1/git/commit`; `Esc` closes without
+    writing. The route refuses an empty message with `400`, and an empty index or a git hook's
+    refusal with `409`.
+  - `acpilot-git::Repo::commit` is the commit write. It commits the index as it stands — no
+    staging, no cleanup — and is reached only by the confirmed route; P6.5-7 later adds `stage`
+    and `unstage`. The changed-file fixture in `--demo` is a design-pass source, not a repository.
+  - **Tests:** three in `acpilot-git` (whole message and body, whitespace refused before git, the
+    existing first-commit case), three route tests (the index-only commit, the empty message, the
+    empty index) plus the OpenAPI operation and both schemas, four TUI state tests (`F6`, `g`,
+    `Ctrl-S`/`y`, a draft landing in the composer), and two render tests (the pane's list and diff,
+    the composer's message and footer).
+  - **Open:** the desktop and browser panes wait on P6.5-5. There was no stage/unstage route at
+    this task, so the commit acted on whatever the person had already added; P6.5-7 later added
+    it. The source
+    pane is modal rather than a movable `Panel`, because it is about the repository and the only
+    write it leads to needs the confirmation. A commit is not added to the transcript; the status
+    line and the refreshed index are the TUI's record, and the daemon's git output is only the
+    answer.
+- [x] **P6.5-5 · Desktop and web** — the same two panes over the same API and the same diff text;
   no second diff implementation.
-- [ ] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
+  - The desktop shell opens the pane over the window with `F6`: `j`/`k` choose a changed path,
+    `PgUp`/`PgDn` scroll its section, `r` re-reads, and `c` opens the composer. There,
+    `Tab`/`Shift-Tab` chooses which listed session a draft is asked of (the first is the default),
+    `Ctrl-G` asks that session, `Ctrl-S` asks for confirmation, and `y` sends the whole message to
+    `POST /v1/git/commit`.
+  - The served page's **Source control** panel is lazy: it requests nothing until a person opens it,
+    then reads the same status and whole diff. A path button selects its section; `Review commit`
+    shows the confirmation, and only `Commit staged index` writes.
+  - `acpilot_git::patch_section` now cuts the header-to-next-header section for both the TUI and the
+    desktop shell. The browser's `patchSection` only selects the daemon's text by the same headers;
+    it does not compute a diff, so all three show the same lines for a path.
+  - **Tests:** five desktop state tests (refresh keeps or clamps the selected path, both status marks,
+    a message and confirmation, a refusal clearing every in-flight flag, choosing any listed session),
+    a headless window test that `Ctrl-G` carries the chosen session id, five browser tests (lazy read
+    and one file's section, a generated draft and the two-step commit, an empty message stopped before
+    the daemon, the shared header rule, index-only staging), plus the `acpilot-git` helper test.
+  - **Open:** the desktop shell has no session pane, so the composer's `Tab`/`Shift-Tab` picker is the
+    only place a draft's session is chosen; the browser panel does not do the `F6`/keyboard route (it
+    has no global keymap), and neither client staged at this task; P6.5-7 later adds stage/unstage to
+    all three panes. The pane remains modal in the desktop app, as in the TUI, because its one write
+    needs the confirmation.
+- [x] **P6.5-6 · Tests** — route tests over a fixture repository, snapshot diffs, and commit
   generation exercised without a network call.
+  - **Result:** the git route suite snapshots all three diff scopes in
+    `crates/acpilotd/tests/snapshots/git__diff_scopes.snap`. The snapshot is the exact patch text
+    and file order three clients draw, so a changed hunk, header or path shows up as a reviewable
+    diff. The commit-message suite adds one lifecycle test that stages `one.txt` through
+    `/v1/git/stage`, drafts through the fixture agent over ACP, commits the validated message, and
+    asserts both that the index is clean and that `git log` stored that message. The two suites are
+    14 and 11 route tests; both run entirely against a temporary repository and a child process.
+  - **Open:** none.
+- [x] **P6.5-7 · Stage and unstage from the panes** — `POST /v1/git/stage` and
+  `POST /v1/git/unstage` take `GitIndexRequest { workspace?, paths[] }` and answer the new
+  `GitStatus`, so preparing the index no longer sends a person to a terminal.
+  - `Repo::stage` runs `git add -A -- <paths>`. `Repo::unstage` runs `git reset -q HEAD --
+    <paths>`, and falls back to `git rm --cached --ignore-unmatch` before the first commit.
+    The daemon validates every path before git sees it: empty, absolute and `..` components are
+    `400`, and git's own refusal is `409`. A staged rename contributes both its old and new
+    paths, so one selected row moves both halves.
+  - The TUI's source pane binds `s`/`u` and the desktop overlay binds `SourceStage`/
+    `SourceUnstage`; both ask for status and the whole diff again after the write. The browser's
+    panel has **Stage** and **Unstage** for the selected path. Each surface refuses a path with
+    nothing on that side of the index and says why, rather than sending an empty operation.
+  - **Tests:** three `acpilot-git` tests (stage a working-tree edit, unstage back to the working
+    tree, refuse empty and escaping paths), four route tests including rename expansion and the
+    OpenAPI operations, one TUI state test, and one browser test over the two new calls.
+  - **Open:** P6.5-8 adds checkout and discard; config changes remain separate. The browser panel
+    has buttons rather than a global keymap. `--demo` keeps its seeded index and refuses the
+    writes, because there is no repository behind the fixture.
+- [x] **P6.5-8 · Discard and checkout from the panes** — the two destructive restores are named,
+  confirmed, and served by the daemon instead of sending a person to a terminal.
+  - `Repo::discard` restores the working tree from the index: tracked paths through `git restore
+    --worktree`, an untracked path through `git clean`. A staged edit stays staged. `Repo::checkout`
+    restores both halves from `HEAD` through `git restore --source=HEAD --staged --worktree`; a
+    staged addition — including the new half of a rename — is removed with `git rm`, because `HEAD`
+    does not have it. A rename's old half is restored from the one row that names the new path.
+  - `POST /v1/git/discard` and `/v1/git/checkout` take the same `GitIndexRequest` and answer the new
+    status. Nothing to restore, no `HEAD`, or an untracked checkout is `409` before a write; invalid
+    paths are still `400`. The client methods are `Client::discard` and `Client::checkout`.
+  - The TUI arms with `d`/`x`, confirms with `y`, and cancels with `n`/`Esc`; the desktop keymap has
+    `SourceDiscard`/`SourceCheckout`/`SourceConfirm`/`SourceCancel` on the same keys and the same
+    buttons. The browser has **Discard** and **Checkout** behind an inline confirmation. Every
+    surface refuses a path with nothing to restore and says why; checkout is unavailable before the
+    first commit and for an untracked path, where discard is the action that removes it.
+  - **Tests:** four `acpilot-git` tests (discard restores from the index and removes an untracked
+    file, checkout resets both halves and removes a staged addition, checkout restores a rename's
+    old half, checkout refuses an untracked path and an unborn repository), four route tests
+    (discard, checkout, untracked refusal, no-`HEAD` refusal), two TUI state tests plus the footer
+    drawing, one desktop headless test that arming sends nothing and `y` sends each command, and one
+    browser test over both confirmations. The OpenAPI operations and schema are regenerated.
+  - **Open:** config changes remain separate, and there is no whole-tree discard — a selection is
+    one path, because a button that resets everything is a second decision. A workspace on another
+    host still needs a helper method for these writes. The browser has no keyboard route, as its
+    panel has no global keymap.
+- [x] **P6.5-9 · Stage one hunk from the panes** — the three source-control surfaces can put a
+  single unstaged hunk in the index instead of staging the whole file.
+  - `POST /v1/git/stage-hunk` takes `GitHunkRequest { workspace?, path, hunk }`, where `hunk` is
+    zero-based inside that path's **current unstaged** diff. `acpilot-git::Repo::stage_hunk` cuts
+    the hunk from git's own patch and pipes it to `git apply --cached --whitespace=nowarn -`; no
+    client sends patch text. A missing path or an out-of-range hunk is `409`, because the patch
+    changed under the request; invalid paths remain `400`. `Client::stage_hunk` is the one client
+    method all three surfaces use.
+  - The panes show **Unstaged** and **Staged** sections separately and only the unstaged hunks are
+    selectable. The TUI and desktop app ask for both diff scopes, select with `h`/`l`, and stage
+    with `Shift-S`; the browser draws a **Stage hunk N of M** button beside each unstaged hunk. A
+    write re-reads status and both diffs, and the selection clamps when the file no longer has that
+    hunk.
+  - **Tests:** three `acpilot-git` tests (stage one of two hunks, refuse a hunk past the end, leave
+    an untracked path refused), a wire-contract case, two route tests (one hunk staged, out-of-range
+    `409`), one TUI state test, one desktop headless test, and one browser test over the new call.
+    The OpenAPI snapshot, the browser schema and the generated showcase keymap are regenerated.
+  - **Result:** `cargo xtask check` passes. The TUI, desktop and browser all read the same two diff
+    scopes and send the same `{ path, hunk }` request; the browser never builds a patch.
+  - **Open:** no line-level staging, and an unstaged hunk whose context has moved is refused by git
+    with `409` rather than re-found — reloading the pane is the recovery. An untracked path has no
+    unstaged diff to split, so it is still staged as a whole. The browser has buttons rather than a
+    keyboard route, as its panel has no global keymap.
 
 ---
 
@@ -1082,6 +1790,12 @@ untrusted binary with your repo and your network is exactly the hole worth closi
     so the list does not jump while typing.
   - Caps: 5k per file, 50k per workspace, with a truncation notice. In-memory with a latest
     snapshot for late-joining UIs — diagnostics are recomputed, so persisting them is waste.
+  - Shipped (2026-11-02): the push half and the snapshot. The daemon drains every session's
+    publish queue on a 250 ms timer and announces `diagnostics` frames on `GET /v1/events`; the
+    TUI applies one to the open buffer, so a background index finishing fills the gutter without
+    a save. Answers and publishes both write a capped store (64 files, newest wins), which the
+    stream sends on connect for a client that arrives late. Still open: the pull model
+    (`textDocument/diagnostic`), tags and related information, and the workspace cap.
 
 - [ ] **P7-7 · Requests and features for v0.1** (2d)
   - hover, completion (+`completionItem/resolve`), signature help, definition/declaration/
@@ -1115,7 +1829,36 @@ untrusted binary with your repo and your network is exactly the hole worth closi
   - `acpilot format <paths>` and `--check` for CI. Document the interaction with agent writes:
     last writer wins, but both are diffed and both are audited.
 
-- [ ] **P7-11 · Remote language servers** (1d, lands with the remote hosts phase (P8) and the Windows phase (P9))
+- [x] **P7-11 · Remote language servers** (1d, lands with the remote hosts phase (P8) and the Windows phase (P9))
+  - **Result (2026-11-04):** a workspace on a host gets diagnostics and references from a
+    server **on that host**. The helper grew `lsp.start`, `lsp.write` and `lsp.close`:
+    a program on piped stdio, its stdout as `lsp.data` notifications, its stderr as
+    `lsp.stderr` (read so a full pipe cannot block it) and its end as `lsp.exit`, with
+    the id this process assigns for the same reason `pty.*` assigns one. Pipes rather
+    than a PTY, because a PTY adds echo and CRLF translation to a protocol that is
+    already framed (`docs/notes/ssh-agent.md` makes the same point from the client side).
+    `acpilot-lsp`'s client learned a second transport: `Server::attach` takes a pipe
+    instead of a child, so `Session`'s handshake, document sync and questions are the
+    same code for a server on this machine and one three hops away — the only thing that
+    moved is the pipe's far end. The daemon's bridge (`crates/acpilotd/src/lsp_remote.rs`)
+    carries bytes both ways over one helper process per server, with a writer thread for
+    stdin's ordering and a reader thread that sorts `lsp.data` from `lsp.stdout`'s
+    siblings; the registry is keyed by language **and** place, so two workspaces on one
+    host are two indexes and a local session keeps the key it had. The file routes
+    resolve a workspace through the existing `Source`, so a remote root is read through
+    the helper and a remote references request with no server answer is a `409` rather
+    than an empty list — the parse-tree fallback reads this daemon's disk, and an empty
+    answer would be a claim nobody checked. **Tests:** the helper's `lsp.*` round trip
+    against a shell script that prints and echoes a written frame (the bytes arrive, the
+    id is the helper's, close reaps it), the codec's own tests, and the refusal-by-name
+    for a helper from before `lsp.start`.
+  - **Open:** a publish from a host is drained but dropped: the daemon strips the
+    workspace root before announcing it, and the notice's path is the host's, so only
+    answered diagnostics reach the event stream until the store learns to carry a
+    workspace id. `GET /v1/lsp/servers` still lists this machine's servers only. Nothing
+    measures a remote index's latency, and the bridge has no cancellation or progress
+    forwarding. Windows is covered by the same code (`installed` is the platform's) but
+    no Windows host was tested, because a helper on a Windows host is P9's.
   - Over SSH and WSL the server runs **on the host**, spawned through `acpilotd-helper` alongside
     fs/PTY/spawn. Pointing a local server at remote files is unsupported, not merely slow: wrong
     toolchain, wrong paths, wrong import roots.
@@ -1165,7 +1908,47 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 - [ ] **P8-3** Capabilities over SSH: upload `acpilotd-helper` (musl, `scp`-less — write via `exec` + base64 or SFTP), version handshake, then fs/PTY/spawn/LSP through the helper.
 - [ ] **P8-4** Remote workspace: root path on remote, file read/write with ETag, `notify`-equivalent via helper polling interval (500 ms) until inotify-over-SSH exists.
 - [ ] **P8-5** Remote agent spawn: ACP over an SSH `exec` channel (stdio bridged), stderr captured separately, resize forwarded, clean kill on cancel.
-- [ ] **P8-6** Remote terminal: PTY request (`xterm-256color`, current size), resize messages, reconnect that replays the last screen.
+- [x] **P8-6** Remote terminal: PTY request (`xterm-256color`, current size), resize messages, reconnect that replays the last screen.
+  - **Result (2026-11-04):** a pane can run on the host its files are on.
+    `crates/acpilotd-helper` grew `pty.open`, `pty.write`, `pty.resize`, `pty.kill` and
+    `pty.close` (`portable-pty`, the daemon's own crate, so the platform branch is
+    inside it rather than a second implementation), with the PTY's output leaving as
+    `pty.data` notifications and its exit as `pty.exit { id, code }`. A terminal is not a
+    call — output arrives between requests — so the daemon opens **one helper process per
+    pane** (`crates/acpilotd/src/pty_remote.rs`) and its reader thread sorts the lines by
+    shape: an `id` is an answer, `pty.data` is screen, `pty.exit` is the end. Multiplexing
+    onto the shared files connection would have put a chatty shell in front of every
+    `fs.read` on that host. Bytes are base64 in both directions, the one encoding that
+    carries a `\x1b`, a quote and half a UTF-8 character through a JSON string; the
+    daemon already had an encoder for the install script, and `base64.rs` is now that
+    codec with a decoder beside it and tests on both. The helper is started by the same
+    install-and-fall-back ladder as everything else (`Connections::session`), it is told
+    `TERM=xterm-256color` because a daemon under a service manager has no `TERM` to
+    inherit, and it starts `$SHELL` or `/bin/sh` when the request names no program — a
+    shell is a fact about the host, not about the machine holding the socket.
+    `POST /v1/terminals` takes an optional `workspace`: one on an ssh or WSL host starts
+    the shell there, with `cwd` checked by string (no `..` out of the root, no absolute
+    path outside it) because there is no `canonicalize` across the transport, and with
+    the same capability check the workspace route makes. `Driver` grew a third arm
+    (`Remote`) rather than a second `Terminal`: the screen, the attach replay, the
+    resize and the exit notice are the daemon's and unchanged, so a remote pane is not a
+    second kind of pane. **Tests:** two in the helper's suite (a program paints and its
+    exit code arrives; a terminal takes input and a new size, through `read` so the test
+    cannot pass on a program that exited before it was typed at), two route-level ones
+    in `tests/remote_terminals.rs` against a shell that stands in for `ssh` and the
+    helper (the frame the daemon typed comes back as output, the size changes, the exit
+    code is reported, and a helper from before `pty.open` is refused by name), and the
+    codec's own tests in `crates/acpilotd/src/base64.rs`.
+  - **Open:** the screen lives in the daemon, so a pane reattaches after a network drop
+    but not after a daemon restart — a surviving terminal is P12's (persistence), and
+    `ECD` history is P2-8. `TERM` is the helper's default, not a negotiation or a
+    request field (there is no `env` in `CreateTerminalRequest`). The pane is owned by a
+    session that still lives on this daemon, because sessions do not run remotely until
+    P8-5; a client with no session at all can now ask for a pane on a remote workspace — `POST
+    /v1/terminals` with no `session_id` is allowed there and refused on this daemon's own
+    host — which is the HTTP half P11's browser tab needs; the browser pane itself is
+    still P11's. Input and output each cost one round trip, which is right for a
+    terminal and wrong for a `cat` of a large file (that is `fs.read`).
 - [ ] **P8-7** Fallbacks: `ssh` binary mode via `openssh` crate for configs russh cannot express (FIDO, `Match`, ControlMaster); auto-fallback with a single log line.
 - [ ] **P8-8** Tests: docker-compose `sshd` fixture; tests for agent auth, bad host key, dropped connection mid-turn, and a 200 MB file read.
   - **DoD:** edit a file and run an agent on a remote box from the TUI, with the daemon local; kill the network mid-turn and recover.
@@ -1209,18 +1992,39 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## Web phase (P11) — Web UI (≈12 days)
 
-- [ ] **P11-1** `web/`: Vite + Svelte 5 + TS; layout mirrors TUI panels; profile switcher bound to `X-Acpilot-Profile`; router for `/p/:profile/w/:workspace`, `/p/:profile/s/:session`.
+- [x] **P11-1** `web/`: Vite + Svelte 5 + TS; layout mirrors TUI panels; profile switcher bound to `X-Acpilot-Profile`; router for `/p/:profile/w/:workspace`, `/p/:profile/s/:session`. — **done 2026-11-06**
+  - **Result (2026-11-06):** the address is the page's state. `web/src/routes.ts` parses and writes both published shapes (and the `/app/p/...` spelling the page was served under), the page pushes `/p/<profile>/s/<id>` when a session opens and `/p/<profile>/w/<name>` when the workspace picker moves, and back is a route change the page follows rather than a browser state it ignores. `acpilotd` serves the page at both addresses, so a refresh or a shared link lands on the same view instead of a 404; `GET /v1/health` gained `profile`, the profile directory's own name, because a browser cannot read the daemon's flags and a page that invented `default` would be naming a profile nobody started. Every typed call and both SSE streams carry `X-Acpilot-Profile`, and the workspace picker is filled from `GET /v1/workspaces` with sessions scoped by the row's id **or** label (both appear in links). A link naming a session the list does not have is resolved with `GET /v1/sessions/{id}`; one naming a session that is gone sends the page back to its workspace with the reason. The layout is now the cockpit's: profile and workspace in the top bar, sessions on the left, the transcript on the right, terminals and the stats bar below, stacking under 60rem. The profile switcher asks `GET /v1/profiles` and enables itself when a daemon answers; on today's single-profile daemon it shows the address's profile, disabled, with the reason in its title. **Tests:** 4 in the new `routes.test.ts` (both shapes round-trip with escapes, `/app` normalises, a bad escape is kept, workspace scoping by id and label), 3 in `App.test.ts` (a deep link resolves the session it names and sends its profile, opening a row moves the address, the workspace picker moves both address and table), and 2 in `crates/acpilotd/tests/http.rs` (health names the profile; both page addresses answer 200). The 61 existing web tests still pass, with the load's two new tolerant calls counted.
+  - **Open:** the daemon now reads `X-Acpilot-Profile` and serves `GET /v1/profiles` (P4-8's first half, 2026-11-06), so the switcher is a real choice; the header still travels by hand in the page rather than through a generated client constructor. The terminal socket cannot carry the header (a browser sets no headers on a WebSocket), so an attach still binds the active profile — the subprotocol has to name the profile the way it names the token, which is P4-8's remaining piece for sockets. The workspace picker's names are the daemon's labels, and a session's `workspace_id` is matched against both the label and the id rather than resolved by the daemon — a rename would need a reload to re-scope. `GET /v1/sessions` is still unfiltered by workspace (a client narrows, the daemon does not). The address names one session, so two panes of the same session cannot be open at once; that is a split-view question, not a routing one.
   - **Started 2026-10-24:** `web/` exists — Svelte 5 + Vite + TypeScript, `vite-plugin-singlefile` so the build is one HTML file with its script and stylesheet inlined, written straight into `crates/acpilot-web/assets/` and committed. Connect-with-token, health, and the session list are in; the router, the profile switcher and the panel layout are not.
   - **One command for the web too (2026-10-29):** `cargo xtask check` runs the web UI's steps: `npm run check`, `npm test`, a daemon build for `npm run test:live`, then `npm run build` and a `git status` comparison of the page it wrote. A type error `svelte-check` sees, a failing live repaint, or a `.svelte` edit nobody rebuilt now fails locally with the same messages the runner gives. They are `cargo xtask web-check`, which is also the `web` job's one step, so the two cannot drift; `check --no-web` leaves them out for a Rust-only loop.
   - **The dev loop (2026-10-28):** `cargo xtask web-build` is `npm run build` with the install and the drift answer around it — it ends by saying whether the committed page changed, which is the diff CI fails on. `cargo xtask dev` runs the daemon on `127.0.0.1:7777` with the Vite dev server over it, so a `.svelte` edit is a reload; the address is one fact in two languages, and a test compares the task with `web/vite.config.ts`. Either process stopping stops both.
-- [ ] **P11-2** API client generated by `openapi-typescript` into `web/src/api/schema.d.ts`; `openapi-fetch` wrapper that injects the token; CI check that regeneration is a no-op.
-- [ ] **P11-3** CodeMirror 6 editor: rope-equivalent view over the files API (`If-Match` saves), tree-sitter-wasm highlighting (fall back to `@codemirror/lang-*` if wasm load is slow), diff via `@codemirror/merge`. Attach **`@codemirror/lsp-client` 6.x** through the daemon's WS bridge: the browser never spawns a server, and diagnostics match the TUI byte for byte.
-- [ ] **P11-4** Session view: SSE-driven transcript, streaming markdown, tool-call cards, permission prompts (optimistic resolve + reconcile), cancel.
-- [ ] **P11-5** Terminal: xterm.js attach over WS, fit + webgl addons, resize, copy/paste, reconnect replay.
-- [ ] **P11-6** `acpilot-web` crate: embed built assets (`rust-embed`), `GET /` serves the SPA, `acpilot serve --http --bind 0.0.0.0 --token` with a first-run token printed once; CSRF-safe (token in header only), strict CSP.
+- [x] **P11-2** API client generated by `openapi-typescript` into `web/src/api/schema.d.ts`; `openapi-fetch` wrapper that injects the token; CI check that regeneration is a no-op. — **done 2026-11-06**
+  - **Result (2026-11-06):** the document the page is generated from is the one the daemon serves: `acpilotd::openapi_document()` is public and the `/v1/openapi.json` handler calls it, `cargo xtask web-schema` writes it to `web/src/api/openapi.json`, `openapi-typescript` turns it into `web/src/api/schema.d.ts`, and `openapi-fetch` is the client (`Authorization` on every call, the same `ApiError` messages, and an absolute `baseUrl` because a browser refuses the relative URL the client would otherwise build). The web half of the gate regenerates the document, fails on drift, then regenerates the types and fails if the committed file changed. Pointing a generator at the document found three defects a snapshot could not: a `$ref` to `ReferencesRequest`, used by `POST /v1/files/references` and never registered; four routes sharing `operationId: list_doc` and two sharing `create_doc`/`events_doc`, so the generated `operations` interface pointed every one of them at the first route's shape (now `list_files`, `list_sessions`, `read_stats`, `list_terminals`, `create_session`, `create_terminal`, `session_events`); and `SessionEvent.payload` published as a bare `object`, which a strict client reads as "no properties allowed" (now a map of unknown values). `crates/acpilotd/tests/http.rs` gained a test that every `$ref` in the served document resolves. **Tests:** the page's 67 tests still pass, with the mocks reading `(url, init)` through a small `plainFetch` adapter for the `Request` the typed client sends; the OpenAPI snapshot moved by the three fixes.
+  - **Open:** `GET /v1/health` and `/app/stats` are not in the document — health has no schema and stats is deliberately outside `/v1` — so those two calls keep hand-written shapes in `api.ts`, and the document still has no path for either. `web/.npmrc` sets `legacy-peer-deps` because `openapi-typescript` declares a `typescript ^5.x` peer while this package is on 6; it generates the same file, and the line should go when the range moves. `schema.d.ts` is committed rather than built on demand, so a checkout needs no Node to build the daemon; a wire change means `cargo xtask web-schema` and `npm run schema` before the gate, which names both.
+- [x] **P11-3** CodeMirror 6 editor: rope-equivalent view over the files API (`If-Match` saves), tree-sitter-wasm highlighting (fall back to `@codemirror/lang-*` if wasm load is slow), diff via `@codemirror/merge`. Attach **`@codemirror/lsp-client` 6.x** through the daemon's WS bridge: the browser never spawns a server, and diagnostics match the TUI byte for byte. — **done 2026-11-06**
+  - **Result (2026-11-06):** the page edits the daemon's files, not a browser filesystem. `web/src/Editor.svelte` lists a directory with `GET /v1/files/list` (directories first, each row's git status beside it), opens a file with `GET /v1/files`, and writes it back with `PUT /v1/files` carrying the `etag` it read as `if_match` — a file somebody else changed is the daemon's `409`, shown as "changed on disk … nothing was overwritten", never a silent save. The buffer is CodeMirror 6 (`basicSetup`: history, search, bracket matching) themed from the page's palette, so a live repaint recolours it too; the grammar comes off the extension (JS/TS/JSX, JSON, Markdown, Rust, Python, plain text for everything else). `Diff` switches to a read-only `@codemirror/merge` view of disk against buffer, and the git marks the read route already returns are reported under the pane. **Tests:** 12 in the new `files.test.ts` (grammar per extension, path normalise/join/parent/basename, listing order, dirty, the three refusal sentences) and 5 in `Editor.test.ts` (the root listing with the token, walking into a directory and back, an unreadable listing saying why, opening from the row and by typed path, marks reported) — plus `App.test.ts` answers the editor's listing call and its call count moved from seven to eight.
+  - **Tabs, a new file and a live gutter (2026-11-07):** every open file is a tab that keeps its own buffer, so switching back to one does not re-read the disk and lose an edit; a dot marks a tab whose buffer is unsaved, closing one with unsaved text asks first, and the set of open paths and their unsaved buffers survives a reload (a restored draft is saved against the version it was typed over, so newer disk text is not replaced unseen). **New file** takes a path and opens an empty tab whose first **Save** sends `PUT /v1/files` without `if_match` — the daemon's create, `409` if something is there. The marks are now a CodeMirror gutter (`+` added, `~` modified, `-` removed) held as positions and mapped through every transaction, so typing above a mark moves it with its line instead of drawing yesterday's numbers; a save replaces the set with git's answer for the new text. **Rename** moves the open file — or a row in the listing — through `POST /v1/files/rename` and follows its tab to the new path; **Delete** does the same through `DELETE /v1/files`, dropping the tab and asking first when the buffer is dirty. On a remote workspace the move runs as the helper's `fs.rename`, one operation rather than a write and a delete. **Tests:** 22 in `files.test.ts` (grammar, paths, listing order, dirtiness, stored tabs and drafts, the stored shape) and 16 in `Editor.test.ts` (the browser, tabs, create without `if_match`, gutter cells and count, restore with and without a draft, rename and delete from the bar and a row), plus 5 Rust route tests and a helper test for `fs.rename`.
+  - **Open:** language servers are not attached. `@codemirror/lsp-client` needs a WebSocket bridge, and the daemon has none: the LSP routes and the bridge are P7-9, still unshipped, so the editor cannot show diagnostics or completions the TUI would show. The ticket's tree-sitter-wasm path was not taken: the page is one inlined HTML file (`vite-plugin-singlefile`), and a wasm grammar would be a second asset the daemon does not serve, so the stated fallback (`@codemirror/lang-*`) is what ships and the TUI keeps the tree-sitter spans. The marks are still git's answer for the version on disk: new text on a line git did not mark gains no mark until a save or reload, and deleting a marked line can leave its mark on the line that closed the gap. Rename on a **remote** workspace needs a helper that advertises `fs.rename`: an older upload answers `409` asking to be updated, and write and delete still work. A restored draft keeps the token it was typed over, so a save after the file changed refuses rather than replacing it, and Reload drops the draft; a buffer too large for the browser's store is left out of the restore while the paths are kept. There is still no `workspace` parameter: the daemon serves one workspace and the page's workspace picker does not redirect the file routes. The listing is not a tree: it keeps no expanded set, because that is state the address does not carry.
+- [x] **P11-4** Session view: SSE-driven transcript, streaming markdown, tool-call cards, permission prompts (optimistic resolve + reconcile), cancel. — **done 2026-11-05**
+  - **Result:** `web/src/session.ts` is the view's contract and `web/src/Session.svelte` is the page. The transcript streams from `GET /v1/sessions/{id}/events`: a `SseParser` reads frames incrementally (a chunk boundary can fall inside a line, between `\r` and `\n`, or inside a JSON value), and `followSession` reconnects with `?after=<last seq>` after a drop, so the daemon's ring — and the database behind it — replay the turn the page missed. A clean end is not retried, because that is a stored conversation finishing its replay; a network failure backs off, and a 4xx ends the stream instead of retrying a token the daemon already refused. `EventSource` is unusable here for the reason the terminal socket's note gives: the route needs `Authorization` and `EventSource` sends no headers, so the body is read through `fetch` and the token never enters a URL. `buildTranscript` folds chunks into paragraphs by role, patches a tool call's later updates onto the card it belongs to, and gives notices, plans, mode changes, compaction and command changes the rows they are. `markdown` returns data, never HTML: headings, fences, lists, quotes, inline code/bold/emphasis, with `http(s)` the only link scheme that survives, so agent output cannot write markup into the page. Permissions come from two places on purpose: `GET /v1/permissions?status=pending&session=` is state, fetched on open and after a `resync`, while new requests arrive on `GET /v1/events`, so the page never polls. An answer is optimistic — the card leaves on the press — and reconciled against the pending list, so a refusal brings it back with the daemon's sentence beside it, and a `resolved` frame closes a card another client answered. `Cancel turn` sends `POST /v1/sessions/{id}/cancel` and says whether there was a turn to stop. **Open** on a row opens the view, and the open session's id now goes into `panesFor`: another session's shell is hidden while every pane with no session stays listed.
+  - **Tests:** 61 in `web/` — 17 in `session.test.ts` (frame assembly across chunk boundaries and CRLF, the header and no token in the URL, resume at the last sequence after a dropped body, resync's sequence, an ended stream not retried, a 401 reported and not retried, permission request/resolved frames in both shapes `docs/api.md` and the daemon use, transcript folding and tool patches, the payload shapes the adapters actually send, markdown's blocks, HTML staying text, link schemes, a still-open fence, the answer labels), 4 in `SessionView.test.ts` (the transcript drawn from the stream, the card leaving on the press and confirmed, a refused answer putting it back through the pending refetch, cancel's POST and header), one in `terminals.test.ts` (the open session's panes plus the owners-none, with another session's hidden) and one in `App.test.ts` (Open streams a transcript) — plus 18 existing App tests and `svelte-check` at zero errors and warnings.
+  - **Follow-ups (2026-11-06):** the five gaps the first cut left are closed. The page starts a session (`GET /v1/agents` picker, `POST /v1/sessions` with an empty `workspace_id`, which the daemon reads as its own) and prompts it (`POST /v1/sessions/{id}/prompt` with a per-press idempotency key, so a retried request is the same turn). A write's `detail` is drawn as a coloured unified diff with hunk headers, and anything that is not a diff stays a `<pre>`. The transcript keeps the newest 200 turns in the DOM and grows by 200 on demand. The markdown subset gained tables, and an image renders as its alt text linked to its `http(s)` source — never fetched, because that request is a read receipt. A `resync` drops the transcript and replays it from sequence 0, which is the only way to recover frames the ring no longer held; `SessionHandle.restart(from)` is the stream's half of it. **Tests:** 67 in `web/` — three new in `session.test.ts` (a resync replaying from 0, a table with its cells and an image as a link, a diff coloured line by line, the window keeping the newest turns) and one each in `SessionView.test.ts` (a diff drawn instead of a blob, a prompt sent with its key and cleared only on acceptance) and `App.test.ts` (a session started from the picker and opened).
+  - **Open:** the status badge in the session header is the one from the list load, not the live stream: a turn that starts, asks or ends updates the transcript and the cards but not that badge until the page is refreshed. Paging keeps the newest turns in the DOM, but the event array and the folded turns behind it still hold the whole conversation, so memory grows with the replay even though the page does not. The diff is the daemon's `detail` string, coloured — not two versions compared by the page, so a detail truncated upstream is truncated here. A `resync` costs a full re-download, which is the price of correctness until the daemon has a transcript endpoint that can answer a range. Markdown still has no nested lists, tables inside lists or raw HTML, and an image is deliberately a link. There is no mode picker, no session deletion, and no prompt draft kept across a reload.
+- [x] **P11-5** Terminal: xterm.js attach over WS, fit + webgl addons, resize, copy/paste, reconnect replay. — **done 2026-11-05**
+  - **Result:** the page lists every pane `GET /v1/terminals` returns and attaches to the one a person picks, drawing it with xterm.js 6 (`@xterm/addon-fit` for the cells, `@xterm/addon-webgl` for the renderer with xterm's own fallback when a context is refused). A resize is sent as the `{"type":"resize"}` control frame the TUI sends, and copy/paste are `Ctrl-Shift-C` / `Ctrl-Shift-V` so `Ctrl-C` stays an interrupt. A dropped socket reattaches with backoff and replays the screen — which is what the daemon's `attached` + `replay_bytes` pair is for — and an `exit` notice is the only close that ends the view. The picker is `panesFor`: the open session's panes plus every pane with no `session_id`, each row saying `no session · <workspace> on <host>` the way the TUI's does.
+  - **A browser cannot put `Authorization` on a socket.** `new WebSocket(url, protocols)` sets no headers, and the token in the query string would be a secret in the daemon's log, the browser's history and any `Referer`. The page therefore offers the token as the second subprotocol (`["acpilot.v1", token]`); `acpilotd::auth` accepts it from `Sec-WebSocket-Protocol` when no bearer header was sent, and the attach route answers with `acpilot.v1` — a name, never the token. Bearer-header clients are unchanged and get no protocol back. **Tests:** three in `crates/acpilotd/tests/terminal_attach.rs` against a real listener with the real auth layer (the browser handshake attaches and reports the pane, a socket without the token is a 401 before the upgrade, a bearer header still works), twelve in `web/src/terminals.test.ts` (which panes are listed, where a row says it runs, the token as a protocol and never the URL, bytes/attached/exit, an unreadable control frame, resize only once open, reattach with replay, growing backoff, no reattach after close or exit), and two in `web/src/App.test.ts` (a sessionless pane is listed with its workspace and host; a daemon that cannot list terminals still shows the page).
+  - **Open:** the page attaches to panes, it does not create them. `POST /v1/terminals` needs a session for the daemon's own workspace, and the page now has the open session's id (P11-4), so creating a shell in it is a request the page could make; a remote workspace's pane could be created without one, and that is the natural first creation path. P11-4 landed, so `panesFor` now receives the open session's id and keeps that session's panes plus every pane with no `session_id`; a test pins that another session's shell is hidden and the sessionless ones stay. The xterm colours are read when the terminal opens: a live palette repaint recolours the page but not an open screen. There is still no copy mode on the web side (P6-10's `Open:` note); the daemon-side CSP landed with P11-6.
+  - **Note (2026-11-05):** the picker this item builds must list more than the open session's panes. `GET /v1/terminals` with no filter returns every pane, and a pane may have no session at all: a shell a browser tab opened in a remote workspace, or an agent's shell whose session the daemon could not map. Filtering by `session` hides a pane that is still running. Take the unfiltered list, keep the open session's rows plus the ones with no `session_id`, and say `workspace`/`host` for a sessionless row — the TUI does exactly this (P6-10).
+- [x] **P11-6** `acpilot-web` crate: embed built assets (`rust-embed`), `GET /` serves the SPA, `acpilot serve --http --bind 0.0.0.0 --token` with a first-run token printed once; CSRF-safe (token in header only), strict CSP. — **done 2026-11-06**
   - **Started 2026-10-24 (the shell):** the crate embeds one page (`assets/index.html`) which `acpilotd` serves at `/app`, without a token like `/docs` — a browser cannot attach a header to a typed address, and the page holds no data. It says which build is answering (`acpilot_core::VERSION`, the release tag when there is one), opens an About dialog with the licence and the Freebuff credit, and Quits by closing the tab (a tab nobody scripted open cannot be closed by script, so it says so instead of looking broken). No CDN, no external stylesheet: a daemon behind a firewall still serves a working page.
-  - **The page is now the Svelte app (2026-10-24):** `web/` builds it, `vite-plugin-singlefile` keeps it one file, and the built file is committed so `cargo build` needs no Node — CI rebuilds it and fails on drift. `include_str!` is still the embed (`rust-embed` buys nothing for one file), and the token is held in session storage and sent only in `Authorization`. Still open from this item: `/` as the entry point, the `acpilot serve` flags, and a CSP.
-- [ ] **P11-7** E2E with Playwright: open workspace → edit → prompt mock agent → approve permission → see diff. Runs in CI against the daemon.
+  - **The page is now the Svelte app (2026-10-24):** `web/` builds it, `vite-plugin-singlefile` keeps it one file, and the built file is committed so `cargo build` needs no Node — CI rebuilds it and fails on drift. `include_str!` is still the embed (`rust-embed` buys nothing for one file), and the token is held in session storage and sent only in `Authorization`.
+  - **Result (2026-11-06):** `/` serves the SPA and `/app` is the same handler, kept because that is where links and the page's own subpaths (`/app/stats`, `/app/palette/events`) were published; the page is unauthenticated on both because a browser cannot attach a header to a typed address, and it carries no data. Every page response now goes through one `page_response` with `Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`, so a second page route cannot be added without them. `acpilot serve --http` (default `127.0.0.1:7777`) and `--bind <ADDR>` host the daemon in the CLI's own process — the same `startup` + `router_with` + `serve` the binary runs, with its runtime built for it — and print the URL; `--profile`/`--workspace` are the daemon's two directories. The bearer token is created before the bind, printed on the run that creates it and only then, unless `--token` asks again: a scrollback is still a place a secret should not accumulate. CSRF is not a switch that was set: the token travels only in `Authorization`, never a cookie, so another origin's form post has nothing to ride. **Tests:** two in `crates/acpilotd/tests/http.rs` (the root is the page with its policy and headers; `/` and `/app` are the same page), one in `crates/acpilotd/tests/auth.rs` (the root answers without a token), one unit test for a wildcard bind becoming a browsable host, and the new `serve --help` snapshot. The live check was `acpilot serve --bind 127.0.0.1:17801` under a fresh `XDG_RUNTIME_DIR`: the token printed once, `/` answered 200 with all four headers, `/app` 200, and `/v1/health` was 401 without the bearer and 200 with it.
+
+  - **Amended 2026-11-08:** the startup experience changed after the ticket: `acpilot serve` needs no `--http`, asks the OS for a free loopback port when `--bind` is absent, accepts `--token <token>` in place of generating one, and prints the URL and token together in a Vite-style panel on every start. The token-file and single-secret rules are unchanged.
+  - **Open:** the token is not stored hashed — it is a random value in a `0600` file compared in constant time, which is what lets the daemon print it once and `acpilot token rotate` replace it with no restart. `acpilot serve` does not read `[daemon]` from the config files the way `acpilotd` does: it binds what its flags say, and a machine that wants a permanent address uses `acpilotd` in a service unit. There is no TLS, so a LAN listener is plaintext behind whatever terminates TLS. `--bind 0.0.0.0` names the bind and prints the loopback URL rather than refusing. The policy allows `'unsafe-inline'` script and style because the bundle is one inline file; a nonce would mean templating the page per request, which is the next honest step if a second page ever ships.
+- [x] **P11-7** E2E with Playwright: open workspace → edit → prompt mock agent → approve permission → see diff. Runs in CI against the daemon. — **done 2026-11-06**
+  - **Result (2026-11-06):** `web/e2e/cockpit.spec.ts` drives the page `acpilot serve` serves in Chromium, with no mocked routes: the spec starts the daemon itself with a temporary `ACPILOT_HOME`, a profile holding a one-agent `agents.toml` whose command is the built `acpilot-mock-agent`, and a workspace holding `notes.txt`; the token is the one the daemon printed (`--token`). Test one opens `notes.txt` from the listing, types in CodeMirror, sees the dirty mark, opens the `@codemirror/merge` diff, returns to Edit, saves, and the test reads the changed file off disk — so the keystroke, the diff, `if_match` and the daemon's write are all in one path. Test two starts a session from the page, prompts the mock agent with `write <path outside the workspace>`, waits for the permission card, clicks **Allow once**, and asserts both the agent's `fs/write_text_file accepted` notice and the file the agent asked for (`hello\n`) existing outside the workspace. **Wiring:** `@playwright/test` is the only new dependency (no existing tool drives a real browser; happy-dom has no layout and cannot run CodeMirror's input path or a permission click); `npm run test:e2e` is a step in `cargo xtask web-check` after building `acpilot-cli` and `acpilot-agent`, and CI's `web` job installs Chromium before the task runs. One worker and one Chromium project: the tests share a daemon and a workspace, and two instances editing one file would test the fixture's race.
+  - **Open:** Chromium only, on Linux in CI — WebKit and Firefox, and the Windows and macOS runners, are not in the matrix. There is no terminal interaction in the suite (P11-5's xterm pane is covered by its unit tests and by hand), no visual-regression snapshot, and no trace retained on success (`retain-on-failure` only). The suite runs against the debug binaries, not a release build, and it does not test the editor's `409` conflict path: that needs a second writer, which the spec's single daemon and single page deliberately do not create.
   - **DoD:** from a laptop browser, drive a session running on the dev box over the LAN with a token, with reconnect surviving a daemon restart.
 
 ---
@@ -1233,9 +2037,23 @@ untrusted binary with your repo and your network is exactly the hole worth closi
   - Left: the tap repository (`skamansam/homebrew-tap`) and its `HOMEBREW_TAP_TOKEN` do not exist yet, so the formula is generated and not pushed.
   - Left, and a decision rather than a chore: cargo-dist archives one *package* per platform, so a release is `acpilot`, `acpilotd` and `acpilot-gui` as three archives that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` still packages one tarball holding all three. Picking one shape belongs with P12-2's workflow work; until then `xtask dist` produces the cargo-dist shape and the workflow produces the other.
   - Note: `cargo-dist` declares the `.cdx.xml` per program and generates it only in the CI job it writes, so `xtask dist` runs `cargo cyclonedx` itself and keeps the three declared SBOMs (`Cargo.toml`'s `[profile.dist]` is what `dist build` asks for).
+- **Progress 2026-11-04:** a version difference can now say how to fix it. ADR 0010 decides
+  install provenance: every installation except a bare binary drop ships `install.json`
+  (`{method, version?}`) beside the program or under a shared prefix, because only the
+  package knows which package manager owns the files. `acpilot_host::install` reads it in
+  the ADR's order (beside the binary, `/usr/local/share`, `/usr/share`, per-user state) and
+  answers who may replace the binary: `package-manager` (prints `sudo apt install
+  --only-upgrade acpilot`, `brew upgrade acpilot`, …), `self` (tarball, script, AppImage,
+  `cargo`), or `nobody` for a method it does not know. `GET /v1/health` reports it as
+  `install`, so the refusal a client gives can end in the one command that reconciles the
+  two versions. **Open:** the update itself (fetch, checksum, temp file, atomic rename,
+  restart), a `acpilot update` surface, and a marker actually shipped by a package — no
+  distribution exists yet, so the table is exercised by tests rather than by installs.
 - [ ] **P12-2** Versioning (`0.1.0`), `CHANGELOG.md` via `git-cliff`, release workflow with signed tags, reproducible builds documented.
 - [ ] **P12-3** Docs site (`docs/`): quickstart per interface, agent manifest reference, profile + config reference (`docs/config.md`, cascade and origin), host setup (ssh/wsl), policy reference, LSP server setup (`docs/lsp.md`), API reference from OpenAPI, troubleshooting (`acpilot doctor` output explained).
-- [ ] **P12-4** First-run experience, with no setup command to run first. The first use of a profile materialises it: `Registry::open_or_create` creates `agents.toml` with the `$schema` line and the shipped presets, once, and never over a file that exists. `acpilot doctor` then detects agents on PATH (`claude`, `codex`, `gemini`, `freebuff`) and language servers, tests one handshake, and the first launch prints next steps. A program that needs no configuration launches with sane defaults and says nothing; a file appears only when there is a profile to save. Decided 2026-10-22: a required `setup` step is a toll booth in front of a product whose whole claim is that the manifest is a file you can edit.
+- [x] **P12-4** First-run experience, with no setup command and no required `agents.toml`. A launch opens the workspace and editor with sane defaults and writes nothing; a profile without an agents file has no agents rather than an empty roster, and no launch or registry path creates the file. `acpilot doctor` then detects agents on PATH (`claude`, `codex`, `gemini`, `freebuff`) and language servers, tests one handshake, and the first launch prints next steps. Decided 2026-11-08: the handshake is `initialize` only — no session, no prompt — against the first declared local `acp-stdio` agent, and it is what separates "on PATH" from "can run". An agent is declared when a person adds one (the model lab is P4.5); the file is the declaration, not a toll booth. Decided 2026-10-22 and reaffirmed 2026-11-08: `Registry::open_or_create` was removed so a missing file cannot become a generated one.
+  - **Result (2026-11-08):** `acpilot doctor` shipped as the detection half. It resolves the workspace through `Root`, reports the profile (a missing one as `not created yet (not required)`), parses the settings file and a declared `agents.toml`, lists the candidate agent programs on `PATH` and every language server this build knows, and exits non-zero only when something *declared* cannot run. It starts no daemon, asks no keyring for a secret the manifest does not name, and writes no file; the integration test asserts the profile directory is still absent afterwards. `acpilot tui` also shows a one-time **next** card when the first agent roster is empty — **Session → Select Agent…** and `acpilot doctor` — dismissed by the next key or click, shown once per launch, and never in the design pass. Nothing is written to remember it. The handshake landed too: the first declared local `acp-stdio` agent that is on `PATH` is started once for ACP `initialize` (ten-second bound, no session, no prompt, child killed when the answer arrives), and the report names its identity and protocol version. An agent that exists but does not answer is a problem, so `doctor` now tells the two failures — no file, no protocol — apart; a `pty` or remote agent is reported as declared but not handshaken rather than falsely failed. The empty **Select Agent…** row now names `agents.toml` and `acpilot doctor` rather than an unbuilt lab, so the launch card has no dead end to point at.
+  - **Closed 2026-11-08:** every sentence of this task is shipped. A discovered-but-undeclared program stays a report, never a declaration; the model lab (P4.5) is the writer, not this task.
 - [ ] **P12-5** Telemetry: **none** by default; optional crash reports via `sentry` behind an explicit flag and a documented payload.
 - [ ] **P12-6** Security review: token handling, path traversal, permission bypass attempts, command injection in manifests, LSP binary trust pins (P7-12), cross-profile secret leakage (P4-5), helper upload integrity (signature or hash pin), `cargo audit` clean.
 - [ ] **P12-7** Migration story: config/state paths stable from 0.1 (`~/.config/acpilot`, `~/.local/share/acpilot`, one subtree per profile), documented, with a tested upgrade path from a pre-profile layout.
@@ -1647,7 +2465,7 @@ serialiser.
   `acpilot-core` has unit tests, including fences and every rejection path.
 - [x] Skills: `acpilot-skills` is tested over temporary workspace/extension trees: parsing,
   instructions, name/directory agreement, limits, duplicate handling, and workspace precedence.
-- [ ] Web: Playwright in **the web phase (P11)**, against `acpilot serve` with a temp profile — no mocked routes.
+- [x] Web: Playwright in **the web phase (P11)**, against `acpilot serve` with a temp profile — no mocked routes. Done with P11-7: `web/e2e/cockpit.spec.ts` edits a file in Chromium and approves the mock agent's write outside the workspace.
 - [ ] TUI: headless snapshots via `ratatui`'s `TestBackend` in **the editor phase (P6)**, including the stats bar
   at known dimensions and a 200×60 frame budget.
 - [ ] GUI: a gpui test harness in **the desktop phase (P10)** (frame + text layout assertions), added with the crate.
@@ -1841,7 +2659,7 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] D10 · Profile isolation: one daemon with N stores (recommended — profiles must run concurrently) vs one daemon per profile (stronger blast-radius, worse UX).
 - [ ] D11 · Profile storage: database per profile (recommended) vs single database with a `profile` column.
 - [ ] D12 · Language-server installation: detect-only in v0.1 (recommended) vs managed downloads with checksums.
-- [ ] D13 · Profile inheritance: `extends` merge vs copy-on-create only.
+- [x] D13 · Profile inheritance: **`extends` layers non-secret settings; security-sensitive files are copied when a profile is created** (decided 2026-11-09, ADR 0012). Inheriting `agents.toml`, `policy.toml` or `lsp.toml` would let a child run with a credential reference or permission rule it never wrote; preferences are safe to layer. `profile new` (P4-9) copies the domain files.
 - [x] D14 · Model adapter seam: **one `ChatBackend` trait, `LmStudio` native plus `OpenAiCompatible`, new variants only with their adapter** (decided 2026-10-20, ADR 0002). Anthropic/Gemini are not OpenAI-shaped and are explicitly out of v0.1.
 - [x] D15 · Remote driver trust: **ACP bridge with scopes, `answer_permissions` off by default, permission prompts route to a human** (decided 2026-10-20, ADR 0002). TLS termination is the operator's tunnel in v0.1.
 - [ ] D16 · Token counting: bytes/4 heuristic with a documented error band (recommended for v0.1) vs bundling a tokenizer per model family. The lab's `estimated` flag exists so this can change without rewriting the UI.
@@ -1871,3 +2689,148 @@ Web-only deps live in `web/package.json` (`@codemirror/lsp-client` 6.x, `@codemi
 - [ ] A theme and a language-server preset arrive through an extension, activated per profile, with the built-ins themselves shipped as extensions.
 - [ ] A remote driver pairs over the ACP bridge, prompts that agent, and **cannot** answer the permission prompt it raises — the human does.
 - [ ] Docs cover install, agents, profiles, hosts, policy, LSP, local models, remote drivers, API; OpenAPI published.
+
+### Panels: the shell the file manager and the assistant live in
+
+- [x] **Arrangement** — the Panels menu (Alt-P) puts the file manager and the
+  assistant on either side of the editor: one row per panel per side, because a row
+  is a place and a person reading a menu can see where the pane will land. Both on
+  one side is allowed and stacks them, the workspace above the agent. The editor is
+  not movable: the middle is the window's argument about what it is for. A moved
+  panel keeps the width it was dragged to, and only the default-side divider is
+  grabbable — the arrow keys resize the rest.
+- [x] **Names** — `Files` is the **File manager** and the right column is the
+  **Assistant**, in the bar, the View menu, the pane titles and the status line.
+- [x] **Outline panel** — `acpilot_text::outline` parses the buffer with the grammar
+  the pane highlights with and collects the definitions, each with its grammar's name
+  field: `function_item`, `struct_item`, `enum_item`, `trait_item`, `union_item`,
+  `impl_item` (named by its `type`), `mod_item`, `const_item`, `static_item`,
+  `type_item` and `macro_definition` for Rust, `function_definition` and
+  `class_definition` for Python. Depth is counted in definitions rather than blocks, so
+  a `let` is not a level, and a language this build ships no grammar for is an empty
+  panel that says so. It is a panel like the other two — the Panels menu moves it, and
+  **Show outline** puts it up — and a row is a place: `Enter` puts the caret on the
+  definition's line and gives the keys back to the buffer. The list is as of the last
+  read rather than re-parsed per keystroke, and re-parsed by `App::tick` whenever
+  `Document::revision` has moved — one parse a frame at most, which is the debounce
+  the trade named in the source asked for.
+- [x] **A real gutter and a real save (2026-11-01)** — `GET /v1/files` answers with
+  `marks`, so the editor's gutter is the daemon's git rather than an empty patch, and
+  `Ctrl-S` writes the buffer back through `PUT /v1/files` with the `etag` the read
+  returned: a stale token is the daemon's `409`, and the answer's token becomes the new
+  baseline (`Document::mark_saved`), which is what clears the title's `+`. A buffer that
+  did not come from a file — the design pass's seed — says so rather than writing a
+  version it does not have.
+- [x] **Project map (2026-11-01)** — the agent writes the map of the workspace: what
+  each area is for, which path it owns, and what it depends on, as
+  `.acpilot/project-map.toml` — `updated`, then one `[[areas]]` block per area with
+  `name`, `path`, `summary` and an optional `depends_on`. It is TOML (D23) because it
+  is a document a person reads, corrects and reviews, and `.gitignore` names it as the
+  one exception under `.acpilot/` so a wrong statement about the architecture is a diff
+  somebody argues with. `crates/acpilot-proto/src/project.rs` carries `ProjectMap {
+  path, written, updated?, areas }` and `MapArea { name, path, summary, depends_on? }`,
+  plus `ProjectMap::area_for`, which answers the panel's only clever question — which
+  area owns the open file — by the deepest `path` that is a prefix of it, compared
+  segment by segment so `crates/tui` is not the parent of `crates/tui-tools`, with the
+  earlier area winning a tie. `GET /v1/project/map` (`crates/acpilotd/src/project.rs`)
+  parses the file where the workspace is rather than shipping it as text, so a remote
+  workspace (P8) works; absence is `written: false` with no areas because an unmapped
+  repository is a state and not a `404`, while a file that exists and does not parse is
+  a `400` naming the file, because "no map" over a file sitting right there sends the
+  person looking for the wrong problem. The panel (`Panel::ProjectMap`, in the Panels
+  menu on either side and **Show project map**) lists areas in the agent's order, marks
+  the open file's area and opens its summary, wraps that summary to the column, `j`/`k`
+  choose, `Enter` reads a summary onto the status line, `r` re-reads, and the panel asks
+  the daemon once when it comes up (or on `r`) rather than once a frame, because a
+  document that changes when somebody asks the agent is not a view of moving state.
+  Regeneration is still a prompt over the tree and the README — the panel reads the map
+  rather than writing it, which is what keeps the agent the author.
+  **Tests:** three in `acpilot-proto` (the deepest area owns a file, a name prefix is
+  not a parent, an empty map matches nothing), three in the daemon module (absent is an
+  empty answer, written order preserved with a leaf area, a bad file is a `400`) and
+  four in the daemon's route tests through the router (absent, served in written order,
+  the parse error naming the file, no workspace is a `409`), plus one in the TUI
+  (the panel asking once, the label's status, the file's area marked, `Enter` reading a
+  summary, `r` asking again, and an unwritten map saying so).
+- [ ] **Wiki panel** — the agent builds a wiki about the codebase: one page per
+  subsystem, written from the code and the map, kept in the workspace and served
+  read-only in a pane. What makes it a wiki is that pages are linked and that a link
+  to something nobody has written yet is a prompt to write it, so the panel needs a
+  page list, a reader and a jump — not an editor, because the agent writes it.
+- [x] **References panel (2026-11-01)** — every real use of the identifier under the
+  caret. `acpilot_text::references::identifier_at` reads the word from the pane's own
+  caret (the character before it first, because that is where the caret is after
+  typing) and `uses` walks the parse tree keeping only leaves the grammar calls names —
+  `identifier`, `field_identifier`, `type_identifier`,
+  `shorthand_field_identifier` — so a comment is a `line_comment`, a string's inside is
+  `string_content`, and neither can be a row however it is spelled. `GET
+  /v1/files/references?q=` walks the workspace with the content search's own `walk`,
+  reads the files under the same cap and NUL test, and skips a path no grammar parses
+  rather than listing prose; it returns `Reference { path, line, column, text }` with a
+  1-based character column (tree-sitter counts bytes) and the line's text so a row can
+  be read before it is chosen. The parse is in the daemon because the text is there,
+  which is the one new dependency it took: `acpilotd` now links `acpilot-text` and the
+  four grammars the TUI already ships. `Shift-F12` or View → **Find References** puts
+  the panel up and asks by name; the panel sits on either side from the Panels menu,
+  `j`/`k` choose, `Enter` opens the file at the use and gives the keys back to the
+  buffer, `Esc` returns them, and an answer about a name the caret has left is dropped
+  by comparing the name, the way the two searches compare their queries. A language
+  server's `textDocument/references` replaces the search where one runs (P7-4): scope is
+  unresolved here, so two functions called `new` are one name. The list follows the
+  caret: `App::follow_references` runs from `App::tick`, reads the word under the caret
+  while the buffer holds the keys, and asks about a name that is still there on the
+  next frame — the frame is the debounce, so a typed identifier costs no walks and one
+  arrow into a word costs a single ask, while the previous rows stay up until the
+  answer lands. The question is the word *and* the buffer's `revision`, so a use typed
+  while the caret rests on the name re-lists without the caret moving. Between two words the list clears instead of naming a word the caret is
+  beside, and nothing is asked while the keys are in another pane, which is what keeps
+  `Enter` on a row from re-asking about the word the caret lands on.
+  **Language servers (2026-11-01):** `GET /v1/files/references?q=&path=&offset=` asks a
+  server first. `crates/acpilot-lsp/src/session.rs` is the protocol above the P0-7
+  transport: `initialize` advertising `general.positionEncodings`, `didOpen`/`didChange`
+  with the file the daemon reads, `textDocument/references` with `includeDeclaration`,
+  and both `Location` and `LocationLink` answers accepted. `crates/acpilotd/src/lsp.rs`
+  detects `rust-analyzer`, `pyright-langserver` and `typescript-language-server` on
+  `PATH`, keeps one session per language, and believes an empty answer only once the
+  session has answered with something or five seconds of quarter-second retries have
+  passed — measured: rust-analyzer answers `[]` to a references request sent straight
+  after `didOpen`, so the first question pays for the index. Rows keep their shape, the
+  server's encoding is converted to a character column, and locations outside the
+  workspace are dropped. The grammar search is now the `parse-references` feature
+  (default on), so `--no-default-features` links no grammar at all — which is the point
+  of this work. **The buffer travels with the question (2026-11-01):**
+  `POST /v1/files/references` takes a `ReferencesRequest` — the name, the file, the
+  caret's offset and the open file's own text — and the text is what the search runs
+  over, for the server (opened as the document) and for the grammar fallback in place
+  of that one file's disk read, so an edit nobody has saved is the text the panel is
+  about. Nothing is written and every other file is still read where it is, because a
+  client for a remote daemon does not have them. `GET`, with a name and no buffer, is
+  unchanged.
+  **Tests:** five in `acpilot-text` (the word under a caret and the one before it, a
+  number not being an identifier, comment and string excluded with character columns
+  counted past a multi-byte glyph, a keyword never a use, Python's own kinds, and a
+  grammar with no names), one in the daemon (the definition and the call listed, the
+  comment, the string and the `.md` not, with the empty and not-one-word queries), and
+  one in the TUI (`Shift-F12` naming the word rather than a position, the answer filling
+  the list, `Enter` asking for the file and remembering the line).
+  **Stopped on the way out (2026-11-02):** a kept session is a kept process, and the
+  router's drop was assumed to end it — it does not, because the terminal mirror and the
+  settings watch each hold an `AppState` clone in a task that outlives `serve`, so the
+  registry never reached zero and every daemon that had answered a references request
+  left one `rust-analyzer` behind. `Servers::shutdown` drains the registry and stops each
+  session concurrently with the protocol's `shutdown`/`exit` and a kill for one that will
+  not take the hint; `main` calls it after `serve` returns and embedded mode calls it when
+  its listener stops. Verified against a real daemon: `pgrep -P <daemon>` is empty after
+  `SIGTERM`, where before it named the server.
+  **Idle, and visible (2026-11-02):** `Servers::stop_idle` stops any session nothing
+  has asked in `IDLE_TIMEOUT` (five minutes), swept every thirty seconds by a task
+  `startup` spawns the way the terminal reaper is; the entry is removed rather than
+  emptied, so the next question starts a fresh server instead of finding a hole where
+  one used to be. `GET /v1/lsp/servers` serves the rows `LspServerSummary` already
+  described — one per language this build can start, running or stopped, with the
+  negotiated `encoding` and `round_trip_ms` for the last references call that answered
+  — and the TUI reports them on its status line from the palette's `LSP status` row.
+  **Tests:** two in `acpilotd/tests/lsp_status.rs` that need no server (four rows, all
+  stopped, no encoding; the route and its summary in the OpenAPI document) and one
+  ignored one against `rust-analyzer` (asked, counted with a round trip, stopped by a
+  zero idle, and started again by the next question).

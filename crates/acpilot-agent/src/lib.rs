@@ -8,9 +8,10 @@
 //! asking a person — and writes every decision down. [`fs`] serves the agent's own
 //! file requests from the workspace, through the same [`acpilot_host::Host`] the
 //! daemon uses, so a remote workspace reads and writes without this crate knowing
-//! it is remote. Everything after this — sessions, the PTY adapter — consumes a
-//! spec and never reads the file itself, so there is one place where a manifest
-//! can be wrong.
+//! it is remote. [`pty_agent`] drives a program that does not speak ACP at all:
+//! a PTY, a screen model and a transcript parser. Everything after this —
+//! sessions, the daemon — consumes a spec and never reads the file itself, so
+//! there is one place where a manifest can be wrong.
 //!
 //! The crate is headless on purpose: no daemon, no UI, and tests against a mock
 //! agent rather than a real model.
@@ -23,6 +24,7 @@ pub mod permission;
 // Operating-system branches live here and nowhere else in the workspace; the
 // rule is enforced by `acpilot-host/tests/platform_boundary.rs`.
 mod platform;
+pub mod pty_agent;
 pub mod registry;
 pub mod secret;
 pub mod session;
@@ -36,7 +38,7 @@ pub use keyring::{CredentialStore, KeyringResolver, OsKeyring, SERVICE as KEYRIN
 pub use manifest::{
     AgentDefinition, AgentSpec, CommandSpec, DEFAULT_IDLE_TIMEOUT, DEFAULT_SUBMIT_DELAY, EnvValue,
     MANIFEST_FILE, Parser, PtyProfile, Restart, SCHEMA_PATH, SCHEMA_URL, SCHEMA_VERSION, Transport,
-    TransportDefinition, initial_manifest, json_schema, parse_definitions, schema_json_text,
+    TransportDefinition, json_schema, parse_definitions, schema_json_text,
 };
 pub use permission::{
     ASK_TIMEOUT, Answer, AuditEntry, Broker, Case, DecidedBy, Decision, Pattern, Policy,
@@ -46,6 +48,10 @@ pub use permission::{
 // `acpilot-proto` because a client has to spell them, and are re-exported here
 // because a caller of `Subject` or `Broker::answer` needs them to call it.
 pub use acpilot_proto::permission::{PermissionKind, PermissionOption};
+pub use pty_agent::{
+    EXIT_TIMEOUT, ExitRecord, Message, MessageRole, PtyAgent, PtyAgentError, READY_CAP,
+    READY_QUIET, SCREEN_SIZE, SENTINEL_SETTLE, TURN_DEADLINE, Turn, TurnEnd, transcript,
+};
 pub use registry::{AgentWatcher, Registry};
 pub use secret::{MapResolver, SCHEME, Secret, SecretError, SecretRef, SecretResolver};
 pub use session::{EVENT_CAPACITY, Session, SessionError, SessionOptions};

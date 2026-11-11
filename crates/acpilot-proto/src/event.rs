@@ -50,6 +50,10 @@ pub struct SessionEvent {
     /// RFC 3339 timestamp of when the daemon recorded the event.
     pub at: String,
     /// Kind-specific payload.
-    #[schema(value_type = Object)]
+    ///
+    /// A map of unknown values in the document, not a bare `object`: a bare object
+    /// is "no properties may be added", and a client generated from that refuses
+    /// every payload an adapter actually sends.
+    #[schema(value_type = std::collections::BTreeMap<String, serde_json::Value>)]
     pub payload: serde_json::Value,
 }

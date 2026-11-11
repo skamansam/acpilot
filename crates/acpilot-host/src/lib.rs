@@ -35,6 +35,7 @@
 //! platform branch, so `cargo xtask check` type-checks the platform files with
 //! it off and CI builds it natively per OS.
 
+pub mod install;
 mod platform;
 mod pty;
 #[cfg(feature = "ssh")]

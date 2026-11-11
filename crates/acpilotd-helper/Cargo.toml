@@ -11,6 +11,20 @@ name = "acpilotd-helper"
 path = "src/main.rs"
 
 [dependencies]
+# The wire is JSON lines, and the helper is uploaded to a host where nothing can be
+# installed: one small crate rather than a hand-rolled parser that has to be right
+# about every escape a path can contain.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# A terminal on the host is the daemon's own PTY code, not a second implementation:
+# this is the crate `acpilot-host` already uses, and its platform branch (`forkpty`,
+# ConPTY) is inside it. Opening `/dev/ptmx` here would be `unsafe`, which the
+# workspace forbids, and a hand-rolled fork/exec would be the version of this file
+# that hangs on a host nobody is sitting at.
+portable-pty = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

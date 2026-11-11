@@ -22,8 +22,27 @@ pub struct TerminalSize {
 pub struct TerminalSummary {
     /// Terminal identifier.
     pub id: TerminalId,
-    /// Session that owns it.
-    pub session_id: SessionId,
+    /// Session that owns it, when one does.
+    ///
+    /// Absent for a terminal a client asked for in a remote workspace without a
+    /// session: a browser tab on that workspace's shell has none, and sessions do not
+    /// run on a host yet (P8-5). A local terminal is always a session's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    /// Workspace the pane runs in, when it is not the one this daemon serves.
+    ///
+    /// A pane asked for in a named workspace runs in that tree, which on another host
+    /// is a tree this daemon never walked. Absent means the daemon's own workspace: the
+    /// one implied by every other route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Host the pane runs on, when it is not this daemon's machine.
+    ///
+    /// The id `GET /v1/hosts` lists (`ssh:user@machine`, `wsl:Ubuntu`). A shell whose
+    /// bytes come from another host looks exactly like a local one in a picker, which is
+    /// why the pane says which it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Current dimensions.
     pub size: TerminalSize,
     /// Whether the child process is still running.
@@ -34,14 +53,30 @@ pub struct TerminalSummary {
 
 /// Request body for `POST /v1/terminals`.
 ///
-/// A terminal belongs to a session because that is who owns the work it is doing;
-/// a shell with no session would be a second, sessionless way to run commands on
-/// the daemon's host.
+/// A terminal belongs to a session because that is who owns the work it is doing; a
+/// shell with no session on the daemon's own host would be a second, sessionless way to
+/// run commands there. On a **remote** workspace the work is on that host and sessions
+/// do not run there yet (P8-5), so a client with no session — a browser tab — may ask
+/// for a terminal there without one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CreateTerminalRequest {
-    /// Session that owns the terminal.
-    pub session_id: SessionId,
-    /// Program to run. Defaults to the daemon host's own shell.
+    /// Session that owns the terminal, when the client has one.
+    ///
+    /// Required for the daemon's own workspace; optional for a workspace on another
+    /// host, where a sessionless terminal is the only kind a client without a session
+    /// can have.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    /// Workspace to start in, when it is not the one this daemon serves.
+    ///
+    /// A workspace id from `GET /v1/workspaces`. A remote workspace's terminal runs
+    /// on that workspace's host — the machine the files are on — through its helper,
+    /// while the session that owns the pane is still this daemon's: sessions do not run
+    /// on a host yet (P8-5), so the pane is the session's without the workspace being.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Program to run. Defaults to the host's own shell — this machine's, or the
+    /// remote host's, because which shell exists is a fact about where it runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Arguments for `command`, verbatim.

@@ -172,6 +172,24 @@ impl Grammar {
     }
 }
 
+/// The language a path's extension names, as this crate spells it.
+///
+/// The registry is the authority on which grammars exist, so the suffix table lives
+/// beside it rather than in each client: the editor's title, the outline and a
+/// references search all have to agree with the highlighter about what a `.rs` is, and
+/// a second copy is a second answer. An unknown suffix is `""`, which
+/// [`Grammar::builtin`] answers with `None`.
+#[must_use]
+pub fn language_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("rs") => "rust",
+        Some("py") => "python",
+        Some("json") => "json",
+        Some("toml") => "toml",
+        _ => "",
+    }
+}
+
 /// Why a grammar could not be prepared.
 #[derive(Debug, Error)]
 pub enum GrammarError {

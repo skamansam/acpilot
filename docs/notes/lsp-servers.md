@@ -11,36 +11,35 @@ Servers:
 | `typescript-language-server` | 6.0.1, TypeScript 6.0.3 | `typescript-language-server --stdio` |
 | `pyright-langserver` | 1.1.414 | `pyright-langserver --stdio` |
 
-The instrument is `crates/acpilot-lsp/examples/lsp_probe.rs`: it frames stdio itself
-([`wire`](../../crates/acpilot-lsp/src/wire.rs)), negotiates
-`general.positionEncodings = ["utf-8", "utf-16"]`, opens one file, waits for
-diagnostics, asks for a definition, and converts every returned range back to a
-byte offset. With `--expect`, the definition must start on that exact substring or
+The instrument is `crates/acpilot-lsp/examples/lsp_probe.rs`. It frames stdio itself
+([`wire`](../../crates/acpilot-lsp/src/wire.rs)), and it negotiates
+`general.positionEncodings = ["utf-8", "utf-16"]`. It opens one file and waits for
+diagnostics. Then it asks for a definition and converts every returned range back
+to a byte offset. With `--expect`, the definition must land on that exact substring or
 the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,python}`.
 
 ## Verdict
 
 1. **Assume nothing, negotiate, and keep the conversion.** `rust-analyzer` chose
-   `utf-8`; both `typescript-language-server` and `pyright-langserver` advertise no
+   `utf-8`. Both `typescript-language-server` and `pyright-langserver` advertise no
    `positionEncoding` at all, which means UTF-16. A client that assumes UTF-8 gets
-   the wrong column from two of the three as soon as a line contains an emoji; a
+   the wrong column from two of the three as soon as a line contains an emoji. A
    client that assumes UTF-16 leaves rust-analyzer's offer unused. Both behaviours
-   were observed, and both converted correctly.
-2. **The conversion is not the cost.** On a 100k-line, 6.7 MB file, one
-   offset→position conversion is 17.6 ns in UTF-8 and 28.0 ns in UTF-16; the
-   reverse is 10.0 ns and 16.1 ns. A keystroke will never notice. Rebuilding the
+   were observed, and both gave the right column.
+2. **The conversion is not the cost.** On a 100k-line, 6.7 MB file, one offset→position conversion takes 17.6 ns in
+   UTF-8 and 28.0 ns in UTF-16. The reverse takes 10.0 ns and 16.1 ns. A keystroke will never notice. Rebuilding the
    line index costs 2.26 ms, which *is* relevant: the language-intelligence phase (P7) must make the index
    incremental, not re-run it per edit.
-3. **Publish diagnostics are universal; pull diagnostics are not.**
+3. **Publish diagnostics are universal. Pull diagnostics are not.**
    `rust-analyzer` advertises `diagnosticProvider` and answers
    `textDocument/diagnostic`, but its first answer was `-32802` (RequestCancelled)
    and the second succeeded. The other two only publish. A client needs the
    publish path regardless, and a pull path that retries cancellation.
 4. **`$/progress` is not optional UX.** During the first index,
    `rust-analyzer` sent 133 `$/progress` notifications (14 begin, 105 report, 14
-   end). At the moment the first diagnostics arrived it had begun 14 and ended
-   12, so an unmatched begin is normal while work is still running; after a
-   500 ms drain the counts balanced. A UI that ignores these shows a spinner
+   end). When the first diagnostics arrived it had begun 14 and ended 12, so an
+   unmatched begin is normal while work is still running. After a 500 ms drain the
+   counts balanced. A UI that ignores these shows a spinner
    with no reason.
 5. **URIs were well formed.** All returned `file://` URIs parsed, had no host, and
    preserved percent-encoding for a directory containing a space and `ü`
@@ -48,8 +47,9 @@ the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,
    are untested here (the design phase's task P0-5 owns that).
 6. **`async-lsp` 0.2 is transport-agnostic, so non-stdio costs no extra protocol
    work** — its `MainLoop::run` takes any `AsyncBufRead`/`AsyncWrite`. What it
-   costs is adapters and ownership, below. The design phase (P0) keeps the hand-rolled loop; the language-intelligence phase's task P7-2 can
-   choose with data instead of a guess.
+   costs is adapters and ownership, below. The design phase (P0) keeps the hand-rolled
+   loop. The language-intelligence phase's task P7-2 can choose with data instead of a
+   guess.
 
 ## Capabilities as advertised
 
@@ -63,9 +63,8 @@ the probe exits non-zero. Fixtures are in `probes/fixtures/lsp/{rust,typescript,
 | `hoverProvider` | `true` | `true` | `{workDoneProgress: true}` |
 | client requests seen | `window/workDoneProgress/create` ×14, `workspace/diagnostic/refresh` ×2 | `workspace/configuration`, `window/workDoneProgress/create` | `workspace/configuration` ×2 |
 
-The `workspace/diagnostic/refresh` request is a signal to re-pull diagnostics. The
-probe answers it with `MethodNotFound`; a real client must implement it or treat
-diagnostics as stale.
+The `workspace/diagnostic/refresh` request is a signal to re-pull diagnostics.The probe answers it with `MethodNotFound`. A real client must implement it, or
+treat diagnostics as stale.
 
 ## Definition at a non-ASCII column
 
@@ -80,11 +79,11 @@ declaration name `日本語の関数` makes the returned end column differ too.
 | pyright-langserver | line 5, char 33 (UTF-16) | line 0, char 4→10 | 4 | 22 | 4 ✅ |
 | typescript-language-server, path with space + `ü` | line 5, char 37 (UTF-16) | line 0, char 16→22 | 16 | 34 | 16 ✅ |
 
-The end byte is the check that catches a client that decoded the *start* correctly
-and the *end* with the wrong width: 22 UTF-16 units becomes 34 bytes because the
-six CJK characters take three bytes each; rust-analyzer's 25 UTF-8 bytes becomes
-129. Both were accepted by `LineIndex::offset`, and the declaration byte ranges
-match the source exactly.
+The end byte is the check that catches a client that decodes the *start* with one
+width and the *end* with another. 22 UTF-16 units becomes 34 bytes, because the six
+CJK characters take three bytes each. rust-analyzer's 25 UTF-8 bytes becomes 129.
+`LineIndex::offset` accepted both, and the declaration byte ranges match the source
+exactly.
 
 ## Diagnostics
 
@@ -97,11 +96,11 @@ match the source exactly.
 
 First publish latency after `didOpen`: 500 ms (rust-analyzer), 548 ms
 (typescript-language-server), 267 ms (pyright). Initialize: 24 ms, 48 ms, 124 ms.
-These are a tiny fixture on an already-warm cargo/npm cache; they are a floor, not
+These are a tiny fixture on an already-warm cargo/npm cache. They are a floor, not
 a budget.
 
 `rust-analyzer`'s pull request was cancelled once with `-32802` and succeeded after
-750 ms; that is a race with project loading, not a capability lie. The probe retries
+750 ms. That is a race with project loading, not a capability lie. The probe retries
 only that code.
 
 ## `$/progress` during the first index
@@ -128,9 +127,9 @@ through `window/logMessage`/`showMessage` instead.
 | build `LineIndex` (whole file) | 2.26 ms | 2.26 ms |
 
 2,000,020 conversions per encoding, 20 rounds. The per-conversion numbers are far
-below a frame; the index build is the one that must not happen on the keystroke
-path. D9 should be decided on correctness and interop, not this cost: negotiate
-both, take the server's answer, default to UTF-16.
+below a frame. The index build is the one that must not happen on the keystroke
+path. D9 should rest on interop, not on this cost: negotiate both, take the
+server's answer, and default to UTF-16.
 
 ## `async-lsp` 0.2
 
@@ -138,23 +137,23 @@ Checked against 0.2.4 from crates.io, in a scratch crate outside this repository
 
 - `MainLoop::run(input: impl AsyncBufRead, output: impl AsyncWrite)` and
   `run_buffered` are generic over the transport. Running over a PTY, socket, or
-  in-memory duplex is the same call as stdio — no extra protocol code. This is the
-  thing the design phase's task P0-7 wanted to know, and the answer is favourable.
+  in-memory duplex is the same call as stdio, with no extra protocol code. That is
+  the thing task P0-7 wanted to know, and the answer is favourable.
 - It is `futures`-io based, not tokio-io based. Wrapping `tokio::process::ChildStdout`
   needs `tokio_util::compat`, i.e. a dependency and two adapters that the
   hand-rolled loop does not need.
 - It brings typed request/notification methods for the whole LSP surface
   (`lsp-types` 0.97), plus lifecycle, concurrency, panic, and tracing layers. That
   is real value: our probe client is ~400 lines and implements four methods.
-- Cost measured: 97 packages in its normal closure versus 66 for
-  `acpilot-lsp` (both with tokio's `full` feature), so about 25 extra crates,
-  and 9.1 s for a cold debug build of an otherwise empty binary. That is real
-  weight for a client that currently needs five requests, but it is not
-  disqualifying once the language-intelligence phase (P7) needs the whole surface.
+- Cost measured: 97 packages in its normal closure versus 66 for `acpilot-lsp`
+  (both with tokio's `full` feature), so about 25 extra crates. A cold debug build
+  of an otherwise empty binary took 9.1 s. That is real weight for a client that
+  needs five requests. It is not disqualifying once the language-intelligence
+  phase (P7) needs the whole surface.
 - The trade-off is ownership: `MainLoop` owns the read loop. Raw notifications —
   exactly what the probe needed to count — are only visible by implementing
-  `LanguageClient` callbacks, and a request that needs to race a notification
-  needs the library's router rather than `select!`.
+  `LanguageClient` callbacks. A request that needs to race a notification needs
+  the library's router rather than `select!`.
 
 Recommendation for the language-intelligence phase's task P7-2: adopt `async-lsp` only if the language-intelligence phase (P7) client needs more than
 a dozen typed requests. Otherwise keep `wire` + a loop shaped like `client.rs`,
@@ -183,7 +182,7 @@ cargo run -p acpilot-lsp --example lsp_probe -- \
 ```
 
 `typescript-language-server` 6.0.1 fails `initialize` with "Could not find a valid
-TypeScript installation" when the workspace has no `node_modules/typescript`; it
+TypeScript installation" when the workspace has no `node_modules/typescript`. It
 needs either a local install or `initializationOptions.tsserver.path`. The run
 above used an existing TypeScript 6.0.3 installation by absolute path. A real
 Acpilot install must either vendor/require a TypeScript version or surface that
@@ -192,10 +191,89 @@ error as a readable diagnostic instead of a failed start.
 ## Limitations
 
 - One file per server, one definition, one diagnostic. This proves framing,
-  negotiation, and column conversion; it does not measure a real project index.
+  negotiation, and column conversion. It does not measure a real project index.
 - Linux only. Windows drive letters, UNC paths, and `file://` with a host are
-  untested — that is the design phase's P0-5 territory, and the URI parser here (`url`) is the one
-  the language-intelligence phase (P7) should keep using rather than string-building paths.
+  untested: that is the design phase's P0-5 territory. The URI parser here (`url`)
+  is the one the language-intelligence phase (P7) should keep, not string-built
+  paths.
 - Timings are single runs on a warm machine, not a benchmark harness.
-- `didChange` was not exercised; the probe only opens a document. Incremental sync
+- `didChange` was not exercised: the probe only opens a document. Incremental sync
   (`change: 2` on all three) is the language-intelligence phase's (P7) problem.
+
+## What a kept server costs (measured 2026-11-02)
+
+Asked before the daemon spawned servers on first use, so the numbers are the ones
+the startup path actually has.
+
+**Launching spawns nothing.** The registry is empty until a request names a language. Measured to the first
+successful connect, ten samples each:
+
+| workspace | min | median | max | children at startup |
+| --- | ---: | ---: | ---: | ---: |
+| this repository | 5.63 ms | 6.21 ms | 8.88 ms | 0 |
+| an empty fixture | 4.29 ms | 5.30 ms | 10.32 ms | 0 |
+
+The earlier baseline was 4.6 ms, and both medians sit inside the spread of both
+samples: linking `acpilot-lsp` into the daemon costs the startup path nothing.
+
+**The first question pays for the index.** A fresh daemon, a five-line crate and
+`rust-analyzer` on `PATH`. The first references request took 2,260 ms, the second
+2.2 ms, the third 2.1 ms. That 2.26 s is spawn plus index, paid once per language per daemon. It is why
+the session is kept at all. It is also why `IDLE_TIMEOUT` is five minutes rather
+than seconds. Throwing the index away after a short pause would pay it again.
+
+**A kept server outlives the daemon unless something stops it.** Measured after the
+same run: one `rust-analyzer` still running once `acpilotd` had exited, holding its
+index. The registry is an `Arc`. The terminal mirror and the settings watch each keep it
+alive in a task that outlives `serve`, so dropping the router never reaches zero. `Servers::shutdown` is the fix and `pgrep -P <daemon>` is the check: empty after
+`SIGTERM`, where before it named the server. Nothing about that is LSP-specific — it
+is what "a value that owns a process" has to say on the way out.
+
+## What the daemon does with this now (2026-11-02)
+
+The publish path above is what `POST /v1/files/diagnostics` answers from.
+`acpilot_lsp::Session::diagnostics` polls the transport for
+`textDocument/publishDiagnostics` for the document it just opened. It returns what
+arrived within ten seconds. A `didOpen`/`didChange` drops the previous version's
+problems first. So the wait is for the answer about the text that was sent, not for
+the answer already in hand. The pull path (`textDocument/diagnostic`) is not wired.
+Finding 3 above is why it is a retry loop and not a call. One path is enough until a
+server answers diagnostics only when pulled.
+
+The answer carries the server's name or nothing at all, because "clean" and "nobody
+checked" are different claims. The TUI draws problems as gutter letters (`E`, `W`,
+`I`, `H`, worst on the line) in the cell the git mark uses. It also counts errors
+and warnings in the status line, with `checking` beside them while a question is in
+flight. The first question waits until a server and its index are ready, which
+takes seconds. It asks when a file opens, when one is saved, and once the buffer
+has been still for 480 ms. That pause is measured on the event loop's clock, so a
+sentence of typing is one request, and every edit restarts the pause. The key that types never
+sends anything, which is the rule the phase opens with. A question that nothing
+answers ends the same way. The status line carries what went wrong, and the problems
+already in hand stay, because an older answer is still the newest thing anybody
+knows.
+
+**The server also speaks when nobody asks.** From 2026-11-02 the daemon drains each
+session's publish queue every 250 ms (`DIAGNOSTICS_POLL`). It announces what it finds
+as a `diagnostics` frame on `GET /v1/events`. The TUI applies one to the open buffer
+when the path matches. That is the case the ask-per-pause could not cover. A server
+finishes a background check and publishes afterwards, while the pane waits for
+nothing in particular. A gutter that only moved on the next save would be stale
+exactly as long as the person reads instead of types. The drain is cheap because the
+transport already reads, whether or not anybody is asking. Its pump fills a new
+channel per notification whatever the request in flight. So a publish nobody asked
+for is a message in a queue, not a lost event. A publish about a file outside
+the workspace is dropped: there is no path a client could open.
+
+**An answer is state as well as an event.** Both halves write the same store. One is
+the publish the timer drained. The other is the answer that
+`POST /v1/files/diagnostics` served.
+So the newest problems per file survive the client that asked for them.
+`GET /v1/events` sends that store as `diagnostics` frames on connect. So a reconnect
+starts from what the server already said, not from an empty gutter. A reconnect is
+the laptop that woke, or the second window opened a minute later. The store is capped at
+`DIAGNOSTICS_SNAPSHOT` files (64), and it drops the file whose problems moved longest
+ago. It is a map rather than a file on disk: problems are recomputed, so persisting
+them would be persisting somebody's obsolete opinion. A file missing from it is not a
+clean file. It is a file nobody has asked about since this daemon came up, and
+opening it asks.

@@ -16,11 +16,13 @@ pub mod error;
 pub mod event;
 pub mod extension;
 pub mod file;
+pub mod git;
 pub mod host;
 pub mod lsp;
 pub mod model;
 pub mod permission;
 pub mod profile;
+pub mod project;
 pub mod session;
 pub mod stats;
 pub mod terminal;
@@ -52,6 +54,7 @@ pub const API_PREFIX: &str = "/v1";
         error::ErrorBody,
         error::ErrorDetail,
         host::HostKind,
+        host::CreateHostRequest,
         host::HostSummary,
         host::HostCapabilities,
         workspace::WorkspaceSummary,
@@ -64,6 +67,9 @@ pub const API_PREFIX: &str = "/v1";
         session::CreateSessionRequest,
         session::PromptRequest,
         session::PromptAccepted,
+        session::SetModeRequest,
+        session::SessionMode,
+        session::ModeState,
         session::CancelAccepted,
         event::SessionEvent,
         event::SessionEventKind,
@@ -74,11 +80,43 @@ pub const API_PREFIX: &str = "/v1";
         file::FileEntry,
         file::FileContent,
         file::FileWriteRequest,
+        file::FileRenameRequest,
+        file::GrepMatch,
+        file::Diagnostic,
+        file::DiagnosticSeverity,
+        file::FileDiagnostics,
+        file::DiagnosticsRequest,
+        file::FileFormatRequest,
+        file::FileFormat,
+        file::LineChange,
+        file::LineMark,
+        file::Reference,
+        file::ReferencesRequest,
+        git::GitChangeKind,
+        git::GitStatusEntry,
+        git::GitStatus,
+        git::GitDiffFile,
+        git::GitDiff,
+        git::GitTreeEntry,
+        git::GitCommit,
+        git::CommitPrompt,
+        git::CommitPromptSource,
+        git::CommitMessageRequest,
+        git::GitIndexRequest,
+        git::GitHunkRequest,
+        git::GitCommitRequest,
+        git::CommitDraft,
+        project::ProjectMap,
+        project::MapArea,
         terminal::TerminalSize,
         terminal::TerminalSummary,
         terminal::CreateTerminalRequest,
         profile::ProfileSummary,
+        profile::ProfileCreate,
+        profile::ProfilePatch,
+        profile::ProfileExport,
         profile::Preferences,
+        profile::PreferencesPatch,
         lsp::LspServerSummary,
         lsp::LspServerStatus,
         lsp::PositionEncoding,

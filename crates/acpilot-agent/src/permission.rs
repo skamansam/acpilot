@@ -746,6 +746,12 @@ pub struct Broker {
     next: AtomicU64,
     state: Mutex<State>,
     announce: broadcast::Sender<PermissionRequest>,
+    /// Answers, so a client that did not make one stops showing the question.
+    ///
+    /// `(request id, option)`: the request is already gone from the pending list
+    /// by the time this is sent, which is why the id travels with it rather than
+    /// the whole request.
+    resolved: broadcast::Sender<(String, PermissionOption)>,
 }
 
 #[derive(Debug, Default)]
@@ -797,6 +803,7 @@ impl Broker {
         timeout: Option<Duration>,
     ) -> Self {
         let (announce, _) = broadcast::channel(ANNOUNCE_CAPACITY);
+        let (resolved, _) = broadcast::channel(ANNOUNCE_CAPACITY);
         Self {
             policy,
             workspace: workspace.into(),
@@ -804,6 +811,7 @@ impl Broker {
             next: AtomicU64::new(1),
             state: Mutex::new(State::default()),
             announce,
+            resolved,
         }
     }
 
@@ -822,6 +830,17 @@ impl Broker {
     /// Receive every request that needs an answer.
     pub fn subscribe(&self) -> broadcast::Receiver<PermissionRequest> {
         self.announce.subscribe()
+    }
+
+    /// Receive every request somebody answered.
+    ///
+    /// A client that only made the decision itself does not need this; the second
+    /// window, the terminal and the browser do. It carries the request's id and the
+    /// option rather than the request, because the request is gone by then — the
+    /// pending list is state, and this frame is what tells a client to stop showing
+    /// a question that has an answer.
+    pub fn subscribe_resolved(&self) -> broadcast::Receiver<(String, PermissionOption)> {
+        self.resolved.subscribe()
     }
 
     /// The requests waiting right now, oldest first.
@@ -849,7 +868,16 @@ impl Broker {
             index.map(|index| state.pending.remove(index))
         };
         match entry {
-            Some((_, decision)) => decision.send(option).is_ok(),
+            Some((_, decision)) => {
+                let delivered = decision.send(option).is_ok();
+                if delivered {
+                    // Announced after delivery, not before: a frame saying "decided"
+                    // for a decision nobody received would close a dialog over a
+                    // question that is still pending somewhere else.
+                    let _ = self.resolved.send((id.to_owned(), option));
+                }
+                delivered
+            }
             None => false,
         }
     }

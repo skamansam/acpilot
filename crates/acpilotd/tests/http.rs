@@ -46,6 +46,31 @@ async fn health_reports_the_service_and_its_api_version() {
 }
 
 #[tokio::test]
+async fn health_names_the_profile_the_page_addresses() {
+    // The page writes `/p/<profile>/...` into the address bar and sends
+    // `X-Acpilot-Profile` on every request. A browser cannot read the daemon's
+    // flags, so the name has to come from here.
+    let state = AppState::new().with_profile_name(Some("work".to_owned()));
+    let (status, body) = get_from(router_with(state), "/v1/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["profile"], "work");
+}
+
+#[tokio::test]
+async fn the_page_is_served_at_the_addresses_it_writes() {
+    // `openSession` puts `/p/<profile>/s/<id>` in the location bar. A refresh
+    // there must be the page, not a 404 a person cannot get out of.
+    for uri in ["/p/work/w/acpilot", "/p/work/s/session-1"] {
+        let (status, _) = get(uri).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{uri} is an address the page writes"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_daemon_without_a_profile_still_names_the_workspace_it_serves() {
     // The client that spawns a daemon names a directory even when it has no
     // profile, and uses `health.workspace` to check that the daemon it found is
@@ -117,8 +142,108 @@ async fn wrong_methods_and_routes_do_not_fall_through_to_the_api() {
     let (status, _) = get("/v1").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _) = get("/").await;
+    let (status, _) = get("/nothing-here").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Collect every `$ref` the document contains, at any depth.
+fn references(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(reference)) = map.get("$ref") {
+                found.push(reference.clone());
+            }
+            for value in map.values() {
+                references(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                references(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn every_reference_in_the_served_document_resolves() {
+    // A `$ref` to a schema nobody registered is a document a strict client refuses
+    // to generate from — which is how this was found, by pointing
+    // `openapi-typescript` at it. The snapshot cannot see it: it is valid JSON and
+    // the missing component is only a name.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    let body = body_of(state, "/v1/openapi.json").await;
+    let document: serde_json::Value = serde_json::from_str(&body).expect("the document is JSON");
+    let mut found = Vec::new();
+    references(&document, &mut found);
+    assert!(!found.is_empty(), "the document has operations");
+    for reference in found {
+        let pointer = reference
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("{reference} is not a local reference"));
+        assert!(
+            document.pointer(pointer).is_some(),
+            "{reference} does not resolve"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_page_is_served_at_the_root_with_its_policy() {
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router is infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    let csp = headers
+        .get("content-security-policy")
+        .and_then(|value| value.to_str().ok())
+        .expect("the page has a policy");
+    // The bundle is one file, so its script and style are inline; everything else
+    // is a source the page may not reach, and a frame may not put it in.
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert!(csp.contains("script-src 'unsafe-inline'"), "{csp}");
+    assert!(csp.contains("connect-src 'self'"), "{csp}");
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert_eq!(
+        headers.get("x-content-type-options"),
+        Some(&"nosniff".parse().expect("header value"))
+    );
+    assert_eq!(
+        headers.get("referrer-policy"),
+        Some(&"no-referrer".parse().expect("header value")),
+        "the page holds a token, so a link out must not name the daemon address"
+    );
+
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let html = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    assert!(
+        html.contains(acpilot_core::VERSION),
+        "the page says which build is answering"
+    );
+}
+
+#[tokio::test]
+async fn the_published_path_is_the_same_page() {
+    // `/app` is where the page has been linked from and where its own subpaths
+    // live; `/` is what a person types. One handler, so the two cannot drift.
+    let state = acpilotd::state_for(None, std::path::Path::new(".")).expect("state");
+    assert_eq!(
+        body_of(state.clone(), "/").await,
+        body_of(state, "/app").await
+    );
 }
 
 #[tokio::test]
@@ -491,8 +616,9 @@ async fn a_saved_settings_file_reaches_a_client_over_the_event_stream() {
 #[tokio::test]
 async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
     // A half-written file must not become the palette a client draws with. It
-    // resolves to nothing, so the watcher announces nothing — and the next good
-    // save still arrives, which is what a stream that died on a typo would not do.
+    // resolves to nothing, so the watcher reports the error and leaves the last
+    // good preferences in force — and the next good save still arrives, which is
+    // what a stream that died on a typo would not do.
     let (_directory, settings, state) = serving("acpilot.paper");
     state.watch_preferences();
     let mut stream = stream_of(state.clone()).await;
@@ -503,6 +629,12 @@ async fn a_settings_file_that_does_not_parse_keeps_the_last_good_preferences() {
     assert!(
         state.preferences().is_none(),
         "a file that does not parse is not a set of preferences"
+    );
+    let error = until(&mut stream, "event: prefs_error").await;
+    assert!(error.contains("settings"), "{error}");
+    assert!(
+        error.contains("preferences"),
+        "the notice names the file the person edited: {error}"
     );
 
     std::fs::write(

@@ -27,6 +27,7 @@ pub struct Document {
     buffer: Buffer,
     selections: Selections,
     history: History,
+    revision: u64,
 }
 
 impl Document {
@@ -37,6 +38,7 @@ impl Document {
             buffer,
             selections: Selections::caret(0),
             history: History::new(),
+            revision: 0,
         }
     }
 
@@ -77,6 +79,17 @@ impl Document {
     #[must_use]
     pub fn selections(&self) -> &Selections {
         &self.selections
+    }
+
+    /// How many edits this document has taken, counting undo and redo.
+    ///
+    /// For a panel that reads the text and would otherwise have to compare the whole
+    /// buffer to know whether to re-read it: the number changes when the text does and
+    /// not when a caret moves, so "parse again" is one comparison rather than a copy
+    /// of the file per frame.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Move the carets. Offsets past the end are clamped rather than refused: a
@@ -204,6 +217,7 @@ impl Document {
         match self.history.undo(&mut self.buffer) {
             Some(caret) => {
                 self.selections = Selections::caret(caret.min(self.buffer.char_len()));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -215,6 +229,7 @@ impl Document {
         match self.history.redo(&mut self.buffer) {
             Some(caret) => {
                 self.selections = Selections::caret(caret.min(self.buffer.char_len()));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -225,6 +240,16 @@ impl Document {
     #[must_use]
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
+    }
+
+    /// Forget the undo history, because the text now matches a file.
+    ///
+    /// What a save means is that the buffer and the file agree, so the steps that got
+    /// here are no longer differences to report — and [`Self::can_undo`] is exactly
+    /// how a pane knows there is something to save. The text does not move, and the
+    /// edit that is still on screen is still the person's; only the baseline is new.
+    pub fn mark_saved(&mut self) {
+        self.history.clear();
     }
 
     /// Whether there is a step to put back.
@@ -257,6 +282,7 @@ impl Document {
         self.selections.map_through(change.forward());
         self.selections.normalize(self.buffer.char_len());
         self.history.record(change, now);
+        self.revision += 1;
     }
 }
 

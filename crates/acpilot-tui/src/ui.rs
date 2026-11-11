@@ -19,8 +19,28 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{
     App, Dividers, EditorArea, Focus, Kind, MENUS, MenuAreas, MenuList, MenuState, PaneArea,
-    PaneMode, TerminalPane, Toast, Viewports, about_lines, menu_title,
+    PaneMode, Panel, Side, TerminalPane, Toast, Viewports, about_lines, first_visible, menu_title,
 };
+use crate::keymap::Context;
+
+/// How wide the outline's column is.
+///
+/// Narrower than the tree and fixed: a definition's name and its kind are short, and a
+/// column that could be dragged would be a third divider for a panel that is mostly
+/// read rather than browsed.
+const OUTLINE_WIDTH: u16 = 30;
+
+/// How wide the references list's column is.
+///
+/// Wider than the outline because a row is a path and a line of code rather than a
+/// name: the same reason the content search's rows carry their text.
+const REFERENCES_WIDTH: u16 = 44;
+
+/// How wide the project map's column is.
+///
+/// The references list's width, for the same reason: a row is a name and a path, and
+/// the summary under the area the caret's file is in needs room to be a sentence.
+const PROJECT_MAP_WIDTH: u16 = 44;
 use crate::editor::{PromptKind, State};
 use crate::theme::Theme;
 
@@ -49,9 +69,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     draw_stats(frame, app, stats);
 
     // Overlays, back to front: the picker and the palette are questions, the card
-    // is an interruption, and the toast is a note about the last key. The menu's
-    // list is drawn first because a bar with a list open is still the lowest thing
-    // over the panes.
+    // is an interruption, the review covers the card it answers, and the toast is
+    // a note about the last key. The menu's list is drawn first because a bar with
+    // a list open is still the lowest thing over the panes.
     let list = app
         .menu
         .filter(|state| state.items)
@@ -59,6 +79,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     viewports.menu = MenuAreas { row: bar.y, list };
     if app.about {
         draw_about(frame, app, body);
+    }
+    if app.agent_picker {
+        draw_agent_picker(frame, app, body);
     }
     if app.terminal_picker {
         draw_terminal_picker(frame, app, body);
@@ -69,10 +92,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.palette.is_some() {
         draw_palette(frame, app, body);
     }
+    if app.grep.is_some() {
+        draw_grep(frame, app, body);
+    }
+    if app.source.is_some() {
+        draw_source_control(frame, app, body);
+    }
     if app.permission_card
-        && let Some(request) = app.permissions.first()
+        && let Some(request) = app.permissions.get(app.permission_at)
     {
-        draw_permission(frame, request, app.diff.as_ref(), body, &app.theme);
+        draw_permission(
+            frame,
+            request,
+            app.permission_at + 1,
+            app.permissions.len(),
+            app.diff.as_ref(),
+            body,
+            &app.theme,
+        );
+    }
+    if app.review.is_some() {
+        draw_review(frame, app, body);
+    }
+    if app.commit.is_some() {
+        draw_commit_composer(frame, app, body);
+    }
+    if app.first_run {
+        draw_first_run(frame, &app.theme, body);
     }
     if let Some(toast) = &app.toast {
         draw_toast(frame, toast, body, &app.theme);
@@ -80,74 +126,139 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
 
     viewports
 }
-
-/// The panels, or the terminal in place of the editor and the sidebar.
+/// The panels, or the terminal in place of the editor.
 ///
-/// Three panels is the product's mental model — files, text, agents — and it is
-/// the same three in every frontend. The tree needs a column of its own, so below
-/// a hundred columns it folds away rather than squeezing the editor to a slit;
-/// the centre and the sidebar are what a session is actually read in.
+/// Three panels is the product's mental model — the workspace, the text, the agent —
+/// and it is the same three in every frontend. Two of them can be on either side of
+/// the editor (the Panels menu moves them), so the body is built out of two optional
+/// columns with the editor in the middle, rather than a fixed tree-editor-sidebar
+/// split. A panel that moved keeps the width it was dragged to, and two panels on one
+/// side share the column, the workspace above the agent.
+///
+/// Below a hundred columns both columns fold away rather than squeezing the editor to
+/// a slit: the editor is what a session is read in.
 ///
 /// Returns the size a program in the pane should be told, and the transcript's own
 /// when it is the pane on screen: the cells inside each, because that is what the
 /// next attach uses and what a copy cursor walks.
 fn draw_body(frame: &mut Frame, app: &mut App, area: Rect) -> Viewports {
     let wide = area.width >= 100;
-    // The two dividers are the two widths in `app`: the tree's column and the
-    // sidebar's, both clamped to what the panes beside them can spare. A layout that
-    // obeyed the number instead of the window would put the editor at zero columns.
-    let tree = if wide {
-        app.files_width.min(area.width.saturating_sub(40)).max(16)
-    } else {
-        app.files_width
+    // Each side's column is as wide as the widest panel on it, both widths clamped to
+    // what the editor beside them can spare. A layout that obeyed the number instead
+    // of the window would put the editor at zero columns.
+    let files_width = app.files_width.min(area.width.saturating_sub(40)).max(16);
+    let assistant_width = app
+        .sidebar_width
+        .min(if wide { 80 } else { 34 })
+        .min(area.width.saturating_sub(40))
+        .max(20);
+    // Below a hundred columns the file manager folds away and the assistant stays: a
+    // tree would squeeze the editor to a slit, and the editor is what a session is
+    // read in. The assistant is the pane a person is watching, so it is the one that
+    // keeps its column.
+    let column = |side: Side| -> u16 {
+        let mut width = 0;
+        if wide && app.panels.on(Panel::FileManager, side) {
+            width = width.max(files_width);
+        }
+        if wide && app.show_outline && app.panels.on(Panel::Outline, side) {
+            width = width.max(OUTLINE_WIDTH);
+        }
+        if wide && app.show_references && app.panels.on(Panel::References, side) {
+            width = width.max(REFERENCES_WIDTH);
+        }
+        if wide && app.show_map && app.panels.on(Panel::ProjectMap, side) {
+            width = width.max(PROJECT_MAP_WIDTH);
+        }
+        // The assistant has a place in the arrangement from the first frame, but
+        // no column until agents are chosen: the window is an editor first.
+        if app.show_assistant && app.panels.on(Panel::Assistant, side) {
+            width = width.max(assistant_width);
+        }
+        width
     };
-    let (files, rest) = if wide {
-        let [files, rest] =
-            Layout::horizontal([Constraint::Length(tree), Constraint::Min(40)]).areas(area);
-        (Some(files), rest)
+    let (left, rest) = if column(Side::Left) > 0 {
+        let [left, rest] =
+            Layout::horizontal([Constraint::Length(column(Side::Left)), Constraint::Min(40)])
+                .areas(area);
+        (Some(left), rest)
     } else {
         (None, area)
     };
-    let files_area = files.map(|files| draw_files(frame, app, files));
-    let sidebar = app
-        .sidebar_width
-        .min(if wide { 80 } else { 34 })
-        .min(rest.width.saturating_sub(20))
-        .max(20);
+    // A terminal is a keyboard, and a shell at forty columns is a shell nobody can
+    // use: it takes the editor's place and the column beside it, so the right column
+    // is not split off while one is up. The session panes are behind it until it
+    // closes, which is the trade the pane has always made.
+    let (centre, right) = if app.terminal.is_none() && column(Side::Right) > 0 {
+        let [centre, right] =
+            Layout::horizontal([Constraint::Min(20), Constraint::Length(column(Side::Right))])
+                .areas(rest);
+        (centre, Some(right))
+    } else {
+        (rest, None)
+    };
+
+    let mut files_area = None;
+    let mut sessions_area = None;
+    let mut transcript = None;
+    for (column, side) in [(left, Side::Left), (right, Side::Right)] {
+        // Nothing on the right while a terminal is up: `right` is already `None` for
+        // the default arrangement, and an assistant moved to the left is drawn beside
+        // the shell rather than hidden under it.
+        let Some(column) = column else {
+            continue;
+        };
+        for (slot, panel) in panels_on(app, column, side, wide) {
+            match panel {
+                Panel::FileManager => files_area = Some(draw_files(frame, app, slot)),
+                Panel::Outline => {
+                    draw_outline(frame, app, slot);
+                }
+                Panel::References => {
+                    draw_references(frame, app, slot);
+                }
+                Panel::ProjectMap => {
+                    draw_map(frame, app, slot);
+                }
+                Panel::Assistant => {
+                    let (size, sessions) = draw_agents(frame, app, slot);
+                    sessions_area = Some(sessions);
+                    transcript = Some(size);
+                }
+            }
+        }
+    }
+
     let dividers = Dividers {
-        tree: files.map(|files| files.x + files.width.saturating_sub(1)),
-        // The sidebar is behind the terminal when one is attached, so there is no
+        // A column is grabbable only where the shell has always put it. A panel that
+        // moved to the far side is resized with the arrow keys instead, because a
+        // divider whose meaning depended on the day would be one nobody could learn.
+        tree: left
+            .filter(|_| app.panels.on(Panel::FileManager, Side::Left))
+            .map(|left| left.x + left.width.saturating_sub(1)),
+        // The assistant is behind the terminal when one is attached, so there is no
         // divider to grab there either.
-        sidebar: app
-            .terminal
-            .is_none()
-            .then(|| rest.x + rest.width.saturating_sub(sidebar)),
+        sidebar: right
+            .filter(|_| app.panels.on(Panel::Assistant, Side::Right) && app.terminal.is_none())
+            .map(|right| right.x),
         left: area.x,
         right: area.right(),
     };
 
     let mut editor_area = None;
     let mut terminal_area = None;
-    let mut sessions_area = None;
-    let transcript = match &app.terminal {
+    match &app.terminal {
         Some(pane) => {
-            terminal_area = Some(draw_terminal(frame, pane, rest, &app.theme));
+            terminal_area = Some(draw_terminal(frame, pane, centre, &app.theme));
             // The transcript is behind the terminal, so there is no viewport for a
             // copy cursor to walk.
-            None
+            transcript = None;
         }
-        None => {
-            let [editor, agents] =
-                Layout::horizontal([Constraint::Min(20), Constraint::Length(sidebar)]).areas(rest);
-            editor_area = draw_editor(frame, app, editor);
-            let (transcript, sessions) = draw_agents(frame, app, agents);
-            sessions_area = Some(sessions);
-            Some(transcript)
-        }
+        None => editor_area = draw_editor(frame, app, centre),
     };
 
     Viewports {
-        terminal: inner_size(rest),
+        terminal: inner_size(centre),
         transcript,
         dividers,
         // The bar is drawn before the body, and the list after it: `draw` fills
@@ -369,9 +480,14 @@ fn draw_about(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     // The tree's own name, not the path: the column is 26 cells and a home
     // directory with the workspace in it is longer than the pane that holds it.
-    let title = match app.workspace.rsplit('/').next() {
-        Some(workspace) if !workspace.is_empty() => format!(" Files · {workspace} "),
-        _ => " Files ".to_owned(),
+    let title = match &app.search {
+        // The query is the title while one is up: the pane is answering that
+        // question, and the words a person typed belong on screen.
+        Some(query) => format!(" Find · {query} "),
+        None => match app.workspace.rsplit('/').next() {
+            Some(workspace) if !workspace.is_empty() => format!(" File manager · {workspace} "),
+            _ => " File manager ".to_owned(),
+        },
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -381,9 +497,14 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
     // frame is a click on the frame, not on the first file.
     let inner = block.inner(area);
 
-    if app.files.is_empty() {
+    if app.visible_files().is_empty() {
+        let message = if app.search.is_some() {
+            "no path matches\ntype more of it · Esc puts the tree back"
+        } else {
+            "no rows yet\nthe daemon serves the workspace"
+        };
         frame.render_widget(
-            Paragraph::new("the tree is P6-6\nseeded by --demo")
+            Paragraph::new(message)
                 .style(Style::default().fg(app.theme.text_muted()))
                 .block(block),
             area,
@@ -391,10 +512,17 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
         return pane_area(inner);
     }
 
-    let items: Vec<ListItem> = app
-        .files
+    // The window follows the selection, and only says what fits: a chosen row that
+    // walked off the bottom of the pane would be a pane with no cursor, and one that
+    // kept drawing past the border would draw over the footer.
+    let visible = app.visible_files();
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.file_selected, visible.len(), height);
+    let items: Vec<ListItem> = visible
         .iter()
         .enumerate()
+        .skip(first)
+        .take(height)
         .map(|(index, node)| {
             let chosen = index == app.file_selected;
             let marker = if chosen { "▸" } else { " " };
@@ -409,10 +537,18 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
                     .bg(app.theme.bg_panel())
                     .fg(app.theme.accent_high())
                     .add_modifier(Modifier::BOLD)
+            } else if node.ignored {
+                // A row an ignore rule hides, shown because someone asked to see
+                // it: greyed and italic, so it never reads as an ordinary file.
+                Style::default()
+                    .fg(app.theme.text_muted())
+                    .add_modifier(Modifier::ITALIC)
             } else {
                 Style::default()
             };
-            let status = node.status.letter().unwrap_or(" ");
+            let status = node
+                .status
+                .map_or(" ", acpilot_proto::file::FileChange::letter);
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{marker}{indent}{icon}{}", node.label()), row),
                 Span::styled(
@@ -447,7 +583,6 @@ fn pane_area(inner: Rect) -> PaneArea {
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorArea> {
     let [strip, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     let theme = app.theme.clone();
-    let demo = app.demo;
     let focused = app.focus == Focus::Editor;
     let Some(editor) = app.editor.as_mut() else {
         let block = Block::default()
@@ -471,6 +606,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
             let (sigil, rest) = match prompt.kind {
                 PromptKind::Find => ('/', ""),
                 PromptKind::Line => (':', "line"),
+                PromptKind::Command => (':', ""),
             };
             let hint = if rest.is_empty() {
                 String::new()
@@ -501,7 +637,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
         None => {
             let tab = Line::from(vec![
                 Span::styled(
-                    format!(" {} ", editor.tab()),
+                    // A `+` while the buffer holds edits that are not in the file,
+                    // which is the history's answer rather than a flag's: undo back
+                    // to what was opened and the mark goes away by itself.
+                    format!(
+                        " {}{} ",
+                        editor.tab(),
+                        if editor.dirty() { " +" } else { "" }
+                    ),
                     Style::default()
                         .bg(theme.bg_panel())
                         .fg(theme.accent_high())
@@ -521,12 +664,18 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
     } else {
         format!(" · /{}", editor.find().query())
     };
+    // The mode is the title's, not the status line's: it is the one fact about the
+    // pane that changes what every key does, and a person reading the text should
+    // not have to look somewhere else to find out whether they can type. The design
+    // pass's `seeded` marker gave up its room here for it — the status line still
+    // says `demo · seeded`, and a title that clipped the running search to say the
+    // buffer is a fixture would keep the smaller fact and lose the larger one.
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(
             " {} · {}{title} ",
             editor.path(),
-            if demo { "seeded" } else { "read-only" }
+            editor.mode().label()
         ))
         .border_style(border_style(focused, &theme));
     let inner = block.inner(body);
@@ -548,15 +697,23 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
         } else {
             Style::default()
         };
-        let marker = editor
-            .mark(row.line)
-            .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} "));
+        // One cell, so a problem outranks a change: a line that does not compile is
+        // the fact worth seeing first, and the git mark is still there once it does.
+        let marker = match editor.problem(row.line) {
+            Some(problem) => Span::styled(format!("{problem} "), base.fg(theme.danger())),
+            None => Span::styled(
+                editor
+                    .mark(row.line)
+                    .map_or_else(|| "  ".to_owned(), |letter| format!("{letter} ")),
+                base.fg(theme.warning()),
+            ),
+        };
         let mut spans = vec![
             Span::styled(
                 format!("{:>width$} ", row.line + 1, width = gutter - 3),
                 base.fg(theme.text_muted()),
             ),
-            Span::styled(marker, base.fg(theme.warning())),
+            marker,
         ];
         for run in &row.runs {
             let mut style = base;
@@ -572,6 +729,9 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
                 // the terminal's copy mode uses: it has to read as marked on every
                 // theme, including one whose accent is close to its background.
                 State::Selected => style.add_modifier(Modifier::REVERSED),
+                // A ruler is a reading aid, not text: it is drawn in the border
+                // colour so it never competes with a syntax token.
+                State::Ruler => style.fg(theme.border()),
             };
             spans.push(Span::styled(run.text.clone(), style));
         }
@@ -612,7 +772,314 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) -> Option<EditorAre
     })
 }
 
-/// The agent sidebar: sessions over a transcript over a composer.
+/// The panels drawn in one column, each with the cells it may fill.
+///
+/// A column with one panel gives it everything. A column with two halves it: the
+/// workspace above the agent, because a person opens a file to show it to the agent,
+/// and the two have different jobs — a tree is scanned a row at a time, a transcript
+/// is read in paragraphs, and neither wants the other's room.
+fn panels_on(app: &App, column: Rect, side: Side, wide: bool) -> Vec<(Rect, Panel)> {
+    // A narrow window is the file manager's exception, not the assistant's: the tree
+    // folds away and the agent keeps its column.
+    let stack: Vec<Panel> = app
+        .panels
+        .stack(side)
+        .into_iter()
+        .filter(|panel| wide || *panel != Panel::FileManager)
+        .filter(|panel| app.show_outline || *panel != Panel::Outline)
+        .filter(|panel| app.show_references || *panel != Panel::References)
+        .filter(|panel| app.show_map || *panel != Panel::ProjectMap)
+        .filter(|panel| app.show_assistant || *panel != Panel::Assistant)
+        .collect();
+    if stack.is_empty() {
+        return Vec::new();
+    }
+    // Equal shares however many panels are on the side: a column is a place, and a
+    // pane that is on screen gets a third of it rather than nothing.
+    let count = u32::try_from(stack.len()).unwrap_or(1);
+    let slots: Vec<Rect> = Layout::vertical(std::iter::repeat_n(
+        Constraint::Ratio(1, count),
+        stack.len(),
+    ))
+    .split(column)
+    .to_vec();
+    slots.into_iter().zip(stack).collect()
+}
+
+/// The outline panel: one row per definition in the open buffer.
+///
+/// The kind is beside the name rather than instead of it: `fn` and `struct` are what a
+/// person is scanning for, and a list of bare names is a list nobody can skip down.
+fn draw_outline(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Outline · {} ", app.outline.len()))
+        .border_style(border_style(app.focus == Focus::Outline, &app.theme));
+    let inner = block.inner(area);
+    if app.outline.is_empty() {
+        let message = if app.editor.is_some() {
+            "no symbols in this file\nthe grammar it parses with defines none"
+        } else {
+            "no file is open\nEnter in the file manager reads one"
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(app.theme.text_muted()))
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.outline_selected, app.outline.len(), height);
+    let items: Vec<ListItem> = app
+        .outline
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, symbol)| {
+            let chosen = index == app.outline_selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let indent = "  ".repeat(usize::from(symbol.depth));
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{indent}{}", symbol.name), row),
+                Span::styled(
+                    format!("  {}", symbol.kind),
+                    Style::default().fg(app.theme.text_muted()),
+                ),
+            ]))
+        })
+        .collect();
+    frame.render_widget(List::new(items).block(block), area);
+    pane_area(inner)
+}
+
+/// The references panel: one row per code use of the name under the caret.
+///
+/// The row is the path and the line, then the line's own text with the name marked:
+/// the answer to "where is this used" has to be readable before it is chosen from,
+/// which is the same reason the content search's rows carry text.
+fn draw_references(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let title = if app.references_name.is_empty() {
+        " References ".to_owned()
+    } else {
+        format!(
+            " References · {} · {} ",
+            app.references_name,
+            app.references.len()
+        )
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style(app.focus == Focus::References, &app.theme));
+    let inner = block.inner(area);
+    if app.references.is_empty() {
+        // Three different empty panels, because they ask for three different things: a
+        // buffer, a caret on a name, or nothing at all. A panel that said "no uses"
+        // while the caret stood between two words would be an answer to a question
+        // nobody asked.
+        let message = if app.editor.is_none() {
+            "no file is open\nEnter in the file manager reads one".to_owned()
+        } else if app.references_name.is_empty() {
+            "the caret is not on a word\nmove it onto a name".to_owned()
+        } else {
+            format!(
+                "no code uses {}\nshift-f12 names the word under the caret",
+                app.references_name
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(app.theme.text_muted()))
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let height = usize::from(inner.height).max(1);
+    let first = first_visible(app.references_selected, app.references.len(), height);
+    let rows: Vec<Line> = app
+        .references
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, hit)| {
+            let chosen = index == app.references_selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let body = if chosen {
+                row
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            let mark = Style::default()
+                .bg(app.theme.accent())
+                .fg(app.theme.bg())
+                .add_modifier(Modifier::BOLD);
+            let mut spans = vec![
+                Span::styled(format!("{}:{}", hit.path, hit.line), row),
+                Span::styled("  ", body),
+            ];
+            spans.extend(highlight_line(
+                hit.text.trim(),
+                &app.references_name,
+                body,
+                mark,
+            ));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows).block(block), area);
+    pane_area(inner)
+}
+
+/// The project map: one row per area the agent named, with the caret's area opened.
+///
+/// The map is a document about the workspace rather than a listing of it, so a row is
+/// a name and a path and nothing else until it is worth reading: the area the open
+/// file belongs to is marked and opened, because that is the neighbourhood the person
+/// is standing in, and the selected row opens too, because `j` is how they ask.
+fn draw_map(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
+    let title = match &app.map {
+        Some(map) if map.written => format!(" Project map · {} areas ", map.areas.len()),
+        _ => " Project map ".to_owned(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style(app.focus == Focus::ProjectMap, &app.theme));
+    let inner = block.inner(area);
+    let muted = Style::default().fg(app.theme.text_muted());
+    let Some(map) = &app.map else {
+        frame.render_widget(
+            Paragraph::new("reading the map…").style(muted).block(block),
+            area,
+        );
+        return pane_area(inner);
+    };
+    if !map.written {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "no map yet\nthe agent writes {}\nfrom the tree and the README",
+                map.path
+            ))
+            .style(muted)
+            .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    if map.areas.is_empty() {
+        frame.render_widget(
+            Paragraph::new(format!("{} names no areas", map.path))
+                .style(muted)
+                .block(block),
+            area,
+        );
+        return pane_area(inner);
+    }
+    let here = app
+        .editor
+        .as_ref()
+        .and_then(|editor| map.area_for(editor.path()));
+    let height = usize::from(inner.height).max(1);
+    let width = usize::from(inner.width).saturating_sub(2).max(8);
+    let first = first_visible(app.map_selected, map.areas.len(), height);
+    let mut lines: Vec<Line> = Vec::new();
+    for (index, area) in map.areas.iter().enumerate().skip(first) {
+        if lines.len() >= height {
+            break;
+        }
+        let chosen = index == app.map_selected;
+        let standing = here == Some(index);
+        let row = if chosen {
+            Style::default()
+                .bg(app.theme.bg_panel())
+                .fg(app.theme.accent_high())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let bullet = if standing {
+            Span::styled("● ", Style::default().fg(app.theme.accent()))
+        } else {
+            Span::styled("  ", muted)
+        };
+        let path = if area.path.is_empty() || area.path == "." {
+            String::new()
+        } else {
+            format!("  {}", area.path)
+        };
+        lines.push(Line::from(vec![
+            bullet,
+            Span::styled(area.name.clone(), row),
+            Span::styled(path, if chosen { row } else { muted }),
+        ]));
+        // The summary belongs to the area being read, not to every row: a map where
+        // all the prose is always on screen is a map nobody can scan.
+        if chosen || standing {
+            for line in wrap_text(&area.summary, width) {
+                if lines.len() >= height {
+                    break;
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("    {line}"),
+                    Style::default().fg(app.theme.text()),
+                )));
+            }
+            if !area.depends_on.is_empty() && lines.len() < height {
+                lines.push(Line::from(Span::styled(
+                    format!("    → {}", area.depends_on.join(", ")),
+                    muted,
+                )));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+    pane_area(inner)
+}
+
+/// `text` as lines no wider than `width` columns, breaking at spaces.
+///
+/// A paragraph widget would wrap the rows too, and a path wrapped mid-word reads as
+/// two paths. A word longer than the column is cut rather than left to overflow.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if line.is_empty() {
+                line = word.chars().take(width).collect();
+            } else if line.chars().count() + 1 + word.chars().count() <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut line));
+                line = word.chars().take(width).collect();
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// The agent panel: sessions over a transcript over a composer.
 ///
 /// Returns the transcript's cells, because that is the viewport a copy cursor
 /// walks and nothing outside this function measures it.
@@ -624,12 +1091,13 @@ fn draw_agents(frame: &mut Frame, app: &App, area: Rect) -> (TerminalSize, PaneA
     let [sessions, transcript, composer] = Layout::vertical([
         Constraint::Length(list),
         Constraint::Min(3),
-        Constraint::Length(3),
+        Constraint::Length(app.composer_height()),
     ])
     .areas(area);
     let sessions = draw_sessions(frame, app, sessions);
     let size = draw_transcript(frame, app, transcript);
     draw_composer(frame, app, composer);
+    draw_completion(frame, app, area, composer);
     (size, sessions)
 }
 
@@ -660,7 +1128,7 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
                 history = pane.history()
             ),
             (None, None) => format!(
-                "copy {}/{history} · / find · v select · y copy · Esc leaves",
+                "copy {}/{history} · / find · v/V select · y copy · Esc leaves",
                 pane.reader.view.scroll,
                 history = pane.history()
             ),
@@ -687,8 +1155,11 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
         .border_style(Style::default().fg(border));
 
     let inner = block.inner(area);
+    let first = pane
+        .history()
+        .saturating_sub(pane.reader.view.scroll.min(pane.history()));
     let lines: Vec<Line> = (0..inner.height)
-        .map(|row| terminal_line(pane, row, inner.width, theme))
+        .map(|row| terminal_line(pane, row, first, inner.width, theme))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 
@@ -708,9 +1179,16 @@ fn draw_terminal(frame: &mut Frame, pane: &TerminalPane, area: Rect, theme: &The
 /// the attributes would be a terminal that lies about what a program drew. Runs of
 /// one style become one span, so a 200-column line is not 200 of them; trailing
 /// blanks are dropped because they would only paint the background.
-fn terminal_line(pane: &TerminalPane, row: u16, cols: u16, theme: &Theme) -> Line<'static> {
+fn terminal_line(
+    pane: &TerminalPane,
+    row: u16,
+    first: usize,
+    cols: u16,
+    theme: &Theme,
+) -> Line<'static> {
     let screen = pane.parser.screen();
     let copying = pane.mode == PaneMode::Copy;
+    let line = first + usize::from(row);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run_style: Option<Style> = None;
     let mut run_text = String::new();
@@ -724,15 +1202,15 @@ fn terminal_line(pane: &TerminalPane, row: u16, cols: u16, theme: &Theme) -> Lin
             continue;
         }
         let mut style = cell_style(cell);
-        if pane.reader.view.selected(row, col) {
+        if pane.reader.view.selected(line, col) {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        if pane.matched(row, col) {
+        if pane.matched(line, col) {
             // Yellow rather than reversed: a match can sit inside a selection or
             // under the cursor, and it has to be readable through both.
             style = style.add_modifier(Modifier::UNDERLINED).fg(theme.warning());
         }
-        if copying && pane.reader.view.cursor == (row, col) {
+        if copying && pane.reader.view.cursor == (line, col) {
             // The cursor sits inside selections, so it reverses *and* underlines:
             // a bare inversion would be a cell a person cannot tell from the rest
             // of the selection.
@@ -792,7 +1270,7 @@ fn colour(colour: vt100::Color) -> Option<Color> {
 }
 
 fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
-    let title = format!(" Sessions · {} ", app.sessions.len());
+    let title = format!(" Assistant · {} ", app.sessions.len());
     let items: Vec<ListItem> = app
         .sessions
         .iter()
@@ -843,7 +1321,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) -> PaneArea {
 /// cannot measure itself, and this is the only place that knows how many lines fit
 /// above the composer.
 fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
-    let lines = app.transcript_lines();
+    let lines = app.transcript_rows();
     let inner = inner_size(area);
     let height = usize::from(inner.rows);
     let max_scroll = lines.len().saturating_sub(height);
@@ -865,6 +1343,9 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
             "copy {}/{max_scroll}",
             app.transcript.view.scroll.min(max_scroll)
         ),
+        // A turn in flight has a cursor at the end of the last line and says so:
+        // a reply that is still arriving looks exactly like one that stopped.
+        (false, true) if app.streaming() => "streaming · tab · f3".to_owned(),
         (false, true) => "tab · f3".to_owned(),
         // A transcript with the keyboard and no session is not a state the app can
         // reach, but it still has to say something.
@@ -893,20 +1374,24 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
             0
         };
         let start = max_scroll - scroll;
-        let rows: Vec<Line> = lines
+        let mut rows: Vec<Line> = lines
             .iter()
             .enumerate()
             .skip(start)
             .take(height)
-            .map(|(index, (text, kind))| {
-                transcript_line(
-                    app,
-                    *kind,
-                    text,
-                    u16::try_from(index - start).unwrap_or(u16::MAX),
-                )
-            })
+            .map(|(index, row)| transcript_line(app, row, index))
             .collect();
+        // The cursor sits after the newest text and only while the tail is on
+        // screen: a scrolled transcript with a cursor would point at a line the
+        // turn has not reached yet.
+        if app.streaming()
+            && !reading
+            && start + height >= lines.len()
+            && let Some(last) = rows.last_mut()
+        {
+            last.spans
+                .push(Span::styled("▏", Style::default().fg(app.theme.accent())));
+        }
         let paragraph = Paragraph::new(rows);
         // Wrapped for reading, unwrapped while it is being read back: in copy mode
         // one line of text is one row of the view, so a cell means one character.
@@ -927,46 +1412,84 @@ fn draw_transcript(frame: &mut Frame, app: &App, area: Rect) -> TerminalSize {
 ///
 /// A cell at a time only in copy mode: outside it a line is one span, because a
 /// style run per character is a cost a view pays only while someone points at it.
-fn transcript_line(app: &App, kind: Kind, text: &str, row: u16) -> Line<'static> {
-    let style = entry_style(kind, &app.theme);
-    let Some(view) = (app.focus == Focus::Transcript).then_some(&app.transcript.view) else {
-        return Line::from(Span::styled(text.to_owned(), style));
-    };
-    let mut spans: Vec<Span> = text
-        .chars()
-        .enumerate()
-        .map(|(col, character)| {
-            let col = u16::try_from(col).unwrap_or(u16::MAX);
-            let mut style = style;
-            if view.selected(row, col) {
-                style = style.add_modifier(Modifier::REVERSED);
+fn transcript_line(app: &App, line: &crate::app::TranscriptRow, index: usize) -> Line<'static> {
+    let base = entry_style(line.kind, &app.theme);
+    let reading = app.focus == Focus::Transcript;
+    let mut spans: Vec<Span> = Vec::new();
+    let mut col = 0u16;
+    for segment in &line.segments {
+        let emphasis = emphasis_style(segment.emphasis, &app.theme);
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
+        for character in segment.text.chars() {
+            let mut style = base.patch(emphasis);
+            if reading {
+                if app.transcript.view.selected(index, col) {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                if app.matched_transcript(index, col) {
+                    style = style
+                        .add_modifier(Modifier::UNDERLINED)
+                        .fg(app.theme.warning());
+                }
+                if app.transcript.view.cursor == (index, col) {
+                    style = style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED);
+                }
             }
-            if app.matched_transcript(row, col) {
-                style = style
-                    .add_modifier(Modifier::UNDERLINED)
-                    .fg(app.theme.warning());
+            if run_style == Some(style) {
+                run.push(character);
+            } else {
+                if let Some(style) = run_style.take() {
+                    spans.push(Span::styled(std::mem::take(&mut run), style));
+                }
+                run_style = Some(style);
+                run.push(character);
             }
-            if view.cursor == (row, col) {
-                style = style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED);
-            }
-            Span::styled(character.to_string(), style)
-        })
-        .collect();
+            col = col.saturating_add(1);
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
+        }
+    }
     // The cursor sits after the last character as well as on one, and a cursor on
     // a cell that does not exist would be a pane with no visible cursor at all.
-    if view.cursor == (row, u16::try_from(text.chars().count()).unwrap_or(u16::MAX)) {
+    if reading
+        && app.transcript.view.cursor
+            == (
+                index,
+                u16::try_from(line.text().chars().count()).unwrap_or(u16::MAX),
+            )
+    {
         spans.push(Span::styled(
             " ",
-            style.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
+            base.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED),
         ));
     }
     Line::from(spans)
 }
 
+/// How a markdown run is set, on top of whatever its kind already asked for.
+fn emphasis_style(emphasis: crate::markdown::Emphasis, theme: &Theme) -> Style {
+    use crate::markdown::Emphasis;
+    match emphasis {
+        Emphasis::Plain => Style::default(),
+        Emphasis::Bold => Style::default().add_modifier(Modifier::BOLD),
+        Emphasis::Italic => Style::default().add_modifier(Modifier::ITALIC),
+        Emphasis::Code => Style::default().fg(theme.accent_high()),
+        Emphasis::Link => Style::default()
+            .fg(theme.accent())
+            .add_modifier(Modifier::UNDERLINED),
+        Emphasis::Heading => Style::default()
+            .fg(theme.accent_high())
+            .add_modifier(Modifier::BOLD),
+        Emphasis::Quote => Style::default().fg(theme.text_muted()),
+    }
+}
+
 fn draw_composer(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Prompt · Enter sends ")
+        .title(" Prompt · Enter sends · Alt-Enter a line · @ a file ")
         .border_style(border_style(app.focus == Focus::Prompt, &app.theme));
     let text = if app.input.is_empty() {
         Paragraph::new("ask the agent…").style(Style::default().fg(app.theme.text_muted()))
@@ -975,15 +1498,96 @@ fn draw_composer(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(text.block(block), area);
 
-    if app.focus == Focus::Prompt && !app.input.contains('\n') {
-        // One line, so the cursor is a column count rather than a layout pass.
-        let width = u16::try_from(app.input.chars().count()).unwrap_or(u16::MAX);
-        frame.set_cursor_position((area.x + 1 + width, area.y + 1));
+    if app.focus == Focus::Prompt {
+        let (row, col) = app.composer_position();
+        // The box has borders, and a caret past the last row of a box that stopped
+        // growing would be drawn outside the pane that owns it.
+        frame.set_cursor_position((
+            (area.x + 1 + col).min(area.x + area.width.saturating_sub(2)),
+            (area.y + 1 + row).min(area.y + area.height.saturating_sub(2)),
+        ));
     }
 }
 
-/// The status line: connection, profile, which pane has the keys, the cursor, and
-/// what just happened.
+/// The `@path` popup, drawn over the transcript just above the composer.
+///
+/// Above rather than inside: the composer is where the caret is, and a list that
+/// covered the thing being typed would be a list a person could not type past.
+fn draw_completion(frame: &mut Frame, app: &App, panel: Rect, composer: Rect) {
+    let Some(completion) = &app.completion else {
+        return;
+    };
+    if app.focus != Focus::Prompt {
+        return;
+    }
+    let rows = u16::try_from(completion.rows.len().max(1)).unwrap_or(u16::MAX);
+    let height = rows.min(6).saturating_add(2);
+    if composer.y < height + panel.y {
+        return;
+    }
+    let width = panel.width.saturating_sub(2).max(12);
+    let area = Rect {
+        x: panel.x + 1,
+        y: composer.y - height,
+        width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" @{} ", completion.query))
+        .border_style(Style::default().fg(app.theme.accent()))
+        .style(Style::default().bg(app.theme.bg_panel()));
+    let inner = block.inner(area);
+    let visible = usize::from(inner.height).max(1);
+    let first = completion
+        .selected
+        .saturating_sub(visible.saturating_sub(1));
+    let lines: Vec<Line> = if completion.rows.is_empty() {
+        vec![Line::from(Span::styled(
+            "no file matches",
+            Style::default().fg(app.theme.text_muted()),
+        ))]
+    } else {
+        completion
+            .rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible)
+            .map(|(index, path)| {
+                let style = if index == completion.selected {
+                    Style::default()
+                        .bg(app.theme.accent())
+                        .fg(app.theme.bg())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(path.clone(), style))
+            })
+            .collect()
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Where a pane runs, when it is not in this window's own workspace and host.
+///
+/// The picker and the status line answer the question with these words, so a person
+/// who learned to read a row does not have to learn a second spelling once the pane
+/// has the keyboard. A pane a session opened is the session's, and its workspace is
+/// already the window's: the words are for the panes that are not.
+fn pane_origin(terminal: &acpilot_proto::terminal::TerminalSummary) -> Option<String> {
+    if terminal.session_id.is_some() {
+        return None;
+    }
+    let workspace = terminal.workspace.as_deref().unwrap_or("this workspace");
+    let host = terminal.host.as_deref().unwrap_or("this machine");
+    Some(format!("{workspace} on {host}"))
+}
+
+/// The status line: connection, profile, which pane has the keys and where it runs,
+/// the cursor, and what just happened.
 ///
 /// The order is the order a person reads it — is it alive, what am I in, where am I,
 /// what did it say — and the address is last because it is the thing that is almost
@@ -1010,9 +1614,57 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         format!("{} ", app.focus.label()),
         Style::default().fg(app.theme.accent()),
     ));
+    // The pane behind the keyboard may not be this window's: a sessionless shell can
+    // run in another workspace on another host, and the picker that said so is gone
+    // by the time commands are being typed into it.
+    if let Some(origin) = app
+        .terminal
+        .as_ref()
+        .and_then(|pane| pane_origin(&pane.summary))
+    {
+        spans.push(Span::styled(format!("· no session · {origin} "), dim));
+    }
     if let Some(editor) = &app.editor {
         let (line, column) = editor.position();
         spans.push(Span::styled(format!("· {line}:{column} "), dim));
+        // What the language server says about this file, counted the way the gutter
+        // marks it. Silence when there is nothing wrong, and silence when nothing was
+        // asked: this line has no room to say "unchecked" in a way that reads.
+        let problems = editor.problems();
+        let errors = problems
+            .iter()
+            .filter(|problem| problem.severity == acpilot_proto::file::DiagnosticSeverity::Error)
+            .count();
+        let warnings = problems
+            .iter()
+            .filter(|problem| problem.severity == acpilot_proto::file::DiagnosticSeverity::Warning)
+            .count();
+        if errors + warnings > 0 {
+            spans.push(Span::styled(
+                format!("· {errors}E {warnings}W "),
+                Style::default().fg(if errors > 0 {
+                    app.theme.danger()
+                } else {
+                    app.theme.warning()
+                }),
+            ));
+        }
+        // A question still in flight is worth a word: the first one waits on a server
+        // being started and an index being built, which is seconds, and a gutter that
+        // has not moved in seconds must not read as a clean file.
+        if app.diagnostics_pending {
+            spans.push(Span::styled("· checking ", dim));
+        }
+    }
+    // What the sessions hold, from the same readings the bar draws. A `~` is the
+    // daemon's own count rather than an agent's report, and an absent total is
+    // silence instead of a zero nobody measured.
+    if let Some(tokens) = app.used_tokens {
+        let mark = if app.tokens_estimated { "~" } else { "" };
+        spans.push(Span::styled(
+            format!("· {mark}{} tokens ", acpilot_stats::tokens(tokens)),
+            dim,
+        ));
     }
     spans.push(Span::styled("· ", dim));
     spans.push(Span::raw(app.status.clone()));
@@ -1301,6 +1953,137 @@ fn draw_palette(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(rows), list);
 }
 
+/// The workspace content search: the query, and one row per matching line.
+///
+/// A jump list, so every row leads somewhere: the path and line on the left, the
+/// line's text beside them, with the words that matched marked, so a row explains
+/// itself without being re-read. The text is not truncated here — a row that runs off
+/// the card is a row whose match was past the edge, and guessing at where to cut would
+/// hide the reason it matched more often than not.
+fn draw_grep(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(grep) = &app.grep else {
+        return;
+    };
+    let card = middle(area, 90, 70);
+    if card.width < 24 || card.height < 4 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Find in files · {} ", grep.matches.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [input, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+
+    let query = if grep.query.is_empty() {
+        Span::styled(
+            "type to search…",
+            Style::default().fg(app.theme.text_muted()),
+        )
+    } else {
+        Span::raw(grep.query.clone())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.accent())),
+            query,
+        ])),
+        input,
+    );
+    let typed = u16::try_from(grep.query.chars().count()).unwrap_or(u16::MAX);
+    frame.set_cursor_position((input.x + 2 + typed, input.y));
+
+    // The list follows the selection, so a match far down the file list is never
+    // chosen off the bottom of the card.
+    let capacity = usize::from(list.height).max(1);
+    let first = grep.selected.saturating_sub(capacity - 1);
+    let rows: Vec<Line> = grep
+        .matches
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(capacity)
+        .map(|(index, hit)| {
+            let chosen = index == grep.selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            // The selection is the row's background, so the body inherits it rather
+            // than starting from nothing and leaving a band of terminal colour in the
+            // middle of the chosen row.
+            let body = if chosen {
+                row
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            let mark = Style::default()
+                .bg(app.theme.accent())
+                .fg(app.theme.bg())
+                .add_modifier(Modifier::BOLD);
+            let mut spans = vec![
+                Span::styled(format!("{}:{}", hit.path, hit.line), row),
+                Span::styled("  ", body),
+            ];
+            spans.extend(highlight_line(hit.text.trim(), &grep.query, body, mark));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows), list);
+}
+
+/// The line's text, with every occurrence of the query marked.
+///
+/// The daemon matches case-insensitively (`line.to_lowercase().contains(needle)`), and
+/// this folds the same way: a row that matched with nothing marked is a row a person
+/// has to read again to see why. The offsets are the original string's, never the
+/// folded one's, because lowering a character can change how many bytes it takes.
+///
+/// A query that is empty after trimming marks nothing, which is what the daemon's
+/// empty query returns too.
+fn highlight_line<'a>(text: &'a str, query: &str, base: Style, mark: Style) -> Vec<Span<'a>> {
+    let needle: Vec<char> = query.trim().to_lowercase().chars().collect();
+    if needle.is_empty() {
+        return vec![Span::styled(text, base)];
+    }
+    let folded: Vec<(usize, char)> = text
+        .char_indices()
+        .flat_map(|(index, character)| character.to_lowercase().map(move |folded| (index, folded)))
+        .collect();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    let mut at = 0;
+    while at + needle.len() <= folded.len() {
+        let matched = folded[at..at + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|((_, folded), wanted)| folded == wanted);
+        if !matched {
+            at += 1;
+            continue;
+        }
+        let start = folded[at].0;
+        let last = folded[at + needle.len() - 1].0;
+        let end = last + text[last..].chars().next().map_or(0, char::len_utf8);
+        if start > cursor {
+            spans.push(Span::styled(&text[cursor..start], base));
+        }
+        spans.push(Span::styled(&text[start..end], mark));
+        cursor = end;
+        at += needle.len();
+    }
+    if cursor < text.len() {
+        spans.push(Span::styled(&text[cursor..], base));
+    }
+    spans
+}
+
 /// The keys the focused pane answers to, for `?`.
 fn draw_key_list(frame: &mut Frame, app: &App, area: Rect) {
     let (pane, keys) = keys_for(app);
@@ -1368,29 +2151,56 @@ fn draw_toast(frame: &mut Frame, toast: &Toast, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
-/// The keys a pane being read answers to, in either pane.
+/// The first launch's next steps, shown once when the profile declares no agent.
 ///
-/// One list for both, because the keys are one list: the terminal's copy mode and
-/// the transcript are the same gesture over different media.
-const COPY_KEYS: [(&str, &str); 10] = [
-    ("j / k", "line down / up"),
-    ("h / l", "left / right"),
-    ("ctrl-u / ctrl-d", "page back / forward"),
-    ("g / G", "oldest line / live"),
-    ("/", "find in what is above"),
-    ("n / N", "next match, older / newer"),
-    ("v", "select"),
-    ("y", "copy and leave"),
-    ("esc", "leave"),
-    ("?", "these keys"),
-];
+/// A card rather than a modal: the editor behind it is already usable, the next
+/// key dismisses it, and the two commands it names are the two real ways forward.
+/// The design pass never draws it, because its seeded profile has agents.
+fn draw_first_run(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let width = area.width.min(60);
+    let height = 5.min(area.height);
+    if width < 28 || height < 4 {
+        return;
+    }
+    let card = Rect {
+        x: area.x + area.width.saturating_sub(width),
+        y: area.y + area.height.saturating_sub(height + 2),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, card);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" next · no agent required ")
+        .border_style(Style::default().fg(theme.accent()));
+    let key = Style::default()
+        .fg(theme.accent_high())
+        .add_modifier(Modifier::BOLD);
+    let lines = vec![
+        Line::from(Span::styled(
+            "The editor works without an agent.",
+            Style::default().fg(theme.text_muted()),
+        )),
+        Line::from(vec![
+            Span::styled("Session → Select Agent…", key),
+            Span::raw("  ·  "),
+            Span::styled("acpilot doctor", key),
+        ]),
+        Line::from(Span::styled(
+            "any key closes this",
+            Style::default().fg(theme.text_muted()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
 
 /// The keys the pane with the keyboard answers to, and what to call it.
 ///
-/// A pane being read answers to the copy keys rather than to its own: the motions
-/// are the whole of what it does, and a person who asks for the list while
-/// scrolling asked for the motions.
-fn keys_for(app: &App) -> (&'static str, &'static [(&'static str, &'static str)]) {
+/// Every pane that has moved into `Keymap` asks the table, then appends the
+/// client's own keys because they are live there too. A rebind therefore changes
+/// what works and what this card says in one step. The outline, references and
+/// project-map panels still keep their written lists.
+fn keys_for(app: &App) -> (&'static str, Vec<(String, &'static str)>) {
     let reading = app.focus == Focus::Transcript
         || (app.focus == Focus::Terminal
             && app
@@ -1398,61 +2208,66 @@ fn keys_for(app: &App) -> (&'static str, &'static [(&'static str, &'static str)]
                 .as_ref()
                 .is_some_and(|pane| pane.mode == PaneMode::Copy));
     if reading {
-        return ("copy mode", &COPY_KEYS);
+        let mut rows = app.keymap.rows(Context::Copy);
+        rows.extend(app.keymap.rows(Context::App));
+        return ("copy mode", rows);
     }
-    (app.focus.label(), pane_keys(app.focus))
+    // No insert-mode list here: `?` is a character in insert mode, so the panel
+    // cannot open while those keys are the pane's. The way in is on the normal-mode
+    // list and the insert keys are in `docs/notes/tui-shell.md`, which is the one
+    // place a person reading the settings can find them.
+    let context = match app.focus {
+        Focus::Files => Some(Context::Files),
+        Focus::Sessions => Some(Context::Sessions),
+        Focus::Prompt => Some(Context::Prompt),
+        Focus::Editor => Some(Context::Editor),
+        Focus::Outline
+        | Focus::References
+        | Focus::ProjectMap
+        | Focus::Transcript
+        | Focus::Terminal => None,
+    };
+    if let Some(context) = context {
+        let mut rows = app.keymap.rows(context);
+        rows.extend(app.keymap.rows(Context::App));
+        if context == Context::Editor {
+            // Not in the table: one plans a task and the other asks the daemon, and
+            // the one that plans is not a verb a person should be able to bind.
+            rows.push(("f12".to_owned(), "go to definition"));
+            rows.push(("shift-f12".to_owned(), "find references"));
+        }
+        return (app.focus.label(), rows);
+    }
+    let rows = pane_keys(app.focus)
+        .iter()
+        .map(|(key, what)| ((*key).to_owned(), *what))
+        .collect();
+    (app.focus.label(), rows)
 }
 
 /// The keys a pane answers to, as the which-key panel lists them.
 fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
     match focus {
-        Focus::Files => &[
+        // These panes are in the keymap now; the match keeps the arms for the
+        // three panels that are still written here.
+        Focus::Files | Focus::Editor | Focus::Sessions | Focus::Prompt | Focus::Transcript => &[],
+        Focus::References => &[
             ("j / k", "move"),
-            ("h / l", "collapse / expand"),
-            ("enter", "open"),
-            ("/", "fuzzy open"),
-            ("tab", "next pane"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("?", "these keys"),
-        ],
-        Focus::Editor => &[
-            ("h j k l", "move"),
-            ("0 / $", "start / end of line"),
-            ("pgup / pgdn", "a page"),
-            ("/ or ctrl-f", "find in file"),
-            ("n / N", "next / previous match"),
-            ("ctrl-g", "go to line"),
-            ("ctrl-s", "save"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("i", "insert mode"),
-            ("f12", "go to definition"),
-        ],
-        Focus::Sessions => &[
-            ("j / k", "choose"),
-            ("enter", "open"),
-            ("i", "compose"),
-            ("tab", "read the transcript"),
-            ("ctrl-←/→", "narrower / wider"),
-            ("n", "new session"),
-            ("d", "end session"),
-            ("c", "cancel turn"),
-        ],
-        // Reached only by a pane that is not being read: once it is, this list is
-        // replaced by the copy keys above.
-        Focus::Transcript => &[
-            ("j / k", "scroll"),
-            ("v", "select"),
-            ("y", "copy"),
-            ("esc", "back to the list"),
+            ("enter", "open the use"),
+            ("shift-f12", "another word"),
+            ("esc", "back to the buffer"),
             ("tab", "next pane"),
         ],
-        Focus::Prompt => &[
-            ("enter", "send"),
-            ("esc", "back to the list"),
-            ("ctrl-t", "terminal pane"),
-            ("tab", "read the transcript"),
-            ("ctrl-p", "commands"),
-            ("f4", "where the stats came from"),
+        Focus::Outline => &[
+            ("j / k", "choose a definition"),
+            ("enter", "go to its line"),
+            ("esc", "back to the buffer"),
+        ],
+        Focus::ProjectMap => &[
+            ("j / k", "choose an area"),
+            ("enter", "read its summary"),
+            ("r", "read the map again"),
+            ("esc", "back to the buffer"),
         ],
         Focus::Terminal => &[
             ("ctrl-t", "leave the pane"),
@@ -1464,14 +2279,18 @@ fn pane_keys(focus: Focus) -> &'static [(&'static str, &'static str)] {
 }
 
 /// A git status as the tree's gutter colour.
-fn git_colour(status: acpilot_demo::GitStatus, theme: &Theme) -> Color {
+///
+/// A clean row's letter is a blank, and the blank is muted like the rest of the
+/// furniture rather than unset: a column that changes colour per row is a column
+/// that reads as five different things instead of one.
+fn git_colour(status: Option<acpilot_proto::file::FileChange>, theme: &Theme) -> Color {
     match status {
-        acpilot_demo::GitStatus::Clean => theme.text_muted(),
-        acpilot_demo::GitStatus::Modified => theme.warning(),
-        acpilot_demo::GitStatus::Added => theme.success(),
-        acpilot_demo::GitStatus::Untracked => theme.accent(),
-        acpilot_demo::GitStatus::Deleted => theme.danger(),
-        acpilot_demo::GitStatus::Conflicted => theme.accent_high(),
+        None => theme.text_muted(),
+        Some(acpilot_proto::file::FileChange::Modified) => theme.warning(),
+        Some(acpilot_proto::file::FileChange::Added) => theme.success(),
+        Some(acpilot_proto::file::FileChange::Untracked) => theme.accent(),
+        Some(acpilot_proto::file::FileChange::Deleted) => theme.danger(),
+        Some(acpilot_proto::file::FileChange::Conflicted) => theme.accent_high(),
     }
 }
 
@@ -1483,25 +2302,50 @@ fn git_colour(status: acpilot_demo::GitStatus, theme: &Theme) -> Color {
 fn draw_permission(
     frame: &mut Frame,
     request: &PermissionRequest,
+    at: usize,
+    total: usize,
     diff: Option<&Diff>,
     area: Rect,
     theme: &Theme,
 ) {
+    // The preview is the write's own: a read or a terminal has a detail, not a
+    // diff, and showing the seeded write beside a shell's question would be a
+    // preview of an edit nobody asked about.
+    let diff =
+        diff.filter(|_| request.kind == acpilot_proto::permission::PermissionKind::FileWrite);
     let card = if diff.is_some() {
         middle(area, 84, 76)
     } else {
         centred(area)
     };
     frame.render_widget(Clear, card);
+    let title = if total > 1 {
+        format!(" Permission · {at}/{total} ")
+    } else {
+        " Permission needed ".to_owned()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Permission needed ")
+        .title(title)
         .border_style(Style::default().fg(theme.warning()));
     let room = usize::from(card.height.saturating_sub(2)).saturating_sub(3);
-    let mut lines = vec![Line::from(Span::styled(
-        format!("{} · {}", request.session_id, request.title),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "{} · {} · {}",
+                permission_kind_label(request.kind),
+                request.session_id,
+                request.title
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        // Each question in a queue names its place, so `Tab` has something to
+        // count and an answer says which of them it was.
+        Line::from(Span::styled(
+            format!("request {at} of {total}"),
+            Style::default().fg(theme.text_muted()),
+        )),
+    ];
     // The detail is prose with newlines in it, not one long line: a request that
     // describes three changes describes them on three rows.
     lines.extend(
@@ -1538,7 +2382,7 @@ fn draw_permission(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "y allow once · a allow always · n deny · Esc later",
+        permission_hint(request, at, total),
         Style::default().fg(theme.warning()),
     )));
     frame.render_widget(
@@ -1547,6 +2391,508 @@ fn draw_permission(
             .wrap(Wrap { trim: false }),
         card,
     );
+}
+
+/// What the card calls the tool the request is about.
+fn permission_kind_label(kind: acpilot_proto::permission::PermissionKind) -> &'static str {
+    use acpilot_proto::permission::PermissionKind;
+    match kind {
+        PermissionKind::FileWrite => "file write",
+        PermissionKind::FileRead => "file read",
+        PermissionKind::Terminal => "terminal",
+        PermissionKind::ToolCall => "tool call",
+        PermissionKind::Other => "request",
+    }
+}
+
+/// The keys the card is actually offering, built from the request's own options.
+///
+/// A card that printed a fixed line would advertise `a allow always` on a request
+/// the wire sent with no always option, and a key that is drawn but does nothing
+/// is worse than one that is not drawn.
+fn permission_hint(request: &PermissionRequest, at: usize, total: usize) -> String {
+    if request.options.is_empty() {
+        return "no answer this build can give · Esc later".to_owned();
+    }
+    let mut parts: Vec<String> = request
+        .options
+        .iter()
+        .map(|option| {
+            format!(
+                "{} {}",
+                crate::app::option_key(*option),
+                crate::app::option_label(*option)
+            )
+        })
+        .collect();
+    if total > 1 {
+        parts.push(format!("Tab next · {at}/{total}"));
+    }
+    parts.push("Esc later".to_owned());
+    parts.push("every answer is audited".to_owned());
+    parts.join(" · ")
+}
+
+/// The source-control pane: changed paths on the left, the selected file's diff
+/// on the right.
+///
+/// Modal because it is about the repository rather than the buffer, and because its
+/// writes — moving a path across the index, restoring the working tree, then
+/// committing — are decisions that should not be one keystroke away from a pane that
+/// edits text. `s`/`u` stage and unstage, `d`/`x` arm a discard or checkout that `y`
+/// confirms, and the composer still confirms the commit.
+fn draw_source_control(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(source) = &app.source else {
+        return;
+    };
+    let card = middle(area, 110, 88);
+    if card.width < 50 || card.height < 8 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let branch = source.status.branch.as_deref().unwrap_or("(detached)");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " Source control · {branch} · {} changed · {} staged ",
+            source.status.files.len(),
+            source.staged()
+        ))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let files_width = (body.width / 3).clamp(18, 38);
+    let [files, patch] =
+        Layout::horizontal([Constraint::Length(files_width), Constraint::Min(10)]).areas(body);
+
+    if source.loading {
+        frame.render_widget(
+            Paragraph::new("reading the index…").style(Style::default().fg(app.theme.text_muted())),
+            files,
+        );
+    } else if source.status.files.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no changed files").style(Style::default().fg(app.theme.text_muted())),
+            files,
+        );
+    } else {
+        let start = first_visible(
+            source.selected,
+            source.status.files.len(),
+            usize::from(files.height),
+        );
+        let rows: Vec<Line<'static>> = source
+            .status
+            .files
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(usize::from(files.height))
+            .map(|(index, entry)| {
+                let chosen = index == source.selected;
+                let style = if chosen {
+                    Style::default()
+                        .fg(app.theme.accent_high())
+                        .bg(app.theme.bg_panel())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(app.theme.text())
+                };
+                let marks = format!(
+                    "{}{} ",
+                    change_letter(entry.index),
+                    change_letter(entry.worktree)
+                );
+                let mark_style = Style::default()
+                    .fg(change_colour(entry.worktree, &app.theme))
+                    .bg(if chosen {
+                        app.theme.bg_panel()
+                    } else {
+                        app.theme.bg()
+                    });
+                Line::from(vec![
+                    Span::styled(marks, mark_style),
+                    Span::styled(entry.path.clone(), style),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(rows), files);
+    }
+    if let Some(error) = &source.error {
+        frame.render_widget(
+            Paragraph::new(error.as_str())
+                .style(Style::default().fg(app.theme.danger()))
+                .wrap(Wrap { trim: false }),
+            patch,
+        );
+    } else if source.loading {
+        frame.render_widget(
+            Paragraph::new("reading the diff…").style(Style::default().fg(app.theme.text_muted())),
+            patch,
+        );
+    } else {
+        let lines = source.source_lines();
+        if lines.is_empty() {
+            frame.render_widget(
+                Paragraph::new("no diff for this path yet · s stages it")
+                    .style(Style::default().fg(app.theme.text_muted()))
+                    .wrap(Wrap { trim: false }),
+                patch,
+            );
+        } else {
+            let height = usize::from(patch.height);
+            let rows: Vec<Line<'static>> = lines
+                .into_iter()
+                .skip(source.scroll)
+                .take(height)
+                .map(|line| {
+                    if line.heading {
+                        Line::from(Span::styled(
+                            line.text,
+                            Style::default()
+                                .fg(app.theme.accent())
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                    } else if line.selected_hunk {
+                        diff_line(&line.text, &app.theme)
+                            .style(Style::default().bg(app.theme.bg_panel()))
+                    } else {
+                        diff_line(&line.text, &app.theme)
+                    }
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(rows), patch);
+        }
+    }
+
+    let total = source.source_lines().len();
+    let position = if total > 0 {
+        format!(
+            " · lines {}-{}",
+            source.scroll + 1,
+            (source.scroll + usize::from(patch.height)).min(total)
+        )
+    } else {
+        String::new()
+    };
+    let footer_text = source.pending.as_ref().map_or_else(
+        || {
+            format!(
+                " j/k file · h/l hunk · S stage hunk · s/u index · d discard · x checkout · c compose · g draft · esc{position} "
+            )
+        },
+        |pending| {
+            format!(
+                " {} {}? y confirms · n cancels ",
+                pending.restore.verb(),
+                pending.path
+            )
+        },
+    );
+    let footer_line = Line::from(Span::styled(
+        footer_text,
+        Style::default().fg(app.theme.warning()),
+    ));
+    frame.render_widget(Paragraph::new(footer_line), footer);
+}
+
+fn change_letter(kind: acpilot_proto::git::GitChangeKind) -> char {
+    use acpilot_proto::git::GitChangeKind::{
+        Added, Copied, Deleted, Ignored, Modified, Renamed, TypeChanged, Unmerged, Unmodified,
+        Untracked,
+    };
+    match kind {
+        Unmodified | Ignored => '·',
+        Modified => 'M',
+        Added => 'A',
+        Deleted => 'D',
+        Renamed => 'R',
+        Copied => 'C',
+        TypeChanged => 'T',
+        Unmerged => 'U',
+        Untracked => '?',
+    }
+}
+
+fn change_colour(kind: acpilot_proto::git::GitChangeKind, theme: &Theme) -> Color {
+    use acpilot_proto::git::GitChangeKind::{Added, Deleted, Renamed, Unmerged, Untracked};
+    match kind {
+        Added | Untracked => theme.success(),
+        Deleted => theme.danger(),
+        Renamed => theme.accent_high(),
+        Unmerged => theme.warning(),
+        _ => theme.text_muted(),
+    }
+}
+
+/// One line of a unified diff, coloured by what its first character says.
+fn diff_line(text: &str, theme: &Theme) -> Line<'static> {
+    let colour = match text.chars().next() {
+        Some('+') => theme.success(),
+        Some('-') => theme.danger(),
+        Some('@') => theme.accent(),
+        Some('d') => theme.accent_high(),
+        _ => theme.text_muted(),
+    };
+    Line::from(Span::styled(text.to_owned(), Style::default().fg(colour)))
+}
+
+/// The commit composer, over the pane it will commit from.
+///
+/// The message is shown with a caret rather than sent to a terminal's line editor:
+/// the body is paragraphs, and editing it has to work before the one action that
+/// writes. The footer changes with the state, so `Ctrl-S` is visibly a question and
+/// `y` is visibly the answer.
+fn draw_commit_composer(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(composer) = &app.commit else {
+        return;
+    };
+    let card = middle(area, 84, 64);
+    if card.width < 32 || card.height < 6 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let staged = app.source.as_ref().map_or(0, |source| source.staged());
+    let state = if composer.generating {
+        "drafting"
+    } else if composer.committing {
+        "committing"
+    } else if composer.confirming {
+        "confirm"
+    } else {
+        "edit"
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Commit message · {staged} staged · {state} "))
+        .border_style(Style::default().fg(if composer.confirming {
+            app.theme.warning()
+        } else {
+            app.theme.accent()
+        }));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let lines = composer_lines(composer, &app.theme);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+
+    let (text, colour) = if let Some(error) = &composer.error {
+        (format!(" {error} "), app.theme.danger())
+    } else if composer.generating {
+        (
+            " the session is drafting from the staged diff… ".to_owned(),
+            app.theme.warning(),
+        )
+    } else if composer.committing {
+        (
+            " committing the staged index… ".to_owned(),
+            app.theme.warning(),
+        )
+    } else if composer.confirming {
+        (
+            format!(" commit {staged} staged? y confirms · n cancels "),
+            app.theme.warning(),
+        )
+    } else {
+        (
+            " ctrl-g generate from session · ctrl-s reviews and commits · esc closes ".to_owned(),
+            app.theme.text_muted(),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, Style::default().fg(colour)))),
+        footer,
+    );
+}
+
+/// The message as lines, with the caret drawn as a block or a bar.
+fn composer_lines(composer: &crate::app::CommitComposer, theme: &Theme) -> Vec<Line<'static>> {
+    let (cursor_line, cursor_column) = composer.line_col();
+    let mut lines = Vec::new();
+    for (line_index, text) in composer.text.split('\n').enumerate() {
+        let mut spans = Vec::new();
+        if line_index == cursor_line {
+            let characters: Vec<char> = text.chars().collect();
+            for (column, character) in characters.iter().enumerate() {
+                if column == cursor_column {
+                    spans.push(Span::styled(
+                        character.to_string(),
+                        Style::default().fg(theme.bg()).bg(theme.accent()),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        character.to_string(),
+                        Style::default().fg(theme.text()),
+                    ));
+                }
+            }
+            if cursor_column >= characters.len() {
+                spans.push(Span::styled("▏", Style::default().fg(theme.accent())));
+            }
+        } else {
+            spans.push(Span::styled(
+                text.to_owned(),
+                Style::default().fg(theme.text()),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+/// The diff review: the agent's edit, hunk by hunk, with a decision on each.
+///
+/// Drawn over the permission card rather than beside it, because the card is the
+/// question and this is how it is answered: a review in a pane of its own would be
+/// a review nobody reads before pressing `y`. The hunks are scrolled by the cursor
+/// rather than by an offset — the hunk under the keyboard is the top of the box, so
+/// moving the cursor is the only scrolling there is.
+fn draw_review(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(review) = &app.review else {
+        return;
+    };
+    let card = middle(area, 96, 84);
+    if card.width < 34 || card.height < 8 || review.diff.hunks.is_empty() {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let total = review.diff.hunks.len();
+    let accepted = review.accepted_hunks();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Review · {} ", review.diff.path))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [body, keys_row] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+
+    let height = usize::from(body.height);
+    // The hunks are drawn from the top whenever the ones up to the cursor fit, so
+    // that deciding a hunk does not scroll the hunk just decided out of sight. Past
+    // that the cursor's hunk is the top of the box, which is the only scrolling
+    // there is.
+    let up_to_cursor: usize = review
+        .diff
+        .hunks
+        .iter()
+        .take(review.cursor + 1)
+        .map(|hunk| 1 + hunk.lines.len())
+        .sum();
+    let start = if up_to_cursor > height {
+        review.cursor
+    } else {
+        0
+    };
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, hunk) in review.diff.hunks.iter().enumerate().skip(start) {
+        if lines.len() >= height {
+            break;
+        }
+        let chosen = index == review.cursor;
+        let agreed = review.accepted.get(index).copied().unwrap_or(true);
+        let (word, colour) = if agreed {
+            ("accepted", app.theme.success())
+        } else {
+            ("rejected", app.theme.danger())
+        };
+        let marker = if chosen { "▸" } else { " " };
+        let mut heading = Style::default().fg(app.theme.accent());
+        if chosen {
+            heading = heading.add_modifier(Modifier::BOLD);
+        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), heading),
+            Span::styled(hunk.header.clone(), Style::default().fg(app.theme.accent())),
+            Span::styled(format!("  · {word}"), Style::default().fg(colour)),
+        ]));
+        if review.split {
+            split_hunk(&mut lines, hunk, body.width, height, &app.theme);
+        } else {
+            for change in &hunk.lines {
+                if lines.len() >= height {
+                    break;
+                }
+                lines.push(inline_change(change, &app.theme));
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), body);
+
+    let next = if review.split { "inline" } else { "split" };
+    let footer = Line::from(Span::styled(
+        format!(
+            " hunk {}/{total} · {accepted} accepted · a accept · x reject · A all · X none · s {next} · y answer · n decline · esc close ",
+            review.cursor + 1
+        ),
+        Style::default().fg(app.theme.warning()),
+    ));
+    frame.render_widget(Paragraph::new(footer), keys_row);
+}
+
+/// One line of a unified diff: the sigil is the diff's, the colour is the kind's.
+fn inline_change(change: &acpilot_demo::DiffLine, theme: &Theme) -> Line<'static> {
+    let (sign, colour) = match change.kind {
+        DiffKind::Added => ("+", theme.success()),
+        DiffKind::Removed => ("-", theme.danger()),
+        DiffKind::Context => (" ", theme.text_muted()),
+    };
+    Line::from(vec![
+        Span::styled(format!("  {sign} "), Style::default().fg(colour)),
+        Span::raw(change.text.clone()),
+    ])
+}
+
+/// A hunk as two columns, old on the left and new on the right.
+///
+/// Aligned the way a diff aligns them rather than as two independent lists: a
+/// context line is on both sides, a removal only on the left and an addition only
+/// on the right, so the same row of the card is the same place in the file.
+fn split_hunk(
+    lines: &mut Vec<Line<'static>>,
+    hunk: &acpilot_demo::Hunk,
+    width: u16,
+    height: usize,
+    theme: &Theme,
+) {
+    let column = usize::from(width.saturating_sub(1)) / 2;
+    for change in &hunk.lines {
+        if lines.len() >= height {
+            return;
+        }
+        let (left, right) = match change.kind {
+            DiffKind::Removed => (Some(change.text.as_str()), None),
+            DiffKind::Added => (None, Some(change.text.as_str())),
+            DiffKind::Context => (Some(change.text.as_str()), Some(change.text.as_str())),
+        };
+        let (left_colour, right_colour) = match change.kind {
+            DiffKind::Removed => (theme.danger(), theme.text_muted()),
+            DiffKind::Added => (theme.text_muted(), theme.success()),
+            DiffKind::Context => (theme.text_muted(), theme.text_muted()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(cell(left, column), Style::default().fg(left_colour)),
+            Span::styled("│", Style::default().fg(theme.border())),
+            Span::styled(cell(right, column), Style::default().fg(right_colour)),
+        ]));
+    }
+}
+
+/// Text padded or cut to `width` characters, so that two columns line up.
+///
+/// Characters rather than cells: a diff of code is ASCII in the overwhelming
+/// case, and the alternative — measuring every glyph in a card — would make the
+/// review's drawing answer a question the editor already answers properly.
+fn cell(text: Option<&str>, width: usize) -> String {
+    let mut out: String = text
+        .unwrap_or_default()
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect();
+    let len = out.chars().count();
+    out.push_str(&" ".repeat(width.saturating_sub(len)));
+    out
 }
 
 /// The list of a session's terminals, when there is more than one.
@@ -1565,6 +2911,14 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
             let chosen = index == app.picker_selected;
             let marker = if chosen { "▸ " } else { "  " };
             let state = if terminal.alive { "" } else { " · exited" };
+            // A pane no session owns is not this session's, and the picker says so
+            // rather than letting it pass for one the agent opened here. Where it runs
+            // is part of that: a shell on another host is not the shell this window
+            // implies, and a pane that will not take this session's commands is exactly
+            // the one a person needs an address for.
+            let owner = pane_origin(terminal)
+                .map(|origin| format!(" · no session · {origin}"))
+                .unwrap_or_default();
             let row = if chosen {
                 Style::default()
                     .bg(app.theme.bg_panel())
@@ -1579,19 +2933,65 @@ fn draw_terminal_picker(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(app.theme.text_muted())
             };
             Line::from(vec![
-                Span::styled(format!("{marker}{}{state}", terminal.command), row),
+                Span::styled(format!("{marker}{}{state}{owner}", terminal.command), row),
                 Span::styled(format!("  {}", terminal.id), id),
             ])
         })
         .collect();
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Enter opens · j/k choose · Esc closes",
+        "Enter opens · j/k choose · n starts a shell · Esc closes",
         Style::default().fg(app.theme.accent()),
     )));
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Terminals · {} ", app.terminals.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
+/// The list of declared agents, when the menu asks which one to run.
+///
+/// A profile with no roster never reaches this card: `Select Agent` answers with
+/// the model lab instead, because a picker with no rows is a question with no
+/// answers.
+fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let mut lines: Vec<Line> = app
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| {
+            let chosen = index == app.agent_selected;
+            let marker = if chosen { "▸ " } else { "  " };
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let id = if chosen {
+                Style::default().fg(app.theme.text())
+            } else {
+                Style::default().fg(app.theme.text_muted())
+            };
+            Line::from(vec![
+                Span::styled(format!("{marker}{}", agent.name), row),
+                Span::styled(format!("  {}", agent.id), id),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter chooses · j/k choose · Esc closes",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Agents · {} ", app.agents.len()))
         .border_style(Style::default().fg(app.theme.accent()));
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
@@ -1603,6 +3003,11 @@ fn centred(area: Rect) -> Rect {
 
 /// A centred box `width` per cent across and `height` per cent tall.
 fn middle(area: Rect, width: u16, height: u16) -> Rect {
+    // Percentages above 100 are clamped rather than subtracted from: a caller asking
+    // for a card wider than the area means "as wide as it goes", and the arithmetic
+    // below should not underflow into a panic on the way to saying so.
+    let width = width.min(100);
+    let height = height.min(100);
     let top = (100 - height) / 2;
     let side = (100 - width) / 2;
     let [_, middle, _] = Layout::vertical([
@@ -1664,6 +3069,7 @@ fn status_colour(status: SessionStatus, theme: &Theme) -> Color {
 mod tests {
     use super::*;
     use crate::app::Entry;
+    use acpilot_proto::agent::{AgentStatus, AgentSummary, AgentTransport};
     use acpilot_proto::permission::{PermissionKind, PermissionOption};
     use acpilot_proto::session::SessionSummary;
     use crossterm::event::{
@@ -1694,11 +3100,99 @@ mod tests {
         text
     }
 
+    #[test]
+    fn a_window_with_no_agent_draws_the_editor_and_no_assistant() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.connected = true;
+        let text = render(&mut app);
+        assert!(
+            !text.contains("Assistant ·"),
+            "no assistant column before a choice"
+        );
+
+        // The panel is the answer to a choice, not a column the window opens with.
+        app.show_assistant = true;
+        let text = render(&mut app);
+        assert!(
+            text.contains("Assistant ·"),
+            "the panel is there once chosen"
+        );
+    }
+
+    #[test]
+    fn a_launch_with_no_agents_says_what_to_do_next() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(crate::backend::Update::Agents(Vec::new()));
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("The editor works without an agent."),
+            "{text}"
+        );
+        assert!(text.contains("Select Agent"), "the menu path: {text}");
+        assert!(text.contains("acpilot doctor"), "the other way: {text}");
+
+        // A note, not a modal: the next key dismisses it and still acts.
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert!(
+            !text.contains("The editor works without an agent."),
+            "{text}"
+        );
+    }
+
+    fn permission(
+        id: &str,
+        kind: PermissionKind,
+        options: Vec<PermissionOption>,
+        title: &str,
+    ) -> PermissionRequest {
+        PermissionRequest {
+            id: id.to_owned(),
+            session_id: "s1".to_owned(),
+            kind,
+            title: title.to_owned(),
+            detail: "detail".to_owned(),
+            options,
+            created_at: "2026-10-24T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_agent_picker_lists_the_declared_agents() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.agents = vec![
+            AgentSummary {
+                id: "one".to_owned(),
+                name: "One".to_owned(),
+                transport: AgentTransport::AcpStdio,
+                status: AgentStatus::Available,
+                command: "one".to_owned(),
+                protocol_version: None,
+            },
+            AgentSummary {
+                id: "two".to_owned(),
+                name: "Two".to_owned(),
+                transport: AgentTransport::AcpStdio,
+                status: AgentStatus::Available,
+                command: "two".to_owned(),
+                protocol_version: None,
+            },
+        ];
+        app.agent_picker = true;
+        app.agent_selected = 1;
+
+        let text = render(&mut app);
+        assert!(text.contains("Agents · 2"), "{text}");
+        assert!(text.contains("▸ Two"), "the chosen row is marked: {text}");
+    }
+
     fn app_with_session() -> App {
         let mut app = App::new("http://127.0.0.1:7777");
         app.connected = true;
         app.sessions.push(SessionSummary {
             id: "s1".to_owned(),
+            profile: "work".to_owned(),
             workspace_id: "work".to_owned(),
             agent_id: "mock".to_owned(),
             title: "wire the tui".to_owned(),
@@ -1710,6 +3204,7 @@ mod tests {
         app.entries.push(Entry {
             kind: Kind::Assistant,
             text: "the daemon has the turn".to_owned(),
+            ..Entry::default()
         });
         app.status = "connected · acpilotd 0.1.0".to_owned();
         app
@@ -1718,7 +3213,7 @@ mod tests {
     #[test]
     fn the_shell_shows_the_panes_it_promises() {
         let text = render(&mut app_with_session());
-        assert!(text.contains("Sessions · 1"), "{text}");
+        assert!(text.contains("Assistant · 1"), "{text}");
         assert!(text.contains("wire the tui"), "{text}");
         assert!(text.contains("the daemon has the turn"), "{text}");
         assert!(text.contains("Prompt"), "{text}");
@@ -1730,6 +3225,64 @@ mod tests {
         let mut app = app_with_session();
         app.entries.clear();
         assert!(render(&mut app).contains("no transcript yet"));
+    }
+
+    #[test]
+    fn the_permission_card_names_the_tool_and_the_queue() {
+        let mut app = app_with_session();
+        app.permissions.push(permission(
+            "p1",
+            PermissionKind::Terminal,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Run make",
+        ));
+        app.permissions.push(permission(
+            "p2",
+            PermissionKind::FileWrite,
+            vec![PermissionOption::AllowAlways, PermissionOption::Deny],
+            "Write src/main.rs",
+        ));
+        app.permission_card = true;
+        app.permission_at = 1;
+        let text = render(&mut app);
+        assert!(text.contains("Permission · 2/2"), "{text}");
+        assert!(text.contains("request 2 of 2"), "{text}");
+        assert!(text.contains("file write"), "{text}");
+        assert!(text.contains("a allow always · this session"), "{text}");
+        assert!(
+            !text.contains("y allow once"),
+            "the request does not offer it: {text}"
+        );
+        // The card is narrow enough to wrap its footer, so the sentence is read
+        // as its two words rather than as one line the buffer split.
+        assert!(text.contains("every answer"), "{text}");
+        assert!(text.contains("audited"), "{text}");
+    }
+
+    #[test]
+    fn the_card_is_drawn_over_a_streaming_transcript() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::Busy;
+        app.permissions.push(permission(
+            "p1",
+            PermissionKind::FileWrite,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Write src/main.rs",
+        ));
+        app.permission_card = true;
+        app.apply(crate::backend::Update::Event(
+            acpilot_proto::event::SessionEvent {
+                seq: 1,
+                session_id: "s1".to_owned(),
+                kind: acpilot_proto::event::SessionEventKind::MessageChunk,
+                at: "2026-10-24T00:00:00Z".to_owned(),
+                payload: serde_json::json!({ "role": "assistant", "content": "still arriving" }),
+            },
+        ));
+        let text = render(&mut app);
+        assert!(text.contains("Permission needed"), "{text}");
+        assert!(text.contains("Write src/main.rs"), "{text}");
+        assert!(text.contains("y allow once"), "{text}");
     }
 
     #[test]
@@ -1758,7 +3311,9 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -1785,7 +3340,9 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -1830,7 +3387,9 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 8 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -1918,7 +3477,9 @@ mod tests {
         app.apply(crate::backend::Update::TerminalOpened {
             terminal: acpilot_proto::terminal::TerminalSummary {
                 id: "agent-terminal-1".to_owned(),
-                session_id: "s1".to_owned(),
+                session_id: Some("s1".to_owned()),
+                workspace: None,
+                host: None,
                 size: TerminalSize { cols: 60, rows: 20 },
                 alive: true,
                 command: "/bin/sh -c make".to_owned(),
@@ -1936,7 +3497,9 @@ mod tests {
     fn summary(id: &str, command: &str, alive: bool) -> acpilot_proto::terminal::TerminalSummary {
         acpilot_proto::terminal::TerminalSummary {
             id: id.to_owned(),
-            session_id: "s1".to_owned(),
+            session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 60, rows: 20 },
             alive,
             command: command.to_owned(),
@@ -1944,21 +3507,68 @@ mod tests {
     }
 
     #[test]
-    fn the_terminal_picker_lists_every_terminal_the_session_has() {
+    fn the_terminal_picker_lists_the_sessions_panes_and_the_ones_nobody_owns() {
         let mut app = app_with_session();
         app.terminals
             .push(summary("agent-terminal-1", "/bin/sh -c make", true));
         app.terminals
             .push(summary("agent-terminal-2", "/bin/sh -c cargo test", false));
+        let mut orphan = summary("agent-terminal-3", "tail -f", true);
+        orphan.session_id = None;
+        orphan.workspace = Some("build".to_owned());
+        orphan.host = Some("ssh:box".to_owned());
+        app.terminals.push(orphan);
         app.terminal_picker = true;
         app.picker_selected = 1;
 
         let text = render(&mut app);
-        assert!(text.contains("Terminals · 2"), "{text}");
+        assert!(text.contains("Terminals · 3"), "{text}");
         assert!(text.contains("/bin/sh -c make"), "{text}");
         assert!(text.contains("/bin/sh -c cargo test"), "{text}");
         assert!(text.contains("exited"), "an ended program says so: {text}");
-        assert!(text.contains("Enter opens"), "{text}");
+        assert!(
+            text.contains("no session"),
+            "a pane with no owner says so: {text}"
+        );
+        assert!(
+            text.contains("build on ssh:box"),
+            "a pane on another host says where: {text}"
+        );
+        assert!(text.contains("n starts a shell"), "{text}");
+    }
+
+    #[test]
+    fn the_status_line_says_where_an_attached_pane_runs() {
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 20 });
+        let mut orphan = summary("agent-terminal-3", "tail -f", true);
+        orphan.session_id = None;
+        orphan.workspace = Some("build".to_owned());
+        orphan.host = Some("ssh:box".to_owned());
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: orphan,
+            replay_bytes: 0,
+        });
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("build on ssh:box"),
+            "the status line says where the pane behind the keyboard runs: {text}"
+        );
+
+        // A pane the session owns already runs where the window does, and saying so on
+        // every attach would be noise on the path a person takes most often.
+        let mut app = app_with_session();
+        app.set_pane_size(TerminalSize { cols: 60, rows: 20 });
+        app.apply(crate::backend::Update::TerminalOpened {
+            terminal: summary("agent-terminal-1", "/bin/sh -c make", true),
+            replay_bytes: 0,
+        });
+        let text = render(&mut app);
+        assert!(
+            !text.contains("this workspace on this machine"),
+            "a session's own pane says nothing about where it runs: {text}"
+        );
     }
 
     #[test]
@@ -1975,7 +3585,7 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("hello"), "{text}");
         assert!(text.contains("copy"), "{text}");
-        assert!(text.contains("v select"), "{text}");
+        assert!(text.contains("v/V select"), "{text}");
     }
 
     #[test]
@@ -2008,7 +3618,7 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
         let text = render(&mut app);
         assert!(text.contains("copy"), "{text}");
-        assert!(text.contains("v select"), "{text}");
+        assert!(text.contains("v/V select"), "{text}");
         assert!(text.contains("y copy"), "{text}");
     }
 
@@ -2021,7 +3631,8 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
         assert!(text.contains("find in what is above"), "{text}");
-        assert!(text.contains("ctrl-u / ctrl-d"), "{text}");
+        assert!(text.contains("ctrl-u"), "{text}");
+        assert!(text.contains("ctrl-d"), "{text}");
     }
 
     #[test]
@@ -2040,10 +3651,57 @@ mod tests {
 
         let text = render(&mut app);
         assert!(text.contains("copy mode keys"), "{text}");
-        assert!(text.contains("page back / forward"), "{text}");
+        assert!(text.contains("a page back"), "{text}");
         assert!(
             !text.contains("interrupt the program"),
             "the shell's keys are not the pane's while it is being read: {text}"
+        );
+    }
+
+    #[test]
+    fn a_panes_key_list_asks_the_table_too() {
+        let mut app = app_with_session();
+        app.focus = Focus::Files;
+        app.keymap =
+            crate::keymap::Keymap::from_toml("[keys]\nexpand = [\"e\"]\n").expect("a keymap");
+
+        let (pane, rows) = keys_for(&app);
+        assert_eq!(pane, "file manager");
+        assert!(
+            rows.iter()
+                .any(|(keys, what)| keys == "e" && *what == "expand"),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(keys, _)| keys != "l"),
+            "the chord the file moved is not listed as if it still worked: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn the_key_list_shows_the_keys_in_force_rather_than_the_ones_it_grew_with() {
+        let mut app = app_with_session();
+        app.focus = Focus::Editor;
+        app.keymap =
+            crate::keymap::Keymap::from_toml("[keys]\npalette = [\"f1\"]\n").expect("a keymap");
+
+        // Asked of the list rather than of a drawn screen: the card clips its tail
+        // on a short terminal, and a test of which bindings are listed should not
+        // depend on whether this one happens to fit.
+        let (pane, rows) = keys_for(&app);
+        assert_eq!(pane, "editor");
+        assert!(
+            rows.iter()
+                .any(|(keys, what)| keys == "f1" && *what == "commands"),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|(keys, _)| !keys.contains("ctrl-p")),
+            "the chord the file moved is not listed as if it still worked: {rows:?}"
+        );
+        assert!(
+            rows.first().is_some_and(|(_, what)| *what == "move up"),
+            "the pane's own keys come first: {rows:?}"
         );
     }
 
@@ -2382,9 +4040,9 @@ mod tests {
         let text = render(&mut app);
 
         // Files, text, agents — the same three in every frontend.
-        assert!(text.contains("Files · acpilot"), "{text}");
+        assert!(text.contains("File manager · acpilot"), "{text}");
         assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
-        assert!(text.contains("Sessions · 3"), "{text}");
+        assert!(text.contains("Assistant · 3"), "{text}");
         assert!(text.contains("wire the terminal pane"), "{text}");
         assert!(
             text.contains("seeded"),
@@ -2511,12 +4169,24 @@ mod tests {
         let mut app = App::demo(&acpilot_demo::demo());
         let text = render_at(&mut app, 80, 24);
         assert!(!text.contains("Files ·"), "the tree folds away: {text}");
-        assert!(text.contains("Sessions · 3"), "{text}");
+        assert!(text.contains("Assistant · 3"), "{text}");
         assert!(text.contains("Prompt · Enter sends"), "{text}");
     }
 
     #[test]
     fn the_palette_marks_every_row_that_is_not_built_with_its_task() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        for character in "symbol".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        let text = render(&mut app);
+        assert!(text.contains("Rename symbol"), "{text}");
+        assert!(text.contains("· P7-5"), "{text}");
+    }
+
+    #[test]
+    fn the_diff_rows_are_built_rather_than_promised() {
         let mut app = App::demo(&acpilot_demo::demo());
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         for character in "diff".chars() {
@@ -2525,20 +4195,228 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("Commands · 3"), "{text}");
         assert!(text.contains("Review diff"), "{text}");
-        assert!(text.contains("P6-9"), "{text}");
+        assert!(
+            !text.contains("P6-9"),
+            "a built row carries no task tag: {text}"
+        );
+    }
+
+    #[test]
+    fn the_editor_says_which_mode_it_is_in_and_marks_an_edited_buffer() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.focus = Focus::Editor;
+        let normal = render(&mut app);
+        assert!(normal.contains("· normal"), "{normal}");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let insert = render(&mut app);
+        assert!(insert.contains("· insert"), "{insert}");
+        assert!(
+            !insert.contains("app.rs +"),
+            "nothing has been typed yet: {insert}"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let edited = render(&mut app);
+        assert!(
+            edited.contains("app.rs +"),
+            "an edited buffer says it is not in the file: {edited}"
+        );
+    }
+
+    #[test]
+    fn a_check_in_flight_says_so_beside_the_position() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.focus = Focus::Editor;
+        let quiet = render(&mut app);
+        assert!(!quiet.contains("checking"), "{quiet}");
+
+        // A question that has been asked and not answered is a fact about the screen: a
+        // gutter that has not moved for the seconds a first index takes must not read as
+        // a clean file.
+        app.diagnostics_pending = true;
+        let asking = render(&mut app);
+        assert!(asking.contains("· checking"), "{asking}");
     }
 
     #[test]
     fn a_planned_action_names_the_task_in_a_toast() {
         let mut app = App::demo(&acpilot_demo::demo());
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "review".chars() {
+        // A row that is still planned: a definition is the language server's (P7-4)
+        // and nothing in this build asks one.
+        for character in "definition".chars() {
             app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
         }
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let text = render(&mut app);
-        assert!(text.contains("planned · P6-9"), "{text}");
+        assert!(text.contains("planned · P7-4"), "{text}");
         assert!(text.contains("not implemented"), "{text}");
+    }
+
+    #[test]
+    fn the_content_search_draws_a_row_per_matching_line() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.grep = Some(crate::app::GrepSearch {
+            query: "const".to_owned(),
+            matches: vec![acpilot_proto::file::GrepMatch {
+                path: "src/app.rs".to_owned(),
+                line: 3,
+                text: "const SCROLLBACK: usize = 10_000;".to_owned(),
+            }],
+            selected: 0,
+        });
+        let text = render(&mut app);
+        assert!(text.contains("Find in files · 1"), "{text}");
+        assert!(text.contains("src/app.rs:3"), "{text}");
+        assert!(text.contains("const SCROLLBACK"), "{text}");
+    }
+
+    #[test]
+    fn a_result_row_marks_the_words_that_matched() {
+        let base = Style::default().fg(Color::Gray);
+        let mark = Style::default().fg(Color::Black).bg(Color::Yellow);
+        let marked = |text: &str, query: &str| -> Vec<String> {
+            highlight_line(text, query, base, mark)
+                .iter()
+                .filter(|span| span.style == mark)
+                .map(|span| span.content.to_string())
+                .collect()
+        };
+
+        let text = "const SCROLLBACK: usize = 10_000;";
+        let spans = highlight_line(text, "const", base, mark);
+        // Marking splits the line, so the pieces have to add back up to it: a row that
+        // dropped or repeated a character would not read as the file does.
+        let joined: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(joined, text);
+        assert_eq!(marked(text, "const"), ["const"]);
+        assert_eq!(marked("const and const", "const"), ["const", "const"]);
+        // The daemon folds case to decide a line matched, so the row folds it to mark.
+        assert_eq!(marked("Const x", "CONST"), ["Const"]);
+        // Nothing to mark: the whole line stays in the body's own style.
+        assert!(marked(text, "  ").is_empty());
+        assert_eq!(highlight_line(text, "", base, mark).len(), 1);
+    }
+
+    #[test]
+    fn the_review_draws_each_hunk_with_its_decision() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let text = render(&mut app);
+        assert!(
+            text.contains("Review · crates/acpilot-tui/src/app.rs"),
+            "{text}"
+        );
+        assert!(text.contains("@@ -8,6 +8,12 @@"), "{text}");
+        assert!(text.contains("accepted"), "{text}");
+        assert!(text.contains("hunk 1/2"), "{text}");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert!(text.contains("rejected"), "{text}");
+        assert!(text.contains("hunk 2/2"), "{text}");
+    }
+
+    #[test]
+    fn a_split_review_draws_both_sides_of_a_hunk() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        let text = render(&mut app);
+        assert_eq!(
+            text.matches("pub exit: Option<Option<i32>>,").count(),
+            2,
+            "a context line is on both sides: {text}"
+        );
+        assert_eq!(
+            text.matches("pub mode: PaneMode,").count(),
+            1,
+            "an addition is on one: {text}"
+        );
+    }
+
+    #[test]
+    fn a_streaming_turn_has_a_cursor_and_says_so() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::Busy;
+        let text = render(&mut app);
+        assert!(text.contains("streaming"), "{text}");
+        assert!(text.contains('▏'), "the cursor is at the end: {text}");
+    }
+
+    #[test]
+    fn assistant_markdown_is_drawn_without_its_markers() {
+        let mut app = app_with_session();
+        app.entries = vec![Entry {
+            kind: Kind::Assistant,
+            text: "## What changed\n**bold** and `code`".to_owned(),
+            ..Entry::default()
+        }];
+        let text = render(&mut app);
+        assert!(text.contains("What changed"), "{text}");
+        assert!(
+            !text.contains("##"),
+            "the hashes are a marker, not text: {text}"
+        );
+        assert!(text.contains("bold and code"), "{text}");
+        assert!(!text.contains('`'), "{text}");
+    }
+
+    #[test]
+    fn the_at_completion_is_drawn_over_the_transcript() {
+        let mut app = app_with_session();
+        app.focus = Focus::Prompt;
+        app.input = "@app".to_owned();
+        app.cursor = 4;
+        app.completion = Some(crate::app::Completion {
+            query: "app".to_owned(),
+            rows: vec!["crates/acpilot-tui/src/app.rs".to_owned()],
+            selected: 0,
+        });
+        let text = render(&mut app);
+        assert!(text.contains("@app"), "{text}");
+        assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
+    }
+
+    #[test]
+    fn the_source_pane_draws_the_changed_file_and_its_diff() {
+        let mut app = app_with_session();
+        let demo = acpilot_demo::demo();
+        app.source = Some(crate::app::SourceControl::fixture(&demo.diff));
+
+        let text = render(&mut app);
+        assert!(text.contains("Source control"), "{text}");
+        assert!(text.contains("crates/acpilot-tui/src/app.rs"), "{text}");
+        assert!(text.contains("diff --git"), "{text}");
+        assert!(text.contains("d discard"), "{text}");
+        assert!(text.contains("x checkout"), "{text}");
+        assert!(text.contains("S stage hunk"), "{text}");
+        assert!(
+            text.contains("staged"),
+            "the already-staged half has its own heading: {text}"
+        );
+        assert!(
+            text.contains("c compose"),
+            "the footer names the composer: {text}"
+        );
+    }
+
+    #[test]
+    fn the_composer_draws_the_message_and_the_confirmation_question() {
+        let mut app = app_with_session();
+        let demo = acpilot_demo::demo();
+        app.source = Some(crate::app::SourceControl::fixture(&demo.diff));
+        app.commit = Some(crate::app::CommitComposer {
+            text: "feat: write the message".to_owned(),
+            cursor: 24,
+            ..crate::app::CommitComposer::default()
+        });
+
+        let text = render(&mut app);
+        assert!(text.contains("Commit message"), "{text}");
+        assert!(text.contains("feat: write the message"), "{text}");
+        assert!(text.contains("ctrl-s"), "{text}");
     }
 
     #[test]
@@ -2549,6 +4427,7 @@ mod tests {
             app.entries.push(Entry {
                 kind: Kind::Assistant,
                 text: format!("line {index}"),
+                ..Entry::default()
             });
         }
         let text = render(&mut app);

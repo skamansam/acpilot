@@ -20,25 +20,25 @@ gh variable set DOCS_DEPLOY --body true
 ```
 
 That gate exists because GitHub Pages is not available for private repositories
-on every plan, and a workflow that fails on every push for an account setting is
-one people learn to ignore.
+on every plan. A workflow that fails on every push for an account setting is one
+people learn to ignore.
 
-The site is configured for the project-page path (`/acpilot`). To move it to a
-custom domain or a root path, change `site` and `base` in `astro.config.mjs` —
-and the link checker's `BASE` constant with them.
+The site uses the project-page path (`/acpilot`). To move it to a custom domain
+or a root path, change `site` and `base` in `astro.config.mjs`. Change the link
+checker's `BASE` constant with them.
 
 ## Writing
 
 - Every page carries a status pill: `flying`, `boarding`, or `hangar`, matching
   `TODO.md`. A page that claims more than the code does is a bug.
-- Internal links are relative (`../../status/`), not root-absolute: the site lives
+- Internal links are relative (`../../status/`), not root-absolute. The site lives
   under `/acpilot/`, and root-absolute links silently 404 on Pages. The link
   checker enforces this.
 - The tone is deadpan aviation, not sketch comedy. One good joke per section is
   worth three that interrupt the instructions.
-- Diagrams are Mermaid, in a ```mermaid fence. Never ASCII art: box-drawing
+- Diagrams are Mermaid, in a ```mermaid fence. Never use ASCII art. Box-drawing
   characters reflow badly on a phone, cannot be searched, and are invisible to a
   screen reader. `astro-mermaid` renders client-side and follows the light/dark
-  toggle, so no build-time browser is needed in CI. If a diagram fails to parse,
-  the page shows the source — check the browser console, because the build will
+  toggle, so CI does not need a build-time browser. If a diagram fails to parse,
+  the page shows the source. Check the browser console, because the build will
   not fail for you.

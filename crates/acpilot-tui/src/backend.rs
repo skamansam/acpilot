@@ -23,6 +23,8 @@ use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::keymap::Keymap;
+
 /// How long the session list waits before asking again.
 ///
 /// Status is not on the event stream — a turn ending changes a summary, not the
@@ -44,7 +46,12 @@ const STATS_POLL: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// Re-read sessions, agents and pending permissions.
-    Refresh,
+    Refresh {
+        /// Whether the tree is showing the paths an ignore rule hides. The root is
+        /// listed again on a refresh, and a refresh that quietly dropped those rows
+        /// would leave the toggle claiming they are on screen.
+        include_ignored: bool,
+    },
     /// Open a session, replaying its transcript from the beginning.
     Select(String),
     /// Send a prompt to the open session.
@@ -55,10 +62,135 @@ pub enum Request {
     New(String),
     /// End a session.
     Delete(String),
+    /// List a directory of the workspace, by workspace-relative path.
+    ///
+    /// Empty is the root. The tree asks for a directory when it is opened rather
+    /// than reading the whole workspace, because a walk of a large repository is a
+    /// request whose cost is the repository's.
+    ListDir {
+        /// The directory, relative to the workspace root; empty is the root.
+        path: String,
+        /// Whether to return the rows an ignore rule hides, marked as hidden.
+        include_ignored: bool,
+    },
+    /// Walk the workspace for paths containing a query, for the files pane's find.
+    SearchFiles(String),
+    /// Walk the workspace for the `@path` the composer is typing.
+    ///
+    /// The same walk as [`Request::SearchFiles`], under a different name: one asks
+    /// for a list a person reads and the other for a popup beside the caret, and an
+    /// answer that landed in whichever pane asked last would be a completion in the
+    /// file tree.
+    CompleteFiles(String),
+    /// Search the workspace's file contents for a query, for the jump list.
+    Grep(String),
+    /// Read the source-control pane: branch state and the whole diff.
+    Git,
+    /// Put one repository-relative path in the index.
+    Stage {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Put one unstaged hunk of a path in the index.
+    StageHunk {
+        /// The path selected in the pane.
+        path: String,
+        /// The zero-based hunk in that path's unstaged diff.
+        hunk: usize,
+    },
+    /// Remove one repository-relative path from the index.
+    Unstage {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Restore one path's working-tree half from the index.
+    Discard {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Restore one path's index and working tree from HEAD.
+    Checkout {
+        /// The path selected in the pane.
+        path: String,
+    },
+    /// Ask the open session to draft a commit message from the staged index.
+    GenerateCommit {
+        /// The session whose agent writes it.
+        session_id: String,
+    },
+    /// Commit the staged index with a message the person confirmed.
+    Commit {
+        /// The whole message, subject and body.
+        message: String,
+    },
+    /// Find the code uses of an identifier, for the references panel.
+    ///
+    /// The name *and* the caret: the name is what a parse-tree search needs, and the
+    /// file and character offset are what a language server needs to resolve that name
+    /// to a symbol. The pane sends both, and the daemon uses whichever it can.
+    References {
+        /// The identifier under the caret.
+        name: String,
+        /// The file the caret is in, workspace-relative.
+        path: String,
+        /// The caret's offset in that file, counted in characters.
+        offset: usize,
+        /// The buffer as the pane holds it, because an edit that has not been saved is
+        /// still the text the list is about: a use typed a moment ago is missing from
+        /// the file on disk, and a use deleted a moment ago is still in it.
+        text: String,
+    },
+    /// What the daemon's language server says is wrong with a buffer.
+    ///
+    /// The text travels for the same reason it does with references: an edit that has
+    /// not been saved is the file the person is reading, and problems about the saved
+    /// version are problems about a line that has moved.
+    Diagnostics {
+        /// The file, workspace-relative.
+        path: String,
+        /// The buffer as the pane holds it.
+        text: String,
+    },
+    /// Read what the daemon's language servers are doing.
+    ///
+    /// A request rather than a local answer: the servers are the daemon's processes,
+    /// and a window that reported its own guess would be a second opinion about which
+    /// servers exist.
+    LspStatus,
+    /// Read the project map the agent wrote under `.acpilot/`.
+    ProjectMap,
+    /// Read a file, by workspace-relative path.
+    OpenFile(String),
+    /// Write a buffer back, with the token the read came with.
+    ///
+    /// The text and the token travel together because they are one write: a save
+    /// without the token would be a save that could overwrite a change nobody saw.
+    SaveFile {
+        /// The file, relative to the workspace root.
+        path: String,
+        /// The whole buffer, as it reads now.
+        text: String,
+        /// The `etag` the read answered with.
+        etag: String,
+        /// Whether to run the daemon's formatter before writing.
+        format: bool,
+    },
     /// Attach to one of the open session's terminals, by id.
     OpenTerminal {
         /// The terminal to attach to, as the daemon listed it.
         id: String,
+    },
+    /// Start a shell for the open session and attach to it.
+    ///
+    /// `workspace` is where the shell runs, and it is the session's: a remote
+    /// workspace's terminal runs on that workspace's host through its helper, which
+    /// is the machine the files are on. The daemon decides that from the id, so this
+    /// window does not have to know which hosts are remote.
+    NewTerminal {
+        /// Workspace id from the session; absent for the daemon's own workspace.
+        workspace: Option<String>,
+        /// The size to start it at, before the pane's first resize.
+        size: TerminalSize,
     },
     /// Bytes for the attached terminal, as if typed.
     TerminalWrite(Vec<u8>),
@@ -87,6 +219,132 @@ pub enum Update {
     },
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
+    /// The workspace root the daemon serves, for the tree's title.
+    Workspace(String),
+    /// One directory, as the daemon listed it.
+    Listing {
+        /// The workspace-relative path that was listed; empty is the root.
+        path: String,
+        /// Its entries, already sorted by the daemon.
+        entries: Vec<acpilot_proto::file::FileEntry>,
+    },
+    /// A workspace search's answer.
+    ///
+    /// The query comes back with the rows because a person types faster than a walk
+    /// finishes: an answer to the query before this one is an answer to a question
+    /// nobody is asking any more, and the app can only tell by the words.
+    Found {
+        /// The query that was asked.
+        query: String,
+        /// The files whose paths contain it, sorted by the daemon.
+        entries: Vec<acpilot_proto::file::FileEntry>,
+    },
+    /// A content search's answer, tagged with the query that asked for the same
+    /// reason [`Update::Found`] is: the words on screen are the newest question.
+    Matches {
+        /// The query that was asked.
+        query: String,
+        /// The lines that contain it, sorted by path and line.
+        matches: Vec<acpilot_proto::file::GrepMatch>,
+    },
+    /// The source-control pane's answer: status and both diff halves.
+    Git {
+        /// Branch state and every changed path.
+        status: acpilot_proto::git::GitStatus,
+        /// Working tree against the index: the hunks that can still be staged.
+        unstaged: acpilot_proto::git::GitDiff,
+        /// Index against `HEAD`: the hunks the next commit already holds.
+        staged: acpilot_proto::git::GitDiff,
+    },
+    /// The source-control read failed, with a message the pane can show.
+    GitError(String),
+    /// A session's draft of a commit message, for the composer to edit.
+    CommitDraft(acpilot_proto::git::CommitDraft),
+    /// A draft or a commit was refused, with a message the status line can show.
+    CommitError(String),
+    /// The index was committed.
+    Committed(acpilot_proto::git::GitCommit),
+    /// The files an `@path` in the composer could mean.
+    Completions {
+        /// The query that was asked, so an answer about a word the caret has left
+        /// can be dropped.
+        query: String,
+        /// Paths that match, best first.
+        rows: Vec<String>,
+    },
+    /// A references answer, tagged with the name that asked for the same reason the
+    /// searches are tagged with their queries.
+    References {
+        /// The identifier that was asked about.
+        name: String,
+        /// Its uses in code, sorted by path, line and column.
+        hits: Vec<acpilot_proto::file::Reference>,
+    },
+    /// What a language server said about a buffer.
+    Diagnostics {
+        /// The file the answer is about.
+        path: String,
+        /// The problems, and which server found them — absent when none was asked.
+        problems: acpilot_proto::file::FileDiagnostics,
+    },
+    /// Problems a language server pushed about a file without being asked.
+    ///
+    /// Different from [`Update::Diagnostics`] because it is not an answer: a server
+    /// that finishes an index speaks again on its own, and a pane that only knew about
+    /// the problems it had asked for would keep a stale gutter until somebody typed.
+    /// The app applies it to the open buffer when the path matches and leaves the
+    /// question state alone, because the two are about different versions of the text.
+    DiagnosticsPushed(acpilot_proto::file::DiagnosticsNotice),
+    /// A question about a buffer was asked and nothing answered it.
+    ///
+    /// Not the same as [`Update::Diagnostics`] naming no server: a server that said
+    /// nothing is an answer, and this is the client never getting one. It exists so a
+    /// question stops reading as still in flight — a client that never hears back has
+    /// to be told that it will not, or the status line would say `checking` for ever.
+    DiagnosticsUnanswered {
+        /// The file the question was about.
+        path: String,
+        /// What went wrong, worded the way the status line should say it.
+        message: String,
+    },
+    /// The project map, as the daemon read it.
+    ///
+    /// The map rather than its text: the daemon parsed it, so a client cannot
+    /// disagree with the other one about what the file says.
+    ProjectMap(acpilot_proto::project::ProjectMap),
+    /// A file's text, for the editor.
+    File {
+        /// The path the daemon answered with, which is the one to show.
+        path: String,
+        /// The UTF-8 contents.
+        text: String,
+        /// The token a save sends back as `if_match`.
+        etag: String,
+        /// The lines that differ from the last commit, for the gutter.
+        marks: Vec<acpilot_proto::file::LineMark>,
+    },
+    /// A buffer was written back.
+    Saved {
+        /// The path the daemon answered with.
+        path: String,
+        /// The token the next save must send, which is the new file's.
+        etag: String,
+    },
+    /// A save the formatter rewrote before writing.
+    ///
+    /// The text travels because the buffer the person sees is the one that was
+    /// written: marking the old buffer saved would show unsaved changes that are
+    /// already on disk.
+    FormattedSaved {
+        /// The path the daemon answered with.
+        path: String,
+        /// The formatted text that was written.
+        text: String,
+        /// The token the next save must send.
+        etag: String,
+        /// Which server formatted it.
+        server: String,
+    },
     /// The integrations the bar draws, as the daemon reported them.
     Stats(Vec<IntegrationStats>),
     /// The session list.
@@ -100,7 +358,8 @@ pub enum Update {
     Event(SessionEvent),
     /// The pending permission list, as the daemon has it now.
     Permissions(Vec<PermissionRequest>),
-    /// The open session's terminals, as the daemon lists them.
+    /// The panes a person may attach to: the open session's, and the ones no
+    /// session owns, as the daemon lists them.
     Terminals(Vec<TerminalSummary>),
     /// The attach succeeded. The screen replay follows as [`Update::TerminalData`].
     TerminalOpened {
@@ -124,6 +383,17 @@ pub enum Update {
     /// read itself: the daemon's answer is the authoritative one, so the first of
     /// these takes over from the file watcher rather than racing it.
     DaemonTheme(crate::Theme),
+    /// The daemon's preferences, for the panes that are not a theme.
+    ///
+    /// Sent beside [`Update::DaemonTheme`] from the same frame: the theme is what
+    /// the window draws with, and this is what the editor indents with. A client
+    /// that only received the theme would keep yesterday's tab width until a
+    /// restart.
+    Preferences(acpilot_proto::profile::Preferences),
+    /// A settings save the daemon could not read, with its explanation.
+    PreferencesError(String),
+    /// `keymap.toml` changed and parsed.
+    Keymap(Keymap),
     /// A turn was accepted.
     Prompted {
         /// Session id.
@@ -209,6 +479,24 @@ struct TerminalLink {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// Start following one terminal, replacing nothing: the caller drops the old link.
+fn start_attach(
+    endpoint: &str,
+    token: Option<String>,
+    id: String,
+    updates: &UnboundedSender<Update>,
+) -> TerminalLink {
+    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(follow_terminal(
+        endpoint.to_owned(),
+        token,
+        id,
+        receiver,
+        updates.clone(),
+    ));
+    TerminalLink { commands, task }
+}
+
 async fn run(
     client: Client,
     token: Option<String>,
@@ -218,6 +506,9 @@ async fn run(
 ) {
     match client.health().await {
         Ok(health) => {
+            if let Some(workspace) = &health.workspace {
+                let _ = updates.send(Update::Workspace(workspace.clone()));
+            }
             let _ = updates.send(Update::Health {
                 version: health.version,
             });
@@ -229,7 +520,7 @@ async fn run(
             )));
         }
     }
-    refresh(&client, &updates).await;
+    refresh(&client, false, &updates).await;
 
     // The profile-wide stream is what raises a permission card without the user
     // pressing anything, and what says the settings changed when this client
@@ -283,15 +574,40 @@ async fn run(
                     if let Some(link) = terminal.take() {
                         link.task.abort();
                     }
-                    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
-                    let task = tokio::spawn(follow_terminal(
-                        client.base().to_owned(),
-                        token.clone(),
-                        id,
-                        receiver,
-                        updates.clone(),
-                    ));
-                    terminal = Some(TerminalLink { commands, task });
+                    terminal = Some(start_attach(client.base(), token.clone(), id, &updates));
+                }
+                // The daemon starts the shell and answers with it running, so the
+                // attach below cannot arrive before there is a screen to attach to.
+                Some(Request::NewTerminal { workspace, size }) => {
+                    let Some((session, _)) = &open else {
+                        let _ = updates.send(Update::Status("no session is open".to_owned()));
+                        continue;
+                    };
+                    let request = acpilot_proto::terminal::CreateTerminalRequest {
+                        session_id: Some(session.clone()),
+                        workspace,
+                        command: None,
+                        args: Vec::new(),
+                        cwd: None,
+                        size,
+                    };
+                    match client.create_terminal(&request).await {
+                        Ok(summary) => {
+                            let _ = updates.send(Update::Status(format!(
+                                "started {} · attaching",
+                                summary.command
+                            )));
+                            refresh_terminals(&client, session, &updates).await;
+                            if let Some(link) = terminal.take() {
+                                link.task.abort();
+                            }
+                            let id = summary.id;
+                            terminal = Some(start_attach(client.base(), token.clone(), id, &updates));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
                 }
                 Some(Request::TerminalWrite(bytes)) => {
                     if let Some(link) = &terminal {
@@ -308,7 +624,285 @@ async fn run(
                         let _ = link.commands.send(TerminalCommand::Close);
                     }
                 }
-                Some(Request::Refresh) => refresh(&client, &updates).await,
+                Some(Request::Refresh { include_ignored }) => {
+                    refresh(&client, include_ignored, &updates).await;
+                }
+                Some(Request::ListDir {
+                    path,
+                    include_ignored,
+                }) => {
+                    match client.files(&path, include_ignored).await {
+                        Ok(entries) => {
+                            let _ = updates.send(Update::Listing { path, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::SearchFiles(query)) => {
+                    match client.search_files(&query).await {
+                        Ok(entries) => {
+                            let _ = updates.send(Update::Found { query, entries });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::CompleteFiles(query)) => {
+                    match client.search_files(&query).await {
+                        Ok(entries) => {
+                            let rows = entries
+                                .into_iter()
+                                .take(8)
+                                .map(|entry| entry.path)
+                                .collect();
+                            let _ = updates.send(Update::Completions { query, rows });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::SaveFile {
+                    path,
+                    text,
+                    etag,
+                    format,
+                }) => {
+                    let (text, formatted) = if format {
+                        match client.format_file(&path, &text).await {
+                            Ok(answer) if answer.formatted => (answer.text, answer.server),
+                            Ok(answer) => {
+                                if let Some(reason) = answer.reason {
+                                    let _ = updates.send(Update::Status(format!(
+                                        "saving unformatted · {reason}"
+                                    )));
+                                }
+                                (answer.text, None)
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::Status(format!(
+                                    "saving unformatted · {error}"
+                                )));
+                                (text, None)
+                            }
+                        }
+                    } else {
+                        (text, None)
+                    };
+                    let body = acpilot_proto::file::FileWriteRequest {
+                        workspace: None,
+                        path: path.clone(),
+                        text: text.clone(),
+                        if_match: Some(etag),
+                    };
+                    match client.write_file(&body).await {
+                        Ok(content) => match formatted {
+                            Some(server) => {
+                                let _ = updates.send(Update::FormattedSaved {
+                                    path: content.path,
+                                    text,
+                                    etag: content.etag,
+                                    server,
+                                });
+                            }
+                            None => {
+                                let _ = updates.send(Update::Saved {
+                                    path: content.path,
+                                    etag: content.etag,
+                                });
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Grep(query)) => {
+                    match client.grep(&query).await {
+                        Ok(matches) => {
+                            let _ = updates.send(Update::Matches { query, matches });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Git) => match read_source(&client).await {
+                    Ok(update) => {
+                        let _ = updates.send(update);
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::GitError(error));
+                    }
+                },
+                Some(Request::Stage { path }) => {
+                    match client.stage(std::slice::from_ref(&path)).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "staged {path}, but could not read the index again: {error}"
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::StageHunk { path, hunk }) => {
+                    match client.stage_hunk(&path, hunk).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "staged {path} hunk {}, but could not read the index again: {error}",
+                                    hunk + 1
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Unstage { path }) => {
+                    match client.unstage(std::slice::from_ref(&path)).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "unstaged {path}, but could not read the index again: {error}"
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Discard { path }) => {
+                    match client.discard(std::slice::from_ref(&path)).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "discarded {path}, but could not read the status again: {error}"
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Checkout { path }) => {
+                    match client.checkout(std::slice::from_ref(&path)).await {
+                        Ok(_) => match read_source(&client).await {
+                            Ok(update) => {
+                                let _ = updates.send(update);
+                            }
+                            Err(error) => {
+                                let _ = updates.send(Update::GitError(format!(
+                                    "checked out {path}, but could not read the status again: {error}"
+                                )));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = updates.send(Update::GitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::GenerateCommit { session_id }) => {
+                    match client.commit_message(&session_id).await {
+                        Ok(draft) => {
+                            let _ = updates.send(Update::CommitDraft(draft));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::CommitError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Commit { message }) => match client.commit(&message).await {
+                    Ok(commit) => {
+                        let _ = updates.send(Update::Committed(commit));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::CommitError(describe(&error)));
+                    }
+                },
+                Some(Request::References {
+                    name,
+                    path,
+                    offset,
+                    text,
+                }) => {
+                    match client.references(&name, Some((&path, offset, &text))).await {
+                        Ok(hits) => {
+                            let _ = updates.send(Update::References { name, hits });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::Diagnostics { path, text }) => {
+                    match client.diagnostics(&path, &text).await {
+                        Ok(problems) => {
+                            let _ = updates.send(Update::Diagnostics { path, problems });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::DiagnosticsUnanswered {
+                                path,
+                                message: describe(&error),
+                            });
+                        }
+                    }
+                }
+                Some(Request::LspStatus) => match client.lsp_servers().await {
+                    Ok(servers) => {
+                        let _ = updates.send(Update::Status(language_servers_line(&servers)));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::Status(describe(&error)));
+                    }
+                },
+                Some(Request::ProjectMap) => {
+                    match client.project_map().await {
+                        Ok(map) => {
+                            let _ = updates.send(Update::ProjectMap(map));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::OpenFile(path)) => {
+                    match client.file(&path).await {
+                        Ok(content) => {
+                            let _ = updates.send(Update::File {
+                                path: content.path,
+                                text: content.text,
+                                etag: content.etag,
+                                marks: content.marks,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::Select(id)) => {
                     if let Some((existing, _)) = &open
                         && existing == &id
@@ -428,7 +1022,7 @@ async fn run(
 }
 
 /// Re-read everything the UI shows at startup.
-async fn refresh(client: &Client, updates: &UnboundedSender<Update>) {
+async fn refresh(client: &Client, include_ignored: bool, updates: &UnboundedSender<Update>) {
     match client.agents().await {
         Ok(agents) => {
             let _ = updates.send(Update::Agents(agents));
@@ -440,6 +1034,26 @@ async fn refresh(client: &Client, updates: &UnboundedSender<Update>) {
     refresh_sessions(client, updates).await;
     refresh_permissions(client, updates).await;
     refresh_stats(client, updates).await;
+    refresh_files(client, include_ignored, updates).await;
+}
+
+/// Read the workspace root, so the tree has rows before a key is pressed.
+///
+/// The root only: its children arrive when a directory is opened. A daemon with no
+/// workspace answers `409` and the status line says so, which is the honest answer
+/// to a tree with nothing behind it.
+async fn refresh_files(client: &Client, include_ignored: bool, updates: &UnboundedSender<Update>) {
+    match client.files("", include_ignored).await {
+        Ok(entries) => {
+            let _ = updates.send(Update::Listing {
+                path: String::new(),
+                entries,
+            });
+        }
+        Err(error) => {
+            let _ = updates.send(Update::Status(describe(&error)));
+        }
+    }
 }
 
 async fn refresh_sessions(client: &Client, updates: &UnboundedSender<Update>) {
@@ -453,20 +1067,44 @@ async fn refresh_sessions(client: &Client, updates: &UnboundedSender<Update>) {
     }
 }
 
-/// Read the open session's terminals.
+/// Read the panes a person may attach to: the open session's, and the sessionless
+/// ones.
 ///
 /// Sent as soon as a session opens as well as on every poll: an agent's shell is
 /// exactly what a person presses `Ctrl-T` for, and a list that arrives a second
 /// later is a pane that says the session has none.
+///
+/// One request rather than two, because `GET /v1/terminals` with no filter is the
+/// only listing that can name both: the session's panes and the ones an agent
+/// opened whose session this daemon could not map. A pane with no session cannot
+/// be listed under one, so filtering the answer here is the only way it is ever
+/// found.
 async fn refresh_terminals(client: &Client, session: &str, updates: &UnboundedSender<Update>) {
-    match client.terminals(Some(session)).await {
+    match client.terminals(None).await {
         Ok(terminals) => {
-            let _ = updates.send(Update::Terminals(terminals));
+            let _ = updates.send(Update::Terminals(listed(session, terminals)));
         }
         Err(error) => {
             let _ = updates.send(Update::Status(describe(&error)));
         }
     }
+}
+
+/// The panes of `session`, plus the panes no session owns.
+///
+/// Another session's shell is left out: it is already listed where it belongs,
+/// and offering it here would be a pane a person could type into without ever
+/// having opened the conversation it belongs to.
+fn listed(session: &str, terminals: Vec<TerminalSummary>) -> Vec<TerminalSummary> {
+    terminals
+        .into_iter()
+        .filter(|terminal| {
+            terminal
+                .session_id
+                .as_deref()
+                .is_none_or(|id| id == session)
+        })
+        .collect()
 }
 
 /// Read the integrations the stats bar draws.
@@ -631,6 +1269,7 @@ async fn follow_permissions(
                 // one. A theme this build cannot resolve is said out loud rather
                 // than ignored: it is a preference, and somebody chose it.
                 Ok(ProfileStream::Preferences(preferences)) => {
+                    let _ = updates.send(Update::Preferences(preferences.clone()));
                     match crate::theme_for(&preferences, terminal) {
                         Some(theme) => {
                             let _ = updates.send(Update::DaemonTheme(theme));
@@ -643,6 +1282,22 @@ async fn follow_permissions(
                             ));
                         }
                     }
+                }
+                Ok(ProfileStream::PreferencesError(message)) => {
+                    let _ = updates.send(Update::PreferencesError(message));
+                }
+                Ok(ProfileStream::Diagnostics(notice)) => {
+                    let _ = updates.send(Update::DiagnosticsPushed(notice));
+                }
+                // Somebody answered a question this terminal may be showing. The
+                // pending list is state, so the answer is to refetch it rather than
+                // to guess which dialog was open: a second window resolving a
+                // request must not leave this one blocking a turn nobody is in.
+                Ok(ProfileStream::Resolved { request_id, .. }) => {
+                    let _ = updates.send(Update::Status(format!(
+                        "{request_id} was answered elsewhere"
+                    )));
+                    refresh_permissions(&client, &updates).await;
                 }
                 Ok(ProfileStream::Resync) | Ok(ProfileStream::Heartbeat) => {
                     let _ = refresh_permissions(&client, &updates).await;
@@ -717,6 +1372,138 @@ async fn run_demo(
     while let Some(request) = requests.recv().await {
         match request {
             Request::Quit => return,
+            // The design pass has one tree and one file, and says so rather than
+            // pretending a fixture is a workspace.
+            Request::ListDir { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the tree is the fixture's".to_owned(),
+                ));
+            }
+            Request::SearchFiles(query) => {
+                let _ = updates.send(Update::Status(format!(
+                    "design pass · no workspace to walk for {query}"
+                )));
+            }
+            // The fixture is the design pass's own buffer, and it is not a file: a
+            // save has nowhere to go, and the status line says which world the window
+            // is in rather than pretending a write happened.
+            Request::SaveFile { path, .. } => {
+                let _ = updates.send(Update::Status(format!(
+                    "design pass · {path} is the fixture's text"
+                )));
+            }
+            Request::Git => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the changed file is the fixture's".to_owned(),
+                ));
+            }
+            Request::Stage { .. } | Request::StageHunk { .. } | Request::Unstage { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the index is the fixture's".to_owned(),
+                ));
+            }
+            Request::Discard { .. } | Request::Checkout { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the working tree is the fixture's".to_owned(),
+                ));
+            }
+            Request::GenerateCommit { session_id } => {
+                // The design pass has a scripted answer so the composer can be
+                // reviewed in its generated state; no model ran.
+                let _ = updates.send(Update::CommitDraft(acpilot_proto::git::CommitDraft {
+                    message: "feat(tui): ✨ draw the source-control pane\n\nThe changed files and the selected diff are read from the daemon; the composer edits a message before anything is committed.".to_owned(),
+                    subject: "feat(tui): ✨ draw the source-control pane".to_owned(),
+                    body: "The changed files and the selected diff are read from the daemon; the composer edits a message before anything is committed.".to_owned(),
+                    kind: "feat".to_owned(),
+                    scope: Some("tui".to_owned()),
+                    breaking: false,
+                    emoji: Some("✨".to_owned()),
+                    generator: format!("session:{session_id}"),
+                }));
+            }
+            Request::Commit { .. } => {
+                let _ = updates.send(Update::CommitError(
+                    "design pass · nothing was committed".to_owned(),
+                ));
+            }
+            Request::Grep(query) => {
+                // The design pass has one file, and greps it: enough to review the
+                // list without pretending the fixture is a workspace.
+                let needle = query.to_lowercase();
+                let matches = demo
+                    .editor
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| !needle.is_empty() && line.to_lowercase().contains(&needle))
+                    .map(|(index, line)| acpilot_proto::file::GrepMatch {
+                        path: demo.editor.path.clone(),
+                        line: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                        text: line.trim_end().to_owned(),
+                    })
+                    .collect();
+                let _ = updates.send(Update::Matches { query, matches });
+            }
+            Request::References { name, .. } => {
+                // The design pass parses its one fixture: the same filter over the text
+                // it drew, so the panel can be reviewed without a workspace.
+                let text = demo.editor.lines.join("\n");
+                let lines: Vec<&str> = text.split('\n').collect();
+                let language = acpilot_text::language_for(&demo.editor.path);
+                let hits = acpilot_text::references::uses(language, &text, &name)
+                    .into_iter()
+                    .map(|hit| acpilot_proto::file::Reference {
+                        path: demo.editor.path.clone(),
+                        line: u32::try_from(hit.line + 1).unwrap_or(u32::MAX),
+                        column: u32::try_from(hit.column + 1).unwrap_or(u32::MAX),
+                        text: lines
+                            .get(hit.line)
+                            .map_or_else(String::new, |line| line.trim_end().to_owned()),
+                    })
+                    .collect();
+                let _ = updates.send(Update::References { name, hits });
+            }
+            Request::Diagnostics { path, .. } => {
+                // No daemon, no server: the design pass says which world it is in rather
+                // than drawing a clean file, which is a check nobody ran. It is an
+                // unanswered question rather than a plain status, so the frame stops
+                // saying `checking` the way it would after a real answer.
+                let _ = updates.send(Update::DiagnosticsUnanswered {
+                    path,
+                    message: "no language server · the design pass reads its own text".to_owned(),
+                });
+            }
+            Request::LspStatus => {
+                // No daemon, no servers: the design pass says which world it is in
+                // rather than reporting an empty list as a fact.
+                let _ = updates.send(Update::Status(
+                    "design pass · there is no daemon to ask".to_owned(),
+                ));
+            }
+            Request::ProjectMap => {
+                // The design pass has no workspace, so it has no map: the panel is
+                // drawn from its empty state, which is a state worth reviewing.
+                let _ = updates.send(Update::Status(
+                    "design pass · no workspace to map".to_owned(),
+                ));
+            }
+            Request::OpenFile(path) => {
+                if path == demo.editor.path {
+                    let _ = updates.send(Update::File {
+                        path: demo.editor.path.clone(),
+                        text: demo.editor.lines.join("\n"),
+                        // The fixture is not a file: no version to replace, and the
+                        // repository its gutter was designed against is not read here.
+                        etag: String::new(),
+                        marks: Vec::new(),
+                    });
+                } else {
+                    let _ = updates.send(Update::Status(format!(
+                        "design pass · only {} is behind this tree",
+                        demo.editor.path
+                    )));
+                }
+            }
             Request::Select(id) => {
                 let Some(fixture) = demo
                     .sessions
@@ -735,6 +1522,21 @@ async fn run_demo(
                     let _ = updates.send(Update::Event(event.clone()));
                     tokio::time::sleep(REPLAY).await;
                 }
+            }
+            Request::CompleteFiles(query) => {
+                // The fixture's tree is the only workspace the design pass has, so
+                // the popup offers what the tree would open.
+                let rows = demo
+                    .files
+                    .iter()
+                    .filter(|node| !node.dir && node.path.contains(query.as_str()))
+                    .take(8)
+                    .map(|node| node.path.clone())
+                    .collect();
+                let _ = updates.send(Update::Completions {
+                    query: query.clone(),
+                    rows,
+                });
             }
             Request::Prompt(_) => {
                 // The composer works, the turn does not: the reply is a script, so
@@ -776,13 +1578,20 @@ async fn run_demo(
             Request::CloseTerminal => {
                 let _ = updates.send(Update::TerminalClosed);
             }
+            // A shell is a process, and the design pass has none: saying so is the
+            // honest answer to a key that asked for one.
+            Request::NewTerminal { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · no daemon to start a shell".to_owned(),
+                ));
+            }
             Request::Resolve { id, option } => {
                 let _ = updates.send(Update::Status(format!(
                     "design pass · answered {id} with {option:?} · nothing was written"
                 )));
                 let _ = updates.send(Update::Permissions(Vec::new()));
             }
-            Request::Refresh => announce(&demo, &updates),
+            Request::Refresh { .. } => announce(&demo, &updates),
             // A keystroke into the fixture's shell is not answered: the screen it
             // shows is the one it kept, and pretending to run it would be the one
             // thing a design pass must not do.
@@ -808,10 +1617,105 @@ fn announce(demo: &acpilot_demo::Demo, updates: &UnboundedSender<Update>) {
     let _ = updates.send(Update::Terminals(demo.terminals.clone()));
 }
 
+/// The language servers as one status line.
+///
+/// A line rather than a pane because the question is asked to check something — is
+/// the server running, and is it fast — and a pane would be opened, read and closed
+/// for one glance. A language this build has no server for is not a row, which is
+/// worth knowing when a references list turned out to be the parse tree's answer.
+fn language_servers_line(servers: &[acpilot_proto::lsp::LspServerSummary]) -> String {
+    use acpilot_proto::lsp::{LspServerStatus, PositionEncoding};
+
+    if servers.is_empty() {
+        return "no language server this build can start".to_owned();
+    }
+    let rows: Vec<String> = servers
+        .iter()
+        .map(|server| {
+            let state = match server.status {
+                LspServerStatus::Starting => "starting",
+                LspServerStatus::Ready => "running",
+                LspServerStatus::Indexing => "indexing",
+                LspServerStatus::Crashed => "crashed",
+                LspServerStatus::Stopped => "stopped",
+            };
+            let encoding = match server.encoding {
+                Some(PositionEncoding::Utf8) => " utf-8",
+                Some(PositionEncoding::Utf16) => " utf-16",
+                None => "",
+            };
+            let round_trip = server
+                .round_trip_ms
+                .map_or_else(String::new, |ms| format!(" {ms} ms"));
+            let language = server
+                .languages
+                .first()
+                .map_or(server.id.as_str(), String::as_str);
+            format!("{language} {state}{encoding}{round_trip}")
+        })
+        .collect();
+    format!("lsp · {}", rows.join(" · "))
+}
+
 /// A failure as a status line, with its code when the daemon sent one.
+/// Read the source pane's three answers at one moment: status and both halves of
+/// the diff. The two diff calls are separate because staging a hunk needs the
+/// index-to-working-tree patch, while the pane also shows what is already staged.
+async fn read_source(client: &Client) -> Result<Update, String> {
+    let status = client
+        .git_status()
+        .await
+        .map_err(|error| describe(&error))?;
+    let unstaged = client
+        .git_diff("unstaged")
+        .await
+        .map_err(|error| describe(&error))?;
+    let staged = client
+        .git_diff("staged")
+        .await
+        .map_err(|error| describe(&error))?;
+    Ok(Update::Git {
+        status,
+        unstaged,
+        staged,
+    })
+}
+
 fn describe(error: &ClientError) -> String {
     match error.code() {
         Some(code) => format!("{code}: {error}"),
         None => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listed;
+    use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
+
+    fn pane(id: &str, session: Option<&str>) -> TerminalSummary {
+        TerminalSummary {
+            id: id.to_owned(),
+            session_id: session.map(str::to_owned),
+            workspace: None,
+            host: None,
+            size: TerminalSize { cols: 80, rows: 24 },
+            alive: true,
+            command: "/bin/sh".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_list_keeps_the_open_sessions_panes_and_the_ones_nobody_owns() {
+        let kept = listed(
+            "s1",
+            vec![
+                pane("mine", Some("s1")),
+                pane("orphan", None),
+                pane("theirs", Some("s2")),
+            ],
+        );
+        let ids: Vec<&str> = kept.iter().map(|terminal| terminal.id.as_str()).collect();
+        assert_eq!(ids, ["mine", "orphan"]);
     }
 }

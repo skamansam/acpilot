@@ -6,12 +6,39 @@ use std::path::{Path, PathBuf};
 use axum::Router;
 use tokio::net::{TcpListener, UnixListener};
 
-use super::Target;
+use super::{Bound, Target};
 
 /// The socket `acpilot-host` names as the default endpoint, so a client's default
 /// probe and the daemon's default bind are the same string by construction.
 pub(crate) fn default_target() -> Target {
     Target::Socket(PathBuf::from(acpilot_host::default_endpoint()))
+}
+
+/// The names a program may have on this platform's `PATH`.
+///
+/// One name, as typed: unix has no executable extension, and `rust-analyzer` on
+/// `PATH` is that exact file. The Windows half of this pair is why it lives here —
+/// a `cfg!(windows)` in the middle of the daemon compiles on the platform it was
+/// written for and never runs on the other.
+pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
+    vec![PathBuf::from(program)]
+}
+
+/// Whether something is listening on `target` right now.
+///
+/// The pidfile's stale check, and nothing else: a daemon that is already bound is a
+/// daemon whose socket accepts a connection, which is a stronger answer than "the
+/// pid in the file is still in a process table" — a recycled pid looks alive forever.
+/// The TCP half uses a short timeout because a host that does not answer is not the
+/// one we are about to start beside.
+pub(crate) fn endpoint_answers(target: &Target) -> bool {
+    match target {
+        Target::Socket(path) => std::os::unix::net::UnixStream::connect(path).is_ok(),
+        Target::Tcp(addr) => addr.parse::<std::net::SocketAddr>().is_ok_and(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250))
+                .is_ok()
+        }),
+    }
 }
 
 /// Bind `target` and serve until `shutdown` resolves.
@@ -20,9 +47,15 @@ pub(crate) fn default_target() -> Target {
 ///
 /// The directory or socket could not be created, a socket path that another
 /// daemon is already serving, or the listener failed while serving.
-pub async fn serve<F>(router: Router, target: Target, shutdown: F) -> io::Result<()>
+pub async fn serve_with_listening<F, B>(
+    router: Router,
+    target: Target,
+    shutdown: F,
+    listening: B,
+) -> io::Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
+    B: FnOnce(Bound) + Send + 'static,
 {
     match target {
         Target::Tcp(addr) => {
@@ -37,8 +70,10 @@ where
             // rotation needs no restart.
             acpilot_host::token::load_or_create(&path)?;
             let listener = TcpListener::bind(&addr).await?;
+            let bound = listener.local_addr()?;
+            listening(Bound::Tcp(bound));
             tracing::warn!(
-                addr = %listener.local_addr()?,
+                addr = %bound,
                 token = %path.display(),
                 "listening on TCP; every request needs `Authorization: Bearer <token>`"
             );
@@ -49,6 +84,7 @@ where
         Target::Socket(path) => {
             let stale = prepare(&path)?;
             let listener = UnixListener::bind(&path)?;
+            listening(Bound::Socket(path.clone()));
             // After the bind: the mode is set on the socket that exists, and a
             // bind that fails leaves nothing to widen.
             acpilot_host::private_file(&path)?;
@@ -125,5 +161,26 @@ fn prepare(path: &Path) -> io::Result<bool> {
             std::fs::remove_file(path)?;
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_names_are_the_program_as_typed() {
+        assert_eq!(
+            executable_names("rust-analyzer"),
+            vec![PathBuf::from("rust-analyzer")],
+            "unix has no executable extension"
+        );
+    }
+
+    #[test]
+    fn a_program_on_the_path_is_installed() {
+        // `sh` is on every unix this ships to. The daemon's detector is asked rather
+        // than a second copy of the scan, because the scan is the thing under test.
+        assert!(crate::lsp::installed("sh"));
     }
 }

@@ -16,7 +16,8 @@ use acpilot_proto::event::SessionEventKind;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
+    PromptResponse, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Channel, on_receive_notification, on_receive_request};
 use tokio::sync::Notify;
@@ -27,10 +28,16 @@ use tokio::task::JoinHandle;
 struct Seen {
     cancels: Mutex<Vec<String>>,
     cancel_seen: Notify,
+    /// The mode ids `session/set_mode` named, in the order they arrived.
+    modes: Mutex<Vec<String>>,
 }
 
 fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // The mode handler needs its own handle: the cancel handler below moves
+        // `seen` into an `async move` block, and one closure cannot borrow what
+        // another has already taken.
+        let seen_modes = Arc::clone(&seen);
         let result = Agent
             .builder()
             .name("mock-agent")
@@ -46,7 +53,26 @@ fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
             )
             .on_receive_request(
                 async |_request: NewSessionRequest, responder, _cx| {
-                    responder.respond(NewSessionResponse::new("acp-1"))
+                    responder.respond(NewSessionResponse::new("acp-1").modes(
+                        SessionModeState::new(
+                            "ask",
+                            vec![
+                                SessionMode::new("ask", "Ask").description("Check before acting"),
+                                SessionMode::new("code", "Code"),
+                            ],
+                        ),
+                    ))
+                },
+                on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: SetSessionModeRequest, responder, _cx| {
+                    seen_modes
+                        .modes
+                        .lock()
+                        .expect("seen lock")
+                        .push(request.mode_id.0.to_string());
+                    responder.respond(SetSessionModeResponse::new())
                 },
                 on_receive_request!(),
             )
@@ -123,6 +149,47 @@ async fn initialize_new_and_prompt_stream_ordered_chunks() {
     assert_eq!(first.payload["content"]["text"], "one");
     assert_eq!(second.payload["content"]["text"], "two");
     assert_eq!(first.session_id, "session-1");
+
+    agent.abort();
+}
+
+#[tokio::test]
+async fn a_mode_switch_is_asked_of_the_agent_and_kept() {
+    let (mut session, seen, agent) = connected().await;
+    assert!(
+        session.modes().is_none(),
+        "nothing is advertised before session/new"
+    );
+
+    session.new_session(".").await.expect("session/new works");
+    let modes = session.modes().expect("the agent advertised modes");
+    assert_eq!(modes.mode, "ask", "the agent's current mode, not a guess");
+    assert_eq!(
+        modes
+            .available
+            .iter()
+            .map(|mode| mode.id.as_str())
+            .collect::<Vec<_>>(),
+        ["ask", "code"],
+        "the advertised modes, in the agent's order"
+    );
+    assert_eq!(modes.available[0].name, "Ask");
+    assert_eq!(modes.available[1].description, None);
+
+    session
+        .set_mode("code")
+        .await
+        .expect("session/set_mode works");
+    assert_eq!(
+        session.modes().expect("still advertised").mode,
+        "code",
+        "a successful switch is reflected here"
+    );
+    assert_eq!(
+        seen.modes.lock().expect("seen lock").as_slice(),
+        ["code"],
+        "and the agent was asked, rather than told"
+    );
 
     agent.abort();
 }

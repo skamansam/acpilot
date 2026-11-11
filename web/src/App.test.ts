@@ -8,9 +8,11 @@
 // moment the daemon says no.
 
 import { mount, unmount } from 'svelte';
+
+import { plainFetch, type PlainFetch } from './test-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import type { Health, SessionSummary, StatRow } from './api';
+import type { Health, SessionSummary, StatRow, TerminalSummary } from './api';
 
 const TOKEN_KEY = 'acpilot.token';
 
@@ -24,6 +26,7 @@ const HEALTH: Health = {
 
 const SESSION: SessionSummary = {
   id: 'session-1',
+  profile: 'work',
   workspace_id: 'acpilot',
   agent_id: 'mock-agent',
   title: 'a session that exists',
@@ -32,8 +35,34 @@ const SESSION: SessionSummary = {
   updated_at: '2026-10-24T12:05:00Z',
 };
 
+// Two panes: one the session opened, and one nobody owns — a shell in a named
+// workspace on another host. The second is the row the picker exists for.
+const PANE: TerminalSummary = {
+  id: 't1',
+  session_id: 'session-1',
+  size: { cols: 80, rows: 24 },
+  alive: true,
+  command: '/bin/sh -c make',
+};
+
+const ORPHAN: TerminalSummary = {
+  id: 't2',
+  workspace: 'build',
+  host: 'ssh:box',
+  size: { cols: 80, rows: 24 },
+  alive: true,
+  command: 'tail -f',
+};
+
 // One row of each shape the bar has to draw: a measured context window, and an
 // estimate with no denominator that is also old enough to say so.
+// The switcher's rows: two identities, one active. A daemon that serves one
+// profile answers with one row, and the picker disables itself.
+const PROFILES = [
+  { id: 'work', label: 'Work', active: true, agent_count: 1, workspace_count: 1 },
+  { id: 'personal', label: 'Personal', active: false, agent_count: 2, workspace_count: 1 },
+];
+
 const STATS: StatRow[] = [
   {
     id: 'lmstudio',
@@ -121,10 +150,21 @@ function render(): void {
 }
 
 function sentTokens(): (string | undefined)[] {
-  return fetchMock.mock.calls.map(([, init]) => {
+  return fetchMock.mock.calls.map(([input, init]) => {
+    // The typed API calls go out as `Request`s; streams and the off-contract
+    // routes still call `fetch(url, init)`.
+    if (input instanceof Request) {
+      return input.headers.get('Authorization') ?? undefined;
+    }
     const headers = (init as RequestInit | undefined)?.headers as Record<string, string> | undefined;
-    return headers?.Authorization;
+    // Header names survive a `Request` in lower case.
+    return headers?.Authorization ?? headers?.authorization;
   });
+}
+
+/** The path a mocked call asked for, whichever shape it used. */
+function routeOf(input: RequestInfo | URL): string {
+  return input instanceof Request ? new URL(input.url).pathname : String(input);
 }
 
 async function find<T extends Element>(selector: string): Promise<T> {
@@ -157,6 +197,9 @@ beforeEach(() => {
   target = document.createElement('div');
   document.body.append(target);
   sessionStorage.clear();
+  // happy-dom keeps the location between tests; a deep link in one test must not
+  // decide the address the next one starts at.
+  history.replaceState({}, '', '/');
   cleanups = [];
   // The repaint writes inline style onto the document element; a test that starts
   // with yesterday's colours would pass for the wrong reason.
@@ -165,7 +208,7 @@ beforeEach(() => {
   vi.stubGlobal('EventSource', FakeEventSource);
 
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const route = String(input);
+    const route = routeOf(input);
     if (route === '/v1/health') {
       return json(HEALTH);
     }
@@ -175,9 +218,24 @@ beforeEach(() => {
     if (route === '/app/stats') {
       return json(STATS);
     }
+    if (route === '/v1/terminals') {
+      return json([PANE, ORPHAN]);
+    }
+    if (route === '/v1/profiles') {
+      return json(PROFILES);
+    }
+    if (route.startsWith('/v1/profiles/') && route.endsWith('/activate')) {
+      const id = route.split('/')[3] ?? '';
+      return json({ ...PROFILES[0], id, active: true });
+    }
+    // The editor lists the workspace root when it mounts. A test that opens a
+    // file answers the read route itself; an empty root is enough here.
+    if (route === '/v1/files/list') {
+      return json([]);
+    }
     return new Response('not found', { status: 404 });
   });
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', plainFetch(fetchMock as unknown as PlainFetch));
 
   // happy-dom implements <dialog>; if a version ever does not, the About effect
   // would throw on mount and every test would fail for a reason that is not the
@@ -210,7 +268,16 @@ describe('a remembered token', () => {
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(target.textContent).toContain('a session that exists');
     expect(target.textContent).toContain('v1');
+    // The load's seven calls plus the editor's listing and its preferences read,
+    // which are calls the page makes on its own because the pane is part of the
+    // page rather than a route.
     expect(sentTokens()).toEqual([
+      'Bearer stored',
+      'Bearer stored',
+      'Bearer stored',
+      'Bearer stored',
+      'Bearer stored',
+      'Bearer stored',
       'Bearer stored',
       'Bearer stored',
       'Bearer stored',
@@ -306,6 +373,310 @@ describe('the stats bar', () => {
   });
 });
 
+describe('the terminals', () => {
+  it('lists a pane nobody owns and says where it runs', async () => {
+    // Filtering the list by the open session would hide this row, and the process
+    // behind it would be one nobody could find from the page.
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const rows = await vi.waitFor(() => {
+      const found = [...target.querySelectorAll('.pane-row')];
+      expect(found.length).toBe(2);
+      return found;
+    });
+    expect(rows[0]?.textContent).toContain('/bin/sh -c make');
+    expect(rows[0]?.textContent).toContain('session session-1');
+    expect(rows[1]?.textContent).toContain('no session');
+    expect(rows[1]?.textContent).toContain('build on ssh:box');
+    expect(rows[1]?.querySelector('button')?.textContent).toBe('Attach');
+  });
+
+  it('a daemon that cannot list terminals still shows the page', async () => {
+    // An older daemon has no `/v1/terminals`. The sessions are still what a person
+    // came for, so the section says what it could not read instead of failing.
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('a session that exists'));
+    expect(target.textContent).toContain('/v1/terminals');
+  });
+});
+
+describe('the session view', () => {
+  it('opens a session from the table and streams its transcript', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([PANE, ORPHAN]);
+      }
+      if (route === '/v1/sessions/session-1/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-1',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'hello from the agent' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events') {
+        return stream('');
+      }
+      if (route === '/v1/permissions?status=pending&session=session-1') {
+        return json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    const open = await findButton('Open');
+    open.click();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('hello from the agent'));
+    expect(target.querySelector('.session')).not.toBeNull();
+    // Opening a session is a navigation: the address says which one is open, so a
+    // refresh and a link copied from the bar both land here.
+    expect(location.pathname).toBe('/p/default/s/session-1');
+    expect(sentTokens()).toContain('Bearer stored');
+  });
+
+  it('starts a session from the agent picker and opens it', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    let created: unknown = null;
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions' && (init?.method ?? 'GET') === 'GET') {
+        return json([]);
+      }
+      if (route === '/v1/sessions' && init?.method === 'POST') {
+        created = JSON.parse(String(init.body));
+        return json({ ...SESSION, id: 'session-2', title: 'a new session' });
+      }
+      if (route === '/v1/agents') {
+        return json([
+          {
+            id: 'mock-agent',
+            name: 'Mock agent',
+            transport: 'acp_stdio',
+            status: 'available',
+            command: 'mock-agent --stdio',
+          },
+        ]);
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-2/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-2',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'a fresh turn' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events' || route === '/v1/permissions?status=pending&session=session-2') {
+        return route === '/v1/events' ? stream('') : json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await find('form.new-session');
+    target.querySelector('form.new-session')?.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+
+    // The daemon fills in its own workspace when the field is empty, and the
+    // first prompt supplies the title.
+    await vi.waitFor(() => expect(created).toEqual({ workspace_id: '', agent_id: 'mock-agent' }));
+    await vi.waitFor(() => expect(target.textContent).toContain('a new session'));
+    await vi.waitFor(() => expect(target.textContent).toContain('a fresh turn'));
+    expect(location.pathname).toBe('/p/default/s/session-2');
+  });
+
+  it('opens the session a shared address names', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    history.replaceState({}, '', '/p/work/s/session-9');
+    const stream = (body: string): Response =>
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-9') {
+        return json({ ...SESSION, id: 'session-9', title: 'a linked session' });
+      }
+      if (route === '/app/stats') {
+        return json(STATS);
+      }
+      if (route === '/v1/terminals') {
+        return json([]);
+      }
+      if (route === '/v1/sessions/session-9/events?after=0') {
+        return stream(
+          `event: session\ndata: ${JSON.stringify({
+            seq: 1,
+            session_id: 'session-9',
+            kind: 'message_chunk',
+            at: '2026-10-24T12:06:00Z',
+            payload: { role: 'assistant', content: { text: 'a linked turn' } },
+          })}\n\n`,
+        );
+      }
+      if (route === '/v1/events' || route === '/v1/permissions?status=pending&session=session-9') {
+        return route === '/v1/events' ? stream('') : json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    await vi.waitFor(() => expect(target.textContent).toContain('a linked turn'));
+    // The link's profile is the page's profile too: the URL is not rewritten to
+    // the daemon's own name just because it has one.
+    expect(location.pathname).toBe('/p/work/s/session-9');
+    expect(
+      fetchMock.mock.calls.some(([input, init]) => {
+        // The typed client sends a `Request`; the stream and the off-contract
+        // routes send `(url, init)`, which is why the adapter exists. Either way,
+        // the profile the address names has to be on the request.
+        const headers =
+          input instanceof Request
+            ? input.headers
+            : ((init as RequestInit | undefined)?.headers as
+                | Record<string, string>
+                | undefined);
+        const value =
+          headers instanceof Headers
+            ? headers.get('X-Acpilot-Profile')
+            : (headers?.['X-Acpilot-Profile'] ?? headers?.['x-acpilot-profile']);
+        return value === 'work';
+      }),
+    ).toBe(true);
+  });
+
+  it('the workspace picker changes the address and the sessions it shows', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+    const workspaces = [
+      { id: 'local:/acpilot', name: 'acpilot', profile: 'work', host_id: 'local', root: '/acpilot', session_count: 1 },
+      { id: 'local:/build', name: 'build', profile: 'work', host_id: 'local', root: '/build', session_count: 0 },
+    ];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const route = String(input);
+      if (route === '/v1/health') {
+        return json(HEALTH);
+      }
+      if (route === '/v1/sessions') {
+        return json([SESSION]);
+      }
+      if (route === '/v1/workspaces') {
+        return json(workspaces);
+      }
+      if (route === '/app/stats') {
+        return json([]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    render();
+
+    const select = await find<HTMLSelectElement>('select#workspace');
+    await vi.waitFor(() => expect(select.options.length).toBe(2));
+    select.value = 'build';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/default/w/build'));
+    await vi.waitFor(() => expect(target.textContent).not.toContain('a session that exists'));
+  });
+});
+
+describe('the profile switcher', () => {
+  it('activates the profile, moves the address, and rebinds the palette stream', async () => {
+    sessionStorage.setItem(TOKEN_KEY, 'stored');
+
+    render();
+
+    const select = await find<HTMLSelectElement>('select#profile');
+    await vi.waitFor(() => expect(select.options.length).toBeGreaterThanOrEqual(3));
+    expect(select.disabled, 'two profiles is a choice').toBe(false);
+
+    select.value = 'personal';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/personal/w/acpilot'));
+    const activation = fetchMock.mock.calls.find(
+      ([input]) => routeOf(input as RequestInfo) === '/v1/profiles/personal/activate',
+    );
+    expect(activation, 'the page activated the profile').toBeDefined();
+    const [, init] = activation! as [string, RequestInit];
+    expect(init.method).toBe('POST');
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    // The request names the profile it is about rather than whatever the page's
+    // last load adopted: a click before health answers has no adopted profile.
+    // The client's header names keep their spelling when the request is built
+    // from an init rather than a `Request`; both spellings are the same header.
+    expect(headers['X-Acpilot-Profile'] ?? headers['x-acpilot-profile']).toBe('personal');
+    // The stream binds at connect and sends no header, so the new address's
+    // colours would be the old profile's until it reconnected.
+    expect(FakeEventSource.instances.length).toBe(2);
+  });
+});
+
 describe('no token', () => {
   it('is a form, and no request at all', async () => {
     render();
@@ -327,7 +698,17 @@ describe('no token', () => {
 
     await vi.waitFor(() => expect(target.textContent).toContain('acpilotd'));
     expect(sessionStorage.getItem(TOKEN_KEY)).toBe('typed');
-    expect(sentTokens()).toEqual(['Bearer typed', 'Bearer typed', 'Bearer typed']);
+    expect(sentTokens()).toEqual([
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+      'Bearer typed',
+    ]);
   });
 
   it('an empty submission connects to nothing', async () => {

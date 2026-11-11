@@ -1,12 +1,26 @@
 name: CI
 
 on:
+  # Every branch, not only `main`. A branch whose pull request has already merged
+  # fires no `pull_request` event, and a branch with no pull request yet fires none
+  # either, so a push there used to start nothing at all — the commits nobody is
+  # being asked to review were the ones getting no checks. `main` is still covered
+  # by this trigger; `release.yml` and `docs.yml` stay on `main` alone because they
+  # publish rather than check.
   push:
-    branches: [main]
   pull_request:
+  # And a way to ask for a run against a commit that is already pushed: a workflow
+  # that can only start from an event cannot check a branch tip after the fact.
+  workflow_dispatch:
 
+# One run per branch, whichever event started it. With `push` on every branch and
+# `pull_request` both firing, a pull request would otherwise pay for two runs of the
+# same tree — the push ref and the merge ref — on every commit. `head_ref` is the
+# branch a pull request comes from and is empty on a push, so both events land in
+# the same group and the later one cancels the earlier rather than queueing behind
+# it. On `main` this is the same group as before, since there is no `head_ref`.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -65,8 +79,9 @@ jobs:
   # repaint against the same mock the unit test already uses.
   #
   # The checks themselves are `cargo xtask web-check` — install, `svelte-check`,
-  # the token-flow tests, the daemon build, the live shell test, the page build
-  # and the drift comparison, in that order. They live in the task because a
+  # the token-flow tests, the daemon build, the live shell test, the binaries and
+  # Chromium run that edit a file and approve a permission, the page build and the
+  # drift comparison, in that order. They live in the task because a
   # developer's `cargo xtask check` runs the same list: written here instead, the
   # runner could keep checking five commands while the local gate grew a sixth.
   web:
@@ -86,6 +101,27 @@ jobs:
           cache: false
 
       - uses: Swatinem/rust-cache@v2
+
+      # `web-check` installs when `node_modules` is missing, but the browser has to
+      # be installed after the package is there and before the run that uses it:
+      # `playwright` is a devDependency, and its Chromium revision is the one that
+      # package expects rather than an `npx` download that may be newer.
+      - name: Web dependencies
+        working-directory: web
+        run: npm ci
+
+      # The browser alone, never `--with-deps`: that flag's first act is
+      # `apt-get update`, and on a runner that could not resolve
+      # `security.ubuntu.com` it failed before a single test ran, with a log that read
+      # like missing fonts. The runner image already carries Chromium's runtime
+      # libraries and its fonts, which is also why this job needs no apt at all. The
+      # Playwright image is not an option here: it has no C toolchain, and this job
+      # compiles the daemon and the CLI, so its Rust build stops at `linker cc not
+      # found`. A library that is genuinely absent now fails in the e2e run, where
+      # the browser names it.
+      - name: Playwright browser
+        working-directory: web
+        run: npx playwright install chromium
 
       # Install, types, both test runs and the embedded page, in the task's order.
       # A drift failure names the page to commit and exits non-zero; the rebuilt
@@ -324,6 +360,37 @@ jobs:
       - name: Fail if the snapshot changed
         run: git diff --exit-code -- crates/acpilot-proto/tests/snapshots
 
+  # CONTRIBUTING's "Git history" rules, checked. Each of them is a state this
+  # repository has been in: a merge that kept one side's tree, so `main`'s work was
+  # recorded as merged and then vanished; and a pull request that could not merge at
+  # all. Both are cheap to see here and expensive to find at the merge button.
+  #
+  # A full history, because the check compares every merge with both of its parents.
+  # A shallow clone has neither the merge commits nor the base to compare them with.
+  history:
+    name: branch history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The branch's own tip, not the merge commit GitHub builds from base and
+          # head: that commit's tree equals the head's whenever the branch already
+          # contains the base, so the job would find an "ours" merge of its own
+          # making and report the harness instead of the branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `github.base_ref` is the pull request's target and is empty on a push, where
+      # the branch has not said where it is going: `main` is the only answer.
+      - name: History rules
+        run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
+
   # One check to require in branch protection, so the rule does not have to be
   # restated every time a job is added — and cannot silently stop covering one
   # when a job is renamed. It needs every gate above and passes only if all of
@@ -342,7 +409,7 @@ jobs:
   # one a rule points at.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, deny, docs]
+    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -356,6 +423,7 @@ jobs:
             frame-budget=${{ needs.frame-budget.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
+            history=${{ needs.history.result }}
         run: |
           set -euo pipefail
           failed=""

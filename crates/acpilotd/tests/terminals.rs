@@ -59,6 +59,7 @@ fn serving(directory: &std::path::Path) -> AppState {
             .and_then(|name| name.to_str())
             .unwrap_or("workspace")
             .to_owned(),
+        profile: String::new(),
         root: directory.canonicalize().expect("resolved"),
     })
 }

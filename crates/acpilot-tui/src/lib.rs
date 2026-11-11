@@ -19,7 +19,9 @@ pub mod app;
 pub mod backend;
 pub mod clipboard;
 pub mod editor;
+pub mod keymap;
 pub mod layout;
+pub mod markdown;
 pub mod theme;
 pub mod ui;
 
@@ -35,6 +37,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::backend::{Update, Worker};
+use crate::keymap::Keymap;
 
 /// How long the loop waits for a key before redrawing.
 ///
@@ -62,6 +65,13 @@ const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 /// The file the divider widths are remembered in, under the data directory.
 const LAYOUT_FILE: &str = "tui-layout.toml";
 
+/// The file the keys are read from, under the config directory beside
+/// `config.toml`.
+///
+/// A setting rather than a memory of the client's own: a person writes it, and it
+/// belongs where the other settings are.
+const KEYMAP_FILE: &str = "keymap.toml";
+
 /// Run the TUI against the daemon at `daemon` until the user leaves.
 ///
 /// `token` is passed through to the client and is what a TCP daemon requires; the
@@ -79,6 +89,11 @@ const LAYOUT_FILE: &str = "tui-layout.toml";
 /// click-drag selection, which some people would rather keep than have a menu bar
 /// answer a pointer.
 ///
+/// `initial` is the file a launch named, relative to the workspace root. It is read
+/// through the same request the tree's `Enter` sends, so a command that named a file
+/// opens it as an editor rather than as a session list; the daemon reads it, because
+/// the client may not be on the machine the file is.
+///
 /// The terminal is restored on the way out, including when a draw fails: a TUI
 /// that leaves the cursor hidden and the screen in raw mode is worse than the
 /// crash that caused it.
@@ -87,6 +102,7 @@ pub fn run(
     token: Option<&str>,
     theme: Theme,
     files: ThemeFiles,
+    initial: Option<&str>,
     mouse: bool,
 ) -> io::Result<()> {
     // Asked before the screen is taken over and before the loop owns the terminal's
@@ -110,6 +126,17 @@ pub fn run(
     };
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
     let changes = updates.clone();
+    let keymap_updates = updates.clone();
+    // A profile's `keymap.toml` is the one the launch should use; the global file
+    // is the fallback for a profile that has not written one. The daemon's
+    // preferences live in `profile.toml`, but a key table can be large and has a
+    // reader of its own, so it stays a file rather than a `prefs` field.
+    let keymap_path = files
+        .profile
+        .as_ref()
+        .map(|directory| directory.join(KEYMAP_FILE))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| acpilot_profile::config_dir().join(KEYMAP_FILE));
     let worker = backend::spawn(
         daemon.to_owned(),
         token.map(str::to_owned),
@@ -117,12 +144,26 @@ pub fn run(
         updates,
     );
     watch_theme(files, changes);
-    let mut app = App::new(daemon);
+    // A launch is an editor: the assistant's panes are the answer to choosing an
+    // agent, not the surface the command starts on.
+    let mut app = App::editor_first(daemon);
     // A width the dividers were dragged to is remembered per machine, in the data
     // directory rather than in `config.toml`: it is the client's memory of itself,
     // not a setting a person writes.
     app.remember_layout(acpilot_profile::data_dir().join(LAYOUT_FILE));
+    // Before the screen is taken over: a key file that does not parse is a sentence
+    // for the shell, and the client starts on the preset it describes.
+    if let Some(error) = app.remember_keymap(keymap_path.clone()) {
+        eprintln!("acpilot tui: {error} · starting on the default keys");
+    }
+    watch_keymap(keymap_path, keymap_updates);
     app.set_theme(theme);
+    // The answer arrives as `Update::File`, which puts the keyboard in the editor
+    // and says which file was opened. Until it does, the window is already an
+    // editor: a launch must not wait for a pane it has decided not to show.
+    if let Some(path) = initial {
+        worker.send(backend::Request::OpenFile(path.to_owned()));
+    }
     drive(app, worker, inbox, mouse)
 }
 
@@ -136,6 +177,8 @@ pub fn run(
 pub struct ThemeFiles {
     /// The user's `config.toml`.
     pub user: Option<std::path::PathBuf>,
+    /// The profile directory whose `config.toml` and `profile.toml` are layers.
+    pub profile: Option<std::path::PathBuf>,
     /// The project's `.acpilot/config.toml`, when the launch is in a project.
     pub project: Option<std::path::PathBuf>,
     /// What the terminal said its own colours are, when it answered.
@@ -210,7 +253,16 @@ pub fn theme_for(
 
 /// The settings a launch resolved, when they load.
 fn settings(files: &ThemeFiles) -> Option<acpilot_profile::settings::Settings> {
-    acpilot_profile::settings::Settings::load(files.user.as_deref(), files.project.as_deref()).ok()
+    let profile = files
+        .profile
+        .as_deref()
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok());
+    acpilot_profile::settings::Settings::for_launch(
+        files.user.as_deref(),
+        files.project.as_deref(),
+        profile.as_ref(),
+    )
+    .ok()
 }
 
 /// Whether the settings ask for the terminal's own palette.
@@ -246,10 +298,15 @@ pub fn query_terminal_colours() -> Option<TerminalColours> {
 /// debounce policies and two answers to an editor that saves by rename. A client
 /// with no settings to watch — the design pass, the demo — simply has no thread.
 fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
-    let paths: Vec<std::path::PathBuf> = [files.user.clone(), files.project.clone()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let profile = files
+        .profile
+        .as_deref()
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok());
+    let paths = acpilot_profile::settings::watch_paths(
+        files.user.as_deref(),
+        files.project.as_deref(),
+        profile.as_ref(),
+    );
     let Some(changes) = acpilot_profile::watch::changes(paths) else {
         return;
     };
@@ -263,6 +320,37 @@ fn watch_theme(files: ThemeFiles, updates: tokio::sync::mpsc::UnboundedSender<Up
             if updates.send(Update::Theme(theme)).is_err() {
                 // The client is gone; so is the reason to watch.
                 return;
+            }
+        }
+    });
+}
+
+/// Watch the key table and send a new one when it parses.
+///
+/// A keymap is a domain file rather than a preference, so it is not in the
+/// daemon's `prefs` frame. The client can read it wherever it is running, and a
+/// save should take effect without a restart just like a theme does. A file that
+/// does not parse leaves the table in force and says so.
+fn watch_keymap(path: std::path::PathBuf, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
+    let Some(changes) = acpilot_profile::watch::changes([path.clone()]) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        while changes.recv().is_ok() {
+            match Keymap::load(&path) {
+                Ok(keymap) => {
+                    if updates.send(Update::Keymap(keymap)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    if updates
+                        .send(Update::Status(format!("keymap not applied · {error}")))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
     });
@@ -335,6 +423,11 @@ fn event_loop(
         // the pointer moving a cell, so it is asked for here rather than waited
         // for as an event.
         app.autoscroll();
+        // Work that is deferred rather than done on the key that caused it: the outline
+        // re-parses a changed buffer once a frame, and this loop's clock is the
+        // debounce — the same clock a buffer has to be still on before its problems
+        // are asked about.
+        app.tick();
 
         // `draw` reads the layout and hands back the panes' inner sizes, so a
         // program and the screen agree on the width, and a copy cursor and the
@@ -382,6 +475,13 @@ fn event_loop(
             }
         }
 
+        // A key can ask for more than one thing — the hidden-files toggle re-lists
+        // the root and every open directory — and the queue is how it says so
+        // without a second return value for one rare key.
+        for request in app.take_pending() {
+            worker.send(request);
+        }
+
         // A copy leaves as OSC 52 here rather than from the app: the escape goes
         // to the terminal a person is looking at, and the drawing loop is the only
         // thing in this process that owns that stream.
@@ -420,6 +520,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user.clone()),
+            profile: None,
             project: None,
             terminal: None,
         };
@@ -452,6 +553,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user),
+            profile: None,
             project: Some(project),
             terminal: None,
         };
@@ -504,6 +606,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })
@@ -522,6 +625,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(user),
+            profile: None,
             project: None,
             terminal: Some(TerminalColours {
                 background: acpilot_extensions::Color::from_rgb(0x1e, 0x1e, 0x1e),
@@ -554,6 +658,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })
@@ -572,6 +677,7 @@ mod tests {
         );
         let files = ThemeFiles {
             user: Some(following),
+            profile: None,
             project: None,
             terminal: Some(TerminalColours {
                 background: acpilot_extensions::Color::from_rgb(0xf6, 0xf2, 0xe8),
@@ -607,6 +713,7 @@ mod tests {
         assert!(
             reload_theme(&ThemeFiles {
                 user: Some(user),
+                profile: None,
                 project: None,
                 terminal: None,
             })

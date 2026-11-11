@@ -13,10 +13,16 @@ name = "acpilotd"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["parse-references"]
 # Serves a Swagger UI page at /docs. Off by default: the page loads its assets
 # from a CDN, which is fine for development and wrong to assume in production.
 docs = []
+# The parse-tree fallback for `GET /v1/files/references`, for a workspace whose
+# language has no server installed. On by default so references keep working
+# anywhere; `--no-default-features` builds a daemon that links no grammar at all,
+# which is the 2.2 MB of static parser tables measured on 2026-11-01 and worth it
+# only where a language server is always running (P7-4).
+parse-references = ["dep:acpilot-text"]
 
 [dependencies]
 acpilot-agent = { workspace = true }
@@ -29,29 +35,64 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# The record a restart reads: sessions and their events outlive the process that
+# streamed them, and a conversation a client asks about by id has to be
+# answerable after the daemon that ran it is gone.
+acpilot-store = { workspace = true }
 # The stats bar as a value: `/v1/stats` serves the contract, and `/app/stats`
 # serves the rows a browser can draw, measured by the same crate the TUI uses so
 # the two bars cannot disagree about a denominator.
 acpilot-stats = { workspace = true }
+# The references search parses the files it reads: the filter that tells a use from a
+# mention is the parse tree, and it has to run where the text is. The grammars are the
+# ones the editor links, so one crate answers both surfaces.
+acpilot-text = { workspace = true, optional = true }
+# References come from a language server where one is installed: scope is the
+# server's answer rather than the parse tree's guess.
+acpilot-lsp = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }
 # The web page is the third surface drawn from the same theme tokens: the daemon
 # resolves the palette once at startup rather than serving a page with its own.
 acpilot-extensions = { workspace = true }
+# The tree's letters are git's answer, asked once per listing on the host where
+# the files are. Shelling out keeps the daemon agreeing with the command line
+# about what is staged, and the crate's absence is a tree without letters.
+acpilot-git = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+# The daemon's settings are a cascade rather than a flag per file: a user-level
+# `config.toml` and a profile's, merged, with the flags on top — the same shape the
+# profiles phase's task P4-2 gives every Acpilot binary.
+figment = { workspace = true, features = ["toml"] }
 # The SSE body is a stream of frames; `axum` wants `futures_core::Stream` and
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }
 jiff = { workspace = true }
+# `.gitignore` matching for the file tree. The daemon answers the listing, so the
+# patterns are read where the ignore files are rather than guessed at by a client
+# that never saw them — which is also what keeps a remote workspace's tree honest.
+ignore = { workspace = true }
 serde = { workspace = true }
 # The `etag` is a hash of the bytes as well as a timestamp, so an edit that kept
 # the mtime and the size is still visible as a change.
 sha2 = { workspace = true }
 serde_json = { workspace = true }
+# The project map is a document the agent writes and a person can correct, so it
+# is TOML like every file a person maintains (D23) — parsed here, where the file
+# is, rather than shipped to a client as text to interpret.
+toml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+# `oneshot` is how the profile registry hands a request to the router of the
+# profile its header names; the workspace already carries tower under axum, so
+# this declares the half the daemon calls rather than adding a second copy.
+# `DELETE /v1/profiles/{id}` defaults to the platform's trash, the same as
+# `acpilot profile rm`; hand-rolling freedesktop, Finder and Recycle Bin support
+# would be three platform branches and a Windows shell API.
+trash = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -68,6 +109,12 @@ agent-client-protocol = { workspace = true }
 # The socket test talks to the daemon the way a client does, over the transport a
 # client uses, rather than through `oneshot` on the router.
 acpilot-client = { workspace = true }
+# The session stream is a socket, and a test that drove it through `oneshot` would
+# never run the upgrade it exists for: this is the client half.
+tokio-tungstenite = { workspace = true }
+# The diff text is what every pane draws; a snapshot makes a changed hunk a
+# reviewable diff rather than a string assertion somebody has to remember.
+insta = { workspace = true }
 http-body-util = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

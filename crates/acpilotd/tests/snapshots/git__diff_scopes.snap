@@ -1,0 +1,37 @@
+---
+source: crates/acpilotd/tests/git.rs
+expression: "serde_json::Value::Object(scopes)"
+---
+{
+  "unstaged": {
+    "patch": "diff --git a/one.txt b/one.txt\nindex 5626abf..a93aab0 100644\n--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-one\n+one changed\n",
+    "files": [
+      {
+        "path": "one.txt",
+        "change": "modified"
+      }
+    ]
+  },
+  "staged": {
+    "patch": "diff --git a/two.txt b/two.txt\nindex f719efd..6bff0eb 100644\n--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-two\n+two changed\n",
+    "files": [
+      {
+        "path": "two.txt",
+        "change": "modified"
+      }
+    ]
+  },
+  "all": {
+    "patch": "diff --git a/one.txt b/one.txt\nindex 5626abf..a93aab0 100644\n--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-one\n+one changed\ndiff --git a/two.txt b/two.txt\nindex f719efd..6bff0eb 100644\n--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-two\n+two changed\n",
+    "files": [
+      {
+        "path": "one.txt",
+        "change": "modified"
+      },
+      {
+        "path": "two.txt",
+        "change": "modified"
+      }
+    ]
+  }
+}

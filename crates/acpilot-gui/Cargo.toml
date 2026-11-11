@@ -46,6 +46,13 @@ required-features = ["gui"]
 acpilot-client = { workspace = true }
 acpilot-core = { workspace = true }
 acpilot-extensions = { workspace = true }
+# The token a local daemon wrote: its runtime path and its `0600` rule live in
+# acpilot-host, and a second spelling here is how the window and the terminal
+# end up sending different secrets to the same port.
+acpilot-host = { workspace = true }
+# The source-control pane cuts the daemon's patch with the same helper the TUI
+# uses, so two surfaces cannot disagree about where one file's diff ends.
+acpilot-git = { workspace = true }
 acpilot-profile = { workspace = true }
 # The preferences the launch reads: which theme this surface draws with is a
 # protocol type, shared with the daemon's settings cascade.

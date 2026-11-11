@@ -50,6 +50,7 @@ async fn send(
 fn serving(directory: &std::path::Path) -> AppState {
     AppState::new().with_workspace(Workspace {
         id: "app".to_owned(),
+        profile: String::new(),
         root: directory.canonicalize().expect("resolved"),
     })
 }
@@ -61,6 +62,554 @@ fn workspace() -> tempfile::TempDir {
     fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
     fs::write(directory.path().join("README.md"), "# app\n").expect("readme");
     directory
+}
+
+#[tokio::test]
+async fn a_references_request_searches_the_buffer_it_was_sent() {
+    // The file on disk has one call; the buffer the editor is holding has a second,
+    // typed and not saved. The list is about what the pane shows, so the use only the
+    // buffer has is the one that has to appear.
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn helper() {}\nfn main() { helper(); }\n",
+    )
+    .expect("main");
+    let buffer =
+        "fn helper() {}\nfn main() { helper(); }\n// unsaved below\nfn later() { helper(); }\n";
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "POST",
+        "/v1/files/references",
+        // No caret: the parse tree answers, and the buffer is the text it reads — which
+        // is the half of this that is the same on a machine with a language server and
+        // one without.
+        Some(serde_json::json!({
+            "q": "helper",
+            "path": "src/main.rs",
+            "text": buffer,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    let lines: Vec<u64> = rows.iter().filter_map(|row| row["line"].as_u64()).collect();
+    assert!(
+        lines.contains(&4),
+        "the use that exists only in the buffer is listed: {body}"
+    );
+    assert_eq!(
+        rows.len(),
+        3,
+        "the definition and both calls, and nothing read from the saved file: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_references_request_from_a_buffer_refuses_a_path_that_escapes() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "POST",
+        "/v1/files/references",
+        Some(serde_json::json!({
+            "q": "helper",
+            "path": "../outside.rs",
+            "offset": 0,
+            "text": "helper();\n",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_gitignore_keeps_its_paths_out_of_the_tree() {
+    // A workspace with the three things a tree has to get right: an ignored
+    // directory, an ignored file, and `.git` itself.
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("target")).expect("target");
+    fs::write(directory.path().join("target/app.bin"), "built").expect("target file");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".gitignore"), "target/\n*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: Vec<&str> = body
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        vec![".gitignore", "src"],
+        "an ignored directory, an ignored file and .git are not rows: {body}"
+    );
+}
+
+/// Run `git` in `directory`, with an identity in the environment so a machine with
+/// no global one still commits, and without the variables a hook exports.
+///
+/// `pre-commit` runs with `GIT_DIR` and `GIT_INDEX_FILE` set, and they override
+/// `-C`: a fixture that initialised its own repository would commit into this one.
+fn git(directory: &std::path::Path, args: &[&str]) {
+    let mut command = std::process::Command::new("git");
+    command
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    for key in [
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
+    let output = command.output().expect("git is installed");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The `(path, status)` pairs a listing returned, for asserting on the letters.
+fn letters(body: &serde_json::Value) -> Vec<(String, Option<String>)> {
+    body.as_array()
+        .expect("a list")
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"].as_str().expect("a path").to_owned(),
+                entry["status"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_row_says_what_git_says_changed() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("README.md"), "# app\n").expect("readme");
+    git(directory.path(), &["init", "-q"]);
+    git(directory.path(), &["add", "-A"]);
+    git(directory.path(), &["commit", "-q", "-m", "start"]);
+
+    // One of each state a listing can show: an edit to a tracked file, a staged new
+    // one, a file git has never seen, and a tracked file that is gone.
+    fs::write(directory.path().join("src/main.rs"), "fn main() { }\n").expect("edit");
+    fs::write(directory.path().join("src/new.rs"), "pub fn new() {}\n").expect("new");
+    git(directory.path(), &["add", "src/new.rs"]);
+    fs::write(directory.path().join("notes.txt"), "scratch\n").expect("notes");
+    fs::remove_file(directory.path().join("README.md")).expect("delete");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        letters(&body),
+        vec![
+            ("notes.txt".to_owned(), Some("untracked".to_owned())),
+            // One row for the directory, saying the most urgent thing inside it.
+            ("src".to_owned(), Some("added".to_owned())),
+        ],
+        "a deleted file has no row, because a listing is the filesystem: {body}"
+    );
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list?path=src",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        letters(&body),
+        vec![
+            ("src/main.rs".to_owned(), Some("modified".to_owned())),
+            ("src/new.rs".to_owned(), Some("added".to_owned())),
+        ],
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_read_says_which_lines_changed() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    println!(\"one\");\n}\n",
+    )
+    .expect("main");
+    git(directory.path(), &["init", "-q"]);
+    git(directory.path(), &["add", "-A"]);
+    git(directory.path(), &["commit", "-q", "-m", "start"]);
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    println!(\"two\");\n}\n",
+    )
+    .expect("edit");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files?path=src/main.rs",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["marks"],
+        serde_json::json!([{"line": 2, "change": "modified"}]),
+        "the gutter is the daemon's git, in the text's own line numbers: {body}"
+    );
+
+    // A file nobody changed has nothing to mark, and the field is absent rather than
+    // an empty list per read.
+    git(directory.path(), &["checkout", "--", "src/main.rs"]);
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files?path=src/main.rs",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("marks").is_none(), "an unchanged file: {body}");
+}
+
+#[tokio::test]
+async fn a_workspace_that_is_not_a_repository_has_no_letters() {
+    let directory = workspace();
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    assert!(
+        !rows.is_empty(),
+        "the tree still lists what is there: {body}"
+    );
+    assert!(
+        rows.iter().all(|entry| entry.get("status").is_none()),
+        "no repository is no letters, not a listing that fails: {body}"
+    );
+}
+
+#[tokio::test]
+async fn asking_for_hidden_rows_marks_them_instead_of_dropping_them() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("target")).expect("target");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".gitignore"), "target/\n*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/list?include_ignored=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    let paths: Vec<&str> = rows
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![".gitignore", "notes.log", "src", "target"],
+        "the ignored rows are back: {body}"
+    );
+    assert_eq!(rows[1]["ignored"], true, "a hidden file says so: {body}");
+    assert_eq!(rows[3]["ignored"], true, "and so does a hidden directory");
+    assert!(
+        rows[2]["ignored"].is_null(),
+        "an ordinary row carries no flag at all: {body}"
+    );
+    assert!(
+        !paths.contains(&".git"),
+        "the repository's own bookkeeping is still not a row: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_search_walks_the_workspace_and_follows_the_same_ignore_rules() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir_all(directory.path().join("src/deep")).expect("src");
+    fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").expect("main");
+    fs::write(directory.path().join("src/deep/main_helper.rs"), "").expect("helper");
+    fs::write(directory.path().join("notes.log"), "noise\n").expect("log");
+    fs::write(directory.path().join(".env"), "TOKEN=1\n").expect("env");
+    fs::create_dir(directory.path().join(".git")).expect(".git");
+    fs::write(directory.path().join(".git/HEAD"), "ref: refs/heads/main\n").expect("head");
+    fs::write(directory.path().join(".gitignore"), "*.log\n").expect("ignore");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=main",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let paths: Vec<&str> = body
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["src/main.rs", "src/deep/main_helper.rs"],
+        "a search walks the whole workspace, and the nearer path ranks first: {body}"
+    );
+
+    // An ignored path is not findable, and a hidden file that is *not* ignored is:
+    // the rule is the preference, not the leading dot.
+    let (_, ignored) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=log",
+        None,
+    )
+    .await;
+    assert_eq!(ignored.as_array().map(Vec::len), Some(0), "{ignored}");
+    let (_, hidden) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=.env",
+        None,
+    )
+    .await;
+    assert_eq!(hidden[0]["path"], ".env", "{hidden}");
+
+    // A repository's own directory is not walked: no `HEAD`, no `objects`.
+    let (_, git) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=HEAD",
+        None,
+    )
+    .await;
+    assert_eq!(git.as_array().map(Vec::len), Some(0), "{git}");
+
+    // Nothing typed matches nothing rather than walking the repository.
+    let (status, empty) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+#[cfg(feature = "parse-references")]
+async fn a_references_search_lists_code_and_leaves_prose_alone() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/lib.rs"),
+        "// parse_position in a comment\nfn parse_position(at: usize) {}\nfn other() { let text = \"parse_position\"; parse_position(0); }\n",
+    )
+    .expect("lib");
+    // No grammar parses this, so the same word here is prose rather than a use.
+    fs::write(
+        directory.path().join("notes.md"),
+        "parse_position is documented here\n",
+    )
+    .expect("notes");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/references?q=parse_position",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a list");
+    assert_eq!(
+        rows.len(),
+        2,
+        "the definition and the call, not the comment or the string: {body}"
+    );
+    assert_eq!(rows[0]["path"], "src/lib.rs");
+    assert_eq!(rows[0]["line"], 2, "a line is counted from one: {body}");
+    assert_eq!(rows[0]["column"], 4, "the name after `fn `: {body}");
+    assert_eq!(rows[0]["text"], "fn parse_position(at: usize) {}");
+    assert_eq!(rows[1]["line"], 3);
+
+    // A name that is not one word cannot be an identifier, and nothing typed finds
+    // nothing rather than walking the repository.
+    for query in ["parse%20position", "", "1"] {
+        let (status, body) = send(
+            app(serving(directory.path())),
+            "GET",
+            &format!("/v1/files/references?q={query}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{query}: {body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(0), "{query}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_path_search_ranks_the_better_match_first() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir_all(directory.path().join("src")).expect("src");
+    fs::create_dir_all(directory.path().join("crates/acpilot-tui/src")).expect("crates");
+    fs::create_dir_all(directory.path().join("examples/old/src")).expect("examples");
+    for path in [
+        "src/app.rs",
+        "crates/acpilot-tui/src/app.rs",
+        "examples/old/src/app.rs",
+    ] {
+        fs::write(directory.path().join(path), "fn main() {}\n").expect(path);
+    }
+
+    // Initials: `aptui` is the letters of `acpilot-tui`, in order, and no substring
+    // of any path matches it.
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=aptui",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body[0]["path"], "crates/acpilot-tui/src/app.rs",
+        "the initials match ranks first: {body}"
+    );
+
+    // The same letters in three files: the shorter path is the one meant.
+    let (_, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=app.rs",
+        None,
+    )
+    .await;
+    assert_eq!(body[0]["path"], "src/app.rs", "{body}");
+
+    // A letter that is not in the path is not a match: fuzzy is not an anagram.
+    let (_, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/search?q=zapp",
+        None,
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(0), "{body}");
+}
+
+#[tokio::test]
+async fn a_content_search_finds_lines_and_skips_binaries() {
+    let directory = tempfile::tempdir().expect("a workspace");
+    fs::create_dir(directory.path().join("src")).expect("src");
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "fn main() {\n    let greeting = \"hello\";\n    println!(\"{greeting}\");\n}\n",
+    )
+    .expect("main");
+    fs::write(directory.path().join("notes.txt"), "hello there\n").expect("notes");
+    fs::write(directory.path().join("blob.txt"), [0x00, b'h', b'i', 0x01]).expect("blob");
+
+    let (status, body) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=greeting",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let matches = body.as_array().expect("a list");
+    assert_eq!(matches.len(), 2, "{body}");
+    assert_eq!(matches[0]["path"], "src/main.rs");
+    assert_eq!(matches[0]["line"], 2, "a line is counted from one: {body}");
+    assert_eq!(matches[0]["text"], "    let greeting = \"hello\";");
+    assert_eq!(matches[1]["line"], 3);
+
+    // Case is ignored, a binary file is skipped rather than decoded, and the
+    // binary's bytes are not a line of text either.
+    let (_, caseless) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=HELLO",
+        None,
+    )
+    .await;
+    let paths: Vec<&str> = caseless
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|hit| hit["path"].as_str())
+        .collect();
+    assert_eq!(paths, vec!["notes.txt", "src/main.rs"], "{caseless}");
+
+    // Nothing typed matches nothing rather than reading every file.
+    let (status, empty) = send(
+        app(serving(directory.path())),
+        "GET",
+        "/v1/files/grep?q=",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_content_search_with_no_workspace_is_a_conflict() {
+    let (status, body) = send(app(AppState::new()), "GET", "/v1/files/grep?q=main", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn a_search_with_no_workspace_is_a_conflict() {
+    let (status, body) = send(app(AppState::new()), "GET", "/v1/files/search?q=main", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }
 
 #[tokio::test]
@@ -391,4 +940,5 @@ async fn the_contract_lists_the_file_routes() {
     assert!(body["paths"]["/v1/files"]["get"].is_object());
     assert!(body["paths"]["/v1/files"]["put"].is_object());
     assert!(body["paths"]["/v1/files/list"]["get"].is_object());
+    assert!(body["paths"]["/v1/files/search"]["get"].is_object());
 }

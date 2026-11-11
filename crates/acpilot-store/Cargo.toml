@@ -1,0 +1,30 @@
+[package]
+name = "acpilot-store"
+description = "The daemon's durable record: one SQLite database per profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# The events are the wire types and the sessions are the wire summary: a stored
+# conversation has to come back shaped like a live one, or a client would need a
+# second reader for history.
+acpilot-proto = { workspace = true }
+# Timestamps are `jiff` everywhere else in the workspace, and retention is a
+# comparison of instants rather than of strings: an `at` with a `+02:00` offset
+# does not sort beside one with `Z`.
+jiff = { workspace = true }
+# `bundled` because the daemon ships as one binary: a system `libsqlite3` would be
+# a version the release does not pin, and Windows has none to link against.
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

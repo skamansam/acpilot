@@ -15,6 +15,10 @@
 //! | `write <path>` | writes one file at the absolute path given, reports the answer, ends the turn |
 //! | `terminal` | asks the client to open a terminal, reports the answer, ends the turn |
 //! | `hang` | never answers, so the request stays pending |
+//!
+//! Every session advertises two modes, `ask` and `code`, and accepts a switch to
+//! either: the daemon's mode route needs an agent whose modes are real protocol
+//! traffic rather than a body a test handed itself.
 //! | anything else | echoes the prompt as one chunk |
 //!
 //! The session's cwd comes from `session/new`, which is how a real agent learns
@@ -38,8 +42,9 @@ use agent_client_protocol::schema::v1::{
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, Notice,
     NoticeSeverity, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
     ReadTextFileRequest, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallUpdate,
-    ToolCallUpdateFields, WriteTextFileRequest,
+    SessionMode, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, ToolCallUpdate, ToolCallUpdateFields,
+    WriteTextFileRequest,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio, on_receive_request};
 
@@ -70,7 +75,24 @@ async fn main() {
             async |request: NewSessionRequest, responder, _cx| {
                 let _ = WORKSPACE.set(request.cwd.clone());
                 let id = SESSIONS.fetch_add(1, Ordering::Relaxed) + 1;
-                responder.respond(NewSessionResponse::new(format!("acp-{id}")))
+                responder.respond(NewSessionResponse::new(format!("acp-{id}")).modes(
+                    SessionModeState::new(
+                        // The two modes the mode route is driven with: `ask` is the
+                        // one a session starts in, and `code` is what a client
+                        // switches to.
+                        "ask",
+                        vec![
+                            SessionMode::new("ask", "Ask").description("Ask before acting"),
+                            SessionMode::new("code", "Code"),
+                        ],
+                    ),
+                ))
+            },
+            on_receive_request!(),
+        )
+        .on_receive_request(
+            async |_request: SetSessionModeRequest, responder, _cx| {
+                responder.respond(SetSessionModeResponse::new())
             },
             on_receive_request!(),
         )
@@ -84,6 +106,13 @@ async fn main() {
                             connection
                                 .send_notification(chunk(&session, format!("chunk {index}")))?;
                         }
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    }
+                    Directive::Commit => {
+                        connection.send_notification(chunk(
+                            &session,
+                            "feat(mock): ✨ describe the staged change".to_owned(),
+                        ))?;
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
                     Directive::Hang => {
@@ -103,7 +132,9 @@ async fn main() {
                                 Directive::Write(path) => write_file(&task, &session, path).await,
                                 Directive::Terminal => exercise_terminal(&task, &session).await,
                                 // `spawn` is only reached for the four above.
-                                Directive::Stream(_) | Directive::Hang => Vec::new(),
+                                Directive::Stream(_) | Directive::Hang | Directive::Commit => {
+                                    Vec::new()
+                                }
                             };
                             for line in report {
                                 task.send_notification(notice(&session, line))?;
@@ -132,10 +163,18 @@ enum Directive {
     Fs,
     Write(PathBuf),
     Terminal,
+    Commit,
     Hang,
 }
 
 fn directive(text: &str) -> Directive {
+    // The daemon's commit route sends the rendered template, so the fixture looks
+    // for the default prompt's own words rather than for the whole message it
+    // cannot know. A commit prompt gets a valid message back; every other prose
+    // prompt keeps the old `stream 1` answer.
+    if text.contains("You write exactly one git commit message for the staged diff below.") {
+        return Directive::Commit;
+    }
     match text.trim() {
         "permission" => Directive::Permission,
         "fs" => Directive::Fs,

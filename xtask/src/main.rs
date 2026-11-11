@@ -1716,31 +1716,39 @@ mod tests {
     }
 
     #[test]
-    fn the_web_job_runs_in_the_playwright_image_the_package_pins() {
-        // The job installs no browser and no fonts: the image carries both, and the
-        // `--with-deps` call that used to fetch them failed on a runner that could
-        // not reach `security.ubuntu.com`. That bargain holds only while the image
-        // tag and `@playwright/test` are one version — the browser inside the image
-        // is the revision that version launches, so a bump of one alone is an e2e
-        // run that cannot start a browser at all.
-        let manifest = fs::read_to_string(web_dir().join("package.json"))
-            .expect("web/package.json lists its dependencies");
-        let pinned = manifest
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("\"@playwright/test\":"))
-            .expect("web/package.json still pins @playwright/test")
-            .trim()
-            .trim_end_matches(',')
-            .trim_matches('"')
-            .trim_start_matches('^')
-            .to_owned();
-
+    fn the_web_job_needs_no_package_mirror() {
+        // The job installed the browser with `--with-deps`, whose first act is
+        // `apt-get update`. On a runner that could not resolve `security.ubuntu.com`
+        // that step failed before a test ran, and the log read like a font problem.
+        // The runner image already has Chromium's libraries and fonts, so the browser
+        // alone is enough — and a missing library now fails inside the e2e run, where
+        // the browser names it. The Playwright image is not the alternative it looks
+        // like: it carries no C toolchain, and this job compiles Rust.
         let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
             .expect("CI is a workflow file");
+        let start = workflow.find("\n  web:").expect("CI has a web job");
+        let rest = &workflow[start + 1..];
+        let end = rest
+            .find("\n  gui:")
+            .expect("the gui job follows the web job");
+        // The commands, not the prose: the comment above the step names the flag it
+        // refuses to pass, so a whole-block search would fail against its own
+        // explanation.
+        let runs: Vec<&str> = rest[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("run:"))
+            .collect();
         assert!(
-            workflow.contains(&format!("mcr.microsoft.com/playwright:v{pinned}-noble")),
-            "CI's web job does not run in the Playwright image for playwright {pinned}; \
-             the tag in .github/workflows/ci.yml and the pin in web/package.json move together"
+            runs.iter()
+                .any(|line| line.contains("playwright install chromium")),
+            "CI's web job no longer installs the browser the e2e test drives"
+        );
+        assert!(
+            runs.iter()
+                .all(|line| !line.contains("apt-get") && !line.contains("--with-deps")),
+            "CI's web job must install no system package: a package mirror is one more \
+             thing between a push and the page's tests"
         );
     }
 

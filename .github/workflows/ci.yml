@@ -410,7 +410,15 @@ jobs:
   required:
     name: required checks
     needs: [check, web, gui, probes, frame-budget, deny, docs, history]
-    if: always()
+    # `always()` also fires inside a run that is already cancelled, and there every
+    # dependency reports `cancelled`, so the assertion below published a `FAILURE`
+    # named `required checks` against a commit. Pushing a branch and then opening
+    # its pull request cancels the push run in favour of the pull request run, so
+    # the SHA a reviewer is asked to merge carried a failed required check beside a
+    # green one, and the ruleset blocked the merge. `!cancelled()` still runs after
+    # a dependency fails — which is the case the job exists for — and stays out of
+    # a cancelled run, where it has nothing to report.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Every required job succeeded

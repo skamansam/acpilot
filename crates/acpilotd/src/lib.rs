@@ -56,6 +56,8 @@ pub mod helper;
 pub mod hosts;
 mod lsp;
 pub mod providers;
+// One line per model run, appended beside the transcripts (P4.5-6).
+pub mod runs;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;

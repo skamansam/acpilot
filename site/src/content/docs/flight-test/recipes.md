@@ -135,6 +135,36 @@ Token counts are estimates of four bytes per token until the server reports `usa
 hint of 25 percent either way is the plan, and a run record says whether a count was
 measured or estimated.
 
+## Run records
+
+Every run appends one line to the profile's `runs.jsonl`. The line is never rewritten.
+
+The line holds the request and the answer:
+
+- the prompt, and its `sha256:` digest;
+- the selectors, and the files they resolved to with their sizes;
+- the budget, and the sampling parameters actually sent;
+- timings, first token, usage, stop reason and every warning.
+
+A page of runs is newest first. The cursor is a run id, not an offset, because a log
+only grows: an offset would repeat a line when something was appended between two
+pages. A cursor that names another recipe's run is refused.
+
+A replay re-sends the stored request unchanged. It is a new run with its own record,
+so it does not carry the old idempotency key. The workspace is not read again: the
+files are in the record, and a replay must not depend on the tree still looking the
+same.
+
+A partial last line means a crash during a write. Reading stops there and keeps what
+came before. A broken line that is not the last one names its number, and a newer
+`schema_version` is refused rather than half-read.
+
+<Aside type="note" title="Status">
+The log, its paging and replay are in place (`acpilotd::runs`). The agent that writes a
+record is P4.5-5, and the routes that serve a page and a replay are P4.5-7. Until both
+land the file stays empty, and this page does not claim a route that answers.
+</Aside>
+
 ## Why files and not a database
 
 Because a prompt change is a code change. It deserves a diff, a review, and a

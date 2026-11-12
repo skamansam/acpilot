@@ -55,7 +55,7 @@ mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
-mod providers;
+pub mod providers;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
@@ -530,6 +530,18 @@ impl AppState {
     #[must_use]
     pub fn providers(&self) -> &Arc<providers::Providers> {
         &self.providers
+    }
+
+    /// Serve the providers a profile declares.
+    ///
+    /// Loaded once, when the state is built: the file is somebody's declaration,
+    /// and a route that re-read it per request would answer a picker with a
+    /// different list after every editor save. Nothing is probed here; a row reads
+    /// `not_probed` until something asks.
+    #[must_use]
+    pub fn with_providers(mut self, providers: providers::Providers) -> Self {
+        self.providers = Arc::new(providers);
+        self
     }
 
     /// The profile directory's name, when this daemon was started with one.
@@ -1168,6 +1180,10 @@ pub enum StateError {
     #[error("the profile's agents.toml is not usable: {0}")]
     Agents(#[from] acpilot_agent::AgentError),
 
+    /// The profile's `providers.toml` exists and does not load.
+    #[error("the profile's providers.toml is not usable: {0}")]
+    Providers(#[from] acpilot_profile::providers::ProvidersError),
+
     /// The workspace root could not be resolved, so "inside" has no meaning.
     #[error("cannot resolve workspace {}: {source}", path.display())]
     Workspace {
@@ -1216,7 +1232,11 @@ pub fn state_for_profile(
         .with_profile_root(Some(directory.to_path_buf()))
         .with_host_identities(identities)
         .with_broker(broker)
-        .with_workspace(workspace);
+        .with_workspace(workspace)
+        // A malformed declaration is a startup failure rather than an empty list:
+        // the daemon would otherwise look healthy while the rows somebody wrote
+        // were silently absent.
+        .with_providers(providers::Providers::load(profile.providers_path())?);
     Ok(match load_agents(&profile)? {
         Some(registry) => state.with_registry(registry),
         None => state,
@@ -1867,6 +1887,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(git::operations())
         .chain(commit::operations())
         .chain(project::operations())
+        .chain(providers::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();

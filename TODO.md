@@ -1147,12 +1147,15 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   `409`, since replacing the row would move every recipe naming it. **Tests:** six in
   `crates/acpilotd/tests/providers.rs` and `providers.rs`, against a loopback LM Studio
   fixture, a refused port, a duplicate id, and a URL with no scheme.
-  - **Open:** the two paths are not in the OpenAPI document, so the generated web client
-    cannot call them; that is P4.5-7's stub functions and snapshot. The rows are not
-    written to the profile's `[providers]` table, and a restart therefore forgets them.
-    `credential_ref` is kept and not resolved through the keyring, so a server that needs
-    a token answers `unauthorized`. `acpilot models probe` is P4.5-2's verb, and nothing
-    removes a provider yet.
+  - **Landed after that (2026-11-12):** the two paths are in the served OpenAPI
+    document (`providers::operations`, `operation_id` `list_providers` and
+    `add_provider`), so the generated web client has them, and the declaration is
+    written to the profile's `providers.toml` before the row is kept. A restart reads
+    the rows back as `not_probed`: nothing was tried, so nothing failed. The loader
+    refuses an unknown key, a newer `schema_version` and a repeated id.
+  - **Open:** `credential_ref` is kept and not resolved through the keyring, so a
+    server that needs a token answers `unauthorized`. Nothing removes a provider.
+    The last probe's answer is not cached, which is P4.5-2's remaining half.
   - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
     cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
     beyond the HTTP client's idle read timeout).
@@ -1164,9 +1167,20 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     token is `403 permission_denied`; no retries on a 4xx. The variant is added in this phase
     (it is the one failure the enum the foundation phase (P1) shipped could not describe without lying).
 
-- [ ] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping and
-  `Backend::probe` landed (`crates/acpilot-model/src/lib.rs`); the CLI verb and the probe cache
-  are still open.
+- [x] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping,
+  `Backend::probe` and `acpilot models probe` are here; the probe cache is not.
+  - **Result (2026-11-12):** `acpilot models probe [id]` reads the profile's
+    `providers.toml` and asks each enabled provider what it has. A named provider is
+    asked even when it is disabled: the row says `disabled` and no request leaves.
+    The command calls `acpilotd::providers::probe`, so the CLI and the route cannot
+    disagree about a refused credential. A failed probe exits `1`; a declaration
+    that is not usable exits `1` naming the field; no providers declared is exit `0`
+    with the file named. **Tests:** three in `crates/acpilot-cli/src/cli.rs` for
+    target selection, the unknown id, and the printed line.
+  - **Open:** the probe cache. A restart reads the declaration and says `not_probed`
+    instead of remembering the last answer, so `acpilot models probe` is the only way
+    to see the current state without a daemon. `Backend::probe` (one tool-shaped and
+    one JSON-schema request) has no caller yet: the lab button is P4.5-8's.
   - Map `/api/v0/models` fields into `DiscoveredModel` (`llm`→`chat`, `vlm`→`vision`,
     `embeddings`→`embedding`, `state`→`loaded`, `max_context_length`→`context_window` with
     `context_source = server`). Where a server says nothing, `context_source = unknown` and the

@@ -30,6 +30,8 @@ use std::path::{Path, PathBuf};
 use acpilot_agent::{Policy, PolicyError};
 use thiserror::Error;
 
+pub mod providers;
+
 pub use catalog::{
     ProfileId, ProfileIdError, ProfileRecord, ProfileRoots, Registry, RegistryError,
 };
@@ -216,6 +218,16 @@ impl Profile {
     #[must_use]
     pub fn agents_path(&self) -> PathBuf {
         self.root.join(acpilot_agent::MANIFEST_FILE)
+    }
+
+    /// Where this profile declares its model providers.
+    ///
+    /// The file name belongs to the module that parses it, so the daemon and the
+    /// CLI ask the profile for the path instead of spelling `providers.toml` a
+    /// second time and drifting from the loader.
+    #[must_use]
+    pub fn providers_path(&self) -> PathBuf {
+        providers::ProvidersFile::path_in(&self.root)
     }
 
     /// The profile's name: the last segment of its directory.

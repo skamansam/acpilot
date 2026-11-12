@@ -5,6 +5,8 @@
 //! returning a `Value` would test the mapping and skip the part this route adds:
 //! that the answer arrives, is counted, and is written into the row.
 
+use acpilot_profile::providers::{DeclaredProvider, ProvidersFile};
+use acpilot_proto::model::ProviderKind;
 use acpilotd::{AppState, router_with};
 use axum::Router;
 use axum::body::Body;
@@ -45,6 +47,24 @@ async fn send(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (St
 
 fn app() -> Router {
     router_with(AppState::new())
+}
+
+/// A daemon that reads and writes the declarations in `path`.
+fn app_with_file(path: &std::path::Path) -> Router {
+    let providers = acpilotd::providers::Providers::load(path.to_path_buf())
+        .expect("a fresh declaration loads");
+    router_with(AppState::new().with_providers(providers))
+}
+
+fn declaration(id: &str, enabled: bool) -> DeclaredProvider {
+    DeclaredProvider {
+        id: id.to_owned(),
+        kind: ProviderKind::LmStudio,
+        label: Some("LM Studio".to_owned()),
+        base_url: "http://127.0.0.1:1".to_owned(),
+        credential_ref: None,
+        enabled,
+    }
 }
 
 /// A model server on an ephemeral loopback port, answering `models` as LM Studio does.
@@ -216,4 +236,64 @@ async fn a_url_without_a_scheme_is_a_400_and_not_a_guess() {
         Some(0),
         "a refused request declares nothing"
     );
+}
+
+#[tokio::test]
+async fn an_added_provider_is_written_to_the_profile() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let file = ProvidersFile::path_in(directory.path());
+    let application = app_with_file(&file);
+
+    let (status, _) = send(
+        &application,
+        "POST",
+        "/v1/providers",
+        Some(json!({
+            "id": "later",
+            "kind": "open_ai_compatible",
+            "label": "later",
+            "base_url": "http://127.0.0.1:1",
+            "enabled": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let text = std::fs::read_to_string(&file).expect("the declaration was written");
+    assert!(text.contains("schema_version = 1"), "{text}");
+    assert!(text.contains("[[providers]]"), "{text}");
+    assert!(text.contains("id = \"later\""), "{text}");
+    // A credential is a reference even on disk: the token never enters the file.
+    assert!(!text.contains("token"), "{text}");
+}
+
+#[tokio::test]
+async fn a_restart_reads_the_declaration_back_and_claims_nothing_more() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let file = ProvidersFile::path_in(directory.path());
+    let mut declarations = ProvidersFile::empty();
+    declarations.providers.push(declaration("studio", true));
+    declarations.providers.push(declaration("off", false));
+    declarations.save(&file).expect("save");
+
+    let application = app_with_file(&file);
+    let (status, listed) = send(&application, "GET", "/v1/providers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = listed.as_array().expect("a list");
+    assert_eq!(rows.len(), 2, "both declarations came back");
+    assert_eq!(rows[0]["id"], "studio");
+    assert_eq!(rows[0]["label"], "LM Studio");
+    assert_eq!(
+        rows[0]["status"], "not_probed",
+        "a restart tried nothing, so nothing failed"
+    );
+    assert_eq!(rows[0]["model_count"], 0);
+    assert_eq!(rows[0]["last_probed_at"], Value::Null);
+    assert!(
+        rows[0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("acpilot models probe studio")),
+        "the row says how to ask: {listed}"
+    );
+    assert_eq!(rows[1]["status"], "disabled");
 }

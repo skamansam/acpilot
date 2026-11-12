@@ -115,6 +115,11 @@ something asks again.
 acpilot models probe lmstudio     # the only thing that talks to the network
 ```
 
+The declaration is written to `providers.toml`, so a restart reads the rows back.
+Nothing is probed at startup: a row that came back reads `not_probed` until
+something asks again. A failed probe still answers `201`, with the reason in
+`detail`. A disabled provider is never contacted, even when a command names it.
+
 If a provider is down, the daemon reports `model_unavailable` with a `502`. The
 daemon is healthy and the thing behind it is not. The UI may offer "retry" without
 implying that Acpilot broke.

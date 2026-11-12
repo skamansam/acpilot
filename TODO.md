@@ -1136,6 +1136,14 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
+**Status (2026-11-12):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
+(discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
+reload), P4.5-4 (prompt assembly and the corpus selectors) and P4.5-6 (the append-only run
+log with paging and replay). Open: P4.5-5, the agent that runs the loop; P4.5-7, the recipe
+and run routes; P4.5-8 to P4.5-10, the lab, promotion and the ACP bridge; and P4.5-11 to
+P4.5-13, the mock-server tests, integration stats and skills. No route serves a recipe or a
+run yet, and `runs.jsonl` stays empty until P4.5-5 writes a record.
+
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
   - **Result (2026-11-12):** one enum dispatches both dialects, so a provider's shape

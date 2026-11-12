@@ -12,9 +12,11 @@ use acpilot_extensions::ExtensionError;
 use acpilot_profile::catalog::{ProfileRecord, Registry};
 use acpilot_profile::launch::ProfileResolver;
 use acpilot_profile::project::Root;
+use acpilot_profile::providers::{DeclaredProvider, ProvidersFile};
 use acpilot_profile::settings::{Cascade, Settings};
 use acpilot_profile::{ProfileId, ProfileRoots};
 use acpilot_proto::API_PREFIX;
+use acpilot_proto::model::{AddProviderRequest, ProviderStatus, ProviderSummary};
 use acpilot_proto::profile::ThemeSurface;
 use acpilot_proto::workspace::WorkspaceOpenRequest;
 use clap::{Args, Parser, Subcommand};
@@ -208,6 +210,31 @@ pub enum Command {
         /// needs none. `doctor` reads it only to ask health; it writes nothing.
         #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
         token: Option<String>,
+    },
+    /// Probe a declared model server, and print what it answered.
+    ///
+    /// Reads the profile's `providers.toml`; starts no daemon and needs none. A
+    /// probe is the only thing that contacts a model server, so it is a command a
+    /// person runs rather than something a startup does on their behalf. A server
+    /// that is down is reported with its reason, not retried in the background.
+    Models {
+        /// Which models verb.
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
+}
+
+/// Everything under `acpilot models`.
+#[derive(Debug, Subcommand)]
+pub enum ModelsCommand {
+    /// Ask a declared provider what it has.
+    ///
+    /// With no id, every enabled provider is asked. A disabled provider is
+    /// reported as disabled and is not contacted, even when it is named: that is
+    /// the decision the file records.
+    Probe {
+        /// Provider id from the profile's `providers.toml`.
+        id: Option<String>,
     },
 }
 
@@ -549,6 +576,7 @@ pub fn run(cli: Cli) -> u8 {
             demo,
             mouse: !no_mouse,
         }),
+        Some(Command::Models { command }) => run_models(command, profile.as_deref()),
         Some(Command::Doctor {
             path,
             api_url,
@@ -1380,6 +1408,149 @@ fn run_config(command: ConfigCommand, profile: Option<&str>) -> u8 {
             eprintln!("acpilot config explain: {error}");
             exit::FAILURE
         }
+    }
+}
+
+/// `acpilot models probe`.
+fn run_models(command: ModelsCommand, profile: Option<&str>) -> u8 {
+    let ModelsCommand::Probe { id } = command;
+    let profile = match models_profile(profile) {
+        Ok(profile) => profile,
+        Err(message) => {
+            eprintln!("acpilot models probe: {message}");
+            return exit::NOT_FOUND;
+        }
+    };
+    let path = profile.providers_path();
+    let declarations = match ProvidersFile::load(&path) {
+        Ok(declarations) => declarations,
+        Err(error) => {
+            eprintln!("acpilot models probe: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let targets = match probe_targets(&declarations, id.as_deref()) {
+        Ok(targets) => targets,
+        Err(message) => {
+            eprintln!("acpilot models probe: {message}");
+            return exit::NOT_FOUND;
+        }
+    };
+    if targets.is_empty() {
+        println!("no providers declared in {}", path.display());
+        println!("  add a `[[providers]]` table to that file, then ask it here");
+        return exit::SUCCESS;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot models probe: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let mut failed = false;
+    for declaration in targets {
+        let request = AddProviderRequest::from(declaration);
+        if let Some(refusal) = acpilotd::providers::refuse(&request) {
+            eprintln!("acpilot models probe: {}", refusal.message);
+            eprintln!("  {}: {}", refusal.field, refusal.detail);
+            failed = true;
+            continue;
+        }
+        // The daemon's own probe, not a copy: a second mapper would be a second
+        // opinion about what a refused credential means.
+        let row = runtime.block_on(acpilotd::providers::probe(&request));
+        println!("{}", render_provider(&row));
+        if let Some(detail) = &row.detail {
+            println!("  {detail}");
+        }
+        if matches!(
+            row.status,
+            ProviderStatus::Unreachable | ProviderStatus::Unauthorized
+        ) {
+            failed = true;
+        }
+    }
+    if failed { exit::FAILURE } else { exit::SUCCESS }
+}
+
+/// The providers a probe command should ask.
+fn probe_targets<'a>(
+    declarations: &'a ProvidersFile,
+    id: Option<&str>,
+) -> Result<Vec<&'a DeclaredProvider>, String> {
+    match id {
+        Some(id) => declarations
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map(|provider| vec![provider])
+            .ok_or_else(|| format!("no provider `{id}` is declared in this profile")),
+        // A disabled provider is a decision the file records, so an unqualified
+        // probe skips it rather than contacting a server somebody turned off.
+        None => Ok(declarations
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+            .collect()),
+    }
+}
+
+/// The profile whose `providers.toml` a models verb reads.
+fn models_profile(flag: Option<&str>) -> Result<acpilot_profile::Profile, String> {
+    match flag {
+        // A path is a profile directory and a single segment is a name under
+        // `<config>/profiles`: the rule the global flag documents, so `--profile
+        // work` and `--profile ./work` cannot mean two directories.
+        Some(name) if Path::new(name).components().count() > 1 => {
+            acpilot_profile::Profile::open(name).map_err(|error| error.to_string())
+        }
+        Some(name) => acpilot_profile::Profile::named(name).map_err(|error| error.to_string()),
+        None => {
+            let registry = acpilot_profile::Registry::load(&profile_registry_path(
+                &acpilot_profile::config_dir(),
+            ))
+            .map_err(|error| error.to_string())?;
+            let id = registry.active_profile.ok_or_else(|| {
+                "no active profile; pass --profile NAME or run `acpilot profile use NAME`"
+                    .to_owned()
+            })?;
+            acpilot_profile::Profile::named(id.as_str()).map_err(|error| error.to_string())
+        }
+    }
+}
+
+/// One provider as a line a terminal can compare with the file it came from.
+fn render_provider(row: &ProviderSummary) -> String {
+    let count = if row.status == ProviderStatus::Reachable {
+        format!(
+            "{} model{}",
+            row.model_count,
+            if row.model_count == 1 { "" } else { "s" }
+        )
+    } else {
+        "-".to_owned()
+    };
+    format!(
+        "{:<16} {:<12} {:<10} {}",
+        row.id,
+        status_word(row.status),
+        count,
+        row.base_url
+    )
+}
+
+/// The word a person reads for a status, matching the wire spelling.
+fn status_word(status: ProviderStatus) -> &'static str {
+    match status {
+        ProviderStatus::Disabled => "disabled",
+        ProviderStatus::NotProbed => "not_probed",
+        ProviderStatus::Reachable => "reachable",
+        ProviderStatus::Unreachable => "unreachable",
+        ProviderStatus::Unauthorized => "unauthorized",
     }
 }
 

@@ -810,6 +810,7 @@ fn every_enum_has_one_stable_wire_spelling() {
     assert_wire!(model::ProviderKind::LmStudio, "lm_studio");
     assert_wire!(model::ProviderKind::OpenAiCompatible, "open_ai_compatible");
     assert_wire!(model::ProviderStatus::Disabled, "disabled");
+    assert_wire!(model::ProviderStatus::NotProbed, "not_probed");
     assert_wire!(model::ProviderStatus::Reachable, "reachable");
     assert_wire!(model::ProviderStatus::Unreachable, "unreachable");
     assert_wire!(model::ProviderStatus::Unauthorized, "unauthorized");

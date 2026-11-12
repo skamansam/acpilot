@@ -1150,11 +1150,11 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
 
 **Status (2026-11-12):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
 (discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
-reload), P4.5-4 (prompt assembly and the corpus selectors) and P4.5-6 (the append-only run
-log with paging and replay). Open: P4.5-5, the agent that runs the loop; P4.5-7, the recipe
+reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
+loop) and P4.5-6 (the append-only run log with paging and replay). Open: P4.5-7, the recipe
 and run routes; P4.5-8 to P4.5-10, the lab, promotion and the ACP bridge; and P4.5-11 to
 P4.5-13, the mock-server tests, integration stats and skills. No route serves a recipe or a
-run yet, and `runs.jsonl` stays empty until P4.5-5 writes a record.
+run yet, and `runs.jsonl` stays empty until P4.5-7 records a run.
 
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
@@ -1288,7 +1288,29 @@ run yet, and `runs.jsonl` stays empty until P4.5-5 writes a record.
     with a documented error band, and every `RunSummary` reconciles against `usage` and sets
     `TokenUsage.estimated = false` only then.
 
-- [ ] **P4.5-5 · `acpilot-agent-lm`** (3d)
+- [x] **P4.5-5 · `acpilot-agent-lm`** (3d)
+  - **Result (2026-11-12):** `crates/acpilot-agent-lm` is an `acp-stdio` agent. `load`
+    resolves a profile, a recipe and its provider, and reads the keyring entry once, so a
+    missing credential is a startup refusal rather than a 401 mid-turn. The loop sends the
+    master prompt, the session history and the tool schemas, then runs each call through
+    the client: `fs/read_text_file`, `fs/write_text_file`, `terminal/create` →
+    `wait_for_exit` → `output` → `release`, and `session/request_permission` before a write
+    or a command. A malformed call gets one repair request; a second failure is a `Notice`
+    and a failed tool call, never a guessed argument. `max_steps` ends the turn with
+    `MaxTurnRequests` and a notice carrying the number. `session/cancel` is raced against
+    the HTTP request, so the connection is dropped at once and the turn returns
+    `Cancelled`. Updates are `AgentMessageChunk`, `ToolCall`/`ToolCallUpdate`, `Notice` and
+    `UsageUpdate`; the prompt response carries the step and token counts in `_meta`.
+    History is trimmed in whole messages against the recipe's window, and the tool schema
+    is generated from `ToolExposure`. `search` is not offered because ACP has no
+    workspace-search callback; the agent says so in a notice instead of running a shell to
+    fake it. **Tests:** fifteen in the crate (nine for the schema and parser, six for
+    trimming, stop reasons, prompt text and session ids), plus a stdio test that spawns
+    the binary against a mock provider and answers its `fs/read_text_file`.
+  - **Open:** nothing writes a `runs.jsonl` record yet; the record needs the request the
+    recipe and run routes assemble, which is P4.5-7. Promotion (P4.5-9) is what writes the
+    manifest entry that makes this binary reachable from `GET /v1/agents`, so today it is
+    started by hand.
   - A small ACP agent binary: reads a recipe, runs the model loop, and reaches the world only
     through ACP client callbacks (`fs/read_text_file`, `fs/write_text_file`, `terminal/*`,
     `session/request_permission`). It holds no filesystem handle of its own.
@@ -1312,7 +1334,8 @@ run yet, and `runs.jsonl` stays empty until P4.5-5 writes a record.
     number, and a newer `schema_version` is refused rather than half-read. **Tests:** twelve in
     the module.
   - **Open:** no route serves a page or a replay yet; that is P4.5-7. Nothing writes a record
-    yet either: P4.5-5's agent is what produces one, and until it lands the log is empty.
+    yet either: the agent (P4.5-5) runs the loop, but the request to record is assembled by
+    the route, so the write lands with P4.5-7.
   - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
     sampling, corpus selectors and resolved file list, budget), then the result (latency, first
     token, usage, stop reason, warnings).

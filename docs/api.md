@@ -184,8 +184,8 @@ The successful answer is the new effective object. It is also announced as a
 
 **Deliberately not v1**: the recipe routes, the ACP bridge and remote drivers, and
 extensions. The two provider routes below landed with the models phase and follow the
-same conventions. Recipes load from disk and every run is recorded, but neither is
-served yet: that is P4.5-7. None of the remaining areas changes a route above.
+same conventions. Recipes load from disk, but no route records or serves a run yet:
+that is P4.5-7. None of the remaining areas changes a route above.
 
 ## Providers
 

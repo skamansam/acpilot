@@ -5,6 +5,12 @@ description: A recipe becomes an agent by becoming a process that speaks ACP —
 
 <span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-5, P4.5-9)
 
+<Aside type="note" title="Status">
+The shim is built: `acpilot-agent-lm` runs a recipe and reaches the world only through
+ACP callbacks (P4.5-5). The manifest entry described here is written by hand until
+promotion lands (P4.5-9).
+</Aside>
+
 Promotion is one command. The command writes one manifest entry. That is the
 whole trick:
 
@@ -74,11 +80,12 @@ tool call, execute it through ACP and append the result. Repeat.
 Limits are explicit. A local model with a broken tool-call format will otherwise
 loop until the context window catches fire:
 
-- **`max_steps`** from the recipe (1–50). At the cap the turn stops with a stop
-  reason of `step_limit`. It does not hang or truncate silently.
+- **`max_steps`** from the recipe (1–50). At the cap the turn stops with ACP's
+  `max_turn_requests` and a notice carrying the number of steps. It does not hang or
+truncate silently.
 - **One repair attempt.** A tool call that does not parse gets one corrective
-  message with the schema restated. A second failure becomes a visible notice and
-  a plain-text answer. Pretending progress is worse than admitting the format.
+  message with the schema restated. A second failure becomes a visible notice and a
+failed tool call. Pretending progress is worse than admitting the format.
 - **Cancellation is immediate.** `session/cancel` aborts the HTTP stream rather
   than waiting for the next chunk. A 40-token-per-second model should not hold
   `Ctrl-C` hostage.

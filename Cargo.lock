@@ -29,6 +29,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpilot-agent-lm"
+version = "0.1.0"
+dependencies = [
+ "acpilot-agent",
+ "acpilot-model",
+ "acpilot-profile",
+ "acpilot-proto",
+ "agent-client-protocol",
+ "axum",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "acpilot-cli"
 version = "0.1.0"
 dependencies = [

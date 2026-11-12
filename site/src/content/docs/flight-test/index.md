@@ -63,11 +63,12 @@ yesterday?":
 
 ## What exists today
 
-The contract is this page, the five beside it, the OpenAPI types behind them, and
-an ADR that says why. The project does not probe a server yet. The models phase (P4.5) will
-build the crate, the shim agent, and the lab in that order. The API comes first,
-because a workbench that invents its own state would be the sixth thing to
-disagree about what happened.
+The provider crate, discovery, the recipe loader, prompt assembly, the run log and the
+shim agent (`acpilot-agent-lm`) are built and tested. The shim reads a recipe, runs the
+model loop and reaches files, terminals and permissions only through ACP callbacks. What
+is missing is the way in: the recipe and run routes (P4.5-7), the lab panes (P4.5-8) and
+the promotion command that writes the manifest entry (P4.5-9). Until P4.5-9, the shim is
+started by hand.
 
 <Aside type="caution" title="Altitude check">
 Pages in this section describe the models phase (P4.5). The [flight status](../status/) page

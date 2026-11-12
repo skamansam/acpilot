@@ -25,7 +25,8 @@ only step in to approve the dangerous bits.
   are tested. The [ACPilot Roadmap](https://github.com/users/skamansam/projects/4)
   project tracks what is left, and [TODO.md](TODO.md) holds the plan text.
 - License: dual MIT OR Apache-2.0.
-- Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon).
+- Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon),
+  `acpilot-agent-lm` (a model recipe run as an ACP agent).
 - Directory: `acpilot/`, the planned Rust workspace (edition 2024). §6 gives the layout.
 
 ### Why "Acpilot" (and the runners-up)
@@ -325,8 +326,8 @@ GET    /v1/stats
 ```
 
 The list is **frozen** for v1. [`docs/api.md`](docs/api.md) gives the reasoning and the
-rejected alternatives. Providers, models, recipes and the ACP bridge are deliberately
-later. None of them changes a route above.
+rejected alternatives. The two provider routes landed with the models phase; models,
+recipes and the ACP bridge are deliberately later. None of them changes a route above.
 
 Every route takes `X-Acpilot-Profile`. On a mutating request, a daemon that serves more
 than one profile *requires* it, so a client cannot act as the wrong identity silently. On
@@ -584,6 +585,7 @@ acpilot/
 │   ├── acpilot-text/          # rope, selection, edits, tree-sitter, diff — UI-agnostic
 │   ├── acpilot-agent/         # ACP client engine, supervision, transcript adapters
 │   ├── acpilot-model/         # local model backends, capability probes, prompt assembly
+│   ├── acpilot-agent-lm/      # `acpilot-agent-lm`: a recipe run as an ACP agent (P4.5)
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
 │   ├── acpilot-profile/       # profiles, config cascade, provider declarations, recipes

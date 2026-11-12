@@ -1,0 +1,31 @@
+[package]
+name = "acpilot-agent-lm"
+description = "An ACP agent that turns a model recipe into a tool-calling loop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acpilot-agent-lm"
+path = "src/main.rs"
+
+[dependencies]
+acpilot-agent.workspace = true
+acpilot-model.workspace = true
+acpilot-profile.workspace = true
+acpilot-proto.workspace = true
+agent-client-protocol.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

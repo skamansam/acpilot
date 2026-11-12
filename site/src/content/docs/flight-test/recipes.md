@@ -160,9 +160,10 @@ came before. A broken line that is not the last one names its number, and a newe
 `schema_version` is refused rather than half-read.
 
 <Aside type="note" title="Status">
-The log, its paging and replay are in place (`acpilotd::runs`). The agent that writes a
-record is P4.5-5, and the routes that serve a page and a replay are P4.5-7. Until both
-land the file stays empty, and this page does not claim a route that answers.
+The log, its paging and replay are in place (`acpilotd::runs`), and the agent that runs a
+recipe is `acpilot-agent-lm` (P4.5-5). The routes that assemble a request, write its
+record, and serve a page or a replay are P4.5-7. Until they land the file stays empty,
+and this page does not claim a route that answers.
 </Aside>
 
 ## Why files and not a database

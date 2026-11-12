@@ -84,7 +84,13 @@ jobs:
           - os: ubuntu-latest
             target: linux-x86_64
             archive: tar.gz
-          - os: macos-14
+          # `macos-latest`, not `macos-14`: the pinned label asks this account for the
+          # `macos-14-arm64-us-default` configuration, which it does not have, so the job
+          # is cancelled before a runner is assigned
+          # (`The configuration 'macos-14-arm64-us-default' is not supported`). The
+          # floating label resolves to `macos-26-arm64`, which is the architecture named
+          # in `target` and the label CI has been running on.
+          - os: macos-latest
             target: macos-aarch64
             archive: tar.gz
           - os: windows-latest

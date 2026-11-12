@@ -18,6 +18,13 @@ interfaces, zero rewrites.**
 - "DoD" (definition of done) is stated per phase. It is deliberately testable.
 - Anything marked **[decide]** needs a short ADR in `docs/adr/` before code lands.
 - Estimates are ideal engineering days, not calendar promises.
+- A ticket that only applies to some platforms carries a tag after its code:
+  `· [windows]`, `· [linux]`, `· [macos]`, `· [wsl]`, or a set such as
+  `· [windows, wsl]`. A ticket with no tag must work on every platform, because
+  platform code lives behind `src/platform/` (CONTRIBUTING §Platforms).
+- Order: Unix and macOS first, Windows last (D19). Work the `[wsl]` tickets with
+  the Linux path. Leave the `[windows]` and `[windows, wsl]` tickets until that
+  path is done, then finish the Windows builds.
 
 Ordering rule: **no UI work before the daemon API works.** UIs are clients. If a UI
 needs something, add it to the API first. That single rule is what stops the four
@@ -166,7 +173,7 @@ probe answers one question that would be expensive to get wrong.
     real agents over stdio, and the question here was whether SSH preserves their
     framing.
 
-- [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
+- [x] **P0-5 · WSL helper round-trip** · [windows, wsl] (1d) — **done 2026-10-21**
   - On a Windows box (CI runner or VM), enumerate the distros, run
     `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON
     line, and get one back.
@@ -2066,12 +2073,15 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## Windows phase (P9) — Windows + WSL (≈8 days)
 
-- [ ] **P9-1** Windows build green in CI (MSVC), ConPTY verified via `portable-pty` for both local and WSL terminals.
-- [ ] **P9-2** `acpilot-host::wsl`: distro enumeration (`wsl.exe -l -q`, registry via `winreg` as fallback), default distro detection, `wsl --cd` support, path translation both ways (`C:\a` ↔ `/mnt/c/a`, `\\wsl.localhost\D\a` ↔ `/a`).
-- [ ] **P9-3** In-distro helper: install `acpilotd-helper` into `~/.local/bin` inside the distro on first use, handshake, then all fs/PTY/spawn/LSP happens in-distro (see README §5.6 design note).
-- [ ] **P9-4** WSL terminal pane + WSL agent over the helper's stdio; verify interactive TUIs (colours, resize, Ctrl-C) work through ConPTY.
-- [ ] **P9-5** UNC fallback for read-only browsing; explicit warning in the UI when editing over 9P.
-- [ ] **P9-6** Windows process hygiene: job objects for agent trees, named-pipe single instance, `\\?\` long-path handling, CRLF preservation.
+Every ticket here is platform-tagged. Work P9-3 (`[wsl]`) with the Linux path.
+The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
+
+- [ ] **P9-1** · [windows] Windows build green in CI (MSVC), ConPTY verified via `portable-pty` for both local and WSL terminals.
+- [ ] **P9-2** · [windows, wsl] `acpilot-host::wsl`: distro enumeration (`wsl.exe -l -q`, registry via `winreg` as fallback), default distro detection, `wsl --cd` support, path translation both ways (`C:\a` ↔ `/mnt/c/a`, `\\wsl.localhost\D\a` ↔ `/a`).
+- [ ] **P9-3** · [wsl] In-distro helper: install `acpilotd-helper` into `~/.local/bin` inside the distro on first use, handshake, then all fs/PTY/spawn/LSP happens in-distro (see README §5.6 design note).
+- [ ] **P9-4** · [windows, wsl] WSL terminal pane + WSL agent over the helper's stdio; verify interactive TUIs (colours, resize, Ctrl-C) work through ConPTY.
+- [ ] **P9-5** · [windows] UNC fallback for read-only browsing; explicit warning in the UI when editing over 9P.
+- [ ] **P9-6** · [windows] Windows process hygiene: job objects for agent trees, named-pipe single instance, `\\?\` long-path handling, CRLF preservation.
   - **DoD:** on a clean Windows VM, `acpilot workspace open \\wsl.localhost\Ubuntu\home\me\app`, run an agent inside the distro, edit a file, and see the change from `wsl` — no manual setup beyond `wsl --install`.
 
 ---

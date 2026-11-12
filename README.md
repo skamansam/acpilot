@@ -582,10 +582,10 @@ acpilot/
 │   ├── acpilot-core/          # domain: workspaces, sessions, agents, permissions
 │   ├── acpilot-text/          # rope, selection, edits, tree-sitter, diff — UI-agnostic
 │   ├── acpilot-agent/         # ACP client engine, supervision, transcript adapters
-│   ├── acpilot-model/         # local model backends, capability probes, recipes
+│   ├── acpilot-model/         # local model backends, capability probes, prompt assembly
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
-│   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
+│   ├── acpilot-profile/       # profiles, config cascade, provider declarations, recipes
 │   ├── acpilot-store/         # one SQLite database per profile: sessions, events, grants
 │   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
 │   ├── acpilot-client/        # typed client for the daemon API: REST + SSE

@@ -182,10 +182,10 @@ write. A patch that would make them unreadable is rolled back and answered `400`
 The successful answer is the new effective object. It is also announced as a
 `prefs` frame, so an open client applies it without waiting for the file watcher.
 
-**Deliberately not v1**: the model lab and recipes, the ACP bridge and remote
-drivers, and extensions. The two provider routes below landed with the models
-phase and follow the same conventions. None of the remaining areas changes a
-route above.
+**Deliberately not v1**: the recipe routes, the ACP bridge and remote drivers, and
+extensions. The two provider routes below landed with the models phase and follow the
+same conventions. Recipes load from disk and every run is recorded, but neither is
+served yet: that is P4.5-7. None of the remaining areas changes a route above.
 
 ## Providers
 
@@ -854,7 +854,8 @@ session and checks the answer with `acpilot_core::commit`. The staged diff is
 the only change it sees. Nothing is committed, and the draft is not stored, so the
 editor can change it before the commit action of P6.5-4. `prompt` replaces the
 template for this request only. `generator` is `session:<id>`. The model-lab recipe
-half of the ticket waits on P4.5, which has no providers or recipes yet.
+half of the ticket waits on the recipe routes of P4.5-7. Providers answer today, and
+recipes load from disk, but no route serves one yet.
 
 The format is enforced rather than fixed. An unknown type, a missing
 description, a subject over 72 characters, or a body without a blank line is a

@@ -27,7 +27,7 @@ Each step is a thing you can look at, diff, and throw away:
 | Provider | A chat endpoint, declared and probed by you | `config.toml` / `providers.toml` |
 | Model | One model id the provider reported | Discovered, never invented |
 | Recipe | Prompt, sampling, context budget, tool ceiling | `profiles/<name>/recipes/<id>.toml` |
-| Run | One request and one answer, recorded | `runs.jsonl`, immutable |
+| Run | One request and one answer, recorded | `profiles/<name>/runs.jsonl`, append-only |
 | Agent | A recipe promoted into `agents.toml` | Spawned like any other ACP agent |
 
 <Aside type="note" title="The autopilot is still the autopilot">

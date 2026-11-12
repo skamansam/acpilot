@@ -1278,7 +1278,21 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - Streams `SessionEvent`-shaped updates so the transcript, the TUI, and the web UI need no
     model-specific code. Usage and stop reason are reported on the final update.
 
-- [ ] **P4.5-6 · Run records** (1d)
+- [x] **P4.5-6 · Run records** (1d)
+  - **Result (2026-11-12):** `crates/acpilotd/src/runs.rs` appends one `RunRecord` per run to a
+    profile's `runs.jsonl`. A record keeps the exact request beside the answer: the prompt and
+    its `sha256:` digest, the master prompt's digest, the selectors in order, the files they
+    resolved to with bytes and estimated tokens, and the budget. The answer half is the wire
+    `RunSummary`, so the API has one shape to serve. `Page` returns a recipe's runs newest first
+    with a run-id cursor rather than an offset, because a log that grows between two requests
+    would make an offset repeat or skip a line silently; a cursor that names another recipe's
+    run is refused. `replay` rebuilds the stored `RunRequest` unchanged and deliberately drops
+    the old idempotency key, because a replay is a new run with its own record. A missing file
+    is an empty log, a partial last line ends the read, a broken line that is not last names its
+    number, and a newer `schema_version` is refused rather than half-read. **Tests:** twelve in
+    the module.
+  - **Open:** no route serves a page or a replay yet; that is P4.5-7. Nothing writes a record
+    yet either: P4.5-5's agent is what produces one, and until it lands the log is empty.
   - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
     sampling, corpus selectors and resolved file list, budget), then the result (latency, first
     token, usage, stop reason, warnings).

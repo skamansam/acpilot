@@ -610,7 +610,7 @@ fn check_history(base: &str) -> bool {
         else {
             continue;
         };
-        if let Some(dropped) = discarded_side(merge, first, second, trees_match) {
+        if let Some(dropped) = discarded_side(merge, first, second, trees_match, is_ancestor) {
             eprintln!(
                 "==> history: merge {merge} kept one parent's tree whole, so the {dropped} \
                  side's changes are gone"
@@ -661,23 +661,53 @@ fn check_history(base: &str) -> bool {
 /// one side away. History cannot tell the difference afterwards: both parents are
 /// ancestors and every later merge is clean. `same` answers whether two commits hold
 /// the same content.
+///
+/// One shape that looks identical and loses nothing is the ordinary merge of a branch
+/// back into the base it started from. The base had no commits of its own, so the
+/// merge's tree *is* the branch's, and nothing on the other side could be dropped.
+/// `ancestor` answers whether one commit is already reachable from the other, which
+/// is what separates "there was nothing to merge" from "the work was thrown away".
 fn discarded_side(
     merge: &str,
     first: &str,
     second: &str,
     same: impl Fn(&str, &str) -> Option<bool>,
+    ancestor: impl Fn(&str, &str) -> Option<bool>,
 ) -> Option<&'static str> {
     if same(first, second) == Some(true) {
         // Both parents already agreed, so the merge had nothing to drop.
         return None;
     }
-    if same(merge, first) == Some(true) {
-        return Some("second");
+    let dropped = if same(merge, first) == Some(true) {
+        "second"
+    } else if same(merge, second) == Some(true) {
+        "first"
+    } else {
+        return None;
+    };
+    let (dropped_commit, kept_commit) = if dropped == "second" {
+        (second, first)
+    } else {
+        (first, second)
+    };
+    if ancestor(dropped_commit, kept_commit) == Some(true) {
+        // The side whose tree the merge took already contained the other side, so
+        // there was no work in it to lose. Failing here would refuse every merge of
+        // a branch into the base it was cut from.
+        return None;
     }
-    if same(merge, second) == Some(true) {
-        return Some("first");
+    Some(dropped)
+}
+
+/// Whether `old` is already reachable from `new`. `git merge-base --is-ancestor`
+/// answers 0 for yes and 1 for no; anything else is "cannot tell", which is treated
+/// as not an ancestor so an unreadable history still fails loudly.
+fn is_ancestor(old: &str, new: &str) -> Option<bool> {
+    match run_git(&["merge-base", "--is-ancestor", old, new])?.0 {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
     }
-    None
 }
 
 /// Whether two commits have identical trees. `git diff --quiet` answers 0 or 1.
@@ -2004,30 +2034,52 @@ mod tests {
         // A commit named after the side it matches is a commit whose tree *is* that
         // side's: `discarded_side` is handed ids, and `same` is identity here.
         let same = |a: &str, b: &str| Some(a == b);
+        let apart = |_: &str, _: &str| Some(false);
         assert_eq!(
-            discarded_side("branch", "branch", "main", same),
+            discarded_side("branch", "branch", "main", same, apart),
             Some("second"),
             "the merge is the branch's tree, so main's work is gone"
         );
         assert_eq!(
-            discarded_side("main", "branch", "main", same),
+            discarded_side("main", "branch", "main", same, apart),
             Some("first"),
             "the merge is main's tree, so the branch's work is gone"
         );
         assert_eq!(
-            discarded_side("merged", "branch", "main", same),
+            discarded_side("merged", "branch", "main", same, apart),
             None,
             "a real merge differs from both parents"
         );
         assert_eq!(
-            discarded_side("twin", "twin", "twin", same),
+            discarded_side("twin", "twin", "twin", same, apart),
             None,
             "two parents that already agreed drop nothing"
         );
         assert_eq!(
-            discarded_side("branch", "branch", "main", |_, _| None),
+            discarded_side("branch", "branch", "main", |_, _| None, apart),
             None,
             "no answer from git is not a finding"
+        );
+    }
+
+    #[test]
+    fn a_merge_into_the_base_it_started_from_drops_nothing() {
+        // The shape a pull request makes when its base has no commits of its own:
+        // the merge's tree is the branch's, and the base is already an ancestor of
+        // the branch, so there was no work there to lose. Every phase branch starts
+        // this way, so failing here would refuse the normal workflow.
+        let same = |a: &str, b: &str| Some(a == b);
+        let base_behind = |old: &str, new: &str| Some(old == "main" && new == "branch");
+        assert_eq!(
+            discarded_side("branch", "branch", "main", same, base_behind),
+            None,
+            "the base is an ancestor of the branch, so its changes are present in it"
+        );
+        let branch_behind = |old: &str, new: &str| Some(old == "branch" && new == "main");
+        assert_eq!(
+            discarded_side("main", "branch", "main", same, branch_behind),
+            None,
+            "the same shape with the parents the other way round"
         );
     }
 

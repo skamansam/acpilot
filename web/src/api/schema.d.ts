@@ -589,6 +589,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The model servers this profile declares
+         * @description One row per declaration in `providers.toml`, in the order they appear. A row that no probe has answered since the daemon started reads `not_probed`; nothing is contacted to build this list.
+         */
+        get: operations["list_providers"];
+        put?: never;
+        /**
+         * Declare a model server, and ask it what it has
+         * @description Writes the declaration to the profile's `providers.toml` and probes it once. A refused or failed probe is still `201` with the reason in `detail`, because the row is what the person needs in order to correct it. One id is one provider: a second declaration of the same id is `409`.
+         */
+        post: operations["add_provider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -2100,7 +2124,7 @@ export interface components {
          * @description Reachability of a declared provider.
          * @enum {string}
          */
-        ProviderStatus: "disabled" | "reachable" | "unreachable" | "unauthorized";
+        ProviderStatus: "disabled" | "not_probed" | "reachable" | "unreachable" | "unauthorized";
         /** @description A provider as returned by `GET /v1/providers`. */
         ProviderSummary: {
             /** @description Base URL, for example `http://127.0.0.1:1234`. */
@@ -4233,6 +4257,68 @@ export interface operations {
                 };
             };
             /** @description This daemon has no workspace to read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_providers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared provider, with the last answer this daemon got */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSummary"][];
+                };
+            };
+        };
+    };
+    add_provider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddProviderRequest"];
+            };
+        };
+        responses: {
+            /** @description The provider, with the answer it gave or the reason it did not */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSummary"];
+                };
+            };
+            /** @description An id or base URL this build cannot use */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The id is already declared */
             409: {
                 headers: {
                     [name: string]: unknown;

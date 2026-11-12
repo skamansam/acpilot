@@ -47,6 +47,12 @@ pub enum ProviderKind {
 pub enum ProviderStatus {
     /// Declared but disabled; nothing has been sent to it.
     Disabled,
+    /// Declared and enabled, with no answer since this daemon loaded it.
+    ///
+    /// A restart reads the declaration back and says this rather than
+    /// `unreachable`: nothing was tried, so nothing failed. The row moves to one
+    /// of the answers below when something asks, which is never at startup.
+    NotProbed,
     /// Answered a probe.
     Reachable,
     /// Declared and enabled, but the last probe failed.

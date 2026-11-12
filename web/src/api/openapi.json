@@ -2570,6 +2570,7 @@
         "description": "Reachability of a declared provider.",
         "enum": [
           "disabled",
+          "not_probed",
           "reachable",
           "unreachable",
           "unauthorized"
@@ -5402,6 +5403,75 @@
           }
         },
         "summary": "Read the project map"
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "description": "One row per declaration in `providers.toml`, in the order they appear. A row that no probe has answered since the daemon started reads `not_probed`; nothing is contacted to build this list.",
+        "operationId": "list_providers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every declared provider, with the last answer this daemon got"
+          }
+        },
+        "summary": "The model servers this profile declares"
+      },
+      "post": {
+        "description": "Writes the declaration to the profile's `providers.toml` and probes it once. A refused or failed probe is still `201` with the reason in `detail`, because the row is what the person needs in order to correct it. One id is one provider: a second declaration of the same id is `409`.",
+        "operationId": "add_provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddProviderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderSummary"
+                }
+              }
+            },
+            "description": "The provider, with the answer it gave or the reason it did not"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An id or base URL this build cannot use"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The id is already declared"
+          }
+        },
+        "summary": "Declare a model server, and ask it what it has"
       }
     },
     "/v1/sessions": {

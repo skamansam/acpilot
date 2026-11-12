@@ -91,7 +91,7 @@ shell an agent started without a second process behind it.
 
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
-| Models (post-v1) | `GET/POST /v1/providers`, `POST /v1/providers/{id}/probe`, `GET /v1/models` |
+| Models (started) | `GET/POST /v1/providers` are live; `POST /v1/providers/{id}/probe` and `GET /v1/models` are planned |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
 | Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`. ACP itself at `/acp` |
 

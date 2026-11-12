@@ -114,6 +114,8 @@ POST   /v1/profiles/{id}/activate
 GET    /v1/profiles/{id}/preferences      PATCH  /v1/profiles/{id}/preferences
 POST   /v1/profiles/{id}/export
 
+GET    /v1/providers                      POST   /v1/providers
+
 GET    /v1/lsp/servers                    POST   /v1/lsp/servers/{id}/restart
 GET    /v1/lsp/servers/{id}/logs
 GET    /v1/lsp/diagnostics                POST   /v1/lsp/request
@@ -180,9 +182,41 @@ write. A patch that would make them unreadable is rolled back and answered `400`
 The successful answer is the new effective object. It is also announced as a
 `prefs` frame, so an open client applies it without waiting for the file watcher.
 
-**Deliberately not v1**: providers and models, the model lab and recipes, the ACP
-bridge and remote drivers, and extensions. They follow the same conventions when
-they land. None of them changes a route above.
+**Deliberately not v1**: the model lab and recipes, the ACP bridge and remote
+drivers, and extensions. The two provider routes below landed with the models
+phase and follow the same conventions. None of the remaining areas changes a
+route above.
+
+## Providers
+
+A provider is a model server a profile declares: a URL and a dialect. The
+declaration lives in the profile's `providers.toml` as a `[[providers]]` table.
+Nothing scans the local network and nothing probes at startup. A probe is the one
+thing that contacts a server, and it happens because somebody asked.
+
+`GET /v1/providers` lists the declarations in file order, each with the last answer
+this profile remembers. The answer is kept in `providers.state.toml`, beside the
+declaration and separate from it, so a restart says `unreachable at 12:04` rather
+than forgetting the one fact somebody needed. A declaration whose URL, dialect or
+credential reference changed is `not_probed` again: the old server's answer is not
+the new server's. `unreachable` means a probe ran and failed, so that state and
+`not_probed` cannot be confused. A disabled provider reads `disabled` and is never
+contacted.
+
+`POST /v1/providers` writes the declaration to that file and probes it once. A
+failed probe still answers `201`: the row carries the reason in `detail`, and a
+`502` would leave nobody with a row to correct. A refused credential reads
+`unauthorized`, because the fix differs from an unreachable host. One id is one
+provider, and a second declaration of that id is `409`. Replacing a row would move
+every recipe that names it to another server without saying so.
+
+`credential_ref` names a keyring entry in the profile's namespace. The daemon reads
+it at probe time and sends it as a bearer token. A reference that cannot be read
+answers `unauthorized` with the account to add, and nothing is sent, because an
+anonymous request would let the server take the blame. The reference is returned as
+written and the token is never part of any answer. `acpilot models probe [id]` asks
+the same question from a terminal, with no daemon, using the same keyring and the
+same memory file, and exits `1` when a provider answers with a failure.
 
 ## Stats
 
@@ -1032,7 +1066,7 @@ rather than noting them:
 | TUI/CLI: clear an agent whose binary changed | `POST /v1/agents/{id}/trust` | missing, and the proto already had `status: untrusted` with no way out — added |
 | Any client: know whether to retry | error envelope with HTTP mapping | missing from README — added |
 
-Nothing else was missing for v1. Providers, models, recipes and the ACP bridge stay
-out on purpose. They are the models phase (P4.5), the Language intelligence phase
-(P7) and the Remote hosts phase (P8). Adding them now would freeze transports that
-have not been measured.
+Nothing else was missing for v1. The provider routes landed later with the models
+phase (P4.5-1) and are described above. Recipes, the model lab and the ACP bridge
+stay out on purpose. They are planned for the same phase and for P8. Adding them
+now would freeze transports that have not been measured.

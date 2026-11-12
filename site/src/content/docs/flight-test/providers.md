@@ -115,12 +115,22 @@ something asks again.
 acpilot models probe lmstudio     # the only thing that talks to the network
 ```
 
+The declaration is written to `providers.toml`, so a restart reads the rows back.
+The answer travels too: `providers.state.toml` keeps the last probe result, so a
+restart says `unreachable at 12:04` instead of `not_probed`. Change the URL, the
+dialect or the credential reference and the row is `not_probed` again, because the
+old server's answer is not the new server's. A failed probe still answers `201`,
+with the reason in `detail`. A disabled provider is never contacted, even when a
+command names it.
+
 If a provider is down, the daemon reports `model_unavailable` with a `502`. The
 daemon is healthy and the thing behind it is not. The UI may offer "retry" without
 implying that Acpilot broke.
 
 <Aside type="tip" title="Credentials are references, not values">
-`credential_ref` names a keyring entry, exactly like a profile secret. The API
-returns the reference. It never returns the token. `acpilot provider show` prints
-`keyring:work/lmstudio` rather than something you should not paste into an issue.
+`credential_ref` names a keyring entry, exactly like a profile secret. The daemon
+reads the token when it probes and sends it as a bearer header. The API returns the
+reference and never the token, so `acpilot provider show` would print
+`keyring:work/lmstudio` rather than something you should not paste into an issue. A
+reference with no entry makes the row `unauthorized`, naming the account to add.
 </Aside>

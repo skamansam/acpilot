@@ -1137,7 +1137,34 @@ Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapt
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
 - [ ] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
-  landed with 17 tests in this crate; provider registration and the daemon route are still open.
+  landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
+  `acpilotd::providers` keeps the declared providers and serves `GET` and
+  `POST /v1/providers`. Adding one is the explicit probe the phase asks for, so the row
+  carries the server's own answer: `reachable` with the model count, `unreachable` with
+  the refusal in `detail`, `disabled` with nothing sent, or `unauthorized` when the
+  server rejects the credential. A failed probe still records the row, because a `502`
+  would leave a person with nothing to correct. One id is one provider: a second add is
+  `409`, since replacing the row would move every recipe naming it. **Tests:** six in
+  `crates/acpilotd/tests/providers.rs` and `providers.rs`, against a loopback LM Studio
+  fixture, a refused port, a duplicate id, and a URL with no scheme.
+  - **Landed after that (2026-11-12):** the two paths are in the served OpenAPI
+    document (`providers::operations`, `operation_id` `list_providers` and
+    `add_provider`), so the generated web client has them, and the declaration is
+    written to the profile's `providers.toml` before the row is kept. A restart reads
+    the rows back as `not_probed`: nothing was tried, so nothing failed. The loader
+    refuses an unknown key, a newer `schema_version` and a repeated id.
+  - **Landed (2026-11-12):** `credential_ref` resolves through the profile's keyring
+    namespace at probe time, so a token-protected server answers `reachable`; a
+    reference with no entry stops before a request is sent and names the account.
+    The last answer is kept in `providers.state.toml`, beside the declaration and
+    separate from it, so a restart shows what was measured. The CLI verb writes the
+    same file, and the daemon re-reads it on a list, so the two cannot disagree.
+    **Tests:** the keyring path against an injected store in the daemon unit tests,
+    and a loopback server that answers only with the expected bearer in the
+    integration suite.
+  - **Open:** nothing removes a provider, so a declaration survives until somebody
+    edits `providers.toml`. A changed declaration drops its remembered answer rather
+    than clearing it, and nothing probes on a timer.
   - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
     cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
     beyond the HTTP client's idle read timeout).
@@ -1149,9 +1176,24 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     token is `403 permission_denied`; no retries on a 4xx. The variant is added in this phase
     (it is the one failure the enum the foundation phase (P1) shipped could not describe without lying).
 
-- [ ] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping and
-  `Backend::probe` landed (`crates/acpilot-model/src/lib.rs`); the CLI verb and the probe cache
-  are still open.
+- [x] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping,
+  `Backend::probe`, `acpilot models probe` and the remembered answer are here.
+  - **Result (2026-11-12):** `acpilot models probe [id]` reads the profile's
+    `providers.toml` and asks each enabled provider what it has. A named provider is
+    asked even when it is disabled: the row says `disabled` and no request leaves.
+    The command calls `acpilotd::providers::probe`, so the CLI and the route cannot
+    disagree about a refused credential. A failed probe exits `1`; a declaration
+    that is not usable exits `1` naming the field; no providers declared is exit `0`
+    with the file named. **Tests:** three in `crates/acpilot-cli/src/cli.rs` for
+    target selection, the unknown id, and the printed line.
+  - **Landed (2026-11-12):** the answer is remembered in `providers.state.toml`, so a
+    restart reads `unreachable at 12:04` instead of `not_probed`. The record repeats
+    the declaration's URL, dialect and credential reference, so an edited declaration
+    is `not_probed` again rather than showing another server's count. A file that does
+    not parse is forgotten, not a startup failure: it is derived data.
+  - **Open:** `Backend::probe` (one tool-shaped and one JSON-schema request) has no
+    caller yet: the lab button is P4.5-8's. The remembered row carries reachability
+    and the model count, not per-model capabilities.
   - Map `/api/v0/models` fields into `DiscoveredModel` (`llm`→`chat`, `vlm`→`vision`,
     `embeddings`→`embedding`, `state`→`loaded`, `max_context_length`→`context_window` with
     `context_source = server`). Where a server says nothing, `context_source = unknown` and the

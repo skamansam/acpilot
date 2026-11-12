@@ -2574,6 +2574,7 @@ expression: canonical(document)
         "description": "Reachability of a declared provider.",
         "enum": [
           "disabled",
+          "not_probed",
           "reachable",
           "unreachable",
           "unauthorized"

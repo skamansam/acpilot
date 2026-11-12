@@ -55,6 +55,7 @@ mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
+pub mod providers;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
@@ -335,6 +336,13 @@ pub struct AppState {
     /// capabilities are a fact about this build, and a list that changed under a
     /// client between two reads would be a dialog that flickers.
     hosts: Arc<hosts::Hosts>,
+    /// The model providers this daemon has been told about.
+    ///
+    /// Declared, not discovered: there is no scan of the loopback interface, because
+    /// a network call is something a person asked for. In memory, like the host list,
+    /// because a restart's rows come from the profile's `[providers]` table and that
+    /// file belongs to the recipes work.
+    providers: Arc<providers::Providers>,
     /// The workspaces clients have opened, and the check that each root was there.
     ///
     /// In memory like the host list: a workspace is a host and a path, and both are
@@ -467,6 +475,7 @@ impl Default for AppState {
             profile_root: None,
             index: None,
             hosts: Arc::new(hosts::Hosts::default()),
+            providers: Arc::default(),
             workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
@@ -515,6 +524,24 @@ impl AppState {
     #[must_use]
     pub fn index(&self) -> Option<&acpilot_store::Index> {
         self.index.as_ref()
+    }
+
+    /// The model providers this daemon has been told about.
+    #[must_use]
+    pub fn providers(&self) -> &Arc<providers::Providers> {
+        &self.providers
+    }
+
+    /// Serve the providers a profile declares.
+    ///
+    /// Loaded once, when the state is built: the file is somebody's declaration,
+    /// and a route that re-read it per request would answer a picker with a
+    /// different list after every editor save. Nothing is probed here; a row reads
+    /// `not_probed` until something asks.
+    #[must_use]
+    pub fn with_providers(mut self, providers: providers::Providers) -> Self {
+        self.providers = Arc::new(providers);
+        self
     }
 
     /// The profile directory's name, when this daemon was started with one.
@@ -1153,6 +1180,10 @@ pub enum StateError {
     #[error("the profile's agents.toml is not usable: {0}")]
     Agents(#[from] acpilot_agent::AgentError),
 
+    /// The profile's `providers.toml` exists and does not load.
+    #[error("the profile's providers.toml is not usable: {0}")]
+    Providers(#[from] acpilot_profile::providers::ProvidersError),
+
     /// The workspace root could not be resolved, so "inside" has no meaning.
     #[error("cannot resolve workspace {}: {source}", path.display())]
     Workspace {
@@ -1196,12 +1227,24 @@ pub fn state_for_profile(
         "policy loaded"
     );
     let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
+    // The keyring namespace is the profile's directory name, the same rule
+    // `acpilot-agent` applies to a manifest's `keyring:` reference: two spellings
+    // of one namespace would let a provider read an entry the manifest cannot.
+    let providers = providers::Providers::load_with(
+        profile.providers_path(),
+        name.clone()
+            .map(|name| Arc::new(KeyringResolver::new(name))),
+    )?;
     let state = AppState::new()
         .with_profile_name(name)
         .with_profile_root(Some(directory.to_path_buf()))
         .with_host_identities(identities)
         .with_broker(broker)
-        .with_workspace(workspace);
+        .with_workspace(workspace)
+        // A malformed declaration is a startup failure rather than an empty list:
+        // the daemon would otherwise look healthy while the rows somebody wrote
+        // were silently absent.
+        .with_providers(providers);
     Ok(match load_agents(&profile)? {
         Some(registry) => state.with_registry(registry),
         None => state,
@@ -1852,6 +1895,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(git::operations())
         .chain(commit::operations())
         .chain(project::operations())
+        .chain(providers::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
@@ -2247,6 +2291,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(git::routes())
         .merge(commit::routes())
         .merge(hosts::routes())
+        .merge(providers::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
         .merge(project::routes())

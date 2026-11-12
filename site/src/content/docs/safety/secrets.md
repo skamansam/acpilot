@@ -65,6 +65,12 @@ account `<profile>/<name>`. A missing entry fails the manifest load and names th
 account to add, rather than failing mid-turn. The suite tests the namespace and
 every error path against an injected store, so it needs no logged-in desktop.
 
+A model provider's `credential_ref` uses the same namespace. The daemon reads the
+token at probe time and sends it as a bearer header. A missing entry makes the
+provider row `unauthorized` and names the account to add, and nothing is sent. The
+probe answer, which never contains the token, is remembered in
+`providers.state.toml`.
+
 `acpilot secret set|list|rm` writes and deletes through the same namespace. The
 profile follows the launch order: `--profile`, `ACPILOT_PROFILE`, the project
 marker, `active_profile`, then `default`. A credential therefore follows the

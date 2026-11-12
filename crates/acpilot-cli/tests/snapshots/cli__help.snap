@@ -17,6 +17,7 @@ Commands:
   tui        Open the terminal UI against a running daemon, or run one here
   serve      Serve the daemon and the web UI over HTTP, printing its address and token
   doctor     Report what this machine has, and what a project is missing
+  models     Probe a declared model server, and print what it answered
   help       Print this message or the help of the given subcommand(s)
 
 Options:

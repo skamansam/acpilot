@@ -1137,7 +1137,22 @@ Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapt
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
 - [ ] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
-  landed with 17 tests in this crate; provider registration and the daemon route are still open.
+  landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
+  `acpilotd::providers` keeps the declared providers and serves `GET` and
+  `POST /v1/providers`. Adding one is the explicit probe the phase asks for, so the row
+  carries the server's own answer: `reachable` with the model count, `unreachable` with
+  the refusal in `detail`, `disabled` with nothing sent, or `unauthorized` when the
+  server rejects the credential. A failed probe still records the row, because a `502`
+  would leave a person with nothing to correct. One id is one provider: a second add is
+  `409`, since replacing the row would move every recipe naming it. **Tests:** six in
+  `crates/acpilotd/tests/providers.rs` and `providers.rs`, against a loopback LM Studio
+  fixture, a refused port, a duplicate id, and a URL with no scheme.
+  - **Open:** the two paths are not in the OpenAPI document, so the generated web client
+    cannot call them; that is P4.5-7's stub functions and snapshot. The rows are not
+    written to the profile's `[providers]` table, and a restart therefore forgets them.
+    `credential_ref` is kept and not resolved through the keyring, so a server that needs
+    a token answers `unauthorized`. `acpilot models probe` is P4.5-2's verb, and nothing
+    removes a provider yet.
   - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
     cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
     beyond the HTTP client's idle read timeout).

@@ -5,9 +5,9 @@ description: What actually works today, and what is still in the hangar.
 
 <span class="pill pill--boarding">boarding</span>
 
-**Current altitude: 3,000 ft and climbing.** The workspace exists, the contract
-tests pass, and nothing has flown a real agent yet. This page is the honest
-instrument panel. If it says a thing works, it works in the repository today.
+**Current altitude: 3,000 ft and climbing.** The workspace, the daemon and the agent
+engine are built, and the TUI can select an agent and prompt it. This page is the
+honest instrument panel. If it says a thing works, it works in the repository today.
 
 ## What works right now
 

@@ -34,6 +34,10 @@ toml = { workspace = true }
 # paths it is asked about. A watcher in each client would be a second debounce
 # policy and a second answer to an editor that saves by rename.
 notify = { workspace = true }
+# A recipe's `updated_at` is the file's modification time, written as RFC 3339. The
+# workspace's timestamp type already does that arithmetic and already parses what the
+# API serves, so this crate does not grow a second date formatter to spell it.
+jiff = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

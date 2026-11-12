@@ -1204,13 +1204,31 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     loaded model and records what came back in `ModelCapabilities`. A model that claims tools
     and then emits prose gets `tools: false` with the evidence in `detail`.
 
-- [ ] **P4.5-3 · Recipes** (1d)
+- [x] **P4.5-3 · Recipes** (1d)
   - `profiles/<name>/recipes/<id>.toml`, `schema_version = 1`, unknown keys are errors (same
     rule as config and manifests). Hot-reload on change, 200 ms debounce, last-good kept on a
     parse failure with a notice.
   - Validation at load, not at run: `window` must not exceed the model's reported window; a tool
     the model cannot call is refused with an explanation rather than silently omitted;
     `max_steps` in `1..=50`; `reserve_output + max_corpus_bytes_estimate` must fit.
+  - **Result (2026-11-12):** `crates/acpilot-profile/src/recipes.rs` reads the directory into
+    the wire type `ModelRecipe`, so the file, the API and the lab share one shape. The
+    `updated_at` field is the file's modification time, not something an editor has to bump.
+    A load fails on an unknown key, a newer `schema_version`, an `id` that is not the file
+    name, or a value outside its range. A provider must be declared and enabled. A model is
+    checked only once its provider has been probed: it must exist, answer chat, and report a
+    window at least as wide as the recipe's. Exposed tools on a model without tool support are
+    refused with the tool named, never dropped. The budget counts four bytes as a token, adds a
+    documented 1,024-token allowance for tool schemas, and must leave room in the window.
+    `Live` watches the loaded files through `watch` (the same 200 ms debounce the settings use)
+    and keeps the last good set when a reload fails, which is what raises the notice.
+    **Tests:** the module's own, including a half-written save that keeps the old recipes, an
+    edit that applies on reload, and a real watcher delivering a save.
+  - **Open:** the daemon does not read recipes yet, so no route serves one and no run uses one.
+    The API is P4.5-7 and the lab is P4.5-8. A recipe created after `Live::open` is not watched
+    until the next load: the writer has the new set in hand. The documented example claimed
+    `max_corpus_bytes = 262144`, which cannot fit a 32,768-token window beside its reserved
+    output, so `flight-test/recipes.md` now says 65536 and the field table states the rule.
 
 - [ ] **P4.5-4 · Context assembly** (2d)
   - Budget split — system prompt, corpus, history, tool schemas, reserved output — with a

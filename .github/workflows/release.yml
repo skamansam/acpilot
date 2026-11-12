@@ -127,13 +127,18 @@ jobs:
       # is not ours to assume: the static binary runs on a distro the daemon knows
       # nothing about. `build.rs` embeds whatever `ACPILOT_HELPER_BIN` names, and a
       # build without it behaves as before — asking the host's `PATH`.
+      #
+      # The path is absolute because a build script runs in its own crate's directory,
+      # not the workspace root: the relative form resolved to
+      # `crates/acpilotd/target/…`, which no build writes, so every Linux release
+      # failed in `build.rs` with "could not be read".
       - name: Build the helper the daemon carries
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           rustup target add x86_64-unknown-linux-musl
           cargo build --release --locked -p acpilotd-helper --target x86_64-unknown-linux-musl
-          echo "ACPILOT_HELPER_BIN=target/x86_64-unknown-linux-musl/release/acpilotd-helper" >> "$GITHUB_ENV"
+          echo "ACPILOT_HELPER_BIN=$GITHUB_WORKSPACE/target/x86_64-unknown-linux-musl/release/acpilotd-helper" >> "$GITHUB_ENV"
 
       # `acpilot` is the CLI and the TUI; `acpilotd` is the daemon; `acpilot-gui`
       # is the desktop app, built with its feature on because off is the default

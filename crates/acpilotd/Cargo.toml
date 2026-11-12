@@ -50,6 +50,10 @@ acpilot-text = { workspace = true, optional = true }
 # References come from a language server where one is installed: scope is the
 # server's answer rather than the parse tree's guess.
 acpilot-lsp = { workspace = true }
+# A provider row is answered by the adapter that speaks to it: `POST /v1/providers`
+# asks the server what it has, and the mapping from that answer lives in this crate
+# so the route and the model lab read one report rather than two transcriptions.
+acpilot-model = { workspace = true }
 # The page served at `/app`. It is a separate crate so the SPA the web phase
 # builds is embedded by the daemon rather than compiled into it.
 acpilot-web = { workspace = true }

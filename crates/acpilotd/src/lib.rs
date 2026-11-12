@@ -55,6 +55,7 @@ mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
+mod providers;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
@@ -335,6 +336,13 @@ pub struct AppState {
     /// capabilities are a fact about this build, and a list that changed under a
     /// client between two reads would be a dialog that flickers.
     hosts: Arc<hosts::Hosts>,
+    /// The model providers this daemon has been told about.
+    ///
+    /// Declared, not discovered: there is no scan of the loopback interface, because
+    /// a network call is something a person asked for. In memory, like the host list,
+    /// because a restart's rows come from the profile's `[providers]` table and that
+    /// file belongs to the recipes work.
+    providers: Arc<providers::Providers>,
     /// The workspaces clients have opened, and the check that each root was there.
     ///
     /// In memory like the host list: a workspace is a host and a path, and both are
@@ -467,6 +475,7 @@ impl Default for AppState {
             profile_root: None,
             index: None,
             hosts: Arc::new(hosts::Hosts::default()),
+            providers: Arc::default(),
             workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
@@ -515,6 +524,12 @@ impl AppState {
     #[must_use]
     pub fn index(&self) -> Option<&acpilot_store::Index> {
         self.index.as_ref()
+    }
+
+    /// The model providers this daemon has been told about.
+    #[must_use]
+    pub fn providers(&self) -> &Arc<providers::Providers> {
+        &self.providers
     }
 
     /// The profile directory's name, when this daemon was started with one.
@@ -2247,6 +2262,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(git::routes())
         .merge(commit::routes())
         .merge(hosts::routes())
+        .merge(providers::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
         .merge(project::routes())

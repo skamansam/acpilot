@@ -5,12 +5,17 @@
 //! returning a `Value` would test the mapping and skip the part this route adds:
 //! that the answer arrives, is counted, and is written into the row.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use acpilot_agent::{CredentialStore, KEYRING_SERVICE, KeyringResolver};
 use acpilot_profile::providers::{DeclaredProvider, ProvidersFile};
 use acpilot_proto::model::ProviderKind;
 use acpilotd::{AppState, router_with};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router as AxumRouter};
 use http_body_util::BodyExt;
@@ -54,6 +59,43 @@ fn app_with_file(path: &std::path::Path) -> Router {
     let providers = acpilotd::providers::Providers::load(path.to_path_buf())
         .expect("a fresh declaration loads");
     router_with(AppState::new().with_providers(providers))
+}
+
+/// A daemon that reads and writes declarations in `path`, with a keyring of `profile`.
+fn app_with_keyring(path: &std::path::Path, keyring: KeyringResolver) -> Router {
+    let providers =
+        acpilotd::providers::Providers::load_with(path.to_path_buf(), Some(Arc::new(keyring)))
+            .expect("a fresh declaration loads");
+    router_with(AppState::new().with_providers(providers))
+}
+
+/// A read-only keyring, so a credential test needs no desktop session.
+#[derive(Debug, Default, Clone)]
+struct MemoryStore(Arc<BTreeMap<String, String>>);
+
+impl MemoryStore {
+    fn with(account: &str, value: &str) -> Self {
+        let mut entries = BTreeMap::new();
+        entries.insert(account.to_owned(), value.to_owned());
+        Self(Arc::new(entries))
+    }
+}
+
+impl CredentialStore for MemoryStore {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+        if service != KEYRING_SERVICE {
+            return Ok(None);
+        }
+        Ok(self.0.get(account).cloned())
+    }
+
+    fn set(&self, _service: &str, _account: &str, _value: &str) -> Result<(), String> {
+        Err("this test keyring is read only".to_owned())
+    }
+
+    fn delete(&self, _service: &str, _account: &str) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 fn declaration(id: &str, enabled: bool) -> DeclaredProvider {
@@ -265,6 +307,167 @@ async fn an_added_provider_is_written_to_the_profile() {
     assert!(text.contains("id = \"later\""), "{text}");
     // A credential is a reference even on disk: the token never enters the file.
     assert!(!text.contains("token"), "{text}");
+}
+
+/// A model server on an ephemeral loopback port that answers only with `token`.
+async fn serve_models_requiring(token: &'static str, rows: Value) -> String {
+    let app = AxumRouter::new().route(
+        "/api/v0/models",
+        get(move |headers: axum::http::HeaderMap| {
+            let rows = rows.clone();
+            async move {
+                let presented = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok());
+                if presented == Some(format!("Bearer {token}").as_str()) {
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "object": "list", "data": rows })),
+                    )
+                        .into_response()
+                } else {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "error": "a token is required" })),
+                    )
+                        .into_response()
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a loopback port");
+    let address = listener.local_addr().expect("a bound address");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{address}")
+}
+
+#[tokio::test]
+async fn a_token_protected_provider_is_asked_with_the_profiles_entry() {
+    let base_url = serve_models_requiring(
+        "sk-test",
+        json!([{ "id": "qwen2-7b-instruct", "type": "llm" }]),
+    )
+    .await;
+    let directory = tempfile::tempdir().expect("temp dir");
+    let file = ProvidersFile::path_in(directory.path());
+    let keyring = KeyringResolver::with_store("work", MemoryStore::with("work/lm", "sk-test"));
+    let application = app_with_keyring(&file, keyring);
+
+    let (status, added) = send(
+        &application,
+        "POST",
+        "/v1/providers",
+        Some(json!({
+            "id": "lm",
+            "kind": "lm_studio",
+            "label": "LM Studio",
+            "base_url": base_url,
+            "credential_ref": "keyring:lm",
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{added}");
+    assert_eq!(
+        added["status"], "reachable",
+        "the entry under <profile>/<name> authenticated the probe: {added}"
+    );
+    assert_eq!(added["model_count"], 1);
+
+    // The reference travels, the token does not.
+    let text = std::fs::read_to_string(&file).expect("the declaration was written");
+    assert!(text.contains("keyring:lm"), "{text}");
+    assert!(!text.contains("sk-test"), "{text}");
+}
+
+#[tokio::test]
+async fn a_reference_with_no_entry_is_named_instead_of_blaming_the_server() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let file = ProvidersFile::path_in(directory.path());
+    let keyring = KeyringResolver::with_store("work", MemoryStore::default());
+    let application = app_with_keyring(&file, keyring);
+
+    let (status, added) = send(
+        &application,
+        "POST",
+        "/v1/providers",
+        Some(json!({
+            "id": "lm",
+            "kind": "lm_studio",
+            "label": "LM Studio",
+            "base_url": "http://127.0.0.1:1",
+            "credential_ref": "keyring:absent",
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{added}");
+    assert_eq!(added["status"], "unauthorized");
+    assert_eq!(
+        added["last_probed_at"],
+        Value::Null,
+        "nothing was sent, so nothing was probed at"
+    );
+    assert!(
+        added["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("work/absent")),
+        "the row names the account to add: {added}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_remembers_the_answer_it_was_given() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let file = ProvidersFile::path_in(directory.path());
+    let application = app_with_file(&file);
+    let (status, added) = send(
+        &application,
+        "POST",
+        "/v1/providers",
+        Some(json!({
+            "id": "absent",
+            "kind": "open_ai_compatible",
+            "label": "absent",
+            "base_url": "http://127.0.0.1:1",
+            "enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{added}");
+    assert_eq!(added["status"], "unreachable");
+    let detail = added["detail"].clone();
+    let probed_at = added["last_probed_at"].clone();
+    assert!(probed_at.is_string());
+    drop(application);
+
+    // A new process reads the answer it never asked for.
+    let restarted = app_with_file(&file);
+    let (_, listed) = send(&restarted, "GET", "/v1/providers", None).await;
+    let rows = listed.as_array().expect("a list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "unreachable");
+    assert_eq!(rows[0]["detail"], detail);
+    assert_eq!(rows[0]["last_probed_at"], probed_at);
+    drop(restarted);
+
+    // The same id pointed at another port is a server nobody asked.
+    let mut declarations = ProvidersFile::empty();
+    declarations.providers.push(DeclaredProvider {
+        base_url: "http://127.0.0.1:2".to_owned(),
+        ..declaration("absent", true)
+    });
+    declarations.save(&file).expect("rewrite");
+    let moved = app_with_file(&file);
+    let (_, listed) = send(&moved, "GET", "/v1/providers", None).await;
+    assert_eq!(
+        listed[0]["status"], "not_probed",
+        "the old server's refusal is not this server's answer: {listed}"
+    );
 }
 
 #[tokio::test]

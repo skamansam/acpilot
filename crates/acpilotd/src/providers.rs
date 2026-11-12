@@ -22,18 +22,25 @@
 //!
 //! # What is not here
 //!
-//! The bearer token is not read. `credential_ref` names a keyring entry, and the
-//! half of this task that owns secrets resolves it; until then a server that wants
-//! one answers `unauthorized`, which is the honest answer rather than a guessed
-//! pass. Nothing removes a provider, and the last probe's answer is not cached, so
-//! `acpilot models probe` is the way to ask again.
+//! A token is read from the keyring, under this profile's namespace, at the moment
+//! of the probe — never at startup and never into an HTTP answer. A reference that
+//! cannot be read keeps its row and says which entry to fix, because sending the
+//! request anonymously would let the server take the blame for a local problem.
+//!
+//! The last answer is remembered in `providers.state.toml`, beside the declaration
+//! and separate from it: a restart can then say "unreachable at 12:04" instead of
+//! forgetting the one fact somebody needed. That file is derived data, so a copy
+//! that will not parse is forgotten rather than failing a startup.
+//!
+//! Nothing removes a provider yet.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use acpilot_agent::{KeyringResolver, SecretRef, SecretResolver};
 use acpilot_core::AcpilotError;
 use acpilot_model::{Backend, Provider};
-use acpilot_profile::providers::{DeclaredProvider, ProvidersError, ProvidersFile};
+use acpilot_profile::providers::{DeclaredProvider, ProvidersError, ProvidersFile, ProvidersState};
 use acpilot_proto::ErrorBody;
 use acpilot_proto::model::{AddProviderRequest, ProviderStatus, ProviderSummary};
 use axum::Json;
@@ -96,6 +103,11 @@ pub struct Providers {
     /// somebody editing `providers.toml` between two adds should keep their edit,
     /// not have it replaced by a stale copy.
     file: Option<PathBuf>,
+    /// Where the last answers are remembered, beside the declaration.
+    state: Option<PathBuf>,
+    /// The keyring a `credential_ref` resolves through, when this daemon has a
+    /// profile to name in it.
+    resolver: Option<Arc<KeyringResolver>>,
 }
 
 impl Providers {
@@ -110,23 +122,94 @@ impl Providers {
     ///
     /// The file cannot be read, is not this document, or declares one id twice.
     pub fn load(path: PathBuf) -> Result<Self, ProvidersError> {
+        Self::load_with(path, None)
+    }
+
+    /// [`Self::load`], with the keyring that resolves a declaration's
+    /// `credential_ref`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`].
+    pub fn load_with(
+        path: PathBuf,
+        resolver: Option<Arc<KeyringResolver>>,
+    ) -> Result<Self, ProvidersError> {
         let declarations = ProvidersFile::load(&path)?;
+        let state = path.parent().map(ProvidersState::path_in);
+        let remembered = state
+            .as_deref()
+            .map(ProvidersState::load)
+            .unwrap_or_default();
+        // An answer describes one declaration, and the record keeps the fields it
+        // was given for. A declaration that changed is `not_probed` again: the old
+        // server's model count is not the new server's answer.
+        let known = declarations
+            .providers
+            .iter()
+            .map(|declaration| {
+                remembered
+                    .row(declaration)
+                    .cloned()
+                    .unwrap_or_else(|| row_from(declaration))
+            })
+            .collect();
         Ok(Self {
-            known: Mutex::new(declarations.providers.iter().map(row_from).collect()),
+            known: Mutex::new(known),
             file: Some(path),
+            state,
+            resolver,
         })
+    }
+
+    /// The keyring this daemon resolves credentials through, when it has one.
+    #[must_use]
+    pub fn resolver(&self) -> Option<&KeyringResolver> {
+        self.resolver.as_deref()
     }
 
     /// Every provider, in the order they were declared.
     #[must_use]
     pub fn list(&self) -> Vec<ProviderSummary> {
+        self.remember();
         self.lock().clone()
     }
 
     /// The provider with this id, when one was added.
     #[must_use]
     pub fn get(&self, id: &str) -> Option<ProviderSummary> {
+        self.remember();
         self.lock().iter().find(|row| row.id == id).cloned()
+    }
+
+    /// Take the answers another process wrote since this one last looked.
+    ///
+    /// `acpilot models probe` runs without a daemon and writes the same file. Two
+    /// surfaces that answered differently about one server would be a bug people
+    /// blame on the server, and the file is a few hundred bytes.
+    fn remember(&self) {
+        let Some(state) = &self.state else {
+            return;
+        };
+        let remembered = ProvidersState::load(state);
+        if remembered.probes.is_empty() {
+            return;
+        }
+        let mut known = self.lock();
+        for row in known.iter_mut() {
+            if row.status == ProviderStatus::Disabled {
+                continue;
+            }
+            let answer = remembered.probes.iter().find(|record| {
+                record.id == row.id
+                    && record.kind == row.kind
+                    && record.base_url == row.base_url
+                    && record.credential_ref == row.credential_ref
+            });
+            if let Some(answer) = answer {
+                *row = answer.summary.clone();
+            }
+        }
     }
 
     /// Record a declaration and its probe result, and write it down.
@@ -151,10 +234,19 @@ impl Providers {
         }
         if let Some(path) = &self.file {
             let mut file = ProvidersFile::load(path).map_err(Declined::File)?;
-            file.providers.push(declaration);
+            file.providers.push(declaration.clone());
             file.save(path).map_err(Declined::File)?;
         }
-        known.push(row);
+        known.push(row.clone());
+        if let Some(state) = &self.state {
+            let mut remembered = ProvidersState::load(state);
+            remembered.record(&declaration, &row);
+            // A memory that cannot be written is one question somebody repeats, not
+            // a declaration lost: the add itself already succeeded.
+            if let Err(error) = remembered.save(state) {
+                tracing::warn!(%error, "the probe answer was not remembered");
+            }
+        }
         Ok(())
     }
 
@@ -190,7 +282,8 @@ async fn create(
         return Err(duplicate(&request.id));
     }
 
-    let row = probe(&request).await;
+    let credential = Credential::resolve(state.providers().resolver(), &request);
+    let row = probe(&request, credential).await;
     let declaration = DeclaredProvider {
         id: request.id.clone(),
         kind: request.kind,
@@ -253,12 +346,51 @@ pub fn refuse(request: &AddProviderRequest) -> Option<Refusal> {
     None
 }
 
+/// What a declaration's `credential_ref` produced.
+///
+/// Three outcomes rather than an `Option`, because "no token was declared" and
+/// "a token was declared and could not be read" lead to different rows: the first
+/// server is asked anonymously, the second is not asked at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// No reference was declared; the server is asked without a token.
+    None,
+    /// The reference resolved to this value.
+    Bearer(String),
+    /// The reference could not be read. Nothing is sent, and the row says why.
+    Unusable(String),
+}
+
+impl Credential {
+    /// Resolve a request's reference against a profile's keyring.
+    ///
+    /// A process with no keyring — a daemon started without a profile — cannot
+    /// resolve one, and that is `Unusable` rather than a silent anonymous request:
+    /// the server would answer `401` and the row would blame it for a local setup
+    /// mistake.
+    #[must_use]
+    pub fn resolve(resolver: Option<&KeyringResolver>, request: &AddProviderRequest) -> Self {
+        let Some(reference) = request.credential_ref.as_deref() else {
+            return Self::None;
+        };
+        let Some(resolver) = resolver else {
+            return Self::Unusable(format!(
+                "`{reference}` names a keyring entry, and this process has no keyring to read it from"
+            ));
+        };
+        match SecretRef::parse(reference).and_then(|parsed| resolver.resolve(&parsed)) {
+            Ok(secret) => Self::Bearer(secret.expose().to_owned()),
+            Err(error) => Self::Unusable(error.to_string()),
+        }
+    }
+}
+
 /// Ask the server what it has, and turn the answer into the row the API serves.
 ///
 /// Public because `acpilot models probe` asks the same question with the same
 /// words: a second mapper in the CLI would be a second opinion about what a
 /// refused credential means.
-pub async fn probe(request: &AddProviderRequest) -> ProviderSummary {
+pub async fn probe(request: &AddProviderRequest, credential: Credential) -> ProviderSummary {
     if !request.enabled {
         return row(
             request,
@@ -269,7 +401,25 @@ pub async fn probe(request: &AddProviderRequest) -> ProviderSummary {
         );
     }
 
-    let provider = Provider::new(request.id.clone(), request.kind, request.base_url.clone());
+    let token = match credential {
+        Credential::None => None,
+        Credential::Bearer(token) => Some(token),
+        // `last_probed_at` stays empty because nothing was asked: a timestamp here
+        // would say the server was given a chance and refused, which is a different
+        // problem with a different fix.
+        Credential::Unusable(reason) => {
+            return row(
+                request,
+                ProviderStatus::Unauthorized,
+                0,
+                None,
+                Some(format!("nothing was sent: {reason}")),
+            );
+        }
+    };
+
+    let provider =
+        Provider::new(request.id.clone(), request.kind, request.base_url.clone()).with_token(token);
     let answer = match Backend::new(provider) {
         Ok(backend) => backend.models().await,
         Err(error) => Err(error),
@@ -413,7 +563,27 @@ fn create_doc() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acpilot_agent::{CredentialStore, KEYRING_SERVICE};
     use acpilot_proto::model::ProviderKind;
+
+    /// A keyring holding one account, so the resolution path is tested without a
+    /// desktop session — the same reason the agent crate's backend is a trait.
+    #[derive(Debug)]
+    struct OneEntry(&'static str, &'static str);
+
+    impl CredentialStore for OneEntry {
+        fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+            Ok((service == KEYRING_SERVICE && account == self.0).then(|| self.1.to_owned()))
+        }
+
+        fn set(&self, _service: &str, _account: &str, _value: &str) -> Result<(), String> {
+            Err("this test store is read only".to_owned())
+        }
+
+        fn delete(&self, _service: &str, _account: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
 
     fn request(id: &str, base_url: &str) -> AddProviderRequest {
         AddProviderRequest {
@@ -543,7 +713,7 @@ mod tests {
         // `unreachable`. The status is the proof that no request left.
         let mut disabled = request("lm", "http://127.0.0.1:1");
         disabled.enabled = false;
-        let row = probe(&disabled).await;
+        let row = probe(&disabled, Credential::None).await;
         assert_eq!(row.status, ProviderStatus::Disabled);
         assert_eq!(row.model_count, 0);
         assert!(
@@ -554,11 +724,68 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_provider_is_still_a_row() {
-        let row = probe(&request("lm", "http://127.0.0.1:1")).await;
+        let row = probe(&request("lm", "http://127.0.0.1:1"), Credential::None).await;
         assert_eq!(row.status, ProviderStatus::Unreachable);
         assert!(
             row.detail.is_some_and(|detail| !detail.is_empty()),
             "a refusal without a reason is a dialog with nothing to fix"
+        );
+    }
+
+    #[test]
+    fn a_reference_resolves_through_the_profiles_keyring() {
+        let resolver = KeyringResolver::with_store("work", OneEntry("work/lm", "sk-test"));
+        let mut with_token = request("lm", "http://127.0.0.1:1234");
+        with_token.credential_ref = Some("keyring:lm".to_owned());
+        assert_eq!(
+            Credential::resolve(Some(&resolver), &with_token),
+            Credential::Bearer("sk-test".to_owned()),
+            "the account is <profile>/<name>, which is where the agent crate files a secret"
+        );
+
+        let bare = request("bare", "http://127.0.0.1:1234");
+        assert_eq!(
+            Credential::resolve(Some(&resolver), &bare),
+            Credential::None
+        );
+        assert!(
+            matches!(
+                Credential::resolve(None, &with_token),
+                Credential::Unusable(_)
+            ),
+            "a daemon with no keyring cannot honestly send the request anonymously"
+        );
+    }
+
+    #[test]
+    fn a_reference_with_no_entry_is_unusable_and_names_the_account() {
+        let resolver = KeyringResolver::with_store("work", OneEntry("work/other", "sk-test"));
+        let mut with_token = request("lm", "http://127.0.0.1:1234");
+        with_token.credential_ref = Some("keyring:lm".to_owned());
+        let Credential::Unusable(reason) = Credential::resolve(Some(&resolver), &with_token) else {
+            panic!("a missing entry is not a token");
+        };
+        assert!(reason.contains("work/lm"), "the account to add: {reason}");
+    }
+
+    #[tokio::test]
+    async fn a_credential_that_cannot_be_read_is_not_sent() {
+        let mut with_token = request("lm", "http://127.0.0.1:1");
+        with_token.credential_ref = Some("keyring:absent".to_owned());
+        let row = probe(
+            &with_token,
+            Credential::Unusable("no entry for account \"work/absent\"".to_owned()),
+        )
+        .await;
+        assert_eq!(row.status, ProviderStatus::Unauthorized);
+        assert!(
+            row.last_probed_at.is_none(),
+            "nothing was asked, so a timestamp would blame the server"
+        );
+        let detail = row.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("work/absent"),
+            "the row names the entry to add: {detail}"
         );
     }
 

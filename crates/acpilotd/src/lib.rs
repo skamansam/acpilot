@@ -1227,6 +1227,14 @@ pub fn state_for_profile(
         "policy loaded"
     );
     let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
+    // The keyring namespace is the profile's directory name, the same rule
+    // `acpilot-agent` applies to a manifest's `keyring:` reference: two spellings
+    // of one namespace would let a provider read an entry the manifest cannot.
+    let providers = providers::Providers::load_with(
+        profile.providers_path(),
+        name.clone()
+            .map(|name| Arc::new(KeyringResolver::new(name))),
+    )?;
     let state = AppState::new()
         .with_profile_name(name)
         .with_profile_root(Some(directory.to_path_buf()))
@@ -1236,7 +1244,7 @@ pub fn state_for_profile(
         // A malformed declaration is a startup failure rather than an empty list:
         // the daemon would otherwise look healthy while the rows somebody wrote
         // were silently absent.
-        .with_providers(providers::Providers::load(profile.providers_path())?);
+        .with_providers(providers);
     Ok(match load_agents(&profile)? {
         Some(registry) => state.with_registry(registry),
         None => state,

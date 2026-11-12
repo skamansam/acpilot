@@ -19,6 +19,7 @@ pub mod export;
 pub mod launch;
 pub mod prefs;
 pub mod project;
+pub mod recipes;
 pub mod settings;
 pub mod watch;
 
@@ -228,6 +229,16 @@ impl Profile {
     #[must_use]
     pub fn providers_path(&self) -> PathBuf {
         providers::ProvidersFile::path_in(&self.root)
+    }
+
+    /// Where this profile keeps its recipes.
+    ///
+    /// The directory name belongs to the module that reads it, so the daemon and
+    /// the CLI ask the profile for the path instead of spelling `recipes` a second
+    /// time and drifting from the loader.
+    #[must_use]
+    pub fn recipes_dir(&self) -> PathBuf {
+        recipes::Recipes::dir_in(&self.root)
     }
 
     /// The profile's name: the last segment of its directory.

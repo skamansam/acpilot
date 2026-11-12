@@ -38,7 +38,7 @@ stop = []
 window = 32768
 reserve_output = 1500
 strategy = "truncate_oldest"
-max_corpus_bytes = 262144
+max_corpus_bytes = 65536
 
 [tools]
 read_files = true
@@ -70,7 +70,7 @@ notes = "Good at extraction, bad at arithmetic. Do not promote without a probe."
 | `context.window` | integer | Must not exceed the model's reported window |
 | `context.reserve_output` | integer | Held back so the answer cannot be truncated by its own budget |
 | `context.strategy` | enum | `truncate_oldest`, `summarize`, `refuse` |
-| `context.max_corpus_bytes` | integer | Ceiling before tokenisation |
+| `context.max_corpus_bytes` | integer | Ceiling before tokenisation. Four bytes count as one token, and the ceiling has to fit the window beside the reserved output, the prompt and the tool schemas |
 | `tools.*` | bool | A **ceiling**, not a grant. The broker still answers each call |
 | `tools.max_steps` | integer | `1`–`50`. The loop stops here and says so |
 | `notes` | string? | What it is good at, and what it is bad at |

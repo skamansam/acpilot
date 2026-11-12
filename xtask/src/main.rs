@@ -610,7 +610,7 @@ fn check_history(base: &str) -> bool {
         else {
             continue;
         };
-        if let Some(dropped) = discarded_side(merge, first, second, trees_match) {
+        if let Some(dropped) = discarded_side(merge, first, second, trees_match, is_ancestor) {
             eprintln!(
                 "==> history: merge {merge} kept one parent's tree whole, so the {dropped} \
                  side's changes are gone"
@@ -661,23 +661,53 @@ fn check_history(base: &str) -> bool {
 /// one side away. History cannot tell the difference afterwards: both parents are
 /// ancestors and every later merge is clean. `same` answers whether two commits hold
 /// the same content.
+///
+/// One shape that looks identical and loses nothing is the ordinary merge of a branch
+/// back into the base it started from. The base had no commits of its own, so the
+/// merge's tree *is* the branch's, and nothing on the other side could be dropped.
+/// `ancestor` answers whether one commit is already reachable from the other, which
+/// is what separates "there was nothing to merge" from "the work was thrown away".
 fn discarded_side(
     merge: &str,
     first: &str,
     second: &str,
     same: impl Fn(&str, &str) -> Option<bool>,
+    ancestor: impl Fn(&str, &str) -> Option<bool>,
 ) -> Option<&'static str> {
     if same(first, second) == Some(true) {
         // Both parents already agreed, so the merge had nothing to drop.
         return None;
     }
-    if same(merge, first) == Some(true) {
-        return Some("second");
+    let dropped = if same(merge, first) == Some(true) {
+        "second"
+    } else if same(merge, second) == Some(true) {
+        "first"
+    } else {
+        return None;
+    };
+    let (dropped_commit, kept_commit) = if dropped == "second" {
+        (second, first)
+    } else {
+        (first, second)
+    };
+    if ancestor(dropped_commit, kept_commit) == Some(true) {
+        // The side whose tree the merge took already contained the other side, so
+        // there was no work in it to lose. Failing here would refuse every merge of
+        // a branch into the base it was cut from.
+        return None;
     }
-    if same(merge, second) == Some(true) {
-        return Some("first");
+    Some(dropped)
+}
+
+/// Whether `old` is already reachable from `new`. `git merge-base --is-ancestor`
+/// answers 0 for yes and 1 for no; anything else is "cannot tell", which is treated
+/// as not an ancestor so an unreadable history still fails loudly.
+fn is_ancestor(old: &str, new: &str) -> Option<bool> {
+    match run_git(&["merge-base", "--is-ancestor", old, new])?.0 {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
     }
-    None
 }
 
 /// Whether two commits have identical trees. `git diff --quiet` answers 0 or 1.
@@ -1714,6 +1744,80 @@ fn run_schema() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// One job's text: from its key to the next sibling job key.
+    ///
+    /// Text and not YAML, for the same reason the other workflow tests read text: an
+    /// xtask is a build script, and a parser here would be a dependency to answer one
+    /// question. A job key is exactly two spaces and no space after them; a comment
+    /// is not, so a comment mentioning a job cannot move the boundary.
+    fn job_block<'a>(workflow: &'a str, job: &str) -> &'a str {
+        let start = workflow
+            .find(&format!("\n  {job}:"))
+            .unwrap_or_else(|| panic!("CI has no `{job}` job"));
+        let rest = &workflow[start + 1..];
+        let mut offset = 0;
+        for line in rest.lines() {
+            if offset > 0
+                && line.strip_prefix("  ").is_some_and(|tail| {
+                    !tail.is_empty() && !tail.contains(' ') && tail.ends_with(':')
+                })
+            {
+                return &rest[..offset];
+            }
+            offset += line.len() + 1;
+        }
+        rest
+    }
+
+    #[test]
+    fn no_push_can_publish_the_required_checks_name() {
+        // A push run and the pull request run of one branch share a concurrency group,
+        // so opening the pull request cancels the push a minute in, and GitHub records
+        // a check run for every job of the cancelled run. A `cancelled` entry under a
+        // name the ruleset requires counts as not-success: #302 read `BLOCKED` with
+        // all thirteen jobs green, twice, and deleting the cancelled push run is what
+        // moved it to `clean` each time.
+        //
+        // Two attempts that did not help are the reason this test reads the triggers
+        // and not only the job: `!cancelled()` still left the entry, and an `if:` that
+        // excludes push events still published the name, because a job that is in the
+        // run at all publishes it. Only the run's absence fixes it.
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+
+        let on = workflow
+            .split_once("\non:\n")
+            .map(|(_, rest)| rest)
+            .expect("CI declares its triggers");
+        let on = on.split("\nconcurrency:").next().expect("the on: block");
+        let triggers = format!("\n{on}");
+        let push = job_block(&triggers, "push");
+        let push_branches: Vec<&str> = push
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert_eq!(
+            push_branches,
+            ["push:", "branches: [main]"],
+            "a push to a branch is a run whose cancelled jobs publish the required name; \
+             `main` is the only branch a push may start, because a merge landing green \
+             is what that run is for"
+        );
+
+        let jobs = format!("\n{workflow}");
+        let required = job_block(&jobs, "required");
+        assert!(
+            required.contains("\n    name: required checks\n"),
+            "no job is named `required checks`, so the ruleset's one context never appears"
+        );
+        assert!(
+            required.contains("github.event_name == 'pull_request'"),
+            "the job that publishes `required checks` must be a pull request's; on a push \
+             its entry is at best skipped, which is not success"
+        );
+    }
+
     #[test]
     fn building_the_tui_builds_the_daemon_it_spawns() {
         // `acpilot tui` looks for `acpilotd` beside its own executable, so a TUI
@@ -1930,30 +2034,52 @@ mod tests {
         // A commit named after the side it matches is a commit whose tree *is* that
         // side's: `discarded_side` is handed ids, and `same` is identity here.
         let same = |a: &str, b: &str| Some(a == b);
+        let apart = |_: &str, _: &str| Some(false);
         assert_eq!(
-            discarded_side("branch", "branch", "main", same),
+            discarded_side("branch", "branch", "main", same, apart),
             Some("second"),
             "the merge is the branch's tree, so main's work is gone"
         );
         assert_eq!(
-            discarded_side("main", "branch", "main", same),
+            discarded_side("main", "branch", "main", same, apart),
             Some("first"),
             "the merge is main's tree, so the branch's work is gone"
         );
         assert_eq!(
-            discarded_side("merged", "branch", "main", same),
+            discarded_side("merged", "branch", "main", same, apart),
             None,
             "a real merge differs from both parents"
         );
         assert_eq!(
-            discarded_side("twin", "twin", "twin", same),
+            discarded_side("twin", "twin", "twin", same, apart),
             None,
             "two parents that already agreed drop nothing"
         );
         assert_eq!(
-            discarded_side("branch", "branch", "main", |_, _| None),
+            discarded_side("branch", "branch", "main", |_, _| None, apart),
             None,
             "no answer from git is not a finding"
+        );
+    }
+
+    #[test]
+    fn a_merge_into_the_base_it_started_from_drops_nothing() {
+        // The shape a pull request makes when its base has no commits of its own:
+        // the merge's tree is the branch's, and the base is already an ancestor of
+        // the branch, so there was no work there to lose. Every phase branch starts
+        // this way, so failing here would refuse the normal workflow.
+        let same = |a: &str, b: &str| Some(a == b);
+        let base_behind = |old: &str, new: &str| Some(old == "main" && new == "branch");
+        assert_eq!(
+            discarded_side("branch", "branch", "main", same, base_behind),
+            None,
+            "the base is an ancestor of the branch, so its changes are present in it"
+        );
+        let branch_behind = |old: &str, new: &str| Some(old == "branch" && new == "main");
+        assert_eq!(
+            discarded_side("main", "branch", "main", same, branch_behind),
+            None,
+            "the same shape with the parents the other way round"
         );
     }
 

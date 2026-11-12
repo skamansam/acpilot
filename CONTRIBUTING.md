@@ -313,7 +313,9 @@ back. Every rule below prevents a state this repository has already been in.
   so no later merge can conflict over what went missing. On 2026-11-11 that hid 1,457
   lines of `main`, and the next real merge looked clean because of it.
 - **A merge commit must differ from both of its parents.** One that equals a parent
-  dropped the other side, whatever the log says.
+  dropped the other side, whatever the log says. The exception is a side that is
+  already an ancestor of the other: it had no commits of its own to drop, which is
+  the ordinary shape of merging a branch back into the base it started from.
 - **Do not merge a change the base already has.** A squash leaves the same patch under
   a second hash, and the next merge carries it twice.
 - **`main` takes merge commits only.** Squash and rebase rewrite shared history, and

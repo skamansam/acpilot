@@ -25,6 +25,11 @@ interfaces, zero rewrites.**
 - Order: Unix and macOS first, Windows last (D19). Work the `[wsl]` tickets with
   the Linux path. Leave the `[windows]` and `[windows, wsl]` tickets until that
   path is done, then finish the Windows builds.
+- The **ACPilot Roadmap** project is the source of truth for a ticket's state.
+  This file keeps the plan text and each ticket's `Result:`. Every ticket has an
+  issue in that project. The platform tags above are mirrored as the
+  `platform:windows` and `platform:wsl` labels, so a project view can filter by
+  platform.
 
 Ordering rule: **no UI work before the daemon API works.** UIs are clients. If a UI
 needs something, add it to the API first. That single rule is what stops the four

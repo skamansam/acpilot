@@ -159,6 +159,85 @@ async fn a_client_learns_a_request_exists_without_asking() {
 }
 
 #[tokio::test]
+async fn a_client_that_connects_late_is_told_what_the_servers_already_said() {
+    // No language server here: what this asserts is the stream's half. A notice in the
+    // daemon's store is exactly what a publish or an answer leaves behind, and a client
+    // that opens after one must not start with an empty gutter until it asks.
+    let state = AppState::new();
+    state.record_diagnostics(acpilot_proto::file::DiagnosticsNotice {
+        path: "src/main.rs".to_owned(),
+        version: Some(3),
+        problems: acpilot_proto::file::FileDiagnostics {
+            server: Some("rust-analyzer".to_owned()),
+            encoding: None,
+            items: vec![acpilot_proto::file::Diagnostic {
+                line: 3,
+                column: 5,
+                end_line: 3,
+                end_column: 9,
+                severity: acpilot_proto::file::DiagnosticSeverity::Error,
+                message: "cannot find value `nope`".to_owned(),
+                source: None,
+                code: Some("E0425".to_owned()),
+            }],
+        },
+    });
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral port");
+    let address = listener.local_addr().expect("local address");
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, acpilotd::router_with(state))
+            .await
+            .expect("server runs");
+    });
+
+    let response = reqwest::get(format!("http://{address}/v1/events"))
+        .await
+        .expect("the stream opens");
+    assert_eq!(response.status(), 200);
+    let mut frames = response.bytes_stream();
+
+    let mut buffer = String::new();
+    let frame = loop {
+        let chunk = timeout(PATIENCE, frames.next())
+            .await
+            .expect("the snapshot arrives without anyone asking")
+            .expect("the stream is still open")
+            .expect("a readable chunk");
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        if let Some(end) = buffer.find("\n\n") {
+            break buffer[..end].to_owned();
+        }
+    };
+
+    assert!(
+        frame.lines().any(|line| line == "event: diagnostics"),
+        "the frame says what it is: {frame}"
+    );
+    assert!(
+        !frame.lines().any(|line| line.starts_with("id: ")),
+        "a snapshot frame answers a question rather than announcing a change: {frame}"
+    );
+    assert!(
+        frame.contains(r#""path":"src/main.rs""#),
+        "the frame names the file: {frame}"
+    );
+    assert!(
+        frame.contains(r#""version":3"#),
+        "the version travels so a client can tell a late publish from a current one: {frame}"
+    );
+    assert!(
+        frame.contains(r#""server":"rust-analyzer""#) && frame.contains(r#""code":"E0425""#),
+        "the problems are the ones that were kept: {frame}"
+    );
+
+    serving.abort();
+    let _ = serving.await;
+}
+
+#[tokio::test]
 async fn a_daemon_without_a_broker_keeps_the_stream_open_and_quiet() {
     // No profile means nothing can be announced, which is a quiet stream rather
     // than a closed one: a client that reconnected on every close would loop
@@ -192,7 +271,7 @@ async fn the_stream_is_documented_where_a_client_generator_looks() {
     let description = body["paths"]["/v1/events"]["get"]["responses"]["200"]["description"]
         .as_str()
         .expect("the route is in the document");
-    for frame in ["text/event-stream", "prefs", "permission"] {
+    for frame in ["text/event-stream", "prefs", "permission", "diagnostics"] {
         assert!(
             description.contains(frame),
             "the description says what a client will receive, and `{frame}` is missing: \
@@ -201,7 +280,7 @@ async fn the_stream_is_documented_where_a_client_generator_looks() {
     }
     assert_eq!(
         body["paths"]["/v1/events"]["get"]["summary"],
-        "Follow permission requests and settings changes",
+        "Follow permission requests, settings changes and problems a server found",
         "a generated client has a name for the route"
     );
 }

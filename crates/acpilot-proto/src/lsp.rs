@@ -52,4 +52,11 @@ pub struct LspServerSummary {
     /// Encoding agreed during `initialize`, absent before the handshake.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<PositionEncoding>,
+    /// The last `textDocument/references` round trip, in milliseconds.
+    ///
+    /// The answer and not the index: a cold server's first answer pays for an index
+    /// that is paid once, and a figure that mixed the two would make every report
+    /// read as slow when only the first question was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub round_trip_ms: Option<u64>,
 }

@@ -23,12 +23,12 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, Aside, LinkCard } from '@astrojs/starlight/components';
+import { Card, CardGrid, Aside, LinkCard } from '@astrojs/starlight/components'
 
 ## Download
 
 Builds for Linux, macOS and Windows, from the newest tagged version down. The page
-picks the build for the browser you are reading it in, and every archive lists its
+picks the build for the browser you are reading it in. Every archive lists its
 SHA-256 beside it.
 
 <CardGrid>
@@ -47,25 +47,25 @@ SHA-256 beside it.
 <Aside type="note" title="Now boarding">
 **The autopilot is very good. That is exactly the problem.** Acpilot is a code
 editor built around one opinion: an agent may fly, but a human signs the flight
-plan. Everything else — ACP, terminals, remote hosts, profiles — exists to make
+plan. Everything else (ACP, terminals, remote hosts, profiles) exists to make
 that opinion practical.
 </Aside>
 
 ## What this is
 
 Acpilot is a code editor and an agent cockpit in one program. It speaks the
-**Agent Client Protocol** to agents that support it, and it can also fly
-programs that have never heard of ACP — a terminal agent, a CLI, anything that
-prints a transcript.
+**Agent Client Protocol** to agents that support it. It can also fly programs
+that have never heard of ACP: a terminal agent, a CLI, anything that prints a
+transcript.
 
 One daemon owns the sessions, the agents, the permissions, and the terminals.
 The CLI, the terminal UI, the desktop app, and the browser are all clients of
-that daemon, which is why they never disagree about what happened.
+that daemon. They therefore never disagree about what happened.
 
 <CardGrid>
   <Card title="ACP, plus a tow hook" icon="rocket">
     Native ACP agents are the easy case. For everything else there is a PTY
-    adapter: an ordinary program can be flown as an agent without knowing it is
+    adapter. An ordinary program can be flown as an agent without knowing it is
     being flown.
   </Card>
   <Card title="One daemon, four cockpits" icon="laptop">
@@ -77,7 +77,7 @@ that daemon, which is why they never disagree about what happened.
     language servers all run where the code actually lives.
   </Card>
   <Card title="Nothing writes without a signature" icon="approve-check">
-    A write leaves the flight deck only after a human — or a rule you wrote —
+    A write leaves the flight deck only after a human, or a rule you wrote,
     clears it. Every clearance is logged.
   </Card>
   <Card title="Profiles, because keys are not moods" icon="setting">
@@ -85,7 +85,7 @@ that daemon, which is why they never disagree about what happened.
     history. The client's code never flies on your weekend key.
   </Card>
   <Card title="Bring your own autopilot" icon="star">
-    A model you already run — LM Studio first — can be tuned in the lab and
+    A model you already run, LM Studio first, can be tuned in the lab and
     promoted into an agent. Same broker, same transcript, no hosted model, no
     prompt leaving the machine.
   </Card>
@@ -104,12 +104,12 @@ acpilot --profile work agents ls  # who is available under work credentials?
 ```
 
 Those three lines are the destination, not the current position. The
-[flight status](status/) page says exactly how much of this exists today,
-because a manual that lies about the aircraft is worse than no manual.
+[flight status](status/) page says exactly how much of this exists today. A
+manual that lies about the aircraft is worse than no manual.
 
 ## What it is not
 
-- **Not a chat window with a file tree.** The editor is the product; the agent is
+- **Not a chat window with a file tree.** The editor is the product. The agent is
   a crew member, not the pilot.
 - **Not a cloud service.** Your machine, your daemon, your keys. A local model is
   welcome in the [model lab](flight-test/), where it becomes an agent on your

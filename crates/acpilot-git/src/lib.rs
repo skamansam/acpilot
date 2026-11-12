@@ -7,8 +7,13 @@
 //! integration at all. The cost is that `git` must be on the host, which it
 //! already is for anyone with a repository to open.
 //!
-//! Nothing here writes: no stage, commit, checkout or config change. The commit
-//! writer is a later, reviewed step with its own permission path.
+//! The writes are narrow and named: [`Repo::stage`], [`Repo::stage_hunk`] and
+//! [`Repo::unstage`] move paths or one unstaged hunk across the index,
+//! [`Repo::discard`] restores the working tree from the index, [`Repo::checkout`]
+//! restores both from `HEAD`, and [`Repo::commit`] commits the index. Changes
+//! config remain outside this surface. A source-control pane stages and restores
+//! through these so its answer and the command line's cannot disagree about what
+//! the next commit holds.
 //!
 //! Parsing is confined to stable porcelain/plumbing output:
 //! `status --porcelain=v2 -z`, `diff --name-status -z`, `ls-files -z`, and a
@@ -16,8 +21,9 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Which changes a diff should cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +201,31 @@ impl FromIterator<(usize, LineChange)> for LineChanges {
     }
 }
 
+/// One path's section of a unified patch, its `diff --git` header included.
+///
+/// A source-control pane shows one file at a time, and every surface must cut the
+/// same patch at the same place: a client that reimplemented the split would draw
+/// a different diff from the one the daemon served. The section ends at the next
+/// `diff --git` header, so a rename or a new file is one answer rather than a
+/// header and a stray hunk.
+#[must_use]
+pub fn patch_section<'a>(patch: &'a str, path: &str) -> Vec<&'a str> {
+    let suffix = format!(" b/{path}");
+    let mut lines = Vec::new();
+    let mut inside = false;
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") {
+            inside = line.ends_with(&suffix);
+            if inside {
+                lines.push(line);
+            }
+        } else if inside {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
 /// The line changes in a patch, for one path.
 ///
 /// The patch is unified diff text — what `git diff` prints, or what a permission
@@ -335,6 +366,44 @@ pub enum GitError {
         /// Git's own diagnosis.
         stderr: String,
     },
+    /// A commit was asked for with no message.
+    #[error("a commit message cannot be empty")]
+    EmptyMessage,
+    /// No path was named for an index or working-tree operation.
+    #[error("no paths were named")]
+    NoPaths,
+    /// The named paths have nothing to restore.
+    #[error("the named paths have no changes to restore")]
+    NoChanges,
+    /// The path has no unstaged hunk to stage.
+    #[error("{path:?} has no unstaged hunks")]
+    NoHunks {
+        /// The path the caller supplied.
+        path: String,
+    },
+    /// The requested hunk is not in the path's unstaged diff.
+    #[error("{path:?} has no unstaged hunk {hunk}")]
+    HunkNotFound {
+        /// The path the caller supplied.
+        path: String,
+        /// The zero-based hunk index.
+        hunk: usize,
+    },
+    /// A repository with no commit has no `HEAD` to check a path out from.
+    #[error("there is no HEAD to check out from")]
+    NoHead,
+    /// An untracked path has no version to check out.
+    #[error("{path:?} is untracked; discard it instead")]
+    NotInHead {
+        /// The path the caller supplied.
+        path: String,
+    },
+    /// A path was not relative to the repository root.
+    #[error("not a repository-relative path: {path:?}")]
+    InvalidPath {
+        /// The path the caller supplied.
+        path: String,
+    },
     /// Output did not have the documented shape.
     #[error("could not parse git {what}: {reason}")]
     Parse {
@@ -354,11 +423,39 @@ pub struct Repo {
     root: PathBuf,
 }
 
+/// `git`, with the variables a hook exports pointing it at another repository
+/// cleared.
+///
+/// A `pre-commit` hook runs with `GIT_DIR`, `GIT_INDEX_FILE` and the worktree
+/// variables set, and every process it starts inherits them — the daemon, and a
+/// test suite the hook runs. Those variables override `-C`, so a command that
+/// means "the repository at this path" instead reads the one that started the
+/// commit: `Repo::status` reports the wrong tree, and two fixtures adding at once
+/// collide on the outer `.git/index.lock`. The variables carry no information a
+/// `-C` does not already name, so dropping them is what makes that `-C` mean what
+/// it says.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for key in [
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 impl Repo {
     /// Find the repository containing `start`.
     pub fn discover(start: impl AsRef<Path>) -> Result<Self, GitError> {
         let start = start.as_ref();
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(start)
             .args(["rev-parse", "--show-toplevel"])
@@ -505,10 +602,275 @@ impl Repo {
         parse_log(&output)
     }
 
+    /// Put one unstaged hunk of `path` in the index.
+    ///
+    /// `hunk` is zero-based in the path's **unstaged** diff, which is the half
+    /// that can be applied to the index: the working tree against the index. The
+    /// combined `HEAD` diff cannot be used once part of the file is already staged,
+    /// because its removals and context describe `HEAD` rather than the index.
+    ///
+    /// The hunk is cut from git's own diff by this crate before `git apply` sees
+    /// it, so a client names a hunk rather than supplying patch text. A path with
+    /// no unstaged hunks — an untracked file, a binary change, a path whose change
+    /// is already staged — is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::InvalidPath`], [`GitError::NoHunks`],
+    /// [`GitError::HunkNotFound`], or [`GitError::Command`] when git refuses the
+    /// patch or the index is locked.
+    pub fn stage_hunk(&self, path: &str, hunk: usize) -> Result<(), GitError> {
+        validate_paths(&[path.to_owned()])?;
+        let patch = self.diff_patch_for(DiffScope::Unstaged, Some(path))?;
+        let section = patch_section(&patch, path);
+        let mut header = Vec::new();
+        let mut hunks: Vec<Vec<String>> = Vec::new();
+        for line in section {
+            if line.starts_with("@@") {
+                hunks.push(vec![line.to_owned()]);
+            } else if let Some(current) = hunks.last_mut() {
+                current.push(line.to_owned());
+            } else {
+                header.push(line.to_owned());
+            }
+        }
+        if hunks.is_empty() {
+            return Err(GitError::NoHunks {
+                path: path.to_owned(),
+            });
+        }
+        let Some(lines) = hunks.get(hunk) else {
+            return Err(GitError::HunkNotFound {
+                path: path.to_owned(),
+                hunk,
+            });
+        };
+        let mut patch = header.join("\n");
+        if !patch.is_empty() {
+            patch.push('\n');
+        }
+        patch.push_str(&lines.join("\n"));
+        patch.push('\n');
+        self.apply_cached(&patch)
+    }
+
+    /// Put `paths` in the index, including an untracked file or a deletion.
+    ///
+    /// The path spelling is the one [`Self::status`] reports, relative to the
+    /// repository root. `--` ends option parsing, and the path check refuses an
+    /// absolute or parent-traversing path before git sees it: a caller with the
+    /// daemon token should not be able to stage a file outside the workspace because
+    /// it wrote `../` in a request.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::InvalidPath`], or [`GitError::Command`]
+    /// when git refuses a path or the index is locked.
+    pub fn stage(&self, paths: &[String]) -> Result<(), GitError> {
+        self.change_index(paths, true)
+    }
+
+    /// Remove `paths` from the next commit without touching the working tree.
+    ///
+    /// A repository with no commit has no `HEAD` to reset to, so its index is
+    /// emptied with `git rm --cached`; the file stays on disk either way.
+    ///
+    /// # Errors
+    ///
+    /// The same failures as [`Self::stage`].
+    pub fn unstage(&self, paths: &[String]) -> Result<(), GitError> {
+        self.change_index(paths, false)
+    }
+
+    /// Put the working tree back to the index for `paths`.
+    ///
+    /// A staged edit stays staged: this discards only the half a person has not
+    /// put in the next commit. An untracked path has no index version, so git's
+    /// own clean removes it rather than leaving a file no restore can name.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::NoChanges`], [`GitError::InvalidPath`],
+    /// or [`GitError::Command`] when git refuses a path.
+    pub fn discard(&self, paths: &[String]) -> Result<(), GitError> {
+        validate_paths(paths)?;
+        let status = self.status()?;
+        let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        let mut restore = BTreeSet::new();
+        let mut clean = BTreeSet::new();
+        for entry in &status.files {
+            if !wanted.contains(entry.path.as_str()) {
+                continue;
+            }
+            match entry.worktree {
+                ChangeKind::Untracked => {
+                    clean.insert(entry.path.clone());
+                }
+                ChangeKind::Unmodified | ChangeKind::Ignored => {}
+                _ => {
+                    restore.insert(entry.path.clone());
+                }
+            }
+        }
+        if restore.is_empty() && clean.is_empty() {
+            return Err(GitError::NoChanges);
+        }
+
+        if !restore.is_empty() {
+            let mut args = vec![
+                "restore".to_owned(),
+                "--worktree".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(restore);
+            self.run_owned(args)?;
+        }
+        if !clean.is_empty() {
+            let mut args = vec![
+                "clean".to_owned(),
+                "-f".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(clean);
+            self.run_owned(args)?;
+        }
+        Ok(())
+    }
+
+    /// Put both the index and the working tree back to `HEAD` for `paths`.
+    ///
+    /// This is the stronger reset: a staged edit and an unstaged one are both
+    /// discarded. A path that only exists in the index (a staged addition or the
+    /// new half of a rename) is removed, because `HEAD` does not have it. An
+    /// untracked path is refused instead: it has no version to check out, and
+    /// deleting it is [`Self::discard`]'s job.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::NoPaths`], [`GitError::NoChanges`], [`GitError::NoHead`],
+    /// [`GitError::NotInHead`], [`GitError::InvalidPath`], or
+    /// [`GitError::Command`] when git refuses a conflict or a locked index.
+    pub fn checkout(&self, paths: &[String]) -> Result<(), GitError> {
+        validate_paths(paths)?;
+        if !self.has_head()? {
+            return Err(GitError::NoHead);
+        }
+
+        let status = self.status()?;
+        let wanted: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        let mut restore = BTreeSet::new();
+        let mut remove = BTreeSet::new();
+        for entry in &status.files {
+            if !wanted.contains(entry.path.as_str()) {
+                continue;
+            }
+            match entry.index {
+                ChangeKind::Added => {
+                    remove.insert(entry.path.clone());
+                }
+                ChangeKind::Renamed => {
+                    if let Some(old_path) = &entry.orig_path {
+                        restore.insert(old_path.clone());
+                    }
+                    remove.insert(entry.path.clone());
+                }
+                ChangeKind::Copied => {
+                    remove.insert(entry.path.clone());
+                }
+                _ if entry.worktree == ChangeKind::Untracked => {
+                    return Err(GitError::NotInHead {
+                        path: entry.path.clone(),
+                    });
+                }
+                _ => {
+                    restore.insert(entry.path.clone());
+                }
+            }
+        }
+        if restore.is_empty() && remove.is_empty() {
+            return Err(GitError::NoChanges);
+        }
+
+        if !restore.is_empty() {
+            let mut args = vec![
+                "restore".to_owned(),
+                "--source=HEAD".to_owned(),
+                "--staged".to_owned(),
+                "--worktree".to_owned(),
+                "-q".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(restore);
+            self.run_owned(args)?;
+        }
+        if !remove.is_empty() {
+            let mut args = vec![
+                "rm".to_owned(),
+                "-f".to_owned(),
+                "-q".to_owned(),
+                "--ignore-unmatch".to_owned(),
+                "--".to_owned(),
+            ];
+            args.extend(remove);
+            self.run_owned(args)?;
+        }
+        Ok(())
+    }
+
+    fn change_index(&self, paths: &[String], staged: bool) -> Result<(), GitError> {
+        validate_paths(paths)?;
+
+        let mut args = if staged {
+            vec!["add".to_owned(), "-A".to_owned(), "--".to_owned()]
+        } else if self.has_head()? {
+            vec![
+                "reset".to_owned(),
+                "-q".to_owned(),
+                "HEAD".to_owned(),
+                "--".to_owned(),
+            ]
+        } else {
+            vec![
+                "rm".to_owned(),
+                "--cached".to_owned(),
+                "-q".to_owned(),
+                "--ignore-unmatch".to_owned(),
+                "--".to_owned(),
+            ]
+        };
+        args.extend(paths.iter().cloned());
+        self.run_owned(args).map(|_| ())
+    }
+
+    /// Commit the index with `message`, and return the commit that was made.
+    ///
+    /// It commits the index as it stands: [`Self::stage`] and [`Self::unstage`] are
+    /// the only methods that change what the index holds, so this neither adds nor
+    /// cleans up. The whole message travels
+    /// as one argument, newlines included, because git takes the first paragraph as
+    /// the subject and a client that split it would only have to join it again.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::EmptyMessage`] before git runs, and [`GitError::Command`] when git
+    /// refuses — a hook, a merge conflict, or an identity it cannot read.
+    pub fn commit(&self, message: &str) -> Result<Commit, GitError> {
+        if message.trim().is_empty() {
+            return Err(GitError::EmptyMessage);
+        }
+        self.run(["commit", "-q", "-m", message])?;
+        self.log(1)?.into_iter().next().ok_or(GitError::Parse {
+            what: "commit",
+            reason: "git accepted the commit but log returned nothing".to_owned(),
+        })
+    }
+
     fn has_head(&self) -> Result<bool, GitError> {
         // Capture rather than inherit: `rev-parse` prints the id on success, and
         // the daemon's stdout is not a place for it.
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(&self.root)
             .args(["rev-parse", "--verify", "--quiet", "HEAD"])
@@ -522,6 +884,10 @@ impl Repo {
     }
 
     fn diff_patch(&self, scope: DiffScope) -> Result<String, GitError> {
+        self.diff_patch_for(scope, None)
+    }
+
+    fn diff_patch_for(&self, scope: DiffScope, path: Option<&str>) -> Result<String, GitError> {
         let mut args = vec![
             "diff".to_owned(),
             "--no-color".to_owned(),
@@ -534,6 +900,9 @@ impl Repo {
             DiffScope::Unstaged => {}
         }
         args.push("--".to_owned());
+        if let Some(path) = path {
+            args.push(path.to_owned());
+        }
         let output = self.run_owned(args)?;
         Ok(String::from_utf8_lossy(&output).into_owned())
     }
@@ -559,7 +928,7 @@ impl Repo {
     }
 
     fn run_owned(&self, args: Vec<String>) -> Result<Vec<u8>, GitError> {
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(&self.root)
             .args(args.iter().map(OsStr::new))
@@ -579,6 +948,81 @@ impl Repo {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
     }
+
+    /// Run git with a patch on stdin.
+    ///
+    /// `git apply` reads the patch from its standard input; a temporary file would
+    /// need a name, permissions and cleanup for no benefit. The output is read
+    /// after the write because `--cached` is quiet and cannot fill a pipe.
+    fn run_input(&self, args: Vec<String>, input: &[u8]) -> Result<Vec<u8>, GitError> {
+        let mut child = git_command()
+            .arg("-C")
+            .arg(&self.root)
+            .args(args.iter().map(OsStr::new))
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => GitError::GitMissing(error),
+                _ => GitError::Io(error),
+            })?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(input)
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitError::Io(error));
+        }
+        let output = child.wait_with_output()?;
+        if output.status.success() {
+            return Ok(output.stdout);
+        }
+        Err(GitError::Command {
+            command: args.join(" "),
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
+    }
+
+    fn apply_cached(&self, patch: &str) -> Result<(), GitError> {
+        self.run_input(
+            vec![
+                "apply".to_owned(),
+                "--cached".to_owned(),
+                "--whitespace=nowarn".to_owned(),
+                "-".to_owned(),
+            ],
+            patch.as_bytes(),
+        )
+        .map(|_| ())
+    }
+}
+
+/// Whether `path` can name something inside the repository.
+///
+/// `Path::components` is used rather than splitting on `/` because the daemon
+/// runs on Windows too: `..\\x` is a traversal there and an ordinary filename on
+/// Unix, and the platform's own parser is the one that knows which. A normal
+/// component is the only kind allowed; `.`, `..`, a root and a prefix are not.
+fn validate_paths(paths: &[String]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Err(GitError::NoPaths);
+    }
+    for path in paths {
+        if !is_repository_path(path) {
+            return Err(GitError::InvalidPath { path: path.clone() });
+        }
+    }
+    Ok(())
+}
+
+fn is_repository_path(path: &str) -> bool {
+    !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 fn split_nul(bytes: &[u8]) -> impl Iterator<Item = &str> {
@@ -588,7 +1032,12 @@ fn split_nul(bytes: &[u8]) -> impl Iterator<Item = &str> {
         .filter_map(|field| std::str::from_utf8(field).ok())
 }
 
-fn parse_status(bytes: &[u8]) -> Result<Status, GitError> {
+/// Parse `git status --porcelain=v2 --branch -z` output.
+///
+/// Public because a daemon that asked `git` on another host holds the same bytes and has
+/// to draw the same letters: a second parser would be a second answer to what a path's
+/// state is, and the first time the two disagreed nobody could tell which tree was right.
+pub fn parse_status(bytes: &[u8]) -> Result<Status, GitError> {
     let mut status = Status::default();
     let fields: Vec<&str> = split_nul(bytes).collect();
     let mut index = 0;
@@ -823,7 +1272,6 @@ fn parse_log(bytes: &[u8]) -> Result<Vec<Commit>, GitError> {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
@@ -848,6 +1296,10 @@ mod tests {
             fixture.git(&["init", "-q", "-b", "main"]);
             fixture.git(&["config", "user.email", "test@example.com"]);
             fixture.git(&["config", "user.name", "Test User"]);
+            // Checking out on Windows can turn these test files into CRLF. The
+            // assertions are about which revision the bytes came from, not the
+            // host's line-ending policy, so keep the fixture's bytes literal.
+            fixture.git(&["config", "core.autocrlf", "false"]);
             fixture
         }
 
@@ -856,9 +1308,11 @@ mod tests {
         }
 
         fn git(&self, args: &[&str]) -> String {
-            let mut command = Command::new("git");
+            // `git_command` clears the variables a hook exports that would point
+            // this at the outer repository.
+            let mut command = git_command();
             command.arg("-C").arg(&self.root).args(args);
-            // Git exports the author and committer identity to hooks. Without
+            // Git also exports the author and committer identity to hooks. Without
             // this, the suite commits as whoever is committing and only fails
             // when run from the pre-commit hook.
             for key in [
@@ -898,6 +1352,347 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn staging_and_unstaging_move_a_path_across_the_index() {
+        let fixture = Fixture::new("stage");
+        fixture.write("one.txt", "one\n");
+        fixture.write("new.txt", "new\n");
+        fixture.commit("init");
+        fixture.write("one.txt", "changed\n");
+        fixture.write("new.txt", "changed too\n");
+
+        fixture
+            .repo()
+            .stage(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("staged");
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one");
+        assert!(one.is_staged());
+        assert!(!one.is_unstaged());
+        let new = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new");
+        assert_eq!(new.index, ChangeKind::Modified);
+        assert!(!new.is_unstaged());
+
+        fixture
+            .repo()
+            .unstage(&["one.txt".to_owned()])
+            .expect("unstaged");
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one");
+        assert!(!one.is_staged());
+        assert_eq!(one.worktree, ChangeKind::Modified);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("file"),
+            "changed\n",
+            "unstaging does not touch the working tree"
+        );
+    }
+
+    #[test]
+    fn one_hunk_can_be_staged_without_the_other() {
+        let fixture = Fixture::new("stage-hunk");
+        let original = (1..=20)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        fixture.write("many.txt", &original);
+        fixture.commit("init");
+
+        let changed = original
+            .replace("line 2\n", "line 2 changed\n")
+            .replace("line 18\n", "line 18 changed\n");
+        fixture.write("many.txt", &changed);
+        let diff = fixture.repo().diff(DiffScope::Unstaged).expect("diff");
+        assert_eq!(
+            diff.patch
+                .lines()
+                .filter(|line| line.starts_with("@@"))
+                .count(),
+            2,
+            "the fixture has two separate hunks: {}",
+            diff.patch
+        );
+
+        fixture
+            .repo()
+            .stage_hunk("many.txt", 0)
+            .expect("first hunk staged");
+
+        let index = fixture.git(&["show", ":many.txt"]);
+        assert!(
+            index.contains("line 2 changed"),
+            "the selected hunk is in the index: {index}"
+        );
+        assert!(
+            !index.contains("line 18 changed"),
+            "the other hunk is still only in the working tree: {index}"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("many.txt")).expect("file"),
+            changed,
+            "staging a hunk does not rewrite the working tree"
+        );
+        let status = fixture.repo().status().expect("status");
+        let row = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "many.txt")
+            .expect("many.txt changed");
+        assert_eq!(row.index, ChangeKind::Modified);
+        assert_eq!(row.worktree, ChangeKind::Modified);
+    }
+
+    #[test]
+    fn a_hunk_index_past_the_unstaged_diff_is_refused() {
+        let fixture = Fixture::new("stage-hunk-missing");
+        fixture.write("one.txt", "one\ntwo\n");
+        fixture.commit("init");
+        fixture.write("one.txt", "one\ntwo changed\n");
+
+        let error = fixture
+            .repo()
+            .stage_hunk("one.txt", 1)
+            .expect_err("there is one hunk");
+        assert!(
+            matches!(error, GitError::HunkNotFound { ref path, hunk: 1 } if path == "one.txt"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("file"),
+            "one\ntwo changed\n",
+            "a refused hunk writes nothing"
+        );
+    }
+
+    #[test]
+    fn an_untracked_file_has_no_hunk_to_stage() {
+        let fixture = Fixture::new("stage-hunk-untracked");
+        fixture.write("new.txt", "new\n");
+
+        let error = fixture
+            .repo()
+            .stage_hunk("new.txt", 0)
+            .expect_err("an untracked file has no unstaged diff");
+        assert!(
+            matches!(error, GitError::NoHunks { ref path } if path == "new.txt"),
+            "{error}"
+        );
+        let status = fixture.repo().status().expect("status");
+        let row = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new.txt is still listed");
+        assert_eq!(row.worktree, ChangeKind::Untracked);
+    }
+
+    #[test]
+    fn discard_restores_the_working_tree_from_the_index_and_removes_untracked_files() {
+        let fixture = Fixture::new("discard");
+        fixture.write("one.txt", "one\n");
+        fixture.commit("init");
+
+        fixture.write("one.txt", "staged\n");
+        fixture.git(&["add", "one.txt"]);
+        fixture.write("one.txt", "worktree\n");
+        fixture.write("new.txt", "untracked\n");
+
+        fixture
+            .repo()
+            .discard(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("discarded");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("one"),
+            "staged\n",
+            "discard restores from the index, not from HEAD"
+        );
+        assert!(
+            !fixture.root.join("new.txt").exists(),
+            "an untracked path has no index version, so discarding it removes it"
+        );
+        let status = fixture.repo().status().expect("status");
+        let one = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "one.txt")
+            .expect("one is still staged");
+        assert_eq!(one.index, ChangeKind::Modified);
+        assert_eq!(one.worktree, ChangeKind::Unmodified);
+        assert!(
+            status.files.iter().all(|entry| entry.path != "new.txt"),
+            "the untracked path is gone from the status too"
+        );
+    }
+
+    #[test]
+    fn checkout_restores_both_sides_and_removes_a_staged_addition() {
+        let fixture = Fixture::new("checkout");
+        fixture.write("one.txt", "one\n");
+        fixture.commit("init");
+
+        fixture.write("one.txt", "staged\n");
+        fixture.git(&["add", "one.txt"]);
+        fixture.write("one.txt", "worktree\n");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        fixture
+            .repo()
+            .checkout(&["one.txt".to_owned(), "new.txt".to_owned()])
+            .expect("checked out");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("one.txt")).expect("one"),
+            "one\n",
+            "both the index and the working tree go back to HEAD"
+        );
+        assert!(
+            !fixture.root.join("new.txt").exists(),
+            "a path HEAD does not have is removed, not restored"
+        );
+        assert!(
+            fixture.repo().status().expect("status").files.is_empty(),
+            "the tree is clean after checking the only changes out"
+        );
+    }
+
+    #[test]
+    fn checkout_restores_the_old_half_of_a_rename() {
+        let fixture = Fixture::new("checkout-rename");
+        fixture.write("old.txt", "content\n");
+        fixture.commit("init");
+        fixture.git(&["mv", "old.txt", "new.txt"]);
+        fixture.write("new.txt", "changed after the move\n");
+
+        fixture
+            .repo()
+            .checkout(&["new.txt".to_owned()])
+            .expect("checked out");
+
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("old.txt")).expect("old"),
+            "content\n",
+            "the rename's old half is restored from HEAD"
+        );
+        assert!(!fixture.root.join("new.txt").exists());
+        assert!(
+            fixture.repo().status().expect("status").files.is_empty(),
+            "one row moves both halves of the rename"
+        );
+    }
+
+    #[test]
+    fn checkout_refuses_an_untracked_path_and_an_unborn_repository() {
+        let fixture = Fixture::new("checkout-refused");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        let error = fixture
+            .repo()
+            .checkout(&["new.txt".to_owned()])
+            .expect_err("an unborn repository has no HEAD");
+        assert!(matches!(error, GitError::NoHead), "{error}");
+        assert!(
+            fixture.root.join("new.txt").exists(),
+            "a refused checkout writes nothing"
+        );
+
+        fixture.commit("init");
+        fixture.write("untracked.txt", "untracked\n");
+        let error = fixture
+            .repo()
+            .checkout(&["untracked.txt".to_owned()])
+            .expect_err("an untracked path has no HEAD version");
+        assert!(
+            matches!(error, GitError::NotInHead { ref path } if path == "untracked.txt"),
+            "{error}"
+        );
+        assert!(
+            fixture.root.join("untracked.txt").exists(),
+            "checkout does not delete a file it cannot restore"
+        );
+    }
+
+    #[test]
+    fn an_unborn_repository_can_unstage_without_a_head() {
+        let fixture = Fixture::new("unborn-stage");
+        fixture.write("new.txt", "new\n");
+        fixture.git(&["add", "new.txt"]);
+
+        fixture
+            .repo()
+            .unstage(&["new.txt".to_owned()])
+            .expect("unstaged without HEAD");
+        let status = fixture.repo().status().expect("status");
+        let new = status
+            .files
+            .iter()
+            .find(|entry| entry.path == "new.txt")
+            .expect("new");
+        assert_eq!(new.index, ChangeKind::Unmodified);
+        assert_eq!(new.worktree, ChangeKind::Untracked);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("new.txt")).expect("file"),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn a_path_outside_the_repository_is_refused_before_git_runs() {
+        let fixture = Fixture::new("stage-path");
+        let error = fixture
+            .repo()
+            .stage(&["../outside.txt".to_owned()])
+            .expect_err("a traversal is not a repository path");
+        assert!(
+            matches!(error, GitError::InvalidPath { ref path } if path == "../outside.txt"),
+            "{error}"
+        );
+        assert!(matches!(
+            fixture.repo().stage(&[]).expect_err("no path"),
+            GitError::NoPaths
+        ));
+    }
+
+    #[test]
+    fn an_empty_commit_message_never_reaches_git() {
+        let fixture = Fixture::new("empty-message");
+        let error = fixture
+            .repo()
+            .commit(" \n")
+            .expect_err("whitespace is not a message");
+        assert!(matches!(error, GitError::EmptyMessage));
+    }
+
+    #[test]
+    fn a_commit_uses_the_whole_message_and_returns_it() {
+        let fixture = Fixture::new("commit-message");
+        fixture.write("a.txt", "a\n");
+        fixture.git(&["add", "-A"]);
+        let message = "feat(git): ✨ commit\n\nOne message, body and all.";
+
+        let commit = fixture.repo().commit(message).expect("a commit");
+
+        assert_eq!(commit.subject, "feat(git): ✨ commit");
+        assert_eq!(
+            fixture.git(&["log", "-1", "--format=%B"]).trim(),
+            message,
+            "the body is the message, not a second argument"
+        );
     }
 
     #[test]
@@ -1136,6 +1931,25 @@ mod tests {
         let two = line_changes(&both, "two.rs");
         assert_eq!(two.get(3), Some(LineChange::Added), "its own line numbers");
         assert!(line_changes(&both, "three.rs").is_empty());
+    }
+
+    #[test]
+    fn a_file_section_stops_at_the_next_header() {
+        let both = format!(
+            "{}{}",
+            patch("one.rs", "@@ -1,1 +1,2 @@\n a\n+b\n"),
+            patch("two.rs", "@@ -1,1 +3,2 @@\n c\n+d\n"),
+        );
+        let one = patch_section(&both, "one.rs");
+        assert_eq!(one[0], "diff --git a/one.rs b/one.rs");
+        assert!(
+            one.iter().all(|line| !line.contains("two.rs")),
+            "the next file's header and hunk are not part of this section: {one:?}"
+        );
+        assert!(
+            patch_section(&both, "three.rs").is_empty(),
+            "a path the patch does not touch has no section"
+        );
     }
 
     #[test]

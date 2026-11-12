@@ -1,14 +1,14 @@
 ---
 title: The workbench
-description: Three panes, honest gauges, and the exact JSON that was sent.
+description: Three panes, honest gauges, and the exact JSON it sent.
 ---
 
 <span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-8)
 
 The lab is one screen with three panes and a strip of instruments. It is a client
-of the daemon API — the same recipes, the same runs, the same transcript as the
-CLI and the browser. Close it mid-run and the run keeps going, because the
-daemon is doing the work and the pane was only ever a window.
+of the daemon API. It uses the same recipes, runs and transcript as the CLI and
+the browser. Close it mid-run and the run keeps going. The daemon does the work,
+and the pane was only ever a window.
 
 ```mermaid
 flowchart LR
@@ -32,21 +32,21 @@ flowchart LR
 
 ## The recipe pane
 
-The **master prompt** is a real editor, not a textarea: the same buffer, undo
-grouping, and search as the main editor, because the prompt is the artefact you
-will edit most and copying it into a web form would be a downgrade.
+The **master prompt** is a real editor, not a textarea. It has the same buffer,
+undo grouping, and search as the main editor. The prompt is the artefact you
+will edit most, and copying it into a web form would be a downgrade.
 
 Every knob shows its value, its source, and its effect. `max_tokens: (server)`
-means the recipe does not set it, not that it is zero. `window: server (32,768)`
-means the number came from the provider — if the provider did not report one, the
-field is empty and says **unknown**, and the recipe must supply a value before a
-run is accepted.
+means the recipe does not set it. It does not mean zero. `window: server
+(32,768)` means the provider reported the number. If the provider did not report
+one, the field is empty and says **unknown**. The recipe must supply a value
+before the lab accepts a run.
 
 <Aside type="note" title="A knob that does nothing is worse than no knob">
-Some servers accept `top_k` and ignore it, some reject it outright, some honour it
-only on certain models. Acpilot cannot see inside the sampler, so it does not
-pretend to: when a server rejects an optional parameter, the request is retried
-without it and the run record names it under **refused parameters**. That list is
+Some servers accept `top_k` and ignore it. Some reject it outright. Some honour
+it only on certain models. Acpilot cannot see inside the sampler, so it does not
+pretend to. When a server rejects an optional parameter, the client retries
+without it. The run record names it under **refused parameters**. That list is
 more useful than another slider, and it is honest about what it can know.
 </Aside>
 
@@ -61,40 +61,40 @@ max_files = 200
 max_bytes = 65536
 ```
 
-The pane resolves the globs against the **workspace root** — on the host the
-workspace lives on, so a remote workspace reads remote files — and shows the exact
-file list with sizes and a running budget meter. Ignore rules apply, binary files
-are skipped, and the order is stable so two runs of the same recipe on the same
-commit are the same request.
+The pane resolves the globs against the **workspace root**, on the host where the
+workspace lives. A remote workspace therefore reads remote files. The pane shows
+the exact file list with sizes and a running budget meter. Ignore rules apply,
+the loader skips binary files, and the order is stable. Two runs of the same
+recipe on the same commit are the same request.
 
-Resolution happens *before* the run, which is the point: "it worked yesterday" is
-almost always a corpus that grew by a changelog file.
+Resolution happens *before* the run. That is the point. "It worked yesterday"
+usually means a corpus that grew by a changelog file.
 
 ## The output pane
 
-Streaming text, and a strip of instruments that only shows measured values:
+Streaming text, and a strip of instruments that shows only measured values:
 
 | Gauge | Shown when | Notes |
 | --- | --- | --- |
-| Time to first token | The provider reports it | The number that tells you the model is actually loaded |
-| Tokens / second | The provider reports it | LM Studio's `stats`; absent on plain OpenAI-shaped servers |
+| Time to first token | The provider reports it | The number that tells you the model loaded |
+| Tokens / second | The provider reports it | LM Studio's `stats`. Absent on plain OpenAI-shaped servers |
 | Tokens used | Always | Marked **estimated** until the server's `usage` arrives |
 | Stop reason | Always | `eosFound`, `maxPredictedTokensReached`, or our own step cap |
 | Warnings | When non-empty | Refused parameters, truncated corpus, repaired tool call |
 
 <Aside type="caution" title="Estimated is a different colour on purpose">
-Pre-flight counts are a bytes/4 heuristic with a documented error band. When the
-answer comes back with `usage`, the run record is reconciled and the flag flips.
-The UI does not quietly swap one for the other: a number you cannot trust is
-styled like a number you cannot trust, which is the entire etiquette of an
+Pre-flight counts use a bytes/4 heuristic with a documented error band. When the
+answer comes back with `usage`, the daemon reconciles the run record and the flag
+flips. The UI does not quietly swap one for the other. A number you cannot trust is
+styled like a number you cannot trust. That is the whole etiquette of an
 instrument panel.
 </Aside>
 
 ## The stats bar
 
-Above the instruments, one row per **integration** — a provider in the lab, an
-agent in the cockpit — answers the two questions you ask mid-run: how much of the
-window is gone, and how much credit is left.
+Above the instruments, one row per **integration** answers two questions. For a
+provider in the lab or an agent in the cockpit, it shows how much window is gone
+and how much credit is left.
 
 ```text
 lmstudio   ctx  ████████░░░░░░░░░░░░   12.3k / 32.8k    credits  —
@@ -102,49 +102,49 @@ openrouter ctx  ██░░░░░░░░░░░░░░░░░░    
 claude     ctx  ██████████████░░░░░░   98.0k / 140k     credits  █████░░░░  45 / 100
 ```
 
-Both bars are drawn from the same `IntegrationStats` document. The context bar
-needs a reported `used` and `window`; the credit bar needs `used` and `limit`, or
-a `remaining` beside a known ceiling. When those are absent the track is drawn
-indeterminate — not empty, not full — because a bar that fills from a guess is
-worse than a bar that admits it does not know.
+Both bars come from the same `IntegrationStats` document. The context bar needs
+a reported `used` and `window`. The credit bar needs `used` and `limit`, or a
+`remaining` beside a known ceiling. When those are absent, the track is drawn
+indeterminate: not empty, not full. A bar that fills from a guess is worse than a
+bar that admits it does not know.
 
 | Figure | Source | Shown as |
 | --- | --- | --- |
 | Context used | Provider `usage`, or the session transcript | `server` or `estimated` |
-| Context window | Provider metadata, or the recipe | `server` or `configured`; never defaulted |
+| Context window | Provider metadata, or the recipe | `server` or `configured`, never defaulted |
 | Credits spent / left | Provider balance endpoint, or a plan in the profile | `server` or `configured` |
 | Anything else | Nobody | `unknown`, indeterminate track |
 
-Local servers are the normal case for a missing credit bar: LM Studio and Ollama
-do not bill, so there is nothing to show and no zero is invented. A hosted
-provider that exposes a balance — OpenRouter's `/api/v1/credits`, for example —
-reports it on the same probe that refreshes the model list, and the row's
-`updated_at` says when.
+Local servers are the normal case for a missing credit bar. LM Studio and Ollama
+do not bill, so there is nothing to show and the UI invents no zero. A hosted
+provider that exposes a balance, such as OpenRouter's `/api/v1/credits`, reports
+it on the same probe that refreshes the model list. The row's `updated_at` says
+when.
 
-Agents follow the same rule with a different source: usage reported by the
-agent's protocol is `server`, a transcript counted by the daemon is `estimated`,
-and an agent that reports neither still gets a row whose track is indeterminate.
-The row is never removed for being quiet — a bar that reflows when a provider
-stops answering teaches you to distrust it.
+Agents follow the same rule with a different source. Usage reported by the
+agent's protocol is `server`. A transcript counted by the daemon is `estimated`.
+An agent that reports neither still gets a row whose track is indeterminate. The
+daemon never removes the row for being quiet. A bar that reflows when a provider stops
+answering teaches you to distrust it.
 
 ## The effective-request inspector
 
-A debug drawer showing the exact JSON body that was sent — messages, sampling
-parameters, tool schemas, and the model id — plus anything the adapter added or
-dropped on the way.
+A debug drawer shows the exact JSON body it sent: messages, sampling
+parameters, tool schemas, and the model id. It also shows anything the adapter
+added or dropped on the way.
 
 Most local-model debugging is answering "did the server get what I think I sent?"
-with evidence rather than opinion. This drawer is that evidence, and it is one
-keystroke from the transcript, so it can be pasted into a bug report that gets
+with evidence rather than opinion. This drawer is that evidence. It is one
+keystroke from the transcript, so you can paste it into a bug report that gets
 solved.
 
 ## Compare mode
 
 Two runs, side by side: token delta, latency delta, stop reason, and a diff of the
-answers. Runs are immutable records, so comparison never re-rolls the dice — if
-you want a new sample, that is a new run, clearly labelled.
+answers. Runs are immutable records, so comparison never re-rolls the dice. If you
+want a new sample, that is a new run, clearly labelled.
 
-Promotion lives here, one keystroke away, and it warns first:
+Promotion lives here, one keystroke away. It warns first:
 
 ```text
 promote recipe "corpus-scraper" as agent "corpus-scraper"?
@@ -155,7 +155,7 @@ promote recipe "corpus-scraper" as agent "corpus-scraper"?
 
 ## Keyboard first
 
-Every pane is reachable without a mouse, the prompt editor keeps the keymap you
-set globally, and no gauge is the only way to learn something: `acpilot runs show
-<id> --json` returns the same record the pane is drawing. A workbench that can
-only be operated by pointing at it is a kiosk.
+Every pane is reachable without a mouse. The prompt editor keeps the keymap you
+set globally. No gauge is the only way to learn something: `acpilot runs show
+<id> --json` returns the same record the pane is drawing. A workbench that you can
+only operate by pointing at it is a kiosk.

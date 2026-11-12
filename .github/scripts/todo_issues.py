@@ -18,8 +18,11 @@ issue too, titled by its section instead of by a code nobody cites. One box, one
 card on the roadmap; grouping them into a section issue would hide work behind a
 checkbox list.
 
-Re-running is safe: an issue whose title already exists is left alone, so a
-`TODO.md` edit adds what is new and never duplicates.
+Re-running is safe: an issue whose title already exists is not created again, so
+a `TODO.md` edit adds what is new and never duplicates. A re-run also reconciles
+what already exists: a box ticked since its issue was opened closes the issue,
+and a box unticked reopens it. The tracker mirrors `TODO.md`; it is not a second
+plan that can drift.
 
     python3 .github/scripts/todo_issues.py --dry-run          # what it would do
     python3 .github/scripts/todo_issues.py --apply            # create the issues
@@ -215,8 +218,8 @@ def gh(*args: str, check: bool = True) -> str:
     return result.stdout
 
 
-def existing_titles() -> set[str]:
-    """Every issue title, so a re-run is a no-op."""
+def listed() -> list[dict]:
+    """Every issue, open and closed, fetched once per run."""
     out = gh(
         "issue",
         "list",
@@ -227,33 +230,71 @@ def existing_titles() -> set[str]:
         "--limit",
         "1000",
         "--json",
-        "title",
+        "number,title,state,labels",
     )
-    return {issue["title"] for issue in json.loads(out or "[]")}
+    return json.loads(out or "[]")
 
 
-def existing_codes() -> set[str]:
-    """Every task code that already has an issue, so a re-run is a no-op."""
-    out = gh(
-        "issue",
-        "list",
-        "--repo",
-        REPO,
-        "--state",
-        "all",
-        "--limit",
-        "1000",
-        "--json",
-        "number,title",
-    )
-    codes: set[str] = set()
-    for issue in json.loads(out or "[]"):
+def by_code(issues: list[dict]) -> dict[str, list[dict]]:
+    """The issues that belong to a task code, so a re-run can find its own work."""
+    found: dict[str, list[dict]] = {}
+    for issue in issues:
         # `CODE`, not `P\w+`: a code is `P1-3`, `P4.5-3` or `XT-1`, and the hyphen
         # is not a word character — matching `P1` against `P1-3 · ...` is how a
         # re-run once created a second issue for a task that already had one.
         if match := re.match(rf"({CODE}|XT-\d+) ·", issue["title"]):
-            codes.add(match.group(1))
-    return codes
+            found.setdefault(match.group(1), []).append(issue)
+    return found
+
+
+def reconcile(
+    tasks: list[Task], known: dict[str, list[dict]], apply: bool
+) -> tuple[int, int]:
+    """Make every issue say what its box says.
+
+    `TODO.md` is ticked by hand as work lands, long after the issue was opened,
+    so creating missing issues is only half the job. The other half is closing
+    the ones whose box is now ticked and reopening a box that was ticked too
+    early — and keeping `status:shipped` in step, because that label is what a
+    `label:status:shipped` search reads instead of the close reason.
+
+    Only issues with a task code can be reconciled: an issue titled by its
+    section has nothing stable to match on, so it is left to a person.
+    """
+    closed = reopened = 0
+    shipped = "status:shipped"
+    for task in tasks:
+        if not task.code:
+            continue
+        for issue in known.get(task.code, []):
+            number = str(issue["number"])
+            is_open = issue["state"] == "OPEN"
+            has_label = shipped in {label["name"] for label in issue["labels"]}
+            if task.checked and is_open:
+                closed += 1
+                print(f"close   #{number}  {task.code}")
+                if apply:
+                    gh("issue", "close", number, "--repo", REPO, "--reason", "completed")
+            elif not task.checked and not is_open:
+                reopened += 1
+                print(f"reopen  #{number}  {task.code}")
+                if apply:
+                    gh("issue", "reopen", number, "--repo", REPO)
+            # The label is the searchable half of the same statement, so it is
+            # corrected even when the state was already right.
+            if task.checked != has_label:
+                print(f"{'label' if task.checked else 'unlabel'}  #{number}  {task.code}")
+                if apply:
+                    gh(
+                        "issue",
+                        "edit",
+                        number,
+                        "--repo",
+                        REPO,
+                        "--add-label" if task.checked else "--remove-label",
+                        shipped,
+                    )
+    return closed, reopened
 
 
 def ensure_labels(tasks: list[Task]) -> None:
@@ -312,25 +353,36 @@ def main() -> int:
     open_tasks = [task for task in tasks if not task.checked]
     print(f"{len(tasks)} boxes: {len(open_tasks)} open, {len(tasks) - len(open_tasks)} done")
 
+    issues = listed()
+    known = by_code(issues)
+    titles = {issue["title"] for issue in issues}
+
     if not args.apply:
         for task in tasks[:3]:
             print(f"\n{task.title}\n  labels: {', '.join(task.labels)}")
             print("  " + task.body.replace("\n", "\n  ")[:400])
-        print(f"\n(dry run: {len(tasks)} issues would be created)")
+        missing = sum(
+            1
+            for task in tasks
+            if task.title not in titles and not (task.code and task.code in known)
+        )
+        closed, reopened = reconcile(tasks, known, apply=False)
+        print(
+            f"\n(dry run: {missing} issues would be created, "
+            f"{closed} closed, {reopened} reopened)"
+        )
         return 0
 
     ensure_labels(tasks)
-    already = existing_codes()
-    titles = existing_titles()
     created = skipped = 0
 
-    issues: list[tuple[str, str, list[str], bool]] = [
+    issues_to_create: list[tuple[str, str, list[str], bool]] = [
         (task.title, task.body, task.labels, task.checked) for task in tasks
     ]
 
-    for title, body, labels, done in issues:
+    for title, body, labels, done in issues_to_create:
         code = title.split(" · ")[0]
-        if (title in titles) or (code in already and re.match(rf"({CODE}|XT-\d+)$", code)):
+        if (title in titles) or (code in known and re.match(rf"({CODE}|XT-\d+)$", code)):
             skipped += 1
             continue
         create = [
@@ -363,7 +415,14 @@ def main() -> int:
             )
         print(f"{created:3d}  {title}")
 
-    print(f"\n{created} created, {skipped} already there")
+    # Creation just changed the tracker, so the state pass reads it fresh rather
+    # than trusting the list it was deduplicating against.
+    closed, reopened = reconcile(tasks, by_code(listed()), apply=True)
+
+    print(
+        f"\n{created} created, {skipped} already there, "
+        f"{closed} closed, {reopened} reopened"
+    )
     return 0
 
 

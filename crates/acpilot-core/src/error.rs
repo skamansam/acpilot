@@ -58,6 +58,19 @@ pub enum AcpilotError {
         what: String,
     },
 
+    /// A workspace belongs to another profile.
+    ///
+    /// Distinct from [`Self::Conflict`] because the client can fix it by naming
+    /// the owner or by asking explicitly to take the workspace over, and the
+    /// owner is worth carrying as a field rather than only in prose.
+    #[error("profile mismatch: {what} belongs to profile {owner}")]
+    ProfileMismatch {
+        /// What was being opened.
+        what: String,
+        /// The profile that already owns it.
+        owner: String,
+    },
+
     /// The host (SSH, WSL, local helper) could not be reached or did not answer.
     #[error("host unavailable: {host}")]
     HostUnavailable {
@@ -124,6 +137,7 @@ impl AcpilotError {
             Self::InvalidRequest { .. } => "invalid_request",
             Self::Conflict { .. } => "conflict",
             Self::PermissionDenied { .. } => "permission_denied",
+            Self::ProfileMismatch { .. } => "profile_mismatch",
             Self::HostUnavailable { .. } => "host_unavailable",
             Self::ModelUnavailable { .. } => "model_unavailable",
             Self::AgentFailed { .. } => "agent_failed",
@@ -143,6 +157,7 @@ impl AcpilotError {
             Self::InvalidRequest { .. } => exit::USAGE,
             Self::Conflict { .. } => exit::CONFLICT,
             Self::PermissionDenied { .. } => exit::PERMISSION_DENIED,
+            Self::ProfileMismatch { .. } => exit::CONFLICT,
             Self::HostUnavailable { .. }
             | Self::ModelUnavailable { .. }
             | Self::AgentFailed { .. }
@@ -167,6 +182,14 @@ mod tests {
         assert_eq!(
             AcpilotError::denied("outside workspace").code(),
             "permission_denied"
+        );
+        assert_eq!(
+            AcpilotError::ProfileMismatch {
+                what: "workspace local:/src".into(),
+                owner: "work".into(),
+            }
+            .code(),
+            "profile_mismatch"
         );
         assert_eq!(
             AcpilotError::HostUnavailable { host: "dev".into() }.code(),
@@ -202,6 +225,15 @@ mod tests {
         assert_eq!(AcpilotError::not_found("x").exit_code(), 3);
         assert_eq!(AcpilotError::conflict("x").exit_code(), 4);
         assert_eq!(AcpilotError::denied("x").exit_code(), 5);
+        assert_eq!(
+            AcpilotError::ProfileMismatch {
+                what: "x".into(),
+                owner: "work".into(),
+            }
+            .exit_code(),
+            4,
+            "a mismatch is retryable after naming the owner"
+        );
         assert_eq!(
             AcpilotError::invalid("option `yolo`").exit_code(),
             exit::USAGE,

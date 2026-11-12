@@ -25,6 +25,9 @@ pub mod keymap;
 pub mod palette;
 pub mod platform;
 pub mod profiles;
+// The source-control pane's state, away from gpui: the same status and patch the
+// TUI draws, and a composer whose confirmation is testable without a window.
+pub mod source;
 pub mod stats;
 pub mod theme;
 

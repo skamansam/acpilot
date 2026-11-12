@@ -1,12 +1,12 @@
 //! The Windows listener: loopback TCP, until the named pipe exists.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use tokio::net::TcpListener;
 
-use super::Target;
+use super::{Bound, Target};
 
 /// Loopback HTTP, derived from the endpoint `acpilot-host` names.
 ///
@@ -20,6 +20,37 @@ pub(crate) fn default_target() -> Target {
             .trim_start_matches("http://")
             .to_owned(),
     )
+}
+
+/// The names a program may have on this platform's `PATH`.
+///
+/// Windows resolves `rust-analyzer` to `rust-analyzer.exe`, and a package manager's
+/// shim is a `.cmd` beside it, so both are tried before the program is declared
+/// absent. Nothing here launches a shell to find out. A program that already names
+/// an extension is not given another one: `acpilot.exe` is a file, and
+/// `acpilot.exe.exe` is a lookup that can only fail.
+pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
+    if Path::new(program).extension().is_some() {
+        return vec![PathBuf::from(program)];
+    }
+    vec![
+        PathBuf::from(format!("{program}.exe")),
+        PathBuf::from(format!("{program}.cmd")),
+    ]
+}
+
+/// Whether something is listening on `target` right now.
+///
+/// Only the TCP half can answer here: the named pipe is P10-5, so a socket target is
+/// a configuration this platform refuses to serve rather than one it can hold.
+pub(crate) fn endpoint_answers(target: &Target) -> bool {
+    match target {
+        Target::Tcp(addr) => addr.parse::<std::net::SocketAddr>().is_ok_and(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250))
+                .is_ok()
+        }),
+        Target::Socket(_) => false,
+    }
 }
 
 /// Resolve when the daemon should stop: Ctrl-C, which is what a console window
@@ -38,9 +69,15 @@ pub async fn shutdown() {
 ///
 /// A socket target (no pipe transport yet), an address that cannot be bound, or
 /// the listener failing while serving.
-pub async fn serve<F>(router: Router, target: Target, shutdown: F) -> io::Result<()>
+pub async fn serve_with_listening<F, B>(
+    router: Router,
+    target: Target,
+    shutdown: F,
+    listening: B,
+) -> io::Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
+    B: FnOnce(Bound) + Send + 'static,
 {
     let addr = match target {
         Target::Tcp(addr) => addr,
@@ -64,12 +101,39 @@ where
     // needs no restart.
     acpilot_host::token::load_or_create(&path)?;
     let listener = TcpListener::bind(&addr).await?;
+    let bound = listener.local_addr()?;
+    listening(Bound::Tcp(bound));
     tracing::warn!(
-        addr = %listener.local_addr()?,
+        addr = %bound,
         token = %path.display(),
         "listening on TCP; every request needs `Authorization: Bearer <token>`"
     );
     axum::serve(listener, crate::auth::protect(router, path))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_names_carry_the_extensions_windows_resolves() {
+        assert_eq!(
+            executable_names("rust-analyzer"),
+            vec![
+                PathBuf::from("rust-analyzer.exe"),
+                PathBuf::from("rust-analyzer.cmd"),
+            ],
+            "the binary and a package manager's shim, and nothing else"
+        );
+    }
+
+    #[test]
+    fn a_program_on_the_path_is_installed() {
+        assert!(
+            crate::lsp::installed("cmd"),
+            "cmd.exe is on every Windows PATH"
+        );
+    }
 }

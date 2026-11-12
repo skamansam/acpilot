@@ -3,6 +3,7 @@
 //! ```bash
 //! cargo run -p acpilot-gui --features gui                    # this directory
 //! cargo run -p acpilot-gui --features gui -- src/main.rs     # its project
+//! cargo run -p acpilot-gui --features gui -- --profile work
 //! cargo run -p acpilot-gui --features gui -- --profile ~/.config/acpilot/profiles/work
 //! ```
 //!
@@ -43,10 +44,10 @@ struct Cli {
     #[arg(value_name = "PATH")]
     path: Option<std::path::PathBuf>,
 
-    /// A profile directory to open. Repeat for more than one.
+    /// A profile name, or a profile directory, to open. Repeat for more than one.
     ///
     /// Wins over the profile a project implies, for the case a path cannot express.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "NAME|DIR")]
     profile: Vec<std::path::PathBuf>,
 
     /// Theme id to draw with, overriding the one the settings name.
@@ -56,6 +57,21 @@ struct Cli {
     /// at another one without editing either.
     #[arg(long, value_name = "ID")]
     theme: Option<String>,
+
+    /// Endpoint of the daemon: a URL, or a unix socket path.
+    ///
+    /// Defaults to `ACPILOT_API_URL`, then the per-user socket (or loopback HTTP
+    /// on Windows). The same string `acpilot tui` uses, so a window and a terminal
+    /// started together reach one daemon.
+    #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+    api_url: Option<String>,
+
+    /// Bearer token for a daemon on a TCP endpoint.
+    ///
+    /// Without it the token a local daemon wrote is read, so a window against
+    /// `acpilot serve` needs only its URL. A socket needs none.
+    #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+    token: Option<String>,
 }
 
 /// Recolour every open window when the daemon announces new settings.
@@ -144,8 +160,49 @@ fn measure_on_stats(
     .detach();
 }
 
+/// Push git answers at every open window, the same shape as the other two polls.
+/// A source read, a draft and a commit are commands rather than a clock, but the
+/// window still applies them on its own timer so the worker never touches gpui.
+fn apply_git_updates(
+    cx: &mut App,
+    shells: Arc<Mutex<Vec<Entity<Shell>>>>,
+    changed: std::sync::mpsc::Receiver<acpilot_gui::daemon::GitUpdate>,
+) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let mut updates = Vec::new();
+            while let Ok(update) = changed.try_recv() {
+                updates.push(update);
+            }
+            if updates.is_empty() {
+                continue;
+            }
+            let windows = shells
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            for shell in windows {
+                for update in updates.clone() {
+                    if cx
+                        .update(|cx| shell.update(cx, |shell, cx| shell.apply_git(update, cx)))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    })
+    .detach();
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let endpoint = cli.api_url.clone().unwrap_or_else(daemon::endpoint);
+    let token = cli.token.clone().or_else(daemon::token);
 
     let profiles = match profiles::open_for(cli.path.as_deref(), &cli.profile) {
         Ok(profiles) => profiles,
@@ -193,16 +250,29 @@ fn main() -> ExitCode {
     // window opens with, and a `prefs` frame replaces it. A daemon that is not
     // running costs this thread one failed request, not a window.
     let (settings, changed) = std::sync::mpsc::channel::<GuiTheme>();
-    daemon::follow(daemon::endpoint(), extensions.clone(), move |theme| {
-        let _ = settings.send(theme);
-    });
+    daemon::follow(
+        endpoint.clone(),
+        token.clone(),
+        extensions.clone(),
+        move |theme| {
+            let _ = settings.send(theme);
+        },
+    );
 
     // The stats bar is a second, slower question to the same daemon: the roster and
     // what each integration costs. A window with no daemon behind it keeps an empty
     // bar that says so, rather than failing a launch over a footer.
     let (stats, stats_changed) = std::sync::mpsc::channel::<Vec<Row>>();
-    daemon::follow_stats(daemon::endpoint(), move |rows| {
+    daemon::follow_stats(endpoint.clone(), token.clone(), move |rows| {
         let _ = stats.send(rows);
+    });
+
+    // The source-control pane's worker: one thread, commands in, answers out. The
+    // sender reaches every window; the receiver is the worker's.
+    let (git_requests, git_commands) = std::sync::mpsc::channel();
+    let (git_updates, git_changed) = std::sync::mpsc::channel();
+    daemon::follow_git(endpoint, token, git_commands, move |update| {
+        let _ = git_updates.send(update);
     });
 
     // The claim is taken before the runtime starts, so a launch that is only
@@ -232,12 +302,14 @@ fn main() -> ExitCode {
         let shells: Arc<Mutex<Vec<Entity<Shell>>>> = Arc::default();
         let opened = app::open_window(cx, profiles.clone(), theme.clone())
             .expect("the platform accepted a window");
+        opened.update(cx, |shell, _cx| shell.set_git_sender(git_requests.clone()));
         shells
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(opened);
         recolour_on_settings(cx, Arc::clone(&shells), changed);
         measure_on_stats(cx, Arc::clone(&shells), stats_changed);
+        apply_git_updates(cx, Arc::clone(&shells), git_changed);
 
         let Some(mut requests) = requests else {
             return;
@@ -255,6 +327,8 @@ fn main() -> ExitCode {
                     let opened = app::open_window(cx, profiles, theme);
                     cx.activate(true);
                     if let Ok(shell) = &opened {
+                        let git = git_requests.clone();
+                        shell.update(cx, |shell, _cx| shell.set_git_sender(git));
                         shells
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)

@@ -35,6 +35,19 @@ pub struct HostCapabilities {
     pub lsp: bool,
 }
 
+/// The body of `POST /v1/hosts`.
+///
+/// The kind decides what `address` means: `user@machine` or `machine` for `ssh`,
+/// a distribution name for `wsl`, and nothing for `local`, which is always listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CreateHostRequest {
+    /// How the daemon would reach the host.
+    pub kind: HostKind,
+    /// What the transport needs to name it, absent for the local host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
 /// A host as returned by `GET /v1/hosts`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct HostSummary {

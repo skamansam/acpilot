@@ -1,12 +1,29 @@
 name: CI
 
 on:
+  # `main` alone. Every branch used to be here, so that a branch pushed before its
+  # pull request existed still started a run. But a push run and the pull request run
+  # of one branch share a concurrency group, so the pull request cancels the push a
+  # minute in, and GitHub records a check run for every job of the cancelled run,
+  # with conclusion `cancelled`. That entry counts as not-success for a required
+  # check: #302 read `BLOCKED` with all thirteen jobs green and moved to `clean`
+  # only when its cancelled push run was deleted. Skipping the job under an `if:`
+  # does not help, because the entry is still published. A branch's checks come from
+  # its pull request; `workflow_dispatch` covers a branch tip nobody asked about;
+  # and this run on `main` is the one that says a merge landed green.
   push:
     branches: [main]
   pull_request:
+  # And a way to ask for a run against a commit that is already pushed: a workflow
+  # that can only start from an event cannot check a branch tip after the fact.
+  workflow_dispatch:
 
+# One run per branch. `push` no longer fires for a branch (see above), so on a pull
+# request this group cancels the run of the previous commit when the branch moves
+# again — the case it exists for. `head_ref` is the branch a pull request comes from
+# and is empty on a push to `main`, so the two never share a group by accident.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -65,8 +82,9 @@ jobs:
   # repaint against the same mock the unit test already uses.
   #
   # The checks themselves are `cargo xtask web-check` — install, `svelte-check`,
-  # the token-flow tests, the daemon build, the live shell test, the page build
-  # and the drift comparison, in that order. They live in the task because a
+  # the token-flow tests, the daemon build, the live shell test, the binaries and
+  # Chromium run that edit a file and approve a permission, the page build and the
+  # drift comparison, in that order. They live in the task because a
   # developer's `cargo xtask check` runs the same list: written here instead, the
   # runner could keep checking five commands while the local gate grew a sixth.
   web:
@@ -86,6 +104,27 @@ jobs:
           cache: false
 
       - uses: Swatinem/rust-cache@v2
+
+      # `web-check` installs when `node_modules` is missing, but the browser has to
+      # be installed after the package is there and before the run that uses it:
+      # `playwright` is a devDependency, and its Chromium revision is the one that
+      # package expects rather than an `npx` download that may be newer.
+      - name: Web dependencies
+        working-directory: web
+        run: npm ci
+
+      # The browser alone, never `--with-deps`: that flag's first act is
+      # `apt-get update`, and on a runner that could not resolve
+      # `security.ubuntu.com` it failed before a single test ran, with a log that read
+      # like missing fonts. The runner image already carries Chromium's runtime
+      # libraries and its fonts, which is also why this job needs no apt at all. The
+      # Playwright image is not an option here: it has no C toolchain, and this job
+      # compiles the daemon and the CLI, so its Rust build stops at `linker cc not
+      # found`. A library that is genuinely absent now fails in the e2e run, where
+      # the browser names it.
+      - name: Playwright browser
+        working-directory: web
+        run: npx playwright install chromium
 
       # Install, types, both test runs and the embedded page, in the task's order.
       # A drift failure names the page to commit and exits non-zero; the rebuilt
@@ -324,6 +363,37 @@ jobs:
       - name: Fail if the snapshot changed
         run: git diff --exit-code -- crates/acpilot-proto/tests/snapshots
 
+  # CONTRIBUTING's "Git history" rules, checked. Each of them is a state this
+  # repository has been in: a merge that kept one side's tree, so `main`'s work was
+  # recorded as merged and then vanished; and a pull request that could not merge at
+  # all. Both are cheap to see here and expensive to find at the merge button.
+  #
+  # A full history, because the check compares every merge with both of its parents.
+  # A shallow clone has neither the merge commits nor the base to compare them with.
+  history:
+    name: branch history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The branch's own tip, not the merge commit GitHub builds from base and
+          # head: that commit's tree equals the head's whenever the branch already
+          # contains the base, so the job would find an "ours" merge of its own
+          # making and report the harness instead of the branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `github.base_ref` is the pull request's target and is empty on a push, where
+      # the branch has not said where it is going: `main` is the only answer.
+      - name: History rules
+        run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
+
   # One check to require in branch protection, so the rule does not have to be
   # restated every time a job is added — and cannot silently stop covering one
   # when a job is renamed. It needs every gate above and passes only if all of
@@ -340,10 +410,26 @@ jobs:
   #
   # The individual jobs stay listed in the PR's checks tab either way; this is the
   # one a rule points at.
+  # The ruleset on `main` requires the single context `required checks` and allows no
+  # bypass. GitHub records a check run for every job of a run, a cancelled one
+  # included, and a `cancelled` entry under a required name counts as not-success in
+  # that commit's rollup: #302 read `BLOCKED` with every job green, and deleting its
+  # cancelled push run moved the pull request to `clean` with no other change.
+  #
+  # Pushing a branch and then opening its pull request puts a push run and a pull
+  # request run of the same commit in one concurrency group, so the later cancels the
+  # earlier, and the two events cannot publish one name. A job's `name` is a literal —
+  # an expression there becomes the name, which is how the first attempt at this
+  # published a check called `github.event_name == ...` — so the two events get two
+  # jobs over one assertion.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, deny, docs]
-    if: always()
+    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
+    # `always()` also fired inside a cancelled run, where every dependency reports
+    # `cancelled`; `!cancelled()` runs the job after a dependency fails, which is the
+    # case it exists for, and stays out of a cancelled run, where it has nothing to say.
+    # Only the event that merges publishes the name the ruleset asks for.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Every required job succeeded
@@ -356,6 +442,7 @@ jobs:
             frame-budget=${{ needs.frame-budget.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
+            history=${{ needs.history.result }}
         run: |
           set -euo pipefail
           failed=""
@@ -369,5 +456,44 @@ jobs:
           done
           if [ -n "$failed" ]; then
             echo "required job(s) did not pass:$failed"
+            exit 1
+          fi
+
+  # The same assertion under a name of its own, for the runs that are not a pull
+  # request: a push to `main`, and a manual run. The required name belongs to the
+  # pull request alone, and a job that is in a run at all publishes its name there
+  # whatever its `if:` says, so this job cannot be the one called `required checks`.
+  # Keep the two step bodies in step; they are the same check because they are the
+  # same gate.
+  required-branch:
+    name: required checks (branch)
+    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: >-
+            check=${{ needs.check.result }}
+            web=${{ needs.web.result }}
+            gui=${{ needs.gui.result }}
+            probes=${{ needs.probes.result }}
+            frame-budget=${{ needs.frame-budget.result }}
+            deny=${{ needs.deny.result }}
+            docs=${{ needs.docs.result }}
+            history=${{ needs.history.result }}
+        run: |
+          set -euo pipefail
+          failed=""
+          for pair in $RESULTS; do
+            name=${pair%%=*}
+            result=${pair#*=}
+            echo "$name: $result"
+            if [ "$result" != "success" ]; then
+              failed="$failed $name($result)"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "job(s) did not pass:$failed"
             exit 1
           fi

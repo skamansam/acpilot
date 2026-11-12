@@ -56,10 +56,10 @@ async fn screen_shows(pane: &Arc<Terminal>, text: &str) {
 async fn an_agent_terminal_becomes_a_pane_a_client_can_attach_to() {
     let state = AppState::new();
     let handle = an_agents_terminal(&state, "printf hello").await;
-    let summary = state.terminals().adopt("s1".to_owned(), handle);
+    let summary = state.terminals().adopt(Some("s1".to_owned()), handle);
 
     assert_eq!(summary.id, "agent-terminal-1");
-    assert_eq!(summary.session_id, "s1");
+    assert_eq!(summary.session_id.as_deref(), Some("s1"));
     assert!(
         summary.command.contains("printf hello"),
         "the pane has a title: {}",
@@ -89,7 +89,7 @@ async fn typing_into_the_pane_reaches_the_agents_process() {
     // `cat` echoes what it reads, so a byte typed into the pane is visible in the
     // screen the pane replays — through the agent's PTY, not a second one.
     let handle = an_agents_terminal(&state, "exec cat").await;
-    let summary = state.terminals().adopt("s1".to_owned(), handle);
+    let summary = state.terminals().adopt(Some("s1".to_owned()), handle);
     let pane = state
         .terminals()
         .get(&summary.id)
@@ -107,7 +107,7 @@ async fn a_pane_ends_when_the_agents_program_does() {
     // adopted: a command that prints and exits is over before the daemon has a
     // pane for it, which is a different case (and its own test).
     let handle = an_agents_terminal(&state, "read line; printf bye").await;
-    let summary = state.terminals().adopt("s1".to_owned(), handle);
+    let summary = state.terminals().adopt(Some("s1".to_owned()), handle);
     let pane = state
         .terminals()
         .get(&summary.id)
@@ -147,9 +147,11 @@ async fn the_daemon_mirrors_a_terminal_an_agent_opens() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
-    // No session in this daemon answers to the agent's id, so the pane is filed
-    // under that id rather than dropped — see `mirror_agent_terminals`.
-    assert_eq!(pane.session_id(), "acp-1");
+    // No session in this daemon answers to the agent's id, so the pane has no
+    // owner at all rather than one no session resolves — see
+    // `mirror_agent_terminals`. A pane nobody can name is still a pane a client
+    // can list and attach to.
+    assert_eq!(pane.session_id(), None);
     screen_shows(&pane, "mirrored").await;
 }
 
@@ -170,7 +172,7 @@ async fn a_pane_opened_after_the_program_ended_still_hears_the_exit() {
 
     // Nothing is awaited between the adoption and this attach, so the pane's pump
     // has not run yet and every frame it publishes is still to come.
-    let summary = state.terminals().adopt("s1".to_owned(), handle);
+    let summary = state.terminals().adopt(Some("s1".to_owned()), handle);
     let pane = state
         .terminals()
         .get(&summary.id)

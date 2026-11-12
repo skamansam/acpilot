@@ -23,6 +23,8 @@ pub enum CommandId {
     /// between a number someone measured and a number this client guessed, so it
     /// is one row away rather than absent.
     StatsSources,
+    /// Read the repository: changed paths, their diff, and the commit composer.
+    SourceControl,
     /// Leave the app.
     Quit,
 }
@@ -59,6 +61,11 @@ pub fn commands(profiles: &[ShellProfile]) -> Vec<Command> {
         id: CommandId::StatsSources,
         label: "Where the stats came from".to_owned(),
         detail: "Each figure's source, instead of its numbers".to_owned(),
+    });
+    commands.push(Command {
+        id: CommandId::SourceControl,
+        label: "Source control".to_owned(),
+        detail: "Changed files, their diff, and a confirmed commit".to_owned(),
     });
     commands.push(Command {
         id: CommandId::Quit,
@@ -139,7 +146,7 @@ mod tests {
     #[test]
     fn there_is_one_entry_per_profile_one_for_about_one_for_the_stats_and_one_to_leave() {
         let (_dirs, commands) = list();
-        assert_eq!(commands.len(), 5);
+        assert_eq!(commands.len(), 6);
         assert_eq!(commands[0].label, "Switch to work");
         assert_eq!(commands[0].id, CommandId::SelectProfile(0));
         assert!(
@@ -152,7 +159,8 @@ mod tests {
         assert!(commands[1].detail.contains("shipped policy"));
         assert_eq!(commands[2].id, CommandId::About);
         assert_eq!(commands[3].id, CommandId::StatsSources);
-        assert_eq!(commands[4].id, CommandId::Quit);
+        assert_eq!(commands[4].id, CommandId::SourceControl);
+        assert_eq!(commands[5].id, CommandId::Quit);
     }
 
     #[test]
@@ -176,8 +184,8 @@ mod tests {
     #[test]
     fn an_empty_query_shows_everything_in_order() {
         let (_dirs, commands) = list();
-        assert_eq!(filter(&commands, ""), vec![0, 1, 2, 3, 4]);
-        assert_eq!(filter(&commands, "   "), vec![0, 1, 2, 3, 4]);
+        assert_eq!(filter(&commands, ""), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(filter(&commands, "   "), vec![0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
@@ -185,7 +193,7 @@ mod tests {
         let (_dirs, commands) = list();
         assert_eq!(filter(&commands, "work"), vec![0]);
         assert_eq!(filter(&commands, "WORK"), vec![0]);
-        assert_eq!(filter(&commands, "quit"), vec![4]);
+        assert_eq!(filter(&commands, "quit"), vec![5]);
     }
 
     #[test]

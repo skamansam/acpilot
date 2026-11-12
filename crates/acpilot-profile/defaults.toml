@@ -14,6 +14,8 @@ insert_spaces = true
 format_on_save = false
 trim_trailing_whitespace = true
 wrap = false
+# Columns where an editor draws a ruler, as a reading aid. Empty by default.
+# rulers = [80, 100]
 theme = "acpilot.night-flight"
 # A theme is an extension, and the same one draws the TUI, the desktop app and the
 # browser: `theme` is the answer for every surface that does not name its own. Set
@@ -28,4 +30,10 @@ theme = "acpilot.night-flight"
 # instead of naming one. A terminal that will not say what its colours are falls
 # back to the theme named above, so this is safe to turn on anywhere.
 theme_follow_terminal = false
+# Leave paths a `.gitignore` excludes out of the file tree, so the tree is the
+# project as git sees it rather than a listing of a directory: `target/` and every
+# other ignored directory stop being rows. Set it to false to see everything.
+# Nothing here does the matching — the daemon answers the listing and reads the
+# ignore files where they are.
+tree_respect_gitignore = true
 diagnostics_min_severity = "warning"

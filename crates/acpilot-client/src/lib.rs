@@ -26,11 +26,14 @@ pub mod terminal;
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionDecision, PermissionOption, PermissionRequest};
-use acpilot_proto::profile::Preferences;
+use acpilot_proto::profile::{
+    Preferences, PreferencesPatch, ProfileCreate, ProfileExport, ProfilePatch, ProfileSummary,
+};
 use acpilot_proto::session::{
     CancelAccepted, CreateSessionRequest, PromptAccepted, PromptRequest, SessionSummary,
 };
 use acpilot_proto::terminal::TerminalSummary;
+use acpilot_proto::workspace::{WorkspaceOpenRequest, WorkspaceSummary};
 use eventsource_stream::Eventsource;
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
@@ -151,6 +154,27 @@ pub enum ProfileStream {
     /// which is how a client that cannot read the daemon's files learns the
     /// current preferences at all.
     Preferences(Preferences),
+    /// A settings save could not be read, so the last good values are still in
+    /// force. The message is the daemon's explanation, not a preference value.
+    PreferencesError(String),
+    /// A request somebody else answered.
+    ///
+    /// The pending list is state, so this is not how a client learns what is
+    /// waiting; it is how a client that is *showing* a question hears that another
+    /// window answered it, and closes the dialog instead of asking again.
+    Resolved {
+        /// The request that was answered.
+        request_id: String,
+        /// What it was answered with.
+        option: PermissionOption,
+    },
+    /// Problems a language server pushed about a file.
+    ///
+    /// Not an answer to anything the client asked: a server that finishes an index
+    /// speaks again on its own, and this is how a pane hears it without waiting for the
+    /// next save. The notice names the document and, when the server said, its version,
+    /// so a client can tell a late publish from a current one.
+    Diagnostics(acpilot_proto::file::DiagnosticsNotice),
     /// The stream is quiet but alive.
     Heartbeat,
     /// The client fell behind; refetch the pending list.
@@ -230,6 +254,110 @@ impl Client {
         self.get("/v1/agents").await
     }
 
+    /// `GET /v1/profiles`.
+    pub async fn profiles(&self) -> Result<Vec<ProfileSummary>, ClientError> {
+        self.get("/v1/profiles").await
+    }
+
+    /// `GET /v1/profiles/{id}`.
+    pub async fn profile(&self, id: &str) -> Result<ProfileSummary, ClientError> {
+        self.get(&format!("/v1/profiles/{id}")).await
+    }
+
+    /// `POST /v1/profiles`.
+    pub async fn create_profile(
+        &self,
+        request: &ProfileCreate,
+    ) -> Result<ProfileSummary, ClientError> {
+        let builder = self
+            .http
+            .post(self.request_url("/v1/profiles"))
+            .json(request);
+        self.send(builder, "/v1/profiles").await
+    }
+
+    /// `PATCH /v1/profiles/{id}`.
+    pub async fn patch_profile(
+        &self,
+        id: &str,
+        patch: &ProfilePatch,
+    ) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}");
+        let builder = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(builder, &path).await
+    }
+
+    /// `DELETE /v1/profiles/{id}`.
+    ///
+    /// `purge` is the permanent form; without it the daemon asks the platform to
+    /// move the profile's directories to the OS trash.
+    pub async fn delete_profile(
+        &self,
+        id: &str,
+        purge: bool,
+    ) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}?purge={purge}");
+        let builder = self.http.delete(self.request_url(&path));
+        self.send(builder, &path).await
+    }
+
+    /// `POST /v1/profiles/{id}/activate`.
+    pub async fn activate_profile(&self, id: &str) -> Result<ProfileSummary, ClientError> {
+        let path = format!("/v1/profiles/{id}/activate");
+        let builder = self.http.post(self.request_url(&path));
+        self.send(builder, &path).await
+    }
+
+    /// `GET /v1/profiles/{id}/preferences`.
+    pub async fn preferences(&self, id: &str) -> Result<Preferences, ClientError> {
+        self.get(&format!("/v1/profiles/{id}/preferences")).await
+    }
+
+    /// `PATCH /v1/profiles/{id}/preferences`.
+    pub async fn patch_preferences(
+        &self,
+        id: &str,
+        patch: &PreferencesPatch,
+    ) -> Result<Preferences, ClientError> {
+        let path = format!("/v1/profiles/{id}/preferences");
+        let builder = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(builder, &path).await
+    }
+
+    /// `POST /v1/profiles/{id}/export`.
+    ///
+    /// The redacted document: files hold `keyring:` references, never resolved
+    /// credentials. Resolving them is the CLI's explicit opt-in, not an HTTP answer.
+    pub async fn export_profile(&self, id: &str) -> Result<ProfileExport, ClientError> {
+        let path = format!("/v1/profiles/{id}/export");
+        let builder = self.http.post(self.request_url(&path));
+        self.send(builder, &path).await
+    }
+
+    /// `GET /v1/workspaces`.
+    pub async fn workspaces(&self) -> Result<Vec<WorkspaceSummary>, ClientError> {
+        self.get("/v1/workspaces").await
+    }
+
+    /// `POST /v1/workspaces`.
+    ///
+    /// `profile` is the identity the request is made under. It is a header rather
+    /// than a body field because the daemon dispatches every route by it, and a
+    /// request that named a profile only in one place would be a request that could
+    /// open a workspace under one identity and record it under another.
+    pub async fn open_workspace(
+        &self,
+        profile: Option<&str>,
+        request: &WorkspaceOpenRequest,
+    ) -> Result<WorkspaceSummary, ClientError> {
+        let path = "/v1/workspaces";
+        let mut builder = self.http.post(self.request_url(path)).json(request);
+        if let Some(profile) = profile {
+            builder = builder.header("X-Acpilot-Profile", profile);
+        }
+        self.send(builder, path).await
+    }
+
     /// `GET /v1/sessions`.
     pub async fn sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
         self.get("/v1/sessions").await
@@ -244,6 +372,331 @@ impl Client {
         self.get("/v1/stats").await
     }
 
+    /// `GET /v1/files/list?path=&include_ignored=`.
+    ///
+    /// One directory per call: the daemon serves a listing of a path, not a walk of
+    /// the workspace, so a tree that opens a directory asks for exactly that one and
+    /// pays for what a person is looking at.
+    ///
+    /// `include_ignored` asks for the rows an ignore rule hides, each marked with
+    /// its `ignored` flag: a tree's "show hidden" toggle is the only caller that
+    /// sends it, and the marking is what lets a pane draw those rows as the
+    /// exception they are.
+    pub async fn files(
+        &self,
+        path: &str,
+        include_ignored: bool,
+    ) -> Result<Vec<acpilot_proto::file::FileEntry>, ClientError> {
+        self.get(&format!(
+            "/v1/files/list?path={}&include_ignored={include_ignored}",
+            query_value(path)
+        ))
+        .await
+    }
+
+    /// `GET /v1/files/search?q=`.
+    ///
+    /// Every file in the workspace whose path contains `q`, as the daemon walked
+    /// it: the ignore rules are the daemon's, so a find cannot see what the tree
+    /// hides — one `tree_respect_gitignore` decides both.
+    pub async fn search_files(
+        &self,
+        query: &str,
+    ) -> Result<Vec<acpilot_proto::file::FileEntry>, ClientError> {
+        self.get(&format!("/v1/files/search?q={}", query_value(query)))
+            .await
+    }
+
+    /// `GET /v1/files/grep?q=`.
+    ///
+    /// The other half of a find: `search_files` answers a path, this answers a word
+    /// inside a file. The lines come back with their text and a 1-based number, so a
+    /// jump list can be read and chosen from without opening every file first.
+    pub async fn grep(
+        &self,
+        query: &str,
+    ) -> Result<Vec<acpilot_proto::file::GrepMatch>, ClientError> {
+        self.get(&format!("/v1/files/grep?q={}", query_value(query)))
+            .await
+    }
+
+    /// `GET /v1/lsp/servers`.
+    ///
+    /// What the daemon knows about the language servers it can start: which are
+    /// running, the encoding each negotiated, and the last references round trip. A
+    /// language this build has no server for is not a row — the list is the daemon's
+    /// answer to "what could answer a caret", not a catalogue of editors.
+    pub async fn lsp_servers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::lsp::LspServerSummary>, ClientError> {
+        self.get("/v1/lsp/servers").await
+    }
+
+    /// Where the name is used in code.
+    ///
+    /// With a caret — the file, the byte `offset` and the buffer's own `text` — this is
+    /// `POST /v1/files/references`, and the daemon asks a language server where one is
+    /// installed, so the list is scoped: two functions called `new` are two functions.
+    /// The text travels because an edited buffer is not the file on disk, and a panel
+    /// that listed the saved file's uses would answer about a version nobody is
+    /// reading. Without a caret this is the spelling search,
+    /// `GET /v1/files/references?q=`, which is what a symbol with no server behind it
+    /// still deserves.
+    pub async fn references(
+        &self,
+        name: &str,
+        at: Option<(&str, usize, &str)>,
+    ) -> Result<Vec<acpilot_proto::file::Reference>, ClientError> {
+        let Some((path, offset, text)) = at else {
+            let url = format!("/v1/files/references?q={}", query_value(name));
+            return self.get(&url).await;
+        };
+        let body = acpilot_proto::file::ReferencesRequest {
+            workspace: None,
+            q: name.to_owned(),
+            path: path.to_owned(),
+            offset: Some(offset),
+            text: Some(text.to_owned()),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/references"))
+            .json(&body);
+        self.send(request, "/v1/files/references").await
+    }
+
+    /// `POST /v1/files/diagnostics`.
+    ///
+    /// What the daemon's language server says is wrong with a file. The text travels
+    /// because an edited buffer is the file the person is reading, and the answer says
+    /// which server answered — an empty list from no server at all is not a clean file,
+    /// and a status line that drew them the same would be claiming a check nobody ran.
+    pub async fn diagnostics(
+        &self,
+        path: &str,
+        text: &str,
+    ) -> Result<acpilot_proto::file::FileDiagnostics, ClientError> {
+        let body = acpilot_proto::file::DiagnosticsRequest {
+            workspace: None,
+            path: path.to_owned(),
+            text: Some(text.to_owned()),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/diagnostics"))
+            .json(&body);
+        self.send(request, "/v1/files/diagnostics").await
+    }
+
+    /// `POST /v1/files/format`.
+    ///
+    /// The formatter is the daemon's language server, not this client's child: a
+    /// TUI on another machine formats with the server where the files are. A file
+    /// with no formatter is returned unchanged and `formatted: false`, so a
+    /// format-on-save caller can write it rather than failing the save.
+    pub async fn format_file(
+        &self,
+        path: &str,
+        text: &str,
+    ) -> Result<acpilot_proto::file::FileFormat, ClientError> {
+        let body = acpilot_proto::file::FileFormatRequest {
+            workspace: None,
+            path: path.to_owned(),
+            text: text.to_owned(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/files/format"))
+            .json(&body);
+        self.send(request, "/v1/files/format").await
+    }
+
+    /// `GET /v1/project/map`.
+    ///
+    /// The map the agent wrote under `.acpilot/`, as areas with a summary and the
+    /// areas they lean on. `written` is false when nobody has written one yet, which
+    /// is the panel's first state rather than an error.
+    pub async fn project_map(&self) -> Result<acpilot_proto::project::ProjectMap, ClientError> {
+        self.get("/v1/project/map").await
+    }
+
+    /// `PUT /v1/files`.
+    ///
+    /// The write half of the read, and the reason the read returns a token: a save
+    /// that found the file changed underneath it is a `409`, never a silent overwrite.
+    /// The daemon serialises writes per file, so this is the only way a buffer becomes
+    /// a file.
+    pub async fn write_file(
+        &self,
+        request: &acpilot_proto::file::FileWriteRequest,
+    ) -> Result<acpilot_proto::file::FileContent, ClientError> {
+        let builder = self.http.put(self.request_url("/v1/files")).json(request);
+        self.send(builder, "/v1/files").await
+    }
+
+    /// `GET /v1/files?path=`.
+    ///
+    /// The text plus the ETag a save sends back as `if_match`: the read half of the
+    /// write, which is P7-10's.
+    pub async fn file(&self, path: &str) -> Result<acpilot_proto::file::FileContent, ClientError> {
+        self.get(&format!("/v1/files?path={}", query_value(path)))
+            .await
+    }
+
+    /// `GET /v1/git/status`.
+    ///
+    /// Branch state and every changed path, with the index's answer and the working
+    /// tree's on one row. The source-control pane reads this and never writes it.
+    pub async fn git_status(&self) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        self.get("/v1/git/status").await
+    }
+
+    /// `GET /v1/git/diff?scope=all`.
+    ///
+    /// The patch and its file list, both from one request: the pane draws the files
+    /// from the list and the diff from the patch, and two reads could describe two
+    /// different moments.
+    pub async fn git_diff(&self, scope: &str) -> Result<acpilot_proto::git::GitDiff, ClientError> {
+        self.get(&format!("/v1/git/diff?scope={scope}")).await
+    }
+
+    /// `POST /v1/git/stage`.
+    ///
+    /// Adds repository-relative paths to the index and answers with the status read
+    /// after git ran. The working tree is untouched.
+    pub async fn stage(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/stage"))
+            .json(&body);
+        self.send(request, "/v1/git/stage").await
+    }
+
+    /// `POST /v1/git/stage-hunk`.
+    ///
+    /// Applies one zero-based hunk from the path's unstaged diff to the index. The
+    /// daemon cuts the hunk from git's own patch; the client names its position.
+    pub async fn stage_hunk(
+        &self,
+        path: &str,
+        hunk: usize,
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitHunkRequest {
+            workspace: None,
+            path: path.to_owned(),
+            hunk,
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/stage-hunk"))
+            .json(&body);
+        self.send(request, "/v1/git/stage-hunk").await
+    }
+
+    /// `POST /v1/git/unstage`.
+    ///
+    /// Removes repository-relative paths from the index and leaves their working-tree
+    /// changes in place.
+    pub async fn unstage(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/unstage"))
+            .json(&body);
+        self.send(request, "/v1/git/unstage").await
+    }
+
+    /// `POST /v1/git/discard`.
+    ///
+    /// Restores the selected paths' working-tree half from the index and answers the
+    /// status read afterwards. Staged changes stay staged; an untracked path is
+    /// removed, because the index has no version to restore it from.
+    pub async fn discard(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/discard"))
+            .json(&body);
+        self.send(request, "/v1/git/discard").await
+    }
+
+    /// `POST /v1/git/checkout`.
+    ///
+    /// Restores both the index and the working tree for the selected paths from
+    /// `HEAD`. A staged addition is removed; an untracked path is refused.
+    pub async fn checkout(
+        &self,
+        paths: &[String],
+    ) -> Result<acpilot_proto::git::GitStatus, ClientError> {
+        let body = acpilot_proto::git::GitIndexRequest {
+            workspace: None,
+            paths: paths.to_vec(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/checkout"))
+            .json(&body);
+        self.send(request, "/v1/git/checkout").await
+    }
+
+    /// `POST /v1/git/commit-message`.
+    ///
+    /// Asks the named session to draft a message from the staged diff. The answer is
+    /// a draft: the daemon has not staged or committed anything.
+    pub async fn commit_message(
+        &self,
+        session_id: &str,
+    ) -> Result<acpilot_proto::git::CommitDraft, ClientError> {
+        let body = acpilot_proto::git::CommitMessageRequest {
+            workspace: None,
+            session_id: session_id.to_owned(),
+            prompt: None,
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/commit-message"))
+            .json(&body);
+        self.send(request, "/v1/git/commit-message").await
+    }
+
+    /// `POST /v1/git/commit`.
+    ///
+    /// Commits the index with a message the person confirmed. It does not stage
+    /// anything first: the index is what the person prepared through [`Self::stage`].
+    pub async fn commit(
+        &self,
+        message: &str,
+    ) -> Result<acpilot_proto::git::GitCommit, ClientError> {
+        let body = acpilot_proto::git::GitCommitRequest {
+            workspace: None,
+            message: message.to_owned(),
+        };
+        let request = self
+            .http
+            .post(self.request_url("/v1/git/commit"))
+            .json(&body);
+        self.send(request, "/v1/git/commit").await
+    }
+
     /// `GET /v1/terminals?session=`.
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger
@@ -256,6 +709,27 @@ impl Client {
             Some(id) => self.get(&format!("/v1/terminals?session={id}")).await,
             None => self.get("/v1/terminals").await,
         }
+    }
+
+    /// `POST /v1/terminals`.
+    ///
+    /// Starts the program the request names — the host's own shell when it names
+    /// none — and answers with the terminal already running, so the id can be
+    /// attached to without racing the program that is supposed to paint it.
+    ///
+    /// `workspace` is which machine the shell runs on: a remote workspace's terminal
+    /// runs on that workspace's host through its helper, so the shell sees the files
+    /// the rest of the client is reading. The session that owns the pane is still
+    /// this daemon's until sessions run on a host themselves.
+    pub async fn create_terminal(
+        &self,
+        request: &acpilot_proto::terminal::CreateTerminalRequest,
+    ) -> Result<TerminalSummary, ClientError> {
+        let builder = self
+            .http
+            .post(self.request_url("/v1/terminals"))
+            .json(request);
+        self.send(builder, "/v1/terminals").await
     }
 
     /// `GET /v1/sessions/{id}`.
@@ -465,6 +939,24 @@ impl Client {
     }
 }
 
+/// A query-string value, percent-encoded.
+///
+/// Hand-rolled for the same reason the clipboard's base64 is: one escape is not
+/// worth a dependency, and a path with a space, a `#` or a `?` in it has to survive
+/// the round trip. `/` stays as it is — a path reads better in a log than `%2F`.
+fn query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn status_code(status: StatusCode) -> &'static str {
     status.canonical_reason().unwrap_or("unknown")
 }
@@ -495,6 +987,13 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
             let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
                 ClientError::Stream(format!("a permission frame did not parse: {error}"))
             })?;
+            if value["type"].as_str() == Some("resolved") {
+                let request_id = value["request_id"].as_str().unwrap_or_default().to_owned();
+                let option = serde_json::from_value(value["option"].clone()).map_err(|error| {
+                    ClientError::Stream(format!("a decision did not parse: {error}"))
+                })?;
+                return Ok(ProfileStream::Resolved { request_id, option });
+            }
             serde_json::from_value(value["request"].clone())
                 .map(ProfileStream::Permission)
                 .map_err(|error| {
@@ -511,13 +1010,39 @@ fn profile_frame(frame: &eventsource_stream::Event) -> Result<ProfileStream, Cli
                     ClientError::Stream(format!("the preferences did not parse: {error}"))
                 })
         }
+        "prefs_error" => {
+            let value: serde_json::Value = serde_json::from_str(&frame.data).map_err(|error| {
+                ClientError::Stream(format!("a prefs_error frame did not parse: {error}"))
+            })?;
+            value["message"]
+                .as_str()
+                .map(|message| ProfileStream::PreferencesError(message.to_owned()))
+                .ok_or_else(|| {
+                    ClientError::Stream("a prefs_error frame did not name a message".to_owned())
+                })
+        }
         "heartbeat" => Ok(ProfileStream::Heartbeat),
+        "diagnostics" => diagnostics_of(&frame.data).map(ProfileStream::Diagnostics),
         "resync" => Ok(ProfileStream::Resync),
         other => Ok(ProfileStream::Other {
             event: other.to_owned(),
             data: frame.data.clone(),
         }),
     }
+}
+
+/// The notice in a `diagnostics` frame's body.
+///
+/// The body wraps it in an object rather than sending it bare, the same way a `prefs`
+/// frame names its preferences: a frame with a named field has somewhere to put the
+/// next thing the daemon wants to say about it.
+fn diagnostics_of(data: &str) -> Result<acpilot_proto::file::DiagnosticsNotice, ClientError> {
+    let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+        ClientError::Stream(format!("a diagnostics frame did not parse: {error}"))
+    })?;
+    serde_json::from_value(value["diagnostics"].clone()).map_err(|error| {
+        ClientError::Stream(format!("a diagnostics notice did not parse: {error}"))
+    })
 }
 
 /// The `seq` or `latest_seq` in a control frame, `0` when it is missing.
@@ -547,6 +1072,89 @@ mod tests {
             Client::new("http://127.0.0.1:7777").base(),
             "http://127.0.0.1:7777"
         );
+    }
+
+    #[test]
+    fn a_path_survives_the_query_string() {
+        assert_eq!(
+            query_value("crates/acpilot-tui/src/app.rs"),
+            "crates/acpilot-tui/src/app.rs"
+        );
+        assert_eq!(query_value("docs/a b.md"), "docs/a%20b.md");
+        assert_eq!(query_value("a#b?c=d"), "a%23b%3Fc%3Dd");
+        assert_eq!(
+            query_value("caf\u{e9}.rs"),
+            "caf%C3%A9.rs",
+            "a byte, not a char"
+        );
+    }
+
+    #[test]
+    fn the_listing_and_read_routes_are_where_the_daemon_serves_them() {
+        // The paths are the contract: a typo here is a 404 the daemon answers
+        // perfectly correctly, so the strings are asserted rather than assumed.
+        let client = Client::new("http://127.0.0.1:7777");
+        assert_eq!(
+            client.url("/v1/files/list?path=src"),
+            "http://127.0.0.1:7777/v1/files/list?path=src"
+        );
+        assert_eq!(
+            client.url("/v1/files?path=src/main.rs"),
+            "http://127.0.0.1:7777/v1/files?path=src/main.rs"
+        );
+    }
+
+    #[test]
+    fn a_pushed_problem_reads_its_notice_out_of_the_frame() {
+        let body = serde_json::json!({
+            "diagnostics": {
+                "path": "src/main.rs",
+                "version": 7,
+                "problems": {
+                    "server": "rust-analyzer",
+                    "encoding": "utf16",
+                    "items": [{
+                        "line": 3,
+                        "column": 5,
+                        "end_line": 3,
+                        "end_column": 9,
+                        "severity": "error",
+                        "message": "cannot find value `nope`",
+                        "code": "E0425"
+                    }]
+                }
+            }
+        })
+        .to_string();
+        let notice = diagnostics_of(&body).expect("a notice");
+        assert_eq!(notice.path, "src/main.rs");
+        assert_eq!(notice.version, Some(7));
+        assert_eq!(notice.problems.server.as_deref(), Some("rust-analyzer"));
+        assert_eq!(notice.problems.items.len(), 1);
+        assert_eq!(notice.problems.items[0].line, 3);
+
+        // A frame from a newer daemon that this build cannot read is an error rather
+        // than a silent nothing: a gutter that quietly ignored it would look clean.
+        assert!(
+            diagnostics_of(r#"{"diagnostics":{"path":7}}"#).is_err(),
+            "a notice this build cannot read is said out loud"
+        );
+    }
+
+    #[test]
+    fn a_prefs_error_frame_carries_the_sentence_the_window_shows() {
+        let frame = eventsource_stream::Event {
+            event: "prefs_error".to_owned(),
+            data: serde_json::json!({ "message": "config.toml: expected a value" }).to_string(),
+            id: String::new(),
+            retry: None,
+        };
+        match profile_frame(&frame).expect("the frame parses") {
+            ProfileStream::PreferencesError(message) => {
+                assert!(message.contains("config.toml"), "{message}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

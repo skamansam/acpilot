@@ -130,6 +130,14 @@ async fn the_web_shell_answers_without_a_token_and_names_the_build() {
 }
 
 #[tokio::test]
+async fn the_root_is_the_page_and_needs_no_token() {
+    // A browser typing the address has no header to offer, and the page holds no
+    // data: every call it makes is still guarded.
+    let (status, _) = status_of("/", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn the_palette_stream_is_open_because_an_eventsource_has_no_header() {
     // The alternative would be the token in the stream's query string, where it
     // lands in a log line, a history entry and any `Referer` — and it would be a

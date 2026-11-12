@@ -42,6 +42,29 @@ enum Task {
     /// developer's shell does not. It is the mirror of `check --no-web`, which is
     /// everything except this.
     WebCheck,
+    /// Check a branch's history against the branch it will merge into.
+    ///
+    /// CI's `history` job runs this, and it is the mechanical half of CONTRIBUTING's
+    /// "Git history" rules. Every rule is a state this repository has been in: a merge
+    /// that kept one side's tree, a pull request that could not merge, and the same
+    /// patch twice under two hashes.
+    HistoryCheck {
+        /// The ref this branch will merge into. `origin/main` locally; CI passes the
+        /// pull request's base branch.
+        #[arg(long, value_name = "REF", default_value = "origin/main")]
+        base: String,
+    },
+    /// Write the web client's copy of the daemon's OpenAPI document, or compare it
+    /// with the committed one.
+    ///
+    /// The document is committed because the TypeScript generated from it is
+    /// committed: a generator that asked a running daemon would be a build step
+    /// that only works on the machine that has one. `web-check` runs the compare.
+    WebSchema {
+        /// Compare instead of writing; a difference fails.
+        #[arg(long)]
+        check: bool,
+    },
     /// The desktop shell's half of the gate alone: its lint, its link, and its
     /// tests.
     ///
@@ -138,6 +161,20 @@ fn main() -> ExitCode {
         Task::Check { no_web } => run_check(no_web),
         Task::WebCheck => {
             if check_web() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Task::HistoryCheck { base } => {
+            if check_history(&base) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Task::WebSchema { check } => {
+            if write_web_schema(check) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -362,6 +399,65 @@ fn run_app(app: App, args: &[String]) -> ExitCode {
     }
 }
 
+/// Write — or with `check`, compare — the OpenAPI document the web client is
+/// generated from.
+///
+/// Sorted by key because the same document must produce the same bytes from two
+/// builds: `serde_json`'s map order depends on whether the `preserve_order`
+/// feature was unified into the build, which differs between `cargo test -p` and a
+/// workspace build. Key order is not a wire property.
+fn write_web_schema(check: bool) -> bool {
+    let document =
+        serde_json::to_value(acpilotd::openapi_document()).expect("an OpenAPI document is JSON");
+    let rendered = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&canonical_document(document)).expect("valid JSON serialises")
+    );
+    let path = path_in_repo(WEB_OPENAPI);
+
+    if check {
+        if fs::read_to_string(&path).unwrap_or_default() != rendered {
+            eprintln!(
+                "==> drift (web): {} is not the document this build serves; run `cargo xtask web-schema` and commit it",
+                path.display()
+            );
+            return false;
+        }
+        return true;
+    }
+
+    match fs::write(&path, rendered) {
+        Ok(()) => {
+            println!("==> wrote {WEB_OPENAPI}");
+            true
+        }
+        Err(error) => {
+            eprintln!("==> schema (web): cannot write {}: {error}", path.display());
+            false
+        }
+    }
+}
+
+/// Sort every object key, recursively, so the committed document is byte-stable.
+fn canonical_document(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonical_document(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(canonical_document).collect())
+        }
+        other => other,
+    }
+}
+
 /// The address `cargo xtask dev` binds the daemon to.
 ///
 /// `web/vite.config.ts` proxies `/v1` to exactly this address, so the fact is
@@ -460,6 +556,156 @@ const GUI_CLIPPY: [&str; 9] = [
     "warnings",
 ];
 
+/// The branch rules from CONTRIBUTING's "Git history" section, checked against one
+/// base.
+///
+/// Three questions about `<base>..HEAD`, each of them a state this repository has
+/// been in rather than a hypothetical:
+///
+/// - does the branch still merge into its base? A pull request that cannot is a
+///   review nobody can finish, and the merge button is a day late to learn it.
+/// - did a merge keep one parent's tree? `git merge -s ours` records the base as
+///   merged and drops its work. The base is then an ancestor, so no later merge can
+///   conflict over what went missing — which is how 1,457 lines of `main` vanished
+///   from a branch that then merged cleanly.
+/// - is a commit's patch already on the base? A squash merge leaves the same change
+///   under a second hash, and the next merge carries it twice.
+fn check_history(base: &str) -> bool {
+    let mut ok = true;
+
+    match run_git(&["merge-tree", "--write-tree", "--name-only", base, "HEAD"]) {
+        Some((0, _)) => println!("==> history: this branch merges into {base}"),
+        Some((_, conflicted)) => {
+            eprintln!("==> history: this branch does not merge into {base}:");
+            for line in conflicted.lines().take(20) {
+                eprintln!("    {line}");
+            }
+            eprintln!(
+                "    merge {base} into this branch and resolve it now; never rebase a branch \
+                 you have pushed"
+            );
+            ok = false;
+        }
+        None => {
+            eprintln!("==> history: git cannot be asked; is this a checkout of the repository?");
+            return false;
+        }
+    }
+
+    let Some((0, merges)) = run_git(&["rev-list", "--merges", &format!("{base}..HEAD")]) else {
+        eprintln!("==> history: cannot list the merges in {base}..HEAD");
+        return false;
+    };
+    for merge in merges
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some((0, parents)) = run_git(&["rev-list", "--parents", "-n", "1", merge]) else {
+            eprintln!("==> history: cannot read the parents of {merge}");
+            return false;
+        };
+        let mut fields = parents.split_whitespace();
+        let (Some(_), Some(first), Some(second)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if let Some(dropped) = discarded_side(merge, first, second, trees_match) {
+            eprintln!(
+                "==> history: merge {merge} kept one parent's tree whole, so the {dropped} \
+                 side's changes are gone"
+            );
+            eprintln!(
+                "    that records {base} as merged while its changes are gone, and no later merge \
+                 can conflict over them"
+            );
+            eprintln!("    merge {base} again and resolve the conflicts as they are");
+            ok = false;
+        }
+    }
+
+    match run_git(&["cherry", base, "HEAD"]) {
+        Some((0, out)) => {
+            let already: Vec<&str> = out.lines().filter(|line| line.starts_with('-')).collect();
+            if !already.is_empty() {
+                eprintln!(
+                    "==> history: {} commit(s) here are already in {base} under another hash:",
+                    already.len()
+                );
+                for line in already.iter().take(10) {
+                    eprintln!("    {line}");
+                }
+                eprintln!(
+                    "    a squash leaves the same patch twice; start the branch from {base} \
+                     instead of merging the duplicate"
+                );
+                ok = false;
+            }
+        }
+        Some((_, complaint)) => {
+            eprintln!("==> history: git cherry failed: {complaint}");
+            return false;
+        }
+        None => return false,
+    }
+
+    if ok {
+        println!("==> history: {base} is merged, both parents kept, and nothing is duplicated");
+    }
+    ok
+}
+
+/// Which parent's changes a merge dropped, when it kept the other parent's tree.
+///
+/// `git merge -s ours` produces this shape, and so does a hand resolution that threw
+/// one side away. History cannot tell the difference afterwards: both parents are
+/// ancestors and every later merge is clean. `same` answers whether two commits hold
+/// the same content.
+fn discarded_side(
+    merge: &str,
+    first: &str,
+    second: &str,
+    same: impl Fn(&str, &str) -> Option<bool>,
+) -> Option<&'static str> {
+    if same(first, second) == Some(true) {
+        // Both parents already agreed, so the merge had nothing to drop.
+        return None;
+    }
+    if same(merge, first) == Some(true) {
+        return Some("second");
+    }
+    if same(merge, second) == Some(true) {
+        return Some("first");
+    }
+    None
+}
+
+/// Whether two commits have identical trees. `git diff --quiet` answers 0 or 1.
+fn trees_match(first: &str, second: &str) -> Option<bool> {
+    match run_git(&["diff", "--quiet", first, second])?.0 {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
+    }
+}
+
+/// Run git in the repository, returning its exit code with whatever it printed.
+///
+/// The code is kept rather than folded into a `bool` because these commands use it as
+/// an answer: `diff --quiet` says "different" with 1, and `merge-tree` says "conflicts"
+/// with 1. Stdout is preferred and stderr is the fallback, because `merge-tree` names
+/// the conflicted paths on one and `cherry` explains itself on the other.
+fn run_git(args: &[&str]) -> Option<(i32, String)> {
+    let output = Command::new("git").args(args).output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let text = if stdout.trim().is_empty() {
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    } else {
+        stdout
+    };
+    Some((output.status.code().unwrap_or(-1), text))
+}
+
 /// The web UI's half of the gate: types, both test runs, and the built page.
 ///
 /// Commands that CI's `web` job does not repeat: the job runs this task, so there
@@ -471,13 +717,26 @@ fn check_web() -> bool {
     if !install_web_dependencies() {
         return false;
     }
+    if !write_web_schema(true) {
+        return false;
+    }
 
+    // Read before the scripts and again after: `schema` regenerates the types, so a
+    // change is a committed file that is behind the document it was generated from.
+    let types = web_dir().join(WEB_TYPES);
+    let types_before = fs::read(&types).unwrap_or_default();
     for (label, args) in WEB_UNIT_STEPS {
         let mut command = Command::new(npm());
         command.args(args).current_dir(web_dir());
         if !run_step(label, command) {
             return false;
         }
+    }
+    if fs::read(&types).unwrap_or_default() != types_before {
+        eprintln!(
+            "==> drift (web): {WEB_TYPES} is not what `npm run schema` writes; commit the regenerated file"
+        );
+        return false;
     }
 
     // `npm run test:live` spawns the daemon this checkout built, so one has to
@@ -496,9 +755,30 @@ fn check_web() -> bool {
         return false;
     }
 
+    // The page before the binaries: `acpilot` embeds the built page, so an e2e
+    // run against a binary built first would drive the previous page from `web/`
+    // — the exact drift this task exists to catch, hidden inside the test that is
+    // supposed to catch it.
     let mut build = Command::new(npm());
     build.args(WEB_PAGE_BUILD).current_dir(web_dir());
     if !run_step("build (web, for the embedded page)", build) {
+        return false;
+    }
+
+    // The e2e test drives a real browser against `acpilot serve`, so both binaries
+    // it starts have to exist: the CLI that hosts the daemon and the fixture agent
+    // the profile names. Built here for the same reason as the daemon above — a
+    // test that runs `cargo` turns a failure into a build error.
+    let mut binaries = Command::new(env!("CARGO"));
+    binaries.args(WEB_E2E_BINARIES);
+    if !run_step("build (binaries, for the web e2e test)", binaries) {
+        return false;
+    }
+
+    let (label, args) = WEB_E2E_STEP;
+    let mut e2e = Command::new(npm());
+    e2e.args(args).current_dir(web_dir());
+    if !run_step(label, e2e) {
         return false;
     }
 
@@ -510,10 +790,18 @@ fn check_web() -> bool {
 /// Named here rather than written out at each call so a test can hold them against
 /// `web/package.json`: a renamed script would otherwise fail as `Missing script`,
 /// which reads like a broken checkout.
-const WEB_UNIT_STEPS: [(&str, &[&str]); 2] = [
+const WEB_UNIT_STEPS: [(&str, &[&str]); 3] = [
+    // First, because the type check is what reads the generated file.
+    ("schema (web)", &["run", "schema"]),
     ("types (web)", &["run", "check"]),
     ("test (web)", &["test"]),
 ];
+
+/// The generated TypeScript, relative to `web/`.
+const WEB_TYPES: &str = "src/api/schema.d.ts";
+
+/// The committed document, relative to the repository root.
+const WEB_OPENAPI: &str = "web/src/api/openapi.json";
 
 /// The live test, after the daemon build it needs. Separate from the pair above
 /// because of that build step, not because of the command.
@@ -521,6 +809,13 @@ const WEB_LIVE_STEP: (&str, &[&str]) = ("test (web, live)", &["run", "test:live"
 
 /// What the live web test needs beside it: the daemon, from this checkout.
 const WEB_LIVE_DAEMON_BUILD: [&str; 3] = ["build", "-p", "acpilotd"];
+
+/// The e2e test, after the two processes it spawns have been built.
+const WEB_E2E_STEP: (&str, &[&str]) = ("test (web, e2e)", &["run", "test:e2e"]);
+
+/// The binary `acpilot serve` lives in, and the crate whose default build includes
+/// `acpilot-mock-agent`.
+const WEB_E2E_BINARIES: [&str; 5] = ["build", "-p", "acpilot-cli", "-p", "acpilot-agent"];
 
 /// The build that writes the page the daemon embeds.
 const WEB_PAGE_BUILD: [&str; 2] = ["run", "build"];
@@ -1558,7 +1853,10 @@ mod tests {
         // reads like a broken checkout rather than a stale command name.
         let manifest = fs::read_to_string(web_dir().join("package.json"))
             .expect("web/package.json lists the scripts");
-        for (_, args) in WEB_UNIT_STEPS.into_iter().chain([WEB_LIVE_STEP]) {
+        for (_, args) in WEB_UNIT_STEPS
+            .into_iter()
+            .chain([WEB_LIVE_STEP, WEB_E2E_STEP])
+        {
             // `npm test` is the bare script; `npm run <name>` names one.
             let script = if args[0] == "run" { args[1] } else { "test" };
             assert!(
@@ -1584,6 +1882,101 @@ mod tests {
             "CI's web job no longer runs `cargo xtask web-check`"
         );
         Cli::try_parse_from(["xtask", "web-check"]).expect("`web-check` is a task");
+    }
+
+    #[test]
+    fn the_web_job_needs_no_package_mirror() {
+        // The job installed the browser with `--with-deps`, whose first act is
+        // `apt-get update`. On a runner that could not resolve `security.ubuntu.com`
+        // that step failed before a test ran, and the log read like a font problem.
+        // The runner image already has Chromium's libraries and fonts, so the browser
+        // alone is enough — and a missing library now fails inside the e2e run, where
+        // the browser names it. The Playwright image is not the alternative it looks
+        // like: it carries no C toolchain, and this job compiles Rust.
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+        let start = workflow.find("\n  web:").expect("CI has a web job");
+        let rest = &workflow[start + 1..];
+        let end = rest
+            .find("\n  gui:")
+            .expect("the gui job follows the web job");
+        // The commands, not the prose: the comment above the step names the flag it
+        // refuses to pass, so a whole-block search would fail against its own
+        // explanation.
+        let runs: Vec<&str> = rest[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("run:"))
+            .collect();
+        assert!(
+            runs.iter()
+                .any(|line| line.contains("playwright install chromium")),
+            "CI's web job no longer installs the browser the e2e test drives"
+        );
+        assert!(
+            runs.iter()
+                .all(|line| !line.contains("apt-get") && !line.contains("--with-deps")),
+            "CI's web job must install no system package: a package mirror is one more \
+             thing between a push and the page's tests"
+        );
+    }
+
+    #[test]
+    fn a_merge_that_keeps_one_parents_tree_dropped_the_other_side() {
+        // The shape `git merge -s ours` makes: the merge's tree is one parent's, so the
+        // other side's changes are absent while history records the base as merged.
+        // Comparing the merge with both parents is what catches it; comparing it with
+        // the merge base does not, because the base is already an ancestor.
+        // A commit named after the side it matches is a commit whose tree *is* that
+        // side's: `discarded_side` is handed ids, and `same` is identity here.
+        let same = |a: &str, b: &str| Some(a == b);
+        assert_eq!(
+            discarded_side("branch", "branch", "main", same),
+            Some("second"),
+            "the merge is the branch's tree, so main's work is gone"
+        );
+        assert_eq!(
+            discarded_side("main", "branch", "main", same),
+            Some("first"),
+            "the merge is main's tree, so the branch's work is gone"
+        );
+        assert_eq!(
+            discarded_side("merged", "branch", "main", same),
+            None,
+            "a real merge differs from both parents"
+        );
+        assert_eq!(
+            discarded_side("twin", "twin", "twin", same),
+            None,
+            "two parents that already agreed drop nothing"
+        );
+        assert_eq!(
+            discarded_side("branch", "branch", "main", |_, _| None),
+            None,
+            "no answer from git is not a finding"
+        );
+    }
+
+    #[test]
+    fn the_history_job_checks_the_branch_and_fetches_both_parents() {
+        // The check compares a merge with both of its parents, so a shallow clone has
+        // nothing to compare: `fetch-depth: 0` is the other half of the job's promise.
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+        assert!(
+            workflow.contains("run: cargo xtask history-check"),
+            "CI no longer runs `cargo xtask history-check`, so the branch rules are unenforced"
+        );
+        assert!(
+            workflow.contains("fetch-depth: 0"),
+            "the history job needs both parents of every merge, which a shallow clone lacks"
+        );
+        assert!(
+            workflow.contains("github.event.pull_request.head.sha"),
+            "the history job must check the branch's own tip; GitHub's merge commit for a pull \
+             request has one parent's tree whenever the branch already contains the base"
+        );
+        Cli::try_parse_from(["xtask", "history-check"]).expect("`history-check` is a task");
     }
 
     #[test]

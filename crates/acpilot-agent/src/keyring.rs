@@ -30,6 +30,13 @@ use crate::secret::{Secret, SecretError, SecretRef, SecretResolver};
 /// Service name every Acpilot entry is filed under.
 pub const SERVICE: &str = "acpilot";
 
+/// The profile legacy unscoped entries are adopted into.
+///
+/// Before profiles, an entry was filed under its bare name. Only the fallback
+/// profile may claim one: adopting it into `work` would turn a personal key into
+/// a work key by accident, which is the failure the namespace exists to prevent.
+const LEGACY_PROFILE: &str = "default";
+
 /// Reads and writes credentials in a platform store.
 ///
 /// `Ok(None)` is "this account has no entry", which is a different fact from
@@ -153,15 +160,15 @@ impl KeyringResolver {
     /// Only presence is reported: the CLI's `list` can say "set" or "missing"
     /// without ever reading a value into its own output.
     pub fn has(&self, reference: &SecretRef) -> Result<bool, SecretError> {
-        let account = self.account(reference);
-        self.store
-            .get(SERVICE, &account)
-            .map(|found| found.is_some())
-            .map_err(|message| store_error(reference, &account, message))
+        self.read(reference).map(|found| found.is_some())
     }
 
     /// Remove `reference`; `Ok(false)` means it was already absent.
     pub fn remove(&self, reference: &SecretRef) -> Result<bool, SecretError> {
+        // Adopt a legacy entry before deleting it, so `rm anthropic` after an
+        // upgrade removes the value `list` just reported rather than saying it
+        // was already gone.
+        self.read(reference)?;
         let account = self.account(reference);
         self.store
             .delete(SERVICE, &account)
@@ -178,20 +185,63 @@ fn store_error(reference: &SecretRef, account: &str, message: String) -> SecretE
     }
 }
 
+impl KeyringResolver {
+    /// Read one value, adopting a legacy unscoped entry for `default`.
+    ///
+    /// The old account was the bare name. A default profile that finds one copies
+    /// it to `default/<name>` and removes the old entry only after the copy
+    /// succeeds, so a failed write leaves the only copy in place and the next read
+    /// retries. Other profiles never look at the old account.
+    fn read(&self, reference: &SecretRef) -> Result<Option<String>, SecretError> {
+        if reference.cross_profile() {
+            tracing::warn!(
+                profile = %self.profile,
+                reference = reference.reference(),
+                "resolving a cross-profile secret"
+            );
+        }
+
+        let account = self.account(reference);
+        if let Some(value) = self
+            .store
+            .get(SERVICE, &account)
+            .map_err(|message| store_error(reference, &account, message))?
+        {
+            return Ok(Some(value));
+        }
+
+        if self.profile != LEGACY_PROFILE || reference.cross_profile() {
+            return Ok(None);
+        }
+        let legacy = reference.name();
+        let Some(value) = self
+            .store
+            .get(SERVICE, legacy)
+            .map_err(|message| store_error(reference, legacy, message))?
+        else {
+            return Ok(None);
+        };
+        self.store
+            .set(SERVICE, &account, &value)
+            .map_err(|message| store_error(reference, &account, message))?;
+        self.store
+            .delete(SERVICE, legacy)
+            .map_err(|message| store_error(reference, legacy, message))?;
+        Ok(Some(value))
+    }
+}
+
 impl SecretResolver for KeyringResolver {
     fn resolve(&self, reference: &SecretRef) -> Result<Secret, SecretError> {
         let account = self.account(reference);
-        let found = self
-            .store
-            .get(SERVICE, &account)
-            .map_err(|message| SecretError {
+        self.read(reference)?
+            .map(Secret::new)
+            .ok_or_else(|| SecretError {
                 reference: reference.reference().to_owned(),
-                message,
-            })?;
-        found.map(Secret::new).ok_or_else(|| SecretError {
-            reference: reference.reference().to_owned(),
-            message: format!("no entry for account {account:?} in the {SERVICE} keyring service"),
-        })
+                message: format!(
+                    "no entry for account {account:?} in the {SERVICE} keyring service"
+                ),
+            })
     }
 }
 
@@ -337,6 +387,34 @@ mod tests {
             resolver.account(&reference("keyring:personal/anthropic")),
             "personal/anthropic"
         );
+    }
+
+    #[test]
+    fn a_legacy_entry_is_adopted_only_by_default() {
+        let store = MemoryStore::with(SERVICE, "anthropic", "sk-legacy");
+        let default = KeyringResolver::with_store("default", store.clone());
+
+        let secret = default
+            .resolve(&reference("keyring:anthropic"))
+            .expect("the legacy entry is adopted");
+        assert_eq!(secret.expose(), "sk-legacy");
+        assert_eq!(
+            store.entry(SERVICE, "default/anthropic").as_deref(),
+            Some("sk-legacy")
+        );
+        assert_eq!(store.entry(SERVICE, "anthropic"), None);
+
+        let store = MemoryStore::with(SERVICE, "anthropic", "sk-legacy");
+        let work = KeyringResolver::with_store("work", store.clone());
+        assert!(
+            work.resolve(&reference("keyring:anthropic")).is_err(),
+            "a work profile must not inherit a legacy personal entry"
+        );
+        assert_eq!(
+            store.entry(SERVICE, "anthropic").as_deref(),
+            Some("sk-legacy")
+        );
+        assert_eq!(store.entry(SERVICE, "work/anthropic"), None);
     }
 
     #[test]

@@ -105,6 +105,7 @@ fn workspace_documents() {
     round_trip::<acpilot_proto::workspace::WorkspaceSummary>(json!({
         "id": "ws-1",
         "name": "acpilot",
+        "profile": "work",
         "host_id": "local",
         "root": "/home/sam/workspace-other/acpilot",
         "session_count": 3
@@ -120,12 +121,19 @@ fn workspace_documents() {
         "root": "/home/sam/workspace-other/acpilot",
         "name": "Acpilot"
     }));
+
+    round_trip::<acpilot_proto::workspace::WorkspaceOpenRequest>(json!({
+        "host_id": "local",
+        "root": "/home/sam/workspace-other/acpilot",
+        "steal": true
+    }));
 }
 
 #[test]
 fn session_documents() {
     round_trip::<acpilot_proto::session::SessionSummary>(json!({
         "id": "s-1",
+        "profile": "work",
         "workspace_id": "ws-1",
         "agent_id": "claude",
         "title": "Fix the framing bug",
@@ -238,6 +246,34 @@ fn file_documents() {
         "modified": "2026-10-21T09:31:12Z"
     }));
 
+    // A row an ignore rule hides, as a tree that asked for it is answered: the
+    // flag is present only when it is true, so an ordinary listing costs no bytes
+    // saying that none of its rows is hidden.
+    round_trip::<acpilot_proto::file::FileEntry>(json!({
+        "path": "target/debug/app",
+        "is_dir": false,
+        "size": 0,
+        "ignored": true
+    }));
+
+    // A row git says has changed. The wire carries the state, never the letter a
+    // tree draws for it: one spelling is derived from the other, and a snapshot of
+    // `"M"` would be a client's business in the contract.
+    round_trip::<acpilot_proto::file::FileEntry>(json!({
+        "path": "src/lib.rs",
+        "is_dir": false,
+        "size": 42,
+        "status": "modified"
+    }));
+
+    // A line a content search matched: the number is 1-based because it is a line
+    // an editor would go to, and the text travels so the list can be read.
+    round_trip::<acpilot_proto::file::GrepMatch>(json!({
+        "path": "src/main.rs",
+        "line": 2,
+        "text": "    let greeting = \"hello\";"
+    }));
+
     round_trip::<acpilot_proto::file::FileEntry>(json!({
         "path": "src",
         "is_dir": true,
@@ -248,6 +284,20 @@ fn file_documents() {
         "path": "src/lib.rs",
         "text": "fn main() {}\n",
         "etag": "\"mtime-1-size-12\""
+    }));
+
+    // A read that a gutter can draw from: the marks travel with the text, because a
+    // second question about the same file could answer about a different version of
+    // it.
+    round_trip::<acpilot_proto::file::FileContent>(json!({
+        "path": "src/lib.rs",
+        "text": "fn main() {}\n",
+        "etag": "\"mtime-1-size-12\"",
+        "marks": [
+            {"line": 1, "change": "modified"},
+            {"line": 4, "change": "added"},
+            {"line": 9, "change": "deleted"}
+        ]
     }));
 
     round_trip::<acpilot_proto::file::FileWriteRequest>(json!({
@@ -285,7 +335,26 @@ fn profile_documents() {
         "label": "Work",
         "active": true,
         "agent_count": 2,
-        "workspace_count": 1
+        "workspace_count": 1,
+        "extends": "default"
+    }));
+
+    round_trip::<acpilot_proto::profile::ProfileCreate>(json!({
+        "id": "work",
+        "label": "Work",
+        "extends": "default"
+    }));
+
+    // Detaching is its own flag; omitting both parent fields leaves it alone.
+    round_trip::<acpilot_proto::profile::ProfilePatch>(json!({
+        "label": "Work",
+        "clear_extends": true
+    }));
+
+    round_trip::<acpilot_proto::profile::ProfileExport>(json!({
+        "schema_version": 1,
+        "profile": "work",
+        "files": { "config.toml": "schema_version = 1\n" }
     }));
 
     round_trip::<acpilot_proto::profile::Preferences>(json!({
@@ -297,6 +366,7 @@ fn profile_documents() {
         "wrap": false,
         "theme": "acpilot.night-flight",
         "theme_follow_terminal": false,
+        "tree_respect_gitignore": true,
         "diagnostics_min_severity": "warning"
     }));
 }
@@ -317,6 +387,19 @@ fn lsp_documents() {
         "languages": ["python"],
         "command": "pyright-langserver --stdio",
         "status": "starting"
+    }));
+}
+
+#[test]
+fn git_hunk_documents() {
+    round_trip::<acpilot_proto::git::GitHunkRequest>(json!({
+        "path": "src/main.rs",
+        "hunk": 1
+    }));
+    round_trip::<acpilot_proto::git::GitHunkRequest>(json!({
+        "workspace": "ws-1",
+        "path": "src/main.rs",
+        "hunk": 0
     }));
 }
 

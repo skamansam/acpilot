@@ -1,11 +1,15 @@
 //! The registry as the daemon uses it: a directory it owns, a manifest that
 //! changes underneath it, and a snapshot that is never half-updated.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use acpilot_agent::AgentProcess;
+use acpilot_agent::keyring::{CredentialStore, KeyringResolver, SERVICE};
 use acpilot_agent::{AgentError, MapResolver, Parser, Registry, SecretResolver, Transport};
 use acpilot_proto::agent::AgentTransport;
 
@@ -159,6 +163,10 @@ fn a_missing_file_is_reported_with_its_path() {
     let message = error.to_string();
     assert!(message.contains("agents.toml"), "{message}");
     assert!(matches!(error, AgentError::Io { .. }), "{error:?}");
+    assert!(
+        !manifest_path(dir.path()).exists(),
+        "a missing manifest is reported, not created"
+    );
 }
 
 #[test]
@@ -293,6 +301,125 @@ fn watching_a_broken_save_still_picks_up_the_next_good_one() {
     assert_eq!(registry.last_error(), None);
 }
 
+#[derive(Debug, Default, Clone)]
+struct MemoryStore {
+    entries: Arc<Mutex<BTreeMap<(String, String), String>>>,
+}
+
+impl CredentialStore for MemoryStore {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .entries
+            .lock()
+            .expect("entries")
+            .get(&(service.to_owned(), account.to_owned()))
+            .cloned())
+    }
+
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String> {
+        self.entries
+            .lock()
+            .expect("entries")
+            .insert((service.to_owned(), account.to_owned()), value.to_owned());
+        Ok(())
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<bool, String> {
+        Ok(self
+            .entries
+            .lock()
+            .expect("entries")
+            .remove(&(service.to_owned(), account.to_owned()))
+            .is_some())
+    }
+}
+
+#[test]
+fn two_profiles_never_put_each_others_secret_in_a_child_environment() {
+    let work = tempfile::tempdir().expect("work profile");
+    let personal = tempfile::tempdir().expect("personal profile");
+    write(work.path(), FIRST);
+    write(personal.path(), FIRST);
+
+    let store = MemoryStore::default();
+    store
+        .set(SERVICE, "work/anthropic", "sk-work")
+        .expect("work secret");
+    store
+        .set(SERVICE, "personal/anthropic", "sk-personal")
+        .expect("personal secret");
+
+    let work = Registry::load(
+        manifest_path(work.path()),
+        Arc::new(KeyringResolver::with_store("work", store.clone())),
+    )
+    .expect("work registry");
+    let personal = Registry::load(
+        manifest_path(personal.path()),
+        Arc::new(KeyringResolver::with_store("personal", store)),
+    )
+    .expect("personal registry");
+
+    let work_agent = work.get("claude").expect("work agent");
+    let personal_agent = personal.get("claude").expect("personal agent");
+    assert_eq!(work_agent.env["ANTHROPIC_API_KEY"].expose(), "sk-work");
+    assert_eq!(
+        personal_agent.env["ANTHROPIC_API_KEY"].expose(),
+        "sk-personal"
+    );
+    assert!(!format!("{work_agent:?}").contains("sk-personal"));
+    assert!(!format!("{personal_agent:?}").contains("sk-work"));
+}
+
+#[cfg(unix)]
+#[test]
+fn two_profiles_running_at_once_keep_their_own_child_environment() {
+    const SPAWN: &str = r#"
+schema_version = 1
+
+[[agents]]
+id = "claude"
+name = "Claude Code"
+transport = "acp-stdio"
+command = "/bin/sh"
+args = ["-c", "sleep 0.3; printf %s \"$ANTHROPIC_API_KEY\" >&2"]
+env = { ANTHROPIC_API_KEY = "keyring:anthropic" }
+"#;
+    let work = tempfile::tempdir().expect("work profile");
+    let personal = tempfile::tempdir().expect("personal profile");
+    write(work.path(), SPAWN);
+    write(personal.path(), SPAWN);
+
+    let store = MemoryStore::default();
+    store
+        .set(SERVICE, "work/anthropic", "sk-work")
+        .expect("work secret");
+    store
+        .set(SERVICE, "personal/anthropic", "sk-personal")
+        .expect("personal secret");
+    let work = Registry::load(
+        manifest_path(work.path()),
+        Arc::new(KeyringResolver::with_store("work", store.clone())),
+    )
+    .expect("work registry");
+    let personal = Registry::load(
+        manifest_path(personal.path()),
+        Arc::new(KeyringResolver::with_store("personal", store)),
+    )
+    .expect("personal registry");
+
+    // Both are spawned before either is waited on: the shell sleeps inside each
+    // child, so the two environments exist at the same time.
+    let mut work_process =
+        AgentProcess::spawn(work.get("claude").expect("work agent")).expect("work child starts");
+    let mut personal_process = AgentProcess::spawn(personal.get("claude").expect("personal agent"))
+        .expect("personal child starts");
+    assert!(work_process.wait().expect("work waits").success());
+    assert!(personal_process.wait().expect("personal waits").success());
+    assert_eq!(work_process.stderr().text(), "sk-work");
+    assert_eq!(personal_process.stderr().text(), "sk-personal");
+}
+
 #[test]
 fn dropping_the_watcher_stops_the_watching() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -306,44 +433,4 @@ fn dropping_the_watcher_stops_the_watching() {
     assert_eq!(registry.revision(), 1, "no watcher, no reload");
     // The registry is still usable without one.
     assert!(registry.reload().expect("manual reload"));
-}
-
-#[test]
-fn a_profile_that_is_asked_for_is_given_a_manifest_that_names_the_schema() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    // Deliberately not created: this is the first start of a profile.
-    let path = dir
-        .path()
-        .join("profiles")
-        .join("default")
-        .join("agents.toml");
-
-    let registry = Registry::open_or_create(&path, resolver()).expect("open a new profile");
-    assert_eq!(registry.agents().len(), 4, "the shipped presets");
-
-    let text = fs::read_to_string(&path).expect("the manifest was written");
-    let first = text.lines().next().expect("at least one line");
-    assert_eq!(
-        first,
-        format!("\"$schema\" = \"{}\"", acpilot_agent::SCHEMA_URL),
-        "the schema line comes first so an editor sees it before the first edit"
-    );
-    // It parses through the same reader a hand-written file does, so the two
-    // cannot describe different files.
-    assert!(text.contains("schema_version = 1"));
-}
-
-#[test]
-fn opening_existing_manifests_never_rewrites_them() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    write(dir.path(), FIRST);
-
-    Registry::open_or_create(manifest_path(dir.path()), resolver()).expect("load");
-    Registry::open_or_create(manifest_path(dir.path()), resolver()).expect("load again");
-
-    assert_eq!(
-        fs::read_to_string(manifest_path(dir.path())).expect("read"),
-        FIRST,
-        "a file the user owns is never replaced"
-    );
 }

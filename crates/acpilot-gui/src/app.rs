@@ -19,9 +19,11 @@ use gpui::{
 use acpilot_extensions::UiToken;
 use acpilot_stats::{Row, Track};
 
+use crate::daemon::{GitCommand, GitUpdate};
 use crate::keymap::{self, Action as KeyAction, Context as KeyContext};
 use crate::palette::{self, Command, CommandId};
 use crate::profiles::ShellProfile;
+use crate::source::{self, Composer, Restore, Source};
 use crate::stats;
 use crate::theme::GuiTheme;
 
@@ -38,6 +40,27 @@ actions!(
         ShowAbout,
         DismissAbout,
         ToggleStatsSources,
+        ToggleSource,
+        SourceNext,
+        SourcePrevious,
+        SourceNextHunk,
+        SourcePreviousHunk,
+        SourcePageDown,
+        SourcePageUp,
+        SourceRefresh,
+        SourceStage,
+        SourceStageHunk,
+        SourceUnstage,
+        SourceDiscard,
+        SourceCheckout,
+        SourceConfirm,
+        SourceCancel,
+        SourceCompose,
+        SourceGenerate,
+        CloseSource,
+        ComposerNextSession,
+        ComposerPreviousSession,
+        CloseComposer,
         Quit,
     ]
 );
@@ -76,6 +99,29 @@ fn to_binding(keys: &str, action: KeyAction, context: &'static str) -> KeyBindin
         KeyAction::NextProfile => KeyBinding::new(keys, NextProfile, Some(context)),
         KeyAction::PreviousProfile => KeyBinding::new(keys, PreviousProfile, Some(context)),
         KeyAction::ToggleStatsSources => KeyBinding::new(keys, ToggleStatsSources, Some(context)),
+        KeyAction::ToggleSource => KeyBinding::new(keys, ToggleSource, Some(context)),
+        KeyAction::SourceNext => KeyBinding::new(keys, SourceNext, Some(context)),
+        KeyAction::SourcePrevious => KeyBinding::new(keys, SourcePrevious, Some(context)),
+        KeyAction::SourceNextHunk => KeyBinding::new(keys, SourceNextHunk, Some(context)),
+        KeyAction::SourcePreviousHunk => KeyBinding::new(keys, SourcePreviousHunk, Some(context)),
+        KeyAction::SourcePageDown => KeyBinding::new(keys, SourcePageDown, Some(context)),
+        KeyAction::SourcePageUp => KeyBinding::new(keys, SourcePageUp, Some(context)),
+        KeyAction::SourceRefresh => KeyBinding::new(keys, SourceRefresh, Some(context)),
+        KeyAction::SourceStage => KeyBinding::new(keys, SourceStage, Some(context)),
+        KeyAction::SourceStageHunk => KeyBinding::new(keys, SourceStageHunk, Some(context)),
+        KeyAction::SourceUnstage => KeyBinding::new(keys, SourceUnstage, Some(context)),
+        KeyAction::SourceDiscard => KeyBinding::new(keys, SourceDiscard, Some(context)),
+        KeyAction::SourceCheckout => KeyBinding::new(keys, SourceCheckout, Some(context)),
+        KeyAction::SourceConfirm => KeyBinding::new(keys, SourceConfirm, Some(context)),
+        KeyAction::SourceCancel => KeyBinding::new(keys, SourceCancel, Some(context)),
+        KeyAction::SourceCompose => KeyBinding::new(keys, SourceCompose, Some(context)),
+        KeyAction::SourceGenerate => KeyBinding::new(keys, SourceGenerate, Some(context)),
+        KeyAction::CloseSource => KeyBinding::new(keys, CloseSource, Some(context)),
+        KeyAction::ComposerNextSession => KeyBinding::new(keys, ComposerNextSession, Some(context)),
+        KeyAction::ComposerPreviousSession => {
+            KeyBinding::new(keys, ComposerPreviousSession, Some(context))
+        }
+        KeyAction::CloseComposer => KeyBinding::new(keys, CloseComposer, Some(context)),
         KeyAction::Quit => KeyBinding::new(keys, Quit, Some(context)),
     }
 }
@@ -122,6 +168,8 @@ pub fn menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Next Profile", NextProfile),
                 MenuItem::action("Previous Profile", PreviousProfile),
+                MenuItem::separator(),
+                MenuItem::action("Source Control…", ToggleSource),
             ],
         },
     ]
@@ -147,6 +195,13 @@ pub struct Shell {
     integrations: Vec<Row>,
     /// Whether the bar shows each figure's source instead of its numbers.
     stats_sources: bool,
+    /// The source-control pane, when it is up.
+    source: Option<Source>,
+    /// The commit composer, when it is over the pane.
+    commit: Option<Composer>,
+    /// Where git requests go. Absent in a window with no daemon, which is the same
+    /// state as a daemon that does not answer.
+    git: Option<std::sync::mpsc::Sender<GitCommand>>,
     focus: FocusHandle,
     focused: bool,
 }
@@ -163,6 +218,9 @@ impl Shell {
             about: false,
             integrations: Vec::new(),
             stats_sources: false,
+            source: None,
+            commit: None,
+            git: None,
             focus: cx.focus_handle(),
             focused: false,
         }
@@ -220,6 +278,454 @@ impl Shell {
         self.stats_sources
     }
 
+    /// Where this window's git requests go.
+    pub fn set_git_sender(&mut self, sender: std::sync::mpsc::Sender<GitCommand>) {
+        self.git = Some(sender);
+    }
+
+    /// Whether source control is up, for a test or a caller drawing ahead of time.
+    #[must_use]
+    pub fn showing_source(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Whether the composer is over it.
+    #[must_use]
+    pub fn showing_composer(&self) -> bool {
+        self.commit.is_some()
+    }
+
+    /// The pane, as the daemon last answered it.
+    #[must_use]
+    pub fn source(&self) -> Option<&Source> {
+        self.source.as_ref()
+    }
+
+    /// The composer, while it is up.
+    #[must_use]
+    pub fn composer(&self) -> Option<&Composer> {
+        self.commit.as_ref()
+    }
+
+    /// Apply an answer from the git worker.
+    pub fn apply_git(&mut self, update: GitUpdate, cx: &mut Context<Self>) {
+        match update {
+            GitUpdate::Loaded {
+                status,
+                unstaged,
+                staged,
+                sessions,
+            } => {
+                if let Some(source) = &mut self.source {
+                    source.apply(status, unstaged, staged, sessions);
+                }
+            }
+            GitUpdate::LoadFailed(message) => {
+                if let Some(source) = &mut self.source {
+                    source.failed(message);
+                }
+            }
+            GitUpdate::Draft(draft) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.draft(&draft);
+                }
+            }
+            GitUpdate::GenerateFailed(message) | GitUpdate::CommitFailed(message) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.failed(message);
+                }
+            }
+            GitUpdate::Committed(commit) => {
+                if let Some(composer) = &mut self.commit {
+                    composer.committed(&commit);
+                }
+                self.commit = None;
+                // The index just moved under the pane. Ask for the new one rather
+                // than leave a path on screen that is already in history.
+                self.request_git(GitCommand::Load);
+            }
+        }
+        cx.notify();
+    }
+
+    fn request_git(&self, command: GitCommand) {
+        if let Some(git) = &self.git {
+            let _ = git.send(command);
+        }
+    }
+
+    fn toggle_source(&mut self, _: &ToggleSource, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_source_now(cx);
+    }
+
+    fn toggle_source_now(&mut self, cx: &mut Context<Self>) {
+        if self.source.take().is_some() {
+            self.commit = None;
+        } else {
+            self.commit = None;
+            self.source = Some(Source::loading());
+            self.request_git(GitCommand::Load);
+        }
+        cx.notify();
+    }
+
+    fn close_source(&mut self, _: &CloseSource, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source
+            && source.pending.take().is_some()
+        {
+            cx.notify();
+            return;
+        }
+        if self.source.take().is_some() {
+            self.commit = None;
+            cx.notify();
+        }
+    }
+
+    fn source_next(&mut self, _: &SourceNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.step(1);
+            cx.notify();
+        }
+    }
+
+    fn source_previous(
+        &mut self,
+        _: &SourcePrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step(-1);
+            cx.notify();
+        }
+    }
+
+    fn source_next_hunk(
+        &mut self,
+        _: &SourceNextHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step_hunk(1);
+            cx.notify();
+        }
+    }
+
+    fn source_previous_hunk(
+        &mut self,
+        _: &SourcePreviousHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.step_hunk(-1);
+            cx.notify();
+        }
+    }
+
+    fn source_page_down(
+        &mut self,
+        _: &SourcePageDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = &mut self.source {
+            source.page(10);
+            cx.notify();
+        }
+    }
+
+    fn source_page_up(&mut self, _: &SourcePageUp, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.page(-10);
+            cx.notify();
+        }
+    }
+
+    fn source_refresh(&mut self, _: &SourceRefresh, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+            source.pending = None;
+            self.request_git(GitCommand::Load);
+            cx.notify();
+        }
+    }
+
+    fn source_stage(&mut self, _: &SourceStage, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selected_staged(true, cx);
+    }
+
+    fn source_stage_hunk(
+        &mut self,
+        _: &SourceStageHunk,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_selected_hunk(cx);
+    }
+
+    fn source_unstage(&mut self, _: &SourceUnstage, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selected_staged(false, cx);
+    }
+
+    fn source_discard(&mut self, _: &SourceDiscard, _window: &mut Window, cx: &mut Context<Self>) {
+        self.arm_restore(Restore::Discard, cx);
+    }
+
+    fn source_checkout(
+        &mut self,
+        _: &SourceCheckout,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.arm_restore(Restore::Checkout, cx);
+    }
+
+    /// Arm a destructive restore. It writes only after `y`, and the armed path is
+    /// held with the request so moving the selection cannot change what `y` means.
+    fn arm_restore(&mut self, restore: Restore, cx: &mut Context<Self>) {
+        let Some(source) = &mut self.source else {
+            return;
+        };
+        if let Err(message) = source.arm(restore) {
+            source.error = Some(message);
+        }
+        cx.notify();
+    }
+
+    fn source_confirm(&mut self, _: &SourceConfirm, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = &mut self.source else {
+            return;
+        };
+        let Some(pending) = source.confirm() else {
+            return;
+        };
+        source.loading = true;
+        source.error = None;
+        self.request_git(match pending.restore {
+            Restore::Discard => GitCommand::Discard(pending.path),
+            Restore::Checkout => GitCommand::Checkout(pending.path),
+        });
+        cx.notify();
+    }
+
+    fn source_cancel(&mut self, _: &SourceCancel, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(source) = &mut self.source {
+            source.cancel();
+            source.error = None;
+            cx.notify();
+        }
+    }
+
+    /// Ask the daemon to put the selected unstaged hunk in the index.
+    ///
+    /// Like `s`, a path with nothing on that side is a message rather than a
+    /// request. The request names a zero-based hunk and lets the daemon cut git's
+    /// own patch; the window never sends patch text.
+    fn stage_selected_hunk(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        if source.pending.is_some() {
+            if let Some(source) = &mut self.source {
+                source.error = Some("confirm or cancel the restore first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            if let Some(source) = &mut self.source {
+                source.error = Some("no changed file is selected".to_owned());
+            }
+            cx.notify();
+            return;
+        };
+        if !source.can_stage_hunk() {
+            if let Some(source) = &mut self.source {
+                source.error = Some(format!("{path} has no unstaged hunk to stage"));
+            }
+            cx.notify();
+            return;
+        }
+        let hunk = source.selected_hunk();
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+        }
+        self.request_git(GitCommand::StageHunk { path, hunk });
+        cx.notify();
+    }
+
+    /// Ask the daemon to move the selected path across the index.
+    ///
+    /// A path with nothing on that side of the index is a message in the pane, not
+    /// a request: pressing `s` twice should say why the second press did nothing.
+    fn set_selected_staged(&mut self, staged: bool, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        if source.pending.is_some() {
+            if let Some(source) = &mut self.source {
+                source.error = Some("confirm or cancel the restore first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+        let Some(path) = source.selected_path().map(str::to_owned) else {
+            if let Some(source) = &mut self.source {
+                source.error = Some("no changed file is selected".to_owned());
+            }
+            cx.notify();
+            return;
+        };
+        let available = if staged {
+            source.can_stage_selected()
+        } else {
+            source.can_unstage_selected()
+        };
+        if !available {
+            if let Some(source) = &mut self.source {
+                source.error = Some(if staged {
+                    format!("{path} has no working-tree change to stage")
+                } else {
+                    format!("{path} is not in the index")
+                });
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(source) = &mut self.source {
+            source.loading = true;
+            source.error = None;
+        }
+        self.request_git(if staged {
+            GitCommand::Stage(path)
+        } else {
+            GitCommand::Unstage(path)
+        });
+        cx.notify();
+    }
+
+    fn source_compose(&mut self, _: &SourceCompose, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_composer(false, cx);
+    }
+
+    fn source_generate(
+        &mut self,
+        _: &SourceGenerate,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_composer(true, cx);
+    }
+
+    /// Open the composer, refusing before the index is empty: a message describes
+    /// the next commit, and there is nothing for a model to read with nothing staged.
+    fn open_composer(&mut self, generate: bool, cx: &mut Context<Self>) {
+        let staged = self.source.as_ref().map_or(0, Source::staged);
+        if staged == 0 {
+            if let Some(source) = &mut self.source {
+                source.error = Some("nothing is staged · stage a path with s first".to_owned());
+            }
+            cx.notify();
+            return;
+        }
+        self.commit = Some(Composer::default());
+        if generate {
+            self.generate_draft(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn generate_draft(&mut self, cx: &mut Context<Self>) {
+        // Resolve the composer's choice before borrowing it again: the first
+        // session is only the default, and Tab may have named another.
+        let chosen = self
+            .commit
+            .as_ref()
+            .and_then(|composer| composer.session_id.clone());
+        let session = self
+            .source
+            .as_ref()
+            .and_then(|source| source.session(chosen.as_deref()))
+            .map(|session| session.id.clone());
+        let Some(session) = session else {
+            if let Some(composer) = &mut self.commit {
+                composer.failed("no session is open · start one to generate a message");
+            }
+            cx.notify();
+            return;
+        };
+        if let Some(composer) = &mut self.commit {
+            composer.generating = true;
+            composer.error = None;
+        }
+        self.request_git(GitCommand::Generate(session));
+        cx.notify();
+    }
+
+    fn composer_next_session(
+        &mut self,
+        _: &ComposerNextSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_composer_session(1, cx);
+    }
+
+    fn composer_previous_session(
+        &mut self,
+        _: &ComposerPreviousSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_composer_session(-1, cx);
+    }
+
+    /// Tab and Shift-Tab choose which session a draft is asked of.
+    ///
+    /// A draft already in flight is not silently repointed at another session:
+    /// its answer would land under a name that did not write it.
+    fn step_composer_session(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let Some(composer) = self.commit.as_mut() else {
+            return;
+        };
+        if composer.generating {
+            composer.error = Some("the session is still drafting · wait for its draft".to_owned());
+            cx.notify();
+            return;
+        }
+        composer.step_session(source, delta);
+        composer.error = None;
+        cx.notify();
+    }
+
+    fn close_composer(&mut self, _: &CloseComposer, _window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .commit
+            .as_ref()
+            .is_some_and(|composer| composer.committing)
+        {
+            return;
+        }
+        if let Some(composer) = &mut self.commit
+            && composer.confirming
+        {
+            composer.confirming = false;
+            cx.notify();
+            return;
+        }
+        self.commit = None;
+        cx.notify();
+    }
+
     /// Run a palette command.
     fn run(&mut self, command: CommandId, cx: &mut Context<Self>) {
         match command {
@@ -245,6 +751,10 @@ impl Shell {
                 self.palette = None;
                 self.stats_sources = !self.stats_sources;
                 cx.notify();
+            }
+            CommandId::SourceControl => {
+                self.palette = None;
+                self.toggle_source_now(cx);
             }
             CommandId::Quit => cx.quit(),
         }
@@ -377,6 +887,10 @@ impl Shell {
     /// `escape` arrive as bound actions, and handling them twice would move the
     /// selection twice per key.
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.commit.is_some() {
+            self.composer_key(event, cx);
+            return;
+        }
         if self.palette.is_none() {
             return;
         }
@@ -408,6 +922,86 @@ impl Shell {
             // A new query means a new best row: keeping the old index would run
             // whatever happens to sit third in a list the user just narrowed.
             palette.selected = 0;
+            cx.notify();
+        }
+    }
+
+    /// The composer's keys. Text is edited locally; `ctrl-s` then `y` is the only
+    /// path to a write, and the second key is the confirmation.
+    fn composer_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let Some(composer) = self.commit.as_mut() else {
+            return;
+        };
+        if composer.committing {
+            return;
+        }
+        if composer.confirming {
+            match keystroke.key.as_str() {
+                "y" | "enter" => {
+                    let Some(message) = composer.message().map(str::to_owned) else {
+                        composer.confirming = false;
+                        composer.error = Some("a commit needs a message".to_owned());
+                        cx.notify();
+                        return;
+                    };
+                    composer.confirming = false;
+                    composer.committing = true;
+                    composer.error = None;
+                    self.request_git(GitCommand::Commit(message));
+                }
+                "n" => composer.confirming = false,
+                _ => return,
+            }
+            cx.notify();
+            return;
+        }
+        if keystroke.modifiers.control || keystroke.modifiers.platform {
+            match keystroke.key.as_str() {
+                "g" => self.generate_draft(cx),
+                "s" => {
+                    let Some(composer) = &mut self.commit else {
+                        return;
+                    };
+                    if composer.message().is_none() {
+                        composer.error = Some("write a message, or ctrl-g to draft one".to_owned());
+                    } else {
+                        composer.confirming = true;
+                        composer.error = None;
+                    }
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if keystroke.modifiers.alt {
+            return;
+        }
+        let changed = if keystroke.key == "backspace" {
+            composer.text.pop().is_some()
+        } else if keystroke.key == "enter" {
+            composer.text.push('\n');
+            true
+        } else if keystroke.key == "space" {
+            composer.text.push(' ');
+            true
+        } else if keystroke.key == "tab" {
+            // Tab cycles the draft's session through a bound action; it is not
+            // text in a commit message.
+            false
+        } else if let Some(text) = keystroke.key_char.as_deref() {
+            if text.is_empty() {
+                false
+            } else {
+                composer.text.push_str(text);
+                true
+            }
+        } else {
+            false
+        };
+        if changed {
+            composer.error = None;
             cx.notify();
         }
     }
@@ -467,7 +1061,13 @@ impl Render for Shell {
         let theme = self.theme.clone();
         let heading = SharedString::from(format!("Acpilot · {}", theme.name()));
         let palette_open = self.palette.is_some();
-        let context = if palette_open {
+        let source_open = self.source.is_some();
+        let composer_open = self.commit.is_some();
+        let context = if composer_open {
+            KeyContext::Commit.name()
+        } else if source_open {
+            KeyContext::Source.name()
+        } else if palette_open {
             KeyContext::Palette.name()
         } else {
             KeyContext::Shell.name()
@@ -521,6 +1121,8 @@ impl Render for Shell {
         );
         let empty_palette = palette_open && palette_rows.is_empty();
         let about_open = self.about;
+        let source_view = self.source.clone();
+        let composer_view = self.commit.clone();
 
         let header = div()
             .h(px(40.0))
@@ -655,6 +1257,304 @@ impl Render for Shell {
             .text_size(px(11.0))
             .children(stats_children);
 
+        let source_panel = source_view.map(|source| {
+            let branch = source.status.branch.as_deref().unwrap_or("(detached)");
+            let title = format!(
+                "Source control · {branch} · {} changed · {} staged",
+                source.status.files.len(),
+                source.staged()
+            );
+            let rows: Vec<(usize, String, bool)> = source
+                .status
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (index, source::row(entry), index == source.selected))
+                .collect();
+            let lines: Vec<(usize, String, bool, bool)> = source
+                .source_lines()
+                .into_iter()
+                .skip(source.scroll)
+                .take(40)
+                .enumerate()
+                .map(|(offset, line)| (offset, line.text, line.heading, line.selected_hunk))
+                .collect();
+            let mut panel = div()
+                .id("source")
+                .p(px(16.0))
+                .bg(rgb(theme.ui(UiToken::BgPanel)))
+                .border(px(1.0))
+                .border_color(rgb(theme.ui(UiToken::Accent)))
+                .text_color(rgb(theme.ui(UiToken::Text)))
+                .child(div().text_size(px(18.0)).child(SharedString::from(title)))
+                .child(muted(
+                    &theme,
+                    source.pending.as_ref().map_or_else(
+                        || "j/k file · h/l hunk · shift-s stage hunk · s/u path · d discard · x checkout · c compose · g draft · r refresh · esc close".to_owned(),
+                        |pending| format!(
+                            "{} {}? y confirms · n cancels",
+                            pending.restore.verb(),
+                            pending.path
+                        ),
+                    ),
+                ));
+            if source.loading {
+                panel = panel.child(muted(&theme, "reading the index…"));
+            } else if let Some(error) = &source.error {
+                panel = panel.child(
+                    div()
+                        .text_color(rgb(theme.ui(UiToken::Danger)))
+                        .child(SharedString::from(error.clone())),
+                );
+            }
+            let stage_bg = if source.can_stage_selected() {
+                theme.ui(UiToken::Accent)
+            } else {
+                theme.ui(UiToken::Border)
+            };
+            let unstage_bg = if source.can_unstage_selected() {
+                theme.ui(UiToken::Accent)
+            } else {
+                theme.ui(UiToken::Border)
+            };
+            panel = panel
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.0))
+                        .pt(px(8.0))
+                        .child(
+                            div()
+                                .id("source-stage")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(stage_bg))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Stage (s)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_stage(&SourceStage, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-unstage")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(unstage_bg))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Unstage (u)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_unstage(&SourceUnstage, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-discard")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(if source.can_discard_selected() {
+                                    theme.ui(UiToken::Warning)
+                                } else {
+                                    theme.ui(UiToken::Border)
+                                }))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Discard (d)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_discard(&SourceDiscard, window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("source-checkout")
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .bg(rgb(if source.can_checkout_selected() {
+                                    theme.ui(UiToken::Danger)
+                                } else {
+                                    theme.ui(UiToken::Border)
+                                }))
+                                .text_color(rgb(theme.ui(UiToken::Bg)))
+                                .child(SharedString::from("Checkout (x)"))
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.source_checkout(&SourceCheckout, window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .w(px(260.0))
+                            .flex()
+                            .flex_col()
+                            .children(rows.into_iter().map(|(index, label, chosen)| {
+                                let background = if chosen {
+                                    theme.ui(UiToken::Accent)
+                                } else {
+                                    theme.ui(UiToken::Bg)
+                                };
+                                let colour = if chosen {
+                                    theme.ui(UiToken::Bg)
+                                } else {
+                                    theme.ui(UiToken::Text)
+                                };
+                                div()
+                                    .id(("source-file", index))
+                                    .p(px(5.0))
+                                    .bg(rgb(background))
+                                    .text_color(rgb(colour))
+                                    .child(SharedString::from(label))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        if let Some(source) = &mut this.source {
+                                            source.selected = index;
+                                            source.scroll = 0;
+                                            cx.notify();
+                                        }
+                                    }))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .children(lines.into_iter().map(
+                                |(index, line, heading, selected_hunk)| {
+                                    let colour = if heading || selected_hunk {
+                                        theme.ui(UiToken::Bg)
+                                    } else if line.starts_with('+') {
+                                        theme.ui(UiToken::Success)
+                                    } else if line.starts_with('-') {
+                                        theme.ui(UiToken::Danger)
+                                    } else if line.starts_with('@') || line.starts_with("diff ") {
+                                        theme.ui(UiToken::Accent)
+                                    } else {
+                                        theme.ui(UiToken::TextMuted)
+                                    };
+                                    let background = if heading || selected_hunk {
+                                        theme.ui(UiToken::Accent)
+                                    } else {
+                                        theme.ui(UiToken::BgPanel)
+                                    };
+                                    div()
+                                        .id(("source-diff", index))
+                                        .text_size(px(11.0))
+                                        .bg(rgb(background))
+                                        .text_color(rgb(colour))
+                                        .child(SharedString::from(line))
+                                },
+                            )),
+                    ),
+            );
+            panel.into_any_element()
+        });
+
+        let composer_panel = composer_view.map(|composer| {
+            let staged = self.source.as_ref().map_or(0, Source::staged);
+            let session = self.source.as_ref().and_then(|source| {
+                let index = source.session_index(composer.session_id.as_deref())?;
+                Some((index, source.sessions.len(), source.sessions.get(index)?))
+            });
+            let session_colour = if session.is_some() {
+                theme.ui(UiToken::TextMuted)
+            } else {
+                theme.ui(UiToken::Warning)
+            };
+            let session_line = match session {
+                Some((index, count, session)) if count > 1 => format!(
+                    "Draft session · {} · {} · {} of {} · tab/shift-tab chooses",
+                    session.agent_id,
+                    session.title,
+                    index + 1,
+                    count
+                ),
+                Some((_, _, session)) => {
+                    format!("Draft session · {} · {}", session.agent_id, session.title)
+                }
+                None => "No session is open · start one to draft".to_owned(),
+            };
+            let state = if composer.generating {
+                "drafting"
+            } else if composer.committing {
+                "committing"
+            } else if composer.confirming {
+                "confirm"
+            } else {
+                "edit"
+            };
+            let footer = if let Some(error) = &composer.error {
+                (error.clone(), theme.ui(UiToken::Danger))
+            } else if composer.generating {
+                (
+                    "the session is drafting from the staged diff…".to_owned(),
+                    theme.ui(UiToken::Warning),
+                )
+            } else if composer.committing {
+                (
+                    "committing the staged index…".to_owned(),
+                    theme.ui(UiToken::Warning),
+                )
+            } else if composer.confirming {
+                (
+                    format!("commit {staged} staged? y confirms · n cancels"),
+                    theme.ui(UiToken::Warning),
+                )
+            } else {
+                (
+                    "tab/shift-tab chooses the session · ctrl-g drafts from it · ctrl-s reviews the commit · esc closes"
+                        .to_owned(),
+                    theme.ui(UiToken::TextMuted),
+                )
+            };
+            div()
+                .id("composer")
+                .p(px(16.0))
+                .bg(rgb(theme.ui(UiToken::BgPanel)))
+                .border(px(1.0))
+                .border_color(rgb(if composer.confirming {
+                    theme.ui(UiToken::Warning)
+                } else {
+                    theme.ui(UiToken::Accent)
+                }))
+                .text_color(rgb(theme.ui(UiToken::Text)))
+                .child(
+                    div()
+                        .text_size(px(18.0))
+                        .child(SharedString::from(format!(
+                            "Commit message · {staged} staged · {state}"
+                        ))),
+                )
+                .child(
+                    div()
+                        .pt(px(4.0))
+                        .text_size(px(11.0))
+                        .text_color(rgb(session_colour))
+                        .child(SharedString::from(session_line)),
+                )
+                .child(
+                    div()
+                        .p(px(8.0))
+                        .bg(rgb(theme.ui(UiToken::Bg)))
+                        .text_size(px(13.0))
+                        .child(SharedString::from(if composer.text.is_empty() {
+                            "Type the message, or ctrl-g to draft one".to_owned()
+                        } else {
+                            composer.text.clone()
+                        })),
+                )
+                .child(
+                    div()
+                        .pt(px(8.0))
+                        .text_color(rgb(footer.1))
+                        .child(SharedString::from(footer.0)),
+                )
+                .into_any_element()
+        });
+
         let about_panel = about_open.then(|| {
             let lines: Vec<(usize, String, String)> = about_lines()
                 .into_iter()
@@ -727,11 +1627,36 @@ impl Render for Shell {
             .on_action(cx.listener(Self::show_about))
             .on_action(cx.listener(Self::dismiss_about))
             .on_action(cx.listener(Self::toggle_stats_sources))
+            .on_action(cx.listener(Self::toggle_source))
+            .on_action(cx.listener(Self::source_next))
+            .on_action(cx.listener(Self::source_previous))
+            .on_action(cx.listener(Self::source_next_hunk))
+            .on_action(cx.listener(Self::source_previous_hunk))
+            .on_action(cx.listener(Self::source_page_down))
+            .on_action(cx.listener(Self::source_page_up))
+            .on_action(cx.listener(Self::source_refresh))
+            .on_action(cx.listener(Self::source_stage))
+            .on_action(cx.listener(Self::source_stage_hunk))
+            .on_action(cx.listener(Self::source_unstage))
+            .on_action(cx.listener(Self::source_discard))
+            .on_action(cx.listener(Self::source_checkout))
+            .on_action(cx.listener(Self::source_confirm))
+            .on_action(cx.listener(Self::source_cancel))
+            .on_action(cx.listener(Self::source_compose))
+            .on_action(cx.listener(Self::source_generate))
+            .on_action(cx.listener(Self::close_source))
+            .on_action(cx.listener(Self::composer_next_session))
+            .on_action(cx.listener(Self::composer_previous_session))
+            .on_action(cx.listener(Self::close_composer))
             .on_action(cx.listener(Self::quit))
             .on_key_down(cx.listener(Self::key_down))
             .child(header)
             .children(palette_panel)
-            .child(if let Some(about) = about_panel {
+            .child(if let Some(composer) = composer_panel {
+                composer
+            } else if let Some(source) = source_panel {
+                source
+            } else if let Some(about) = about_panel {
                 about
             } else if empty_palette {
                 div()
@@ -750,7 +1675,7 @@ impl Render for Shell {
                     .text_size(px(11.0))
                     .child(SharedString::from(footer))
                     .child(SharedString::from(
-                        "secondary-shift-p — command palette · down/up — profile · f4 — where the stats came from · escape — close about · secondary-q — quit",
+                        "secondary-shift-p — command palette · down/up — profile · f4 — where the stats came from · f6 — source control · escape — close · secondary-q — quit",
                     )),
             )
     }
@@ -994,6 +1919,191 @@ mod drawn {
             updated_at: "2026-10-30T12:00:00Z".to_owned(),
             stale: false,
         }]
+    }
+
+    fn session_summary(id: &str, title: &str) -> acpilot_proto::session::SessionSummary {
+        acpilot_proto::session::SessionSummary {
+            id: id.to_owned(),
+            profile: "acpilot".to_owned(),
+            workspace_id: "acpilot".to_owned(),
+            agent_id: "mock".to_owned(),
+            title: title.to_owned(),
+            status: acpilot_proto::session::SessionStatus::Idle,
+            created_at: "2026-11-07T12:00:00Z".to_owned(),
+            updated_at: "2026-11-07T12:00:00Z".to_owned(),
+        }
+    }
+
+    /// A repository with one staged path and two sessions to choose between.
+    fn staged_source() -> Source {
+        let mut source = Source::loading();
+        source.apply(
+            acpilot_proto::git::GitStatus {
+                branch: Some("main".to_owned()),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                head: None,
+                files: vec![acpilot_proto::git::GitStatusEntry {
+                    path: "src/main.rs".to_owned(),
+                    old_path: None,
+                    index: acpilot_proto::git::GitChangeKind::Modified,
+                    worktree: acpilot_proto::git::GitChangeKind::Unmodified,
+                }],
+            },
+            acpilot_proto::git::GitDiff::default(),
+            acpilot_proto::git::GitDiff::default(),
+            vec![session_summary("s1", "one"), session_summary("s2", "two")],
+        );
+        source
+    }
+
+    #[gpui::test]
+    async fn the_composer_drafts_from_the_session_it_shows(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.set_git_sender(requests);
+                shell.source = Some(staged_source());
+                shell.open_composer(false, cx);
+            });
+        });
+        assert!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .composer()
+                .is_some_and(|composer| composer.session_id.is_none())),
+            "the first listed session is the default"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.composer_next_session(&ComposerNextSession, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .composer()
+                .and_then(|composer| composer.session_id.clone())),
+            Some("s2".to_owned()),
+            "tab chooses the second session"
+        );
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.generate_draft(cx));
+        });
+        assert_eq!(
+            sent.try_recv().expect("a generate request"),
+            GitCommand::Generate("s2".to_owned()),
+            "ctrl-g asks the session the composer is showing"
+        );
+    }
+
+    #[gpui::test]
+    async fn restore_actions_are_armed_and_confirmed(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, _cx| {
+                shell.set_git_sender(requests);
+                let mut source = staged_source();
+                source.status.head = Some("0123456789abcdef".to_owned());
+                source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+                shell.source = Some(source);
+            });
+        });
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_discard(&SourceDiscard, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell
+                .read(cx)
+                .source()
+                .and_then(|source| source.pending.clone())),
+            Some(source::PendingRestore {
+                restore: Restore::Discard,
+                path: "src/main.rs".to_owned(),
+            }),
+            "d arms the selected path instead of writing it"
+        );
+        assert!(sent.try_recv().is_err(), "arming sends no request");
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_confirm(&SourceConfirm, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a discard request"),
+            GitCommand::Discard("src/main.rs".to_owned())
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_checkout(&SourceCheckout, window, cx);
+            });
+        });
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_confirm(&SourceConfirm, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a checkout request"),
+            GitCommand::Checkout("src/main.rs".to_owned())
+        );
+    }
+
+    #[gpui::test]
+    async fn hunk_actions_choose_and_stage_one_unstaged_hunk(cx: &mut gpui::TestAppContext) {
+        let visual = cx.add_empty_window();
+        let shell = visual.update(|_window, cx| cx.new(|cx| Shell::new(Vec::new(), theme(), cx)));
+        let (requests, sent) = std::sync::mpsc::channel();
+
+        visual.update(|_window, cx| {
+            shell.update(cx, |shell, _cx| {
+                shell.set_git_sender(requests);
+                let mut source = staged_source();
+                source.status.files[0].index = acpilot_proto::git::GitChangeKind::Unmodified;
+                source.status.files[0].worktree = acpilot_proto::git::GitChangeKind::Modified;
+                source.unstaged_diff.patch = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-a\n+b\n@@ -20 +20 @@\n-c\n+d\n".to_owned();
+                shell.source = Some(source);
+            });
+        });
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_next_hunk(&SourceNextHunk, window, cx);
+            });
+        });
+        assert_eq!(
+            visual.update(|_window, cx| shell.read(cx).source().map(Source::selected_hunk)),
+            Some(1),
+            "l chooses the second unstaged hunk"
+        );
+
+        visual.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.source_stage_hunk(&SourceStageHunk, window, cx);
+            });
+        });
+        assert_eq!(
+            sent.try_recv().expect("a stage-hunk request"),
+            GitCommand::StageHunk {
+                path: "src/main.rs".to_owned(),
+                hunk: 1,
+            },
+            "shift-s sends the selected hunk, not the path"
+        );
     }
 
     /// The path that works on Linux and Windows, where gpui 0.2.2 draws no menu

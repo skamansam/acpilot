@@ -63,3 +63,4 @@ These are tracked as `D1`–`D13` in `TODO.md`; each gets an ADR when it is sett
 | 0009 | GUI framework: gpui, pinned, with an iced fallback (D1) — **recorded** |
 | 0010 | Daemon auth for non-loopback exposure (D5) |
 | 0011 | Agent manifest licensing so other editors can adopt it (D6) |
+| 0012 | Profile inheritance: layer settings, copy credentials (D13) — **recorded** |

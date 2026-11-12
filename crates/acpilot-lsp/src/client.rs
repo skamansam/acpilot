@@ -69,10 +69,31 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Where a server's bytes go.
+///
+/// A server this process spawned writes to its `stdin`. A server on another machine
+/// writes into a pipe whose other end a bridge carries over a helper — the daemon's
+/// transport, not this crate's, because a helper is a JSON-RPC line protocol and this
+/// is a byte stream. Everything above this enum is the same code either way.
+enum Output {
+    Child(ChildStdin),
+    Pipe(tokio::io::WriteHalf<tokio::io::DuplexStream>),
+}
+
+impl Output {
+    async fn write(&mut self, body: &[u8]) -> Result<(), ClientError> {
+        match self {
+            Self::Child(stdin) => wire::write_message(stdin, body).await?,
+            Self::Pipe(writer) => wire::write_message(writer, body).await?,
+        }
+        Ok(())
+    }
+}
+
 /// A running language server and its message pump.
 pub struct Server {
-    child: Child,
-    stdin: Arc<AsyncMutex<ChildStdin>>,
+    child: Option<Child>,
+    stdin: Arc<AsyncMutex<Output>>,
     pending: Pending,
     notifications: mpsc::UnboundedReceiver<Value>,
     requests: mpsc::UnboundedReceiver<Value>,
@@ -97,7 +118,7 @@ impl Server {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
 
-        let stdin = Arc::new(AsyncMutex::new(stdin));
+        let stdin = Arc::new(AsyncMutex::new(Output::Child(stdin)));
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL)));
         let (notifications, notification_rx) = mpsc::unbounded_channel();
@@ -116,7 +137,7 @@ impl Server {
         ));
 
         Ok(Self {
-            child,
+            child: Some(child),
             stdin,
             pending,
             notifications: notification_rx,
@@ -124,6 +145,43 @@ impl Server {
             stderr: stderr_tail,
             next_id: 1,
         })
+    }
+
+    /// A server whose stdio is somebody else's pipe.
+    ///
+    /// The caller owns both ends: what it writes into `writer` arrives here as the
+    /// server's stdout, and what this client writes comes out of the reader. The
+    /// daemon's bridge turns that into a helper's `lsp.write` and back — which is the
+    /// only difference between a server on this machine and one on an SSH host.
+    ///
+    /// There is no child, so [`Server::try_wait`] answers "still running" and
+    /// [`Server::shutdown`] stops at the protocol's own exit; the caller closes its
+    /// transport when the session is dropped, and that is what ends the process.
+    pub fn attach(
+        reader: impl tokio::io::AsyncBufRead + Unpin + Send + 'static,
+        writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    ) -> Self {
+        let stdin = Arc::new(AsyncMutex::new(Output::Pipe(writer)));
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL)));
+        let (notifications, notification_rx) = mpsc::unbounded_channel();
+        let (requests, request_rx) = mpsc::unbounded_channel();
+        tokio::spawn(pump(
+            reader,
+            Arc::clone(&stdin),
+            Arc::clone(&pending),
+            notifications,
+            requests,
+        ));
+        Self {
+            child: None,
+            stdin,
+            pending,
+            notifications: notification_rx,
+            requests: request_rx,
+            stderr: stderr_tail,
+            next_id: 1,
+        }
     }
 
     /// Send a request and wait for its response.
@@ -196,8 +254,14 @@ impl Server {
     }
 
     /// Whether the server process has exited.
+    ///
+    /// A server on another machine is not this process's child, so there is nothing to
+    /// wait on: its end arrives as EOF from the pipe, which the pump reports.
     pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
-        self.child.try_wait()
+        match &mut self.child {
+            Some(child) => child.try_wait(),
+            None => Ok(None),
+        }
     }
 
     /// Ask the server to shut down, then insist.
@@ -211,31 +275,36 @@ impl Server {
             .await;
         let _ = self.notify("exit", Value::Null).await;
 
-        match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
+        let Some(child) = &mut self.child else {
+            // The far side's owner closes the transport, which ends the process; this
+            // half did what the protocol asks and has nothing left to kill.
+            return;
+        };
+        match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
             Ok(Ok(_)) => {}
             _ => {
-                let _ = self.child.kill().await;
+                let _ = child.kill().await;
             }
         }
     }
 }
 
-async fn send(stdin: &AsyncMutex<ChildStdin>, message: &Value) -> Result<(), ClientError> {
+async fn send(stdin: &AsyncMutex<Output>, message: &Value) -> Result<(), ClientError> {
     let body = serde_json::to_vec(message).expect("a serde_json::Value is always serialisable");
     let mut stdin = stdin.lock().await;
-    wire::write_message(&mut *stdin, &body).await?;
+    stdin.write(&body).await?;
     Ok(())
 }
 
 /// Read framed messages and route them until the server closes stdout.
 async fn pump<R>(
     mut reader: R,
-    stdin: Arc<AsyncMutex<ChildStdin>>,
+    stdin: Arc<AsyncMutex<Output>>,
     pending: Pending,
     notifications: mpsc::UnboundedSender<Value>,
     requests: mpsc::UnboundedSender<Value>,
 ) where
-    R: tokio::io::AsyncBufRead + Unpin,
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
 {
     loop {
         match wire::read_message(&mut reader).await {

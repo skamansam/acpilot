@@ -36,7 +36,7 @@ pub mod tree;
 pub use editor::{Diff, DiffKind, DiffLine, EditorBuffer, Hunk};
 pub use palette::{Command, CommandAction, Run};
 
-pub use tree::{FileNode, GitStatus};
+pub use tree::FileNode;
 
 /// One session and the transcript it replays.
 ///
@@ -176,6 +176,7 @@ fn summary(
 ) -> SessionSummary {
     SessionSummary {
         id: id.to_owned(),
+        profile: "demo".to_owned(),
         workspace_id: "acpilot".to_owned(),
         agent_id: agent.to_owned(),
         title: title.to_owned(),
@@ -353,7 +354,9 @@ fn terminals() -> Vec<TerminalSummary> {
     vec![
         TerminalSummary {
             id: "agent-terminal-1".to_owned(),
-            session_id: "s1".to_owned(),
+            session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize {
                 cols: 100,
                 rows: 24,
@@ -363,7 +366,9 @@ fn terminals() -> Vec<TerminalSummary> {
         },
         TerminalSummary {
             id: "agent-terminal-2".to_owned(),
-            session_id: "s1".to_owned(),
+            session_id: Some("s1".to_owned()),
+            workspace: None,
+            host: None,
             size: TerminalSize { cols: 80, rows: 24 },
             alive: false,
             command: "/bin/sh -c cargo run -- tui".to_owned(),

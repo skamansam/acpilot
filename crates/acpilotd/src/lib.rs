@@ -7,13 +7,14 @@
 //! Note what is *not* here: no file contents on the keystroke path, no agent
 //! logic, no UI. The daemon is a control plane.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use acpilot_agent::Terminals as AgentTerminals;
-use acpilot_agent::supervisor::availability;
 use acpilot_agent::{AgentSpec, Broker, IDLE_TIMEOUT, KeyringResolver, PermissionOption, Registry};
 use acpilot_core::AcpilotError;
 use acpilot_host::LocalHost;
@@ -21,34 +22,67 @@ use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::permission::{PermissionDecision, PermissionRequest};
 use acpilot_proto::profile::Preferences;
 use acpilot_proto::{ApiDoc, ErrorBody, ErrorDetail};
+use acpilot_store::{Store, Stores};
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{
+    DefaultPredicate, NotForContentType, Predicate, SizeAbove,
+};
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
 mod auth;
+mod base64;
+// The daemon's settings: two files, then the flags (P3-1). Public because the
+// binary resolves them before it has an `AppState` to attach them to.
+pub mod config;
 mod files;
+// Status, diff, tree and log over the workspace's repository, from the host's
+// own `git`: the source-control pane's read half (P6.5-2).
+mod git;
+// Commit-message prompts and the draft a session writes from the index (P6.5-3).
+mod commit;
+pub mod helper;
+pub mod hosts;
+mod lsp;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
+mod lsp_remote;
+pub mod pidfile;
 mod platform;
+mod project;
+mod pty_remote;
+// Every profile under `<config>/profiles`, and the header rule that picks one per
+// request: `GET /v1/profiles` and `X-Acpilot-Profile` are its surface.
+pub mod profiles;
 mod sessions;
 mod stats;
 mod terminals;
+// What a person approved: the fingerprint a `POST /v1/agents/{id}/trust` records and
+// the `untrusted` state it is the only way out of.
+mod trust;
 // What a conversation costs, counted from the events its agent streamed. Not a
 // route and not a renderer: the sessions engine counts, `/v1/stats` reports.
 mod usage;
+mod workspaces;
 
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
-pub use platform::{Target, resolve_target, serve, shutdown};
+// The language server table is the daemon's, not a client's: `doctor` reports what
+// this build would start and must not keep a second copy that drifts.
+pub use lsp::{SERVERS, installed};
+pub use platform::{Bound, Target, resolve_target, serve, serve_with_listening, shutdown};
 pub use sessions::{REPLAY_CAPACITY, Sessions};
 pub use terminals::{Output, Terminal, Terminals};
 
@@ -74,6 +108,13 @@ const EVENT_BUFFER: usize = 32;
 /// without this a command that outlived one tool call would outlive the daemon.
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How often the store drops events past its retention window.
+///
+/// Six hours against a thirty-day window: the sweep is a single indexed delete, and
+/// a daemon that runs for a week without one is the case this is sized for. The
+/// first tick is immediate, so every start is also a sweep.
+pub const COMPACT_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
 /// Health payload. Deliberately minimal: a health check should not be able to fail
 /// because a subsystem is slow.
 #[derive(Debug, Serialize)]
@@ -95,6 +136,23 @@ pub struct Health {
     /// something a client should have named.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The profile this daemon serves, by directory name.
+    ///
+    /// The web page's addresses name a profile (`/p/:profile/...`) and every
+    /// request carries it as `X-Acpilot-Profile`. A browser cannot see the
+    /// directory the daemon was started with, so this is where it learns the name
+    /// to put in the address instead of inventing one. Absent when the daemon was
+    /// started without `--profile`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// How this daemon was installed, when a marker says (ADR 0010).
+    ///
+    /// A client whose version does not match reports the difference and needs to know
+    /// who is allowed to reconcile it: a package manager that owns these files, or the
+    /// program itself when the copy is the user's. Absent means no marker was found,
+    /// which is treated as nobody's to replace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<acpilot_host::install::Install>,
 }
 
 /// An [`AcpilotError`] rendered as an HTTP response.
@@ -150,6 +208,7 @@ impl ApiError {
             AcpilotError::NotFound { .. } => StatusCode::NOT_FOUND,
             AcpilotError::Conflict { .. } => StatusCode::CONFLICT,
             AcpilotError::PermissionDenied { .. } => StatusCode::FORBIDDEN,
+            AcpilotError::ProfileMismatch { .. } => StatusCode::CONFLICT,
             AcpilotError::HostUnavailable { .. }
             | AcpilotError::ModelUnavailable { .. }
             | AcpilotError::AgentFailed { .. } => StatusCode::BAD_GATEWAY,
@@ -178,6 +237,12 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
         version: env!("CARGO_PKG_VERSION"),
         api: acpilot_proto::API_PREFIX,
         workspace: state.workspace().map(|workspace| workspace.id.clone()),
+        profile: state.profile_name().map(str::to_owned),
+        // Asked of the binary that is running, not of `PATH`: a second copy on this
+        // machine is a different installation and says so for itself.
+        install: std::env::current_exe()
+            .ok()
+            .and_then(|exe| acpilot_host::install::install_of(&exe)),
     })
 }
 
@@ -196,8 +261,45 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
 pub struct Workspace {
     /// Identifier the API uses, derived from the directory's basename.
     pub id: String,
+    /// Profile that owns this workspace, empty for a daemon started without one.
+    pub profile: String,
     /// Resolved root the broker compares with and the agent is given.
     pub root: std::path::PathBuf,
+}
+
+/// Where a profile's database is, or how to open it when a request needs it.
+///
+/// `Ready` is the test and embedded seam: a caller that owns a store hands it to
+/// the state and the routes read exactly that one. `Lazy` is the daemon's path: a
+/// profile state is built without touching its database, and the shared [`Stores`]
+/// cache opens it on first use. The whole point is that a daemon serving ten
+/// profiles does not open ten SQLite files to answer `GET /v1/health`.
+#[derive(Debug, Clone)]
+enum StoreSlot {
+    /// No store was configured.
+    None,
+    /// A store the caller opened and owns.
+    Ready(Arc<Store>),
+    /// A path opened through the shared cache on first use.
+    Lazy {
+        stores: Arc<Stores>,
+        path: PathBuf,
+        warned: Arc<AtomicBool>,
+    },
+}
+
+impl StoreSlot {
+    fn ready(store: Arc<Store>) -> Self {
+        Self::Ready(store)
+    }
+
+    fn lazy(stores: Arc<Stores>, path: PathBuf) -> Self {
+        Self::Lazy {
+            stores,
+            path,
+            warned: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 /// [`Registry`], which is the same path the daemon will use once profiles land.
@@ -207,6 +309,38 @@ pub struct AppState {
     broker: Option<Arc<Broker>>,
     /// The workspace sessions open in, when the daemon was given one.
     workspace: Option<Workspace>,
+    /// The profile this daemon serves, by directory name.
+    ///
+    /// Kept so `GET /v1/health` can name it: the web page's routes take a profile
+    /// segment, and a page that guessed the name would be addressing a profile
+    /// nobody started.
+    profile: Option<String>,
+    /// The profile directory, when this daemon was started with one.
+    ///
+    /// Kept apart from the name because a name is an address and a directory is
+    /// where the daemon reads the files the profile owns, such as the commit
+    /// prompt. A path in `GET /v1/health` would be a filesystem fact a browser has
+    /// no business knowing, so the two are not the same field.
+    profile_root: Option<std::path::PathBuf>,
+    /// The cross-profile index, when the daemon opened one.
+    ///
+    /// The per-profile workspace registry cannot see another profile, so the
+    /// index is how a root already owned elsewhere becomes a `409` rather than a
+    /// second workspace that happens to share a path. Tests and embedded states
+    /// may have none, and then a workspace is local to its profile.
+    index: Option<acpilot_store::Index>,
+    /// The hosts this daemon knows, the one it runs on first.
+    ///
+    /// A registry rather than a table read per request: the local host's
+    /// capabilities are a fact about this build, and a list that changed under a
+    /// client between two reads would be a dialog that flickers.
+    hosts: Arc<hosts::Hosts>,
+    /// The workspaces clients have opened, and the check that each root was there.
+    ///
+    /// In memory like the host list: a workspace is a host and a path, and both are
+    /// already durable facts. The daemon still serves one workspace's files; this is
+    /// the registry that makes naming another one possible at all.
+    workspaces: Arc<workspaces::Workspaces>,
     /// Every session this daemon owns.
     sessions: Sessions,
     /// Every terminal this daemon owns.
@@ -217,6 +351,14 @@ pub struct AppState {
     /// transcript directory is a decision about a filesystem, and the default for
     /// a library value is not to write into somebody's home directory.
     transcripts: Option<std::path::PathBuf>,
+    /// The SQLite record: sessions, their events and their decisions, kept after
+    /// the process that streamed them is gone (the service phase's task P3-7).
+    ///
+    /// A daemon opens it on first use through the shared cache; a test or an
+    /// embedded caller can hand over a store it already owns. `None` is a library
+    /// value that was given no path, for the same reason transcripts are: it does
+    /// not write into somebody's home directory uninvited.
+    store: StoreSlot,
     /// The terminals *agents* ask their client to open.
     ///
     /// A different store from [`Self::terminals`], which is the panes a client
@@ -234,6 +376,19 @@ pub struct AppState {
     /// it has to remember to drop. `AppState` always holds a sender, so the channel
     /// is never closed while the daemon runs.
     preference_changes: broadcast::Sender<Preferences>,
+    /// Saves that could not become preferences, announced as a notice.
+    ///
+    /// A file that does not parse keeps the last good values in force, but a
+    /// client that cannot see this machine's disk has no other way to learn that
+    /// the save it just made was ignored. The message names the failure; the last
+    /// good `prefs` frame remains the state.
+    preference_errors: broadcast::Sender<String>,
+    /// Answer cross-origin requests (`[daemon] cors`).
+    ///
+    /// Off unless the daemon was told the browser is somewhere else: the page is
+    /// served from this origin, and the one other case (Vite on another port)
+    /// proxies `/v1`, so CORS is an explicit decision rather than a default.
+    cors: bool,
     /// Decisions already delivered, by request id.
     ///
     /// The broker answers each question once and forgets it; the API promises
@@ -242,6 +397,59 @@ pub struct AppState {
     /// only way to tell those two apart, and it is the daemon's to remember:
     /// the broker's job is to answer, not to be a history.
     decided: Arc<Mutex<HashMap<String, PermissionDecision>>>,
+    /// The language servers this daemon may ask about a file, one per language and
+    /// started on demand.
+    ///
+    /// One registry rather than one per request: a server indexes a project once, and
+    /// a daemon that spawned one per references request would pay that index every
+    /// keystroke.
+    language_servers: Arc<lsp::Servers>,
+    /// Problems a language server published without being asked.
+    ///
+    /// A server with an index speaks on its own, and the pane that is reading the file
+    /// did not ask it to: the frame this announces is how a gutter that was waiting on
+    /// a background check fills in.
+    diagnostics_changes: broadcast::Sender<acpilot_proto::file::DiagnosticsNotice>,
+    /// The newest problems per file, so the stream can start a late-joining client
+    /// with what is already known.
+    ///
+    /// Both halves write here: an answer to `POST /v1/files/diagnostics` and a publish
+    /// the timer drained. That is what makes the frame state as well as an event — a
+    /// client that connects after a server saw a problem is told it on connect rather
+    /// than drawing an empty gutter until the next save.
+    diagnostics: Arc<Mutex<DiagnosticsStore>>,
+}
+
+/// How many files the daemon keeps the last problems for.
+///
+/// A snapshot for a client that connects late, not a database: a workspace with more
+/// files than this has more of them than anybody is looking at, and one that falls out
+/// is asked about again when it is opened. Eviction is in announcement order, so the
+/// file whose problems just moved is the last to go.
+pub const DIAGNOSTICS_SNAPSHOT: usize = 64;
+
+/// The newest problems the daemon knows about, by workspace-relative path.
+#[derive(Debug, Default)]
+struct DiagnosticsStore {
+    notices: HashMap<String, acpilot_proto::file::DiagnosticsNotice>,
+    /// The files in the order they were first announced, oldest first.
+    order: VecDeque<String>,
+}
+
+impl DiagnosticsStore {
+    /// Keep `notice`, dropping the oldest file when the store is full.
+    fn record(&mut self, notice: acpilot_proto::file::DiagnosticsNotice) {
+        if !self.notices.contains_key(&notice.path) {
+            self.order.push_back(notice.path.clone());
+            while self.order.len() > DIAGNOSTICS_SNAPSHOT {
+                let Some(oldest) = self.order.pop_front() else {
+                    break;
+                };
+                self.notices.remove(&oldest);
+            }
+        }
+        self.notices.insert(notice.path.clone(), notice);
+    }
 }
 
 impl Default for AppState {
@@ -255,12 +463,23 @@ impl Default for AppState {
             agents: None,
             broker: None,
             workspace: None,
+            profile: None,
+            profile_root: None,
+            index: None,
+            hosts: Arc::new(hosts::Hosts::default()),
+            workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
             transcripts: None,
+            store: StoreSlot::None,
+            cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
+            preference_errors: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
+            language_servers: Arc::new(lsp::Servers::new()),
+            diagnostics_changes: broadcast::channel(EVENT_BUFFER).0,
+            diagnostics: Arc::default(),
         }
     }
 }
@@ -269,6 +488,64 @@ impl AppState {
     /// No profile loaded: the agent list is empty and nothing is pending.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Serve this profile's name in `GET /v1/health`.
+    #[must_use]
+    pub fn with_profile_name(mut self, profile: Option<String>) -> Self {
+        self.workspaces
+            .set_profile(profile.as_deref().unwrap_or_default());
+        self.profile = profile;
+        self
+    }
+
+    /// Let this profile consult the shared index before opening a workspace.
+    ///
+    /// The index records who opened a root first; the same index is handed to
+    /// every profile state in one daemon, which is what makes the ownership check
+    /// cross-profile rather than a per-router accident.
+    #[must_use]
+    pub fn with_index(mut self, index: acpilot_store::Index) -> Self {
+        self.workspaces.set_index(index.clone());
+        self.index = Some(index);
+        self
+    }
+
+    /// The index this daemon opened, when it has one.
+    #[must_use]
+    pub fn index(&self) -> Option<&acpilot_store::Index> {
+        self.index.as_ref()
+    }
+
+    /// The profile directory's name, when this daemon was started with one.
+    pub fn profile_name(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+
+    /// Read this profile's own files from this directory.
+    #[must_use]
+    pub fn with_profile_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.profile_root = root;
+        self
+    }
+
+    /// Attach the per-host credentials this profile's config names.
+    ///
+    /// The host list stays global; only the transport a request builds is the
+    /// profile's. An empty table is the old behaviour: the address and the user's
+    /// own SSH configuration decide.
+    #[must_use]
+    pub fn with_host_identities(
+        self,
+        identities: impl IntoIterator<Item = (String, acpilot_profile::HostIdentity)>,
+    ) -> Self {
+        self.hosts.set_identities(identities);
+        self
+    }
+
+    /// The profile directory, when this daemon was started with one.
+    pub fn profile_root(&self) -> Option<&std::path::Path> {
+        self.profile_root.as_deref()
     }
 
     /// Serve this profile's agents.
@@ -299,9 +576,134 @@ impl AppState {
         self.broker.as_ref()
     }
 
+    /// The language servers behind `GET /v1/files/references`.
+    ///
+    /// A registry rather than a server: which language server a file wants, and
+    /// whether one is installed, is decided per request, and the sessions it has
+    /// started are the daemon's for as long as it runs.
+    pub fn language_servers(&self) -> &lsp::Servers {
+        &self.language_servers
+    }
+
+    /// Subscribe to the problems the language servers publish on their own.
+    ///
+    /// The same broadcast the profile-wide stream reads, exposed so a test can watch
+    /// the daemon's half without a socket.
+    #[must_use]
+    pub fn subscribe_diagnostics(
+        &self,
+    ) -> broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice> {
+        self.diagnostics_changes.subscribe()
+    }
+
+    /// Keep what a server said about a file, for a client that connects later.
+    ///
+    /// The answer to a question and a publish nobody asked for are the same fact about
+    /// a file, so they land in the same place: the newest one wins, and a client that
+    /// opens after both is told what the daemon knows instead of starting empty.
+    pub fn record_diagnostics(&self, notice: acpilot_proto::file::DiagnosticsNotice) {
+        let mut store = self
+            .diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        store.record(notice);
+    }
+
+    /// The problems the daemon knows about, one per file, sorted by path.
+    ///
+    /// Sorted rather than in announcement order because this is what the stream's
+    /// first frames are built from: two connections opening the same daemon should not
+    /// see the same snapshot in two different orders.
+    #[must_use]
+    pub fn diagnostics_snapshot(&self) -> Vec<acpilot_proto::file::DiagnosticsNotice> {
+        let store = self
+            .diagnostics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut notices: Vec<acpilot_proto::file::DiagnosticsNotice> =
+            store.notices.values().cloned().collect();
+        notices.sort_by(|left, right| left.path.cmp(&right.path));
+        notices
+    }
+
+    /// Take what the servers published since this was last called, and announce the
+    /// documents whose problems changed.
+    ///
+    /// A publish outside the workspace is dropped rather than announced: a server may
+    /// mention a file it read from a dependency path, and a client that cannot open it
+    /// has nothing to do with the notice. Returns how many were announced, which is
+    /// the only thing the sweep's log line needs.
+    pub async fn drain_language_server_diagnostics(&self) -> usize {
+        let Some(workspace) = self.workspace() else {
+            return 0;
+        };
+        let pushed = self.language_servers.drain_published().await;
+        let mut announced = 0;
+        for pushed in pushed {
+            let Ok(relative) = pushed.path.strip_prefix(&workspace.root) else {
+                tracing::debug!(
+                    path = %pushed.path.display(),
+                    "a language server published about a file outside the workspace"
+                );
+                continue;
+            };
+            let notice = acpilot_proto::file::DiagnosticsNotice {
+                path: relative.to_string_lossy().replace('\\', "/"),
+                version: pushed.version,
+                problems: acpilot_proto::file::FileDiagnostics {
+                    server: Some(pushed.program.to_owned()),
+                    encoding: Some(match pushed.encoding {
+                        acpilot_lsp::PositionEncoding::Utf8 => {
+                            acpilot_proto::lsp::PositionEncoding::Utf8
+                        }
+                        acpilot_lsp::PositionEncoding::Utf16 => {
+                            acpilot_proto::lsp::PositionEncoding::Utf16
+                        }
+                    }),
+                    items: pushed.items.iter().map(files::problem_row).collect(),
+                },
+            };
+            // Kept before it is announced, so a client that connects mid-sweep finds
+            // the file in the snapshot rather than racing the frame.
+            self.record_diagnostics(notice.clone());
+            // Nobody listening is not a failure: a daemon with no client attached has
+            // nowhere to send an event, and the next client is told on connect from the
+            // snapshot.
+            let _ = self.diagnostics_changes.send(notice);
+            announced += 1;
+        }
+        announced
+    }
+
+    /// Ask the language servers what they published, on a timer.
+    ///
+    /// Spawned by [`startup`] rather than by [`AppState::new`], like the idle sweep: a
+    /// state constructed in a test should not start a clock, and one daemon wants one
+    /// of these.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn watch_language_server_diagnostics(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(lsp::DIAGNOSTICS_POLL);
+            loop {
+                tick.tick().await;
+                let announced = state.drain_language_server_diagnostics().await;
+                if announced > 0 {
+                    tracing::debug!(announced, "language server published problems");
+                }
+            }
+        });
+    }
+
     /// Serve this workspace, and open every session in it.
     #[must_use]
-    pub fn with_workspace(mut self, workspace: Workspace) -> Self {
+    pub fn with_workspace(mut self, mut workspace: Workspace) -> Self {
+        if workspace.profile.is_empty() {
+            workspace.profile = self.profile.clone().unwrap_or_default();
+        }
         self.workspace = Some(workspace);
         self
     }
@@ -341,7 +743,18 @@ impl AppState {
     #[must_use]
     pub fn settings(&self) -> Option<acpilot_profile::settings::Settings> {
         let root = acpilot_profile::project::Root::resolve(Some(&self.workspace()?.root)).ok()?;
-        root.settings().ok()
+        // The profile the daemon was started with is a layer of the same cascade:
+        // its `config.toml` and `profile.toml` sit above the user's file and below
+        // the workspace's, which is why the path is used rather than its name — a
+        // `--profile` may live outside `<config>/profiles`.
+        let profile = self
+            .profile_root()
+            .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+            .or_else(|| {
+                self.profile_name()
+                    .and_then(|name| acpilot_profile::Profile::named(name).ok())
+            });
+        root.settings_with_profile(profile.as_ref()).ok()
     }
 
     /// The preferences a client of this daemon would draw with, resolved now.
@@ -354,6 +767,22 @@ impl AppState {
     #[must_use]
     pub fn subscribe_preferences(&self) -> broadcast::Receiver<Preferences> {
         self.preference_changes.subscribe()
+    }
+
+    /// Announce preferences a route just wrote.
+    ///
+    /// The watcher would notice the file a moment later, but a PATCH answers before
+    /// that debounce and should not make its client wait for a second path to the
+    /// same fact. The extra frame is harmless: it is the same state, and a client
+    /// applies preferences by replacement.
+    pub fn announce_preferences(&self, preferences: Preferences) {
+        let _ = self.preference_changes.send(preferences);
+    }
+
+    /// Subscribe to saves that did not parse, for the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_preference_errors(&self) -> broadcast::Receiver<String> {
+        self.preference_errors.subscribe()
     }
 
     /// Announce the settings a person saves, for as long as the daemon runs.
@@ -373,12 +802,23 @@ impl AppState {
         let Ok(root) = acpilot_profile::project::Root::resolve(Some(&workspace.root)) else {
             return;
         };
-        // Both files the cascade reads, so a save in either is a change: a project
-        // can be light while the user's own settings stay night flight.
-        let mut paths = vec![acpilot_profile::user_config_path()];
-        if let Some(project) = root.project() {
-            paths.push(project.config_path());
-        }
+        let profile = self
+            .profile_root()
+            .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+            .or_else(|| {
+                self.profile_name()
+                    .and_then(|name| acpilot_profile::Profile::named(name).ok())
+            });
+        // The cascade's own list, so a save in the user's file, the project's, a
+        // profile's, or a profile it extends is the same answer to "did the
+        // settings change?". A second list here would drift from the reader.
+        let paths = acpilot_profile::settings::watch_paths(
+            Some(&acpilot_profile::user_config_path()),
+            root.project()
+                .map(|project| project.config_path())
+                .as_deref(),
+            profile.as_ref(),
+        );
         let Some(changes) = acpilot_profile::watch::changes(paths) else {
             tracing::warn!(
                 "settings are not being watched; clients will only see the preferences \
@@ -391,8 +831,13 @@ impl AppState {
             while changes.recv().is_ok() {
                 // A file that does not parse, or names something no extension
                 // provides, answers `None`: the last good preferences stay in
-                // force and the stream says nothing rather than something wrong.
+                // force, and the stream says the save was ignored rather than
+                // quietly leaving a client on stale values.
                 let Some(preferences) = state.preferences() else {
+                    let _ = state.preference_errors.send(
+                        "a settings file does not parse; keeping the last good preferences"
+                            .to_owned(),
+                    );
                     continue;
                 };
                 let _ = state.preference_changes.send(preferences);
@@ -429,6 +874,158 @@ impl AppState {
         self.transcripts.as_deref()
     }
 
+    /// Keep sessions, events and decisions in this database.
+    #[must_use]
+    pub fn with_store(mut self, store: Arc<Store>) -> Self {
+        match store.hosts() {
+            Ok(records) => self.hosts.seed(records),
+            Err(error) => tracing::warn!(%error, "the recorded hosts could not be read"),
+        }
+        self.store = StoreSlot::ready(store);
+        self
+    }
+
+    /// Open this profile's store through `stores` the first time a route asks.
+    ///
+    /// The cache is shared by every profile state in one daemon, so the four-store
+    /// limit is a fact about the daemon rather than a limit per profile. A path
+    /// that cannot be opened is one warning and no history for this profile; it is
+    /// not a reason to stop serving the others.
+    #[must_use]
+    pub fn with_lazy_store(mut self, stores: Arc<Stores>, path: impl Into<PathBuf>) -> Self {
+        self.store = StoreSlot::lazy(stores, path.into());
+        self
+    }
+
+    /// The hosts this daemon knows, the one it runs on first.
+    pub fn hosts(&self) -> &hosts::Hosts {
+        &self.hosts
+    }
+
+    /// The workspaces clients have opened on those hosts.
+    pub fn workspaces(&self) -> &workspaces::Workspaces {
+        &self.workspaces
+    }
+
+    /// The database behind the session routes, opening it on first use.
+    ///
+    /// The first open in this process is also where sessions a previous process
+    /// left open are marked closed and the recorded hosts are seeded. Doing that
+    /// again after an eviction would close conversations this process is running,
+    /// so the cache's `first` flag is the switch rather than the open itself.
+    pub fn store(&self) -> Option<Arc<Store>> {
+        match &self.store {
+            StoreSlot::None => None,
+            StoreSlot::Ready(store) => Some(Arc::clone(store)),
+            StoreSlot::Lazy {
+                stores,
+                path,
+                warned,
+            } => match stores.open(path) {
+                Ok((store, first)) => {
+                    if first {
+                        if let Some(workspace) = self.workspace()
+                            && let Err(error) = store.remember_workspace(
+                                &workspace.id,
+                                &workspace.root.to_string_lossy(),
+                            )
+                        {
+                            tracing::warn!(%error, "the workspace was not recorded");
+                        }
+                        match store.close_open_sessions() {
+                            Ok(0) => {}
+                            Ok(closed) => tracing::info!(
+                                closed,
+                                "sessions from a previous run are closed; nothing is running them"
+                            ),
+                            Err(error) => {
+                                tracing::warn!(%error, "the stored sessions were not closed")
+                            }
+                        }
+                        match store.hosts() {
+                            Ok(records) => self.hosts.seed(records),
+                            Err(error) => {
+                                tracing::warn!(%error, "the recorded hosts could not be read")
+                            }
+                        }
+                        tracing::info!(path = %path.display(), "sessions are kept in a database");
+                    }
+                    Some(store)
+                }
+                Err(error) => {
+                    if !warned.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            %error,
+                            "sessions will not outlive this process"
+                        );
+                    }
+                    None
+                }
+            },
+        }
+    }
+
+    /// The store only when it is already open. Used by the retention sweep, which
+    /// must not defeat the lazy open it is meant to live beside.
+    fn store_if_open(&self) -> Option<Arc<Store>> {
+        match &self.store {
+            StoreSlot::None => None,
+            StoreSlot::Ready(store) => Some(Arc::clone(store)),
+            StoreSlot::Lazy { stores, path, .. } => stores.peek(path),
+        }
+    }
+
+    /// Answer cross-origin requests.
+    #[must_use]
+    pub fn with_cors(mut self, cors: bool) -> Self {
+        self.cors = cors;
+        self
+    }
+
+    /// Whether this daemon answers a browser on another origin.
+    pub fn cors(&self) -> bool {
+        self.cors
+    }
+
+    /// Drop events past the retention window, on a timer.
+    ///
+    /// Run once at boot as well, because the interval's first tick is immediate and
+    /// a daemon that is restarted daily would otherwise never reach a sweep.
+    ///
+    /// # Panics
+    ///
+    /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn compact_store_on_a_timer(&self) {
+        // A clone of the state, not a clone of the store: a sweep that held an
+        // `Arc<Store>` would keep that profile open forever and turn the four-store
+        // cache into a five-store cache.
+        if matches!(self.store, StoreSlot::None) {
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(COMPACT_INTERVAL);
+            loop {
+                tick.tick().await;
+                let Some(store) = state.store_if_open() else {
+                    continue;
+                };
+                let before = jiff::Timestamp::now()
+                    - jiff::SignedDuration::from_hours(acpilot_store::RETENTION_DAYS * 24);
+                match store.compact(before) {
+                    Ok(0) => {}
+                    Ok(removed) => {
+                        tracing::info!(removed, "compacted events past the retention window");
+                    }
+                    // A sweep that fails is retried in six hours: the events it
+                    // would have dropped are not being read by anything.
+                    Err(error) => tracing::warn!(%error, "the retention sweep failed"),
+                }
+            }
+        });
+    }
+
     /// The terminals an agent's `terminal/*` requests are served from.
     ///
     /// One for the whole daemon, because the registry is keyed by session id and
@@ -448,8 +1045,9 @@ impl AppState {
     /// daemon owning a second process for it.
     ///
     /// A session the daemon cannot map (its `session/new` failed after the agent
-    /// chose an id, say) is filed under the agent's own id rather than dropped: a
-    /// pane with an unfamiliar owner is more useful than a shell nobody can see.
+    /// chose an id, say) becomes a **sessionless** pane rather than being dropped:
+    /// no session owns it, so it lists under no session filter, and a client that
+    /// asks for panes with no session can still find it.
     ///
     /// # Panics
     ///
@@ -462,9 +1060,7 @@ impl AppState {
             loop {
                 match opened.recv().await {
                     Ok(handle) => {
-                        let session_id = sessions
-                            .id_for_acp(handle.session_id())
-                            .unwrap_or_else(|| handle.session_id().to_owned());
+                        let session_id = sessions.id_for_acp(handle.session_id());
                         panes.adopt(session_id, handle);
                     }
                     // A mirror that falls 256 terminals behind loses those
@@ -496,6 +1092,23 @@ impl AppState {
     /// # Panics
     ///
     /// If there is no tokio runtime, like every other `tokio::spawn`.
+    pub fn reap_idle_language_servers(&self) {
+        let servers = Arc::clone(&self.language_servers);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(lsp::IDLE_SWEEP);
+            // An interval's first tick fires immediately, and nothing can be idle
+            // before a server has been started.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let stopped = servers.stop_idle(lsp::IDLE_TIMEOUT).await;
+                if !stopped.is_empty() {
+                    tracing::info!(?stopped, "stopped the language servers nothing had asked");
+                }
+            }
+        });
+    }
+
     pub fn reap_terminals_on_a_timer(&self) {
         let terminals = Arc::clone(&self.agent_terminals);
         tokio::spawn(async move {
@@ -566,7 +1179,15 @@ pub fn state_for_profile(
     workspace: &std::path::Path,
 ) -> Result<AppState, StateError> {
     let profile = acpilot_profile::Profile::open(directory)?;
+    // The directory's own name, not the path: the page writes it into an address,
+    // and an absolute host path there would be a filesystem fact a browser has no
+    // business knowing (the same rule `health.workspace` follows).
+    let name = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
     let policy = profile.policy()?;
+    let identities = profile.host_identities()?;
     let workspace = workspace_at(workspace)?;
     tracing::info!(
         profile = %profile.root().display(),
@@ -576,6 +1197,9 @@ pub fn state_for_profile(
     );
     let broker = Arc::new(Broker::with_timeout(policy, workspace.root.clone(), None));
     let state = AppState::new()
+        .with_profile_name(name)
+        .with_profile_root(Some(directory.to_path_buf()))
+        .with_host_identities(identities)
         .with_broker(broker)
         .with_workspace(workspace);
     Ok(match load_agents(&profile)? {
@@ -617,14 +1241,48 @@ pub fn startup(
     profile: Option<&std::path::Path>,
     workspace: &std::path::Path,
 ) -> Result<AppState, StateError> {
+    startup_with_stores(profile, workspace, Arc::new(Stores::default()))
+}
+
+/// [`startup`] with a store cache shared by several profiles in one daemon.
+///
+/// The cache is the P4-4 limit: four open databases, least recently used going
+/// first. A single-profile launch gets its own cache and the same behaviour; the
+/// multi-profile daemon passes one cache to every profile so the limit is about
+/// the process, not each identity in it.
+///
+/// # Errors
+///
+/// The profile or the workspace could not be read (see [`state_for`]).
+pub fn startup_with_stores(
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+    stores: Arc<Stores>,
+) -> Result<AppState, StateError> {
     let state = state_for(profile, workspace)
         // Conversations outlive the process that streamed them, which is the point
         // of a transcript: a client that reconnects after a restart can read what
-        // happened. Where that lives is the data directory, not the socket's.
-        .map(|state| state.with_transcripts(transcript_dir()))?;
+        // happened. A named profile keeps its transcripts under its own data
+        // directory, because two profiles may use the same session id.
+        .map(|state| state.with_transcripts(transcript_dir_for(profile)))?;
+    // The store is attached by path, not opened: a daemon serving every profile on
+    // the machine must not open every database to answer a health check. The first
+    // request that needs this profile's history opens it, and the shared cache
+    // closes the least recently used one when a fifth arrives.
+    let state = state.with_lazy_store(stores, store_path(profile));
+    // Once at boot and then every six hours, because the first tick is immediate.
+    state.compact_store_on_a_timer();
     // A terminal is a process; one an agent opened and never released has to end
     // on its own, because `terminal/release` is optional in ACP.
     state.reap_terminals_on_a_timer();
+    // A kept language server is that same trade one layer up: a session is kept for
+    // the next question, and a person who walks away has no next question. A stopped
+    // server starts again on the next ask, so this is a cost, not a behaviour.
+    state.reap_idle_language_servers();
+    // And a problem a server finds on its own reaches the pane reading the file. The
+    // transport queues a publish whether or not anybody is asking, so this is how a
+    // gutter that was waiting on a background index fills in without a keystroke.
+    state.watch_language_server_diagnostics();
     // And one an agent opened should be watchable: the same PTY, seen through a
     // pane a client can attach to.
     state.mirror_agent_terminals();
@@ -635,14 +1293,34 @@ pub fn startup(
     Ok(state)
 }
 
-/// Where the daemon keeps the transcripts of its sessions.
+/// The database path for a profile, or the shared root when there is none.
 ///
-/// `<data>/acpilot/transcripts`, moved with the rest of Acpilot's state by
-/// `ACPILOT_HOME`. A caller can point [`AppState::with_transcripts`] somewhere
-/// else; this is the answer for a daemon started by its own binary.
+/// The decision is [`acpilot_profile::Profile::database_path`]'s for a named
+/// profile, so the daemon, the CLI and `--database`'s default cannot disagree
+/// about where a conversation lives.
+fn store_path(profile: Option<&std::path::Path>) -> PathBuf {
+    profile
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+        .map_or_else(
+            || acpilot_profile::data_dir().join(acpilot_store::FILE_NAME),
+            |profile| profile.database_path(),
+        )
+}
+
+/// Where the daemon keeps the transcripts of a profile-less launch.
+///
+/// `<data>/sessions`, moved with the rest of Acpilot's state by `ACPILOT_HOME`.
+/// A named profile uses its own data directory through [`transcript_dir_for`].
 #[must_use]
 pub fn transcript_dir() -> std::path::PathBuf {
-    acpilot_profile::data_dir().join("transcripts")
+    acpilot_profile::data_dir().join("sessions")
+}
+
+/// The transcript directory for `profile`, or the shared one when it has none.
+fn transcript_dir_for(profile: Option<&std::path::Path>) -> std::path::PathBuf {
+    profile
+        .and_then(|directory| acpilot_profile::Profile::open(directory).ok())
+        .map_or_else(transcript_dir, |profile| profile.sessions_dir())
 }
 
 /// The root a daemon was started against, resolved and named once.
@@ -660,7 +1338,11 @@ pub fn workspace_at(root: &std::path::Path) -> Result<Workspace, StateError> {
         .file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| "workspace".to_owned(), str::to_owned);
-    Ok(Workspace { id, root })
+    Ok(Workspace {
+        id,
+        profile: String::new(),
+        root,
+    })
 }
 
 /// The profile's agents, when it has an `agents.toml`.
@@ -691,22 +1373,12 @@ fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry
 
 /// One agent as the API reports it.
 ///
-/// Availability is a `PATH` lookup on the host the daemon runs on (see
-/// [`availability`]). Nothing is spawned, so listing agents cannot start one; a
+/// Availability is a `PATH` lookup on the host the daemon runs on, and the pin a
+/// person recorded decides whether a binary that changed is `untrusted` (see
+/// [`trust`]). Nothing is spawned, so listing agents cannot start one; a
 /// handshake-dependent status is reported by the session routes, not here.
-fn summarize(spec: &AgentSpec) -> AgentSummary {
-    AgentSummary {
-        id: spec.id.clone(),
-        name: spec.name.clone(),
-        transport: spec.transport_kind(),
-        status: availability(spec),
-        // An HTTP agent has no command; the empty string is the honest answer
-        // rather than a URL in a field that means "what will be spawned".
-        command: spec
-            .command()
-            .map_or_else(String::new, acpilot_agent::CommandSpec::command_line),
-        protocol_version: None,
-    }
+fn summarize(spec: &AgentSpec, pins: &HashMap<String, String>) -> AgentSummary {
+    trust::summary(spec, pins.get(&spec.id).map(String::as_str))
 }
 
 /// `GET /v1/agents`.
@@ -714,11 +1386,12 @@ fn summarize(spec: &AgentSpec) -> AgentSummary {
 /// An empty list means the daemon has no registry loaded; there is no profile to
 /// answer 404 for yet.
 async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
+    let pins = trust::pins(&state);
     let summaries = state.agents.as_ref().map_or_else(Vec::new, |registry| {
         registry
             .agents()
             .iter()
-            .map(|spec| summarize(spec))
+            .map(|spec| summarize(spec, &pins))
             .collect()
     });
     Json(summaries)
@@ -798,13 +1471,34 @@ async fn events(State(state): State<AppState>) -> Response {
     // Subscribed before the current answer is read, so a save landing between the
     // two is announced rather than silently skipped.
     let preferences = state.subscribe_preferences();
+    let preference_errors = state.subscribe_preference_errors();
     if let Some(current) = state.preferences() {
         // The channel is fresh, so this cannot fail; if it somehow did, the pump
         // below is the next thing to notice.
         let _ = sender.send(prefs_frame(None, &current)).await;
     }
+    // Then what the servers already said, so a client that connects after a publish is
+    // not drawing an empty gutter until it asks: the frames are state as well as
+    // events. They have no id, like the preferences frame — they are the answer to a
+    // question rather than a change.
+    for notice in state.diagnostics_snapshot() {
+        let _ = sender.send(diagnostics_frame(None, &notice)).await;
+    }
     let requests = state.broker.as_ref().map(|broker| broker.subscribe());
-    tokio::spawn(pump(state, requests, preferences, sender));
+    let resolved = state
+        .broker
+        .as_ref()
+        .map(|broker| broker.subscribe_resolved());
+    let diagnostics = state.subscribe_diagnostics();
+    tokio::spawn(pump(
+        state,
+        requests,
+        resolved,
+        preferences,
+        preference_errors,
+        diagnostics,
+        sender,
+    ));
     Sse::new(futures::stream::unfold(
         receiver,
         |mut receiver| async move {
@@ -830,14 +1524,35 @@ fn prefs_frame(id: Option<u64>, preferences: &Preferences) -> Event {
     frame.data(serde_json::json!({ "preferences": preferences }).to_string())
 }
 
+/// One `diagnostics` frame: problems a server published about a file nobody asked
+/// about.
+///
+/// `id` is the frame's place in the stream for the same reason [`prefs_frame`] carries
+/// one: `Last-Event-ID` and a `resync` name a frame, and a client that reconnects has
+/// something to say about where it was. Nothing is replayed — the frame is an event,
+/// and a client that missed it asks about the file it opens.
+fn diagnostics_frame(id: Option<u64>, notice: &acpilot_proto::file::DiagnosticsNotice) -> Event {
+    let mut frame = Event::default().event("diagnostics");
+    if let Some(id) = id {
+        frame = frame.id(id.to_string());
+    }
+    frame.data(serde_json::json!({ "diagnostics": notice }).to_string())
+}
+
 /// What the pump has to say next.
 enum Step {
     /// Time to prove the connection is still there.
     Beat,
     /// The broker announced something, or the subscription ended.
     Permission(Result<PermissionRequest, broadcast::error::RecvError>),
+    /// Somebody answered a request, or that subscription ended.
+    Resolved(Result<(String, PermissionOption), broadcast::error::RecvError>),
     /// The settings settled, or that subscription ended.
     Preferences(Result<Preferences, broadcast::error::RecvError>),
+    /// A settings save could not be read, or that subscription ended.
+    PreferenceError(Result<String, broadcast::error::RecvError>),
+    /// A language server published problems, or that subscription ended.
+    Diagnostics(Result<acpilot_proto::file::DiagnosticsNotice, broadcast::error::RecvError>),
 }
 
 /// Turn announcements and a clock into SSE frames.
@@ -851,7 +1566,10 @@ enum Step {
 async fn pump(
     state: AppState,
     mut requests: Option<broadcast::Receiver<PermissionRequest>>,
+    mut resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
     mut preferences: broadcast::Receiver<Preferences>,
+    mut preference_errors: broadcast::Receiver<String>,
+    mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
     sender: mpsc::Sender<Event>,
 ) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
@@ -873,10 +1591,25 @@ async fn pump(
             }
         };
 
+        let answered = async {
+            match resolved.as_mut() {
+                Some(resolved) => resolved.recv().await,
+                None => {
+                    std::future::pending::<
+                        Result<(String, PermissionOption), broadcast::error::RecvError>,
+                    >()
+                    .await
+                }
+            }
+        };
+
         let step = tokio::select! {
             _ = beat.tick() => Step::Beat,
             preferences = preferences.recv() => Step::Preferences(preferences),
+            error = preference_errors.recv() => Step::PreferenceError(error),
             requests = announced => Step::Permission(requests),
+            answers = answered => Step::Resolved(answers),
+            published = diagnostics.recv() => Step::Diagnostics(published),
         };
 
         let frame = match step {
@@ -896,11 +1629,45 @@ async fn pump(
                 seq += 1;
                 prefs_frame(Some(seq), &preferences)
             }
+            Step::PreferenceError(Ok(message)) => {
+                seq += 1;
+                Event::default()
+                    .event("prefs_error")
+                    .id(seq.to_string())
+                    .data(serde_json::json!({ "message": message }).to_string())
+            }
+            // The request is gone from the pending list by now, so the frame names
+            // it rather than carrying it: a client closes the dialog it is showing
+            // for that id, and one that was not showing it needs nothing.
+            Step::Resolved(Ok((request_id, option))) => {
+                seq += 1;
+                Event::default()
+                    .event("permission")
+                    .id(seq.to_string())
+                    .data(
+                        serde_json::json!({
+                            "type": "resolved",
+                            "request_id": request_id,
+                            "option": option,
+                        })
+                        .to_string(),
+                    )
+            }
+            Step::Resolved(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+            Step::Diagnostics(Ok(notice)) => {
+                seq += 1;
+                diagnostics_frame(Some(seq), &notice)
+            }
             // The client fell behind the announcement channel. It cannot catch up
             // from the stream, so it is told where it now is and refetches what is
             // state: the pending list, and — for preferences, which this daemon can
             // answer directly — the current preferences.
             Step::Permission(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
+            Step::PreferenceError(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
                 .event("resync")
                 .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Preferences(Err(broadcast::error::RecvError::Lagged(_))) => {
@@ -914,8 +1681,16 @@ async fn pump(
                         .data(serde_json::json!({ "latest_seq": seq }).to_string()),
                 }
             }
+            // A lagged diagnostics receiver is the same situation the permission half
+            // handles: the frame is gone, and the client asks about the file it opens.
+            Step::Diagnostics(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             Step::Permission(Err(broadcast::error::RecvError::Closed))
-            | Step::Preferences(Err(broadcast::error::RecvError::Closed)) => break,
+            | Step::Resolved(Err(broadcast::error::RecvError::Closed))
+            | Step::Preferences(Err(broadcast::error::RecvError::Closed))
+            | Step::PreferenceError(Err(broadcast::error::RecvError::Closed))
+            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -1014,7 +1789,22 @@ fn option_str(option: PermissionOption) -> &'static str {
 }
 
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(openapi_document())
+}
+
+/// The document `/v1/openapi.json` serves, and the one the web client's
+/// TypeScript is generated from.
+///
+/// Public because the generated client must be generated from the *served*
+/// document: the schemas come from `acpilot-proto`, but the paths are inserted
+/// here, one per module, so a document assembled anywhere else would be the
+/// components without a single operation in them.
+pub fn openapi_document() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
+    // Trust is a route of its own module: what a pin is and where it lives is
+    // documented there, and the document only needs the operation.
+    trust::register(&mut document);
+    profiles::register(&mut document);
     let paths = &mut document.paths.paths;
     paths.insert(
         "/v1/agents".to_owned(),
@@ -1044,12 +1834,24 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             <__path_events_doc as utoipa::Path>::operation(),
         ),
     );
+    // The language servers are the daemon's own processes, so the route is the
+    // registry's report rather than a module's: one row per language, running or not.
+    paths.insert(
+        "/v1/lsp/servers".to_owned(),
+        utoipa::openapi::path::PathItem::new(
+            utoipa::openapi::path::HttpMethod::Get,
+            <__path_lsp_servers_doc as utoipa::Path>::operation(),
+        ),
+    );
     // Sessions, terminals and files add several methods per path, so they append
     // rather than overwrite.
     let module_operations = sessions::operations()
         .into_iter()
         .chain(terminals::operations())
         .chain(files::operations())
+        .chain(git::operations())
+        .chain(commit::operations())
+        .chain(project::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
@@ -1061,7 +1863,7 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
             _ => {}
         }
     }
-    Json(document)
+    document
 }
 
 /// OpenAPI registration for the pending list.
@@ -1088,10 +1890,10 @@ fn permissions_doc() {}
     get,
     path = "/v1/events",
     tag = "events",
-    summary = "Follow permission requests and settings changes",
+    summary = "Follow permission requests, settings changes and problems a server found",
     responses((
         status = 200,
-        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}
@@ -1114,18 +1916,68 @@ fn events_doc() {}
 )]
 fn resolve_doc() {}
 
-/// The web shell: a page that says which build is answering, and can leave.
+/// What the page may load, and what may be done to it.
+///
+/// `default-src 'none'` is the starting point, and every entry after it is a
+/// permission the one-file bundle needs: its script and its stylesheet are inline
+/// (there is no second asset to name), and its requests are same-origin (the API,
+/// the two streams and the terminal socket). `frame-ancestors 'none'` matters
+/// most: a page that can be framed is a page whose token field can be clickjacked
+/// out of a person, and `/` is unauthenticated precisely so it can be typed. The
+/// policy is on the HTML only — JSON needs none of this, and a CSP on a stream
+/// says nothing about a stream.
+const PAGE_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; \
+                       style-src 'unsafe-inline'; img-src 'self' data:; \
+                       font-src 'self'; connect-src 'self'; base-uri 'none'; \
+                       form-action 'none'; frame-ancestors 'none'";
+
+/// The web app: the SPA at the daemon's root, and again at `/app`.
+///
+/// `/` is the entry point a person types. `/app` stays because it is where the
+/// page has been published — in the docs, in links from a terminal, and in the
+/// paths the page itself asks for (`/app/stats`, `/app/palette/events`). Two
+/// spellings of one page, not two pages: the handler and the headers are the same
+/// function, so they cannot disagree.
 ///
 /// Served without a token, like `/docs`, because a browser cannot attach a header
 /// to a typed address — and this page holds no data at all: one HTML file, the
 /// version, and two buttons. What it proves is that the daemon can be reached from
 /// a browser at all, which is the first question when the web UI is the one that
 /// is misbehaving. The editor, transcript and terminal are the web phase's (P11).
-async fn web_app(State(state): State<AppState>) -> Html<String> {
-    Html(match state.web_palette() {
+async fn web_app(State(state): State<AppState>) -> Response {
+    let html = match state.web_palette() {
         Some(theme) => acpilot_web::themed_page(acpilot_core::VERSION, &theme),
         None => acpilot_web::page(acpilot_core::VERSION),
-    })
+    };
+    page_response(html)
+}
+
+/// The page with the headers it is served under.
+///
+/// One function so a second page route cannot be added with the policy missing.
+/// `no-referrer` is the second half of the token story: the page holds the secret
+/// in session storage, and any outbound link must not be able to learn which
+/// daemon address it was read on.
+fn page_response(html: String) -> Response {
+    let mut response = Html(html).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(PAGE_CSP),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    response
 }
 
 /// The web page's colours, as they change.
@@ -1301,6 +2153,64 @@ async fn docs() -> Html<&'static str> {
     )
 }
 
+/// `GET /v1/lsp/servers`.
+///
+/// One row per language this build can start, not one per server that happens to be
+/// running: a language with no session is the row that explains why a caret's
+/// question was answered by the parse tree, and a list of only the running ones could
+/// not. Running or stopped, the encoding and the last round trip are here because the
+/// alternative is a client remembering what the daemon did — and a second client
+/// remembering it differently.
+async fn lsp_servers(
+    State(state): State<AppState>,
+) -> Json<Vec<acpilot_proto::lsp::LspServerSummary>> {
+    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
+
+    let rows = state
+        .language_servers()
+        .status()
+        .await
+        .into_iter()
+        .map(|server| LspServerSummary {
+            id: server.program.to_owned(),
+            languages: vec![server.language.to_owned()],
+            command: server.program.to_owned(),
+            status: if server.running.is_some() {
+                LspServerStatus::Ready
+            } else {
+                LspServerStatus::Stopped
+            },
+            encoding: server
+                .running
+                .as_ref()
+                .map(|running| match running.encoding {
+                    acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
+                    acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
+                }),
+            // Milliseconds, because a round trip is a number a person compares with
+            // a keystroke and not with a clock.
+            round_trip_ms: server
+                .running
+                .and_then(|running| running.round_trip)
+                .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
+        })
+        .collect();
+    Json(rows)
+}
+
+/// The `GET /v1/lsp/servers` operation, for the OpenAPI document.
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    path = "/v1/lsp/servers",
+    tag = "lsp",
+    summary = "What the language servers are doing",
+    responses(
+        (status = 200, description = "One row per language this build can start: running or stopped, the encoding it negotiated, and the last references round trip", body = Vec<acpilot_proto::lsp::LspServerSummary>)
+    )
+)]
+fn lsp_servers_doc() {}
+
 /// Build the HTTP router with no profile loaded.
 ///
 /// Kept separate from `main` so tests can exercise routes without binding a port.
@@ -1313,25 +2223,59 @@ pub fn router() -> Router {
 /// The daemon's `main` calls [`router`] today because profile resolution is not
 /// built; a caller that has loaded a profile passes it here.
 pub fn router_with(state: AppState) -> Router {
+    // Read before `with_state` moves it: the layer decision is made once, when the
+    // router is built, rather than per request.
+    let cors = state.cors();
     let app = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/agents", get(agents))
+        .merge(trust::routes())
         .route("/v1/permissions", get(permissions))
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
+        .route("/v1/lsp/servers", get(lsp_servers))
         .route("/v1/openapi.json", get(openapi))
+        .route("/", get(web_app))
         .route("/app", get(web_app))
+        // The addresses the page writes into the location bar. A reload of a
+        // shared link is a page request, so the daemon has to answer with the
+        // page here too — otherwise every deep link is a 404 one refresh later.
+        .route("/p/{profile}/w/{workspace}", get(web_app))
+        .route("/p/{profile}/s/{session}", get(web_app))
         .route("/app/palette/events", get(web_palette_events))
         .merge(files::routes())
+        .merge(git::routes())
+        .merge(commit::routes())
+        .merge(hosts::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
+        .merge(project::routes())
         .merge(terminals::routes())
+        .merge(workspaces::routes())
         .with_state(state);
 
     #[cfg(feature = "docs")]
     let app = app.route("/docs", get(docs));
 
-    app
+    // One span per request, from the method to the status: a slow route is visible
+    // in the log without a line in every handler.
+    let app = app.layer(TraceLayer::new_for_http());
+    // Compression for the JSON, never for the event streams. A compressed
+    // `text/event-stream` is held until the compressor has enough bytes, which for a
+    // transcript means a stream that arrives in bursts; `SizeAbove` leaves the small
+    // answers alone, where the framing costs more than the body.
+    let app = app.layer(
+        CompressionLayer::new().compress_when(
+            DefaultPredicate::new()
+                .and(NotForContentType::new("text/event-stream"))
+                .and(SizeAbove::new(1024)),
+        ),
+    );
+    if cors {
+        app.layer(CorsLayer::permissive())
+    } else {
+        app
+    }
 }
 
 #[cfg(test)]
@@ -1349,6 +2293,7 @@ mod tests {
 
         let state = AppState::new().with_workspace(Workspace {
             id: "thing".to_owned(),
+            profile: String::new(),
             root: directory.path().to_path_buf(),
         });
         let theme = state.web_palette().expect("a theme is named");
@@ -1375,6 +2320,24 @@ mod tests {
     #[test]
     fn a_daemon_with_no_workspace_serves_the_pages_own_palette() {
         assert!(AppState::new().web_palette().is_none());
+    }
+
+    #[test]
+    fn a_lazy_store_is_not_opened_until_a_route_asks() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("profile.sqlite");
+        let stores = Arc::new(Stores::default());
+        let state = AppState::new().with_lazy_store(Arc::clone(&stores), &path);
+
+        assert!(
+            !path.exists(),
+            "building a profile state creates no database"
+        );
+        assert!(stores.is_empty(), "and opens none in the shared cache");
+
+        assert!(state.store().is_some(), "the first request opens it");
+        assert!(path.exists(), "the database appears when it is needed");
+        assert_eq!(stores.len(), 1);
     }
 
     #[test]

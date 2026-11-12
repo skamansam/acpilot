@@ -22,8 +22,11 @@
 //!   the editor's, and while one is up every key is text: a find box that let `j`
 //!   through would move the caret out from under the query being typed.
 //!
-//! Insert mode, saving through the daemon and the diff review are P6-5, P7-10 and
-//! P6-9; the pane is read-only until then, and says so rather than pretending.
+//! Insert mode is the first half of P6-5 and saving through the daemon is P7-10:
+//! the buffer can be typed into and undone in this build, and a save is a notice
+//! that names the task which would write it. The pane says which mode it is in,
+//! because a keyboard that silently stopped typing is indistinguishable from one
+//! that broke.
 
 use acpilot_demo::EditorBuffer;
 use acpilot_git::{LineChange, LineChanges};
@@ -32,10 +35,44 @@ use acpilot_git::{LineChange, LineChanges};
 // to. `acpilot-extensions` re-exports the palette's, so this is the same type
 // `Highlights` answers with.
 use acpilot_extensions::theme::SyntaxToken;
+use acpilot_text::buffer::Buffer;
+use acpilot_text::edit::{Edit, IndentMode, IndentStyle};
 use acpilot_text::highlight::{Grammars, Highlights, Span};
-use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, column_at, parse_position};
+use acpilot_text::pane::{Cell, Find, Hit, Row, Viewport, bracket_at, parse_position};
 use acpilot_text::{Document, LineColumn, Selection, Selections};
 use std::ops::Range;
+use std::time::Instant;
+
+/// Which mode the pane's keys are in.
+///
+/// Three, because one is not enough: a pane that is always insert cannot move with
+/// `hjkl`, a pane that is always normal cannot be typed into, and a pane with no
+/// visual mode cannot say which run a command is about. Which spelling the
+/// commands take — Vim's, or a modeless editor's — is the keymap layer's question,
+/// which is the half of P6-5 still open; what the pane knows is only that one
+/// mode's keys are text and the others' are commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Keys are commands: motion, search, and the way into the others.
+    #[default]
+    Normal,
+    /// Keys are text.
+    Insert,
+    /// Motions extend a selection instead of moving a bare caret.
+    Visual,
+}
+
+impl Mode {
+    /// What the status line and the pane's title call it.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Insert => "insert",
+            Self::Visual => "visual",
+        }
+    }
+}
 
 /// Which prompt is up, and what has been typed into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +81,8 @@ pub enum PromptKind {
     Find,
     /// `Ctrl-G` — a line and column, applied on Enter.
     Line,
+    /// `:` — an ex command, run by the app once Enter is pressed.
+    Command,
 }
 
 /// The one-line box the editor takes its next question in.
@@ -71,6 +110,8 @@ pub enum State {
     Bracket,
     /// Covered by a selection a drag made.
     Selected,
+    /// A column a ruler preference marks.
+    Ruler,
 }
 
 /// One run of characters painted the same way.
@@ -104,6 +145,11 @@ pub struct EditorPane {
     highlights: Option<Highlights>,
     viewport: Viewport,
     marks: LineChanges,
+    /// What a language server last said is wrong with this file.
+    ///
+    /// Beside the git marks rather than mixed into them: a change and a problem are
+    /// two facts about a line, and either can be true without the other.
+    problems: Vec<acpilot_proto::file::Diagnostic>,
     find: Find,
     prompt: Option<Prompt>,
     message: String,
@@ -115,6 +161,35 @@ pub struct EditorPane {
     /// lives in the document, where an edit would move it: the anchor is the one end
     /// that must not move, and the caret is the other.
     anchor: Option<usize>,
+    /// Which mode the keys are in.
+    mode: Mode,
+    /// Whether the pane is modal at all.
+    ///
+    /// `Mode` says which set of keys is live; this says whether there is another
+    /// set to move to. A modeless pane is always in [`Mode::Insert`], and `Esc`
+    /// clears a selection instead of taking the keys away from the text.
+    vim_mode: bool,
+    /// The column a run of Up and Down keeps trying to reach.
+    ///
+    /// A property of the key sequence rather than of the caret: Vim and every
+    /// pointer editor remember the column you were on so that a walk through a
+    /// short line does not put you at its end and leave you there. Cleared by any
+    /// horizontal motion or non-motion command, because the next vertical walk
+    /// starts from wherever that put the caret.
+    goal: Option<usize>,
+    /// A `:` command Enter accepted, waiting for the app to run it.
+    ///
+    /// The pane parses no commands and sends no requests: `:w` and `:q` are the
+    /// app's, because a save goes through the daemon and leaving is the loop's.
+    command: Option<String>,
+    /// The token the file was read with, so a save can say which version it replaces.
+    ///
+    /// Absent for a buffer that did not come from the daemon — the design pass's seed,
+    /// and a term where the file has been deleted underneath the pane — and a save of
+    /// one is refused rather than guessed at.
+    etag: Option<String>,
+    /// The editor preferences this pane applies.
+    preferences: acpilot_proto::profile::Preferences,
 }
 
 /// A pane's debug shape: the file, the caret and the window.
@@ -145,27 +220,45 @@ impl EditorPane {
     /// the buffer's opinion about itself.
     #[must_use]
     pub fn seeded(seed: &EditorBuffer, marks: LineChanges, grammars: &mut Grammars) -> Self {
-        let text: Vec<&str> = seed.lines.iter().map(String::as_str).collect();
-        let document = Document::from_bytes(text.join("\n").as_bytes())
-            .expect("the seeded buffer is text the demo wrote");
-        let highlights = grammars.get(&seed.language).map(Highlights::new);
-        let caret = LineColumn::new(seed.cursor.0, seed.cursor.1);
+        let mut pane = Self::from_text(&seed.path, &seed.lines.join("\n"), marks, grammars);
+        let at = pane.offset(LineColumn::new(seed.cursor.0, seed.cursor.1));
+        pane.document.set_caret(at);
+        pane.settle();
+        pane
+    }
+
+    /// A pane over a file the daemon sent, with the caret at its start.
+    ///
+    /// The language is read off the path, so the caller does not have to know which
+    /// grammar a file wants: an extension this build ships no grammar for draws
+    /// plain text rather than refusing the file, which is the same answer the
+    /// highlighter already gives for an unknown language.
+    #[must_use]
+    pub fn from_text(path: &str, text: &str, marks: LineChanges, grammars: &mut Grammars) -> Self {
+        let language = language_for(path).to_owned();
+        let highlights = grammars.get(&language).map(Highlights::new);
         let mut pane = Self {
-            path: seed.path.clone(),
-            language: seed.language.clone(),
-            document,
+            path: path.to_owned(),
+            language,
+            document: Document::new(Buffer::from_text(text)),
             highlights,
             viewport: Viewport::new(0, 0),
+            preferences: acpilot_profile::prefs::defaults().expect("the shipped defaults load"),
             marks,
+            problems: Vec::new(),
             find: Find::new(),
             prompt: None,
             message: String::new(),
             rows: Vec::new(),
             bracket: None,
             anchor: None,
+            mode: Mode::Normal,
+            vim_mode: true,
+            goal: None,
+            command: None,
+            etag: None,
         };
-        let at = pane.offset(caret);
-        pane.document.set_caret(at);
+        pane.document.set_caret(0);
         pane.settle();
         pane
     }
@@ -174,6 +267,68 @@ impl EditorPane {
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// The token this buffer was read with, for the save that replaces it.
+    #[must_use]
+    pub fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
+
+    /// Remember the version the buffer now matches.
+    ///
+    /// Called when a file is opened and again after a save answers with the new
+    /// token: the next save has to name the version it is replacing, and the one the
+    /// read returned is no longer it.
+    pub fn set_etag(&mut self, etag: impl Into<String>) {
+        self.etag = Some(etag.into());
+    }
+
+    /// Forget the undo history: the buffer and the file agree again.
+    pub fn mark_saved(&mut self) {
+        self.document.mark_saved();
+        self.message = "saved".to_owned();
+    }
+
+    /// Replace the gutter's marks, for a diff that changed under the pane.
+    pub fn set_marks(&mut self, marks: LineChanges) {
+        self.marks = marks;
+        self.rebuild();
+    }
+
+    /// Replace what the language server says about this file.
+    ///
+    /// No rebuild: problems are gutter letters and a status line, neither of which is
+    /// measured into a row, so a frame that repaints is all a fresh answer needs.
+    pub fn set_problems(&mut self, problems: Vec<acpilot_proto::file::Diagnostic>) {
+        self.problems = problems;
+    }
+
+    /// What a language server said about the file, as the status line counts it.
+    #[must_use]
+    pub fn problems(&self) -> &[acpilot_proto::file::Diagnostic] {
+        &self.problems
+    }
+
+    /// The worst problem on a line, as the gutter's letter.
+    ///
+    /// One cell, so one letter — `E`, `W`, `I`, `H` — and the worst problem wins,
+    /// because a line with an error and a hint is a line with an error.
+    #[must_use]
+    pub fn problem(&self, line: usize) -> Option<char> {
+        let number = u32::try_from(line + 1).ok()?;
+        let floor = rank(self.preferences.diagnostics_min_severity);
+        self.problems
+            .iter()
+            .filter(|problem| problem.line == number && rank(problem.severity) <= floor)
+            .map(|problem| rank(problem.severity))
+            .min()
+            .map(|rank| match rank {
+                0 => 'E',
+                1 => 'W',
+                2 => 'I',
+                _ => 'H',
+            })
     }
 
     /// The tab's label: the file's own name.
@@ -244,6 +399,54 @@ impl EditorPane {
     #[must_use]
     pub fn cursor(&self) -> Option<(usize, usize)> {
         self.viewport.caret(self.document.buffer(), self.caret())
+    }
+
+    /// Apply the editor preferences a launch or a `prefs` frame resolved.
+    ///
+    /// A width change re-measures the rows, because a tab is a number of cells
+    /// rather than a character: the same text occupies a different window.
+    pub fn set_preferences(&mut self, preferences: &acpilot_proto::profile::Preferences) {
+        let width = usize::from(preferences.tab_width.max(1));
+        let changed = width != self.viewport.tab_width()
+            || preferences.wrap != self.viewport.wrap()
+            || preferences.rulers != self.preferences.rulers;
+        if width != self.viewport.tab_width() {
+            self.viewport = self.viewport.with_tab_width(width);
+        }
+        if preferences.wrap != self.viewport.wrap() {
+            self.viewport = self.viewport.with_wrap(preferences.wrap);
+        }
+        self.preferences = preferences.clone();
+        if changed {
+            self.rebuild();
+        }
+    }
+
+    /// Replace the whole buffer as one undo step, keeping the pane's other state.
+    ///
+    /// Used by a save-time rewrite (trailing whitespace): the person can still undo
+    /// it, and the buffer the daemon writes is the buffer on screen.
+    pub fn replace_all(&mut self, text: &str, now: Instant) -> bool {
+        let len = self.document.buffer().char_len();
+        let edited = self.document.apply_at(Edit::replace(0..len, text), now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Strip spaces and tabs at the end of every line, as one undo step.
+    ///
+    /// A save-time rule, not an editing one: a person watching the buffer change
+    /// under the caret before the write would be a surprise, so the caller asks
+    /// only when it is about to save.
+    pub fn trim_trailing_whitespace(&mut self, now: Instant) -> bool {
+        let text = self.document.text();
+        let trimmed = trim_lines(&text);
+        if trimmed == text {
+            return false;
+        }
+        self.replace_all(&trimmed, now)
     }
 
     /// The two matched brackets under the caret, when there is a pair.
@@ -320,23 +523,53 @@ impl EditorPane {
     }
 
     /// The caret's offset in the buffer.
-    fn caret_offset(&self) -> usize {
+    ///
+    /// The pane moves by line and column, and a search that reads the text as one
+    /// string needs the offset instead: asking for both is what keeps the references
+    /// search from counting the newlines itself.
+    #[must_use]
+    pub fn caret_offset(&self) -> usize {
         self.document.selections().primary().head.at
     }
 
     /// Move the caret, clamped to the text, and scroll the least that shows it.
     ///
     /// A column past the end of the line lands at the line's end: arrows in a
-    /// terminal editor move the caret, they do not add spaces. There is no goal
-    /// column here either — remembering one across a run of Up and Down is a
-    /// property of the key sequence (P6-5), not of the caret.
+    /// terminal editor move the caret, they do not add spaces. A vertical move
+    /// remembers the column it started from, so walking through a short line and
+    /// back out returns to the column the walk began on instead of the short
+    /// line's end; a horizontal move forgets it.
     pub fn move_caret(&mut self, rows: i32, cols: i32) {
+        let goal = self.goal_for(rows, cols);
+        let at = self.moved(rows, cols, goal);
+        self.place(at);
+    }
+
+    /// The column a vertical move is trying to keep, and whether it is a vertical
+    /// move at all.
+    fn goal_for(&mut self, rows: i32, cols: i32) -> Option<usize> {
+        if rows != 0 && cols == 0 {
+            let column = self.caret().column;
+            Some(*self.goal.get_or_insert(column))
+        } else {
+            self.goal = None;
+            None
+        }
+    }
+
+    /// Where a motion lands, with a vertical move clamped to the target line.
+    fn moved(&self, rows: i32, cols: i32, goal: Option<usize>) -> LineColumn {
         let caret = self.caret();
         let lines = self.document.buffer().line_count();
         let line = step(caret.line, rows).min(lines.saturating_sub(1));
         let width = self.document.buffer().line_range(line).len();
-        let column = step(caret.column, cols).min(width);
-        self.place(LineColumn::new(line, column));
+        let column = if rows != 0 && cols == 0 {
+            goal.unwrap_or(caret.column)
+        } else {
+            step(caret.column, cols)
+        }
+        .min(width);
+        LineColumn::new(line, column)
     }
 
     /// Move a page at a time, keeping the caret's row on screen.
@@ -376,10 +609,36 @@ impl EditorPane {
         if self.prompt.is_some() {
             return;
         }
+        if self.mode == Mode::Visual {
+            self.mode = Mode::Normal;
+        }
+        self.goal = None;
         let at = self.offset_at(row, cell);
         self.anchor = Some(at);
         self.document
             .set_selections(Selections::new(vec![Selection::new(at, at)], 0));
+        self.rebuild();
+        self.message.clear();
+    }
+
+    /// Extend a selection to a Shift-click, anchoring it at the caret when there is
+    /// no selection yet.
+    ///
+    /// The anchor is the existing selection's start rather than its moving end, so
+    /// several Shift-clicks grow one run instead of restarting from where the last
+    /// one stopped.
+    pub fn extend_click(&mut self, row: usize, cell: usize) {
+        if self.prompt.is_some() {
+            return;
+        }
+        let anchor = self
+            .anchor
+            .or_else(|| self.selection().map(|range| range.start))
+            .unwrap_or_else(|| self.caret_offset());
+        let at = self.offset_at(row, cell);
+        self.anchor = Some(anchor);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, at)], 0));
         self.rebuild();
         self.message.clear();
     }
@@ -453,11 +712,90 @@ impl EditorPane {
         let text = self.document.buffer().slice(range);
         let lines = self.selected_lines();
         self.anchor = None;
+        self.goal = None;
+        if self.mode == Mode::Visual {
+            self.mode = Mode::Normal;
+        }
         let head = self.caret_offset();
         self.document.set_caret(head);
         self.rebuild();
         self.message = format!("copied {lines} line(s)");
         Some(text)
+    }
+
+    /// Enter visual mode, or leave it when it is already on.
+    ///
+    /// The anchor is the caret, so the first motion selects from where the person
+    /// was standing rather than from the start of the line.
+    pub fn toggle_visual(&mut self) {
+        if self.mode == Mode::Visual {
+            self.leave_visual();
+            return;
+        }
+        self.anchor = Some(self.caret_offset());
+        self.mode = Mode::Visual;
+        self.message = "visual · motions extend · y copies · d deletes".to_owned();
+    }
+
+    /// Leave visual mode, collapsing the selection at its moving end.
+    pub fn leave_visual(&mut self) {
+        self.anchor = None;
+        self.goal = None;
+        let head = self.caret_offset();
+        self.document.set_caret(head);
+        self.mode = Mode::Normal;
+        self.rebuild();
+        self.message = "normal".to_owned();
+    }
+
+    /// Move the caret in visual mode, growing the selection from the anchor.
+    pub fn extend_caret(&mut self, rows: i32, cols: i32) {
+        let anchor = self.anchor.unwrap_or_else(|| self.caret_offset());
+        let goal = self.goal_for(rows, cols);
+        let head = self.offset(self.moved(rows, cols, goal));
+        self.anchor = Some(anchor);
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, head)], 0));
+        self.rebuild();
+        self.message = format!("{} line(s) selected", self.selected_lines());
+    }
+
+    /// Extend the selection a page at a time.
+    pub fn extend_page(&mut self, down: bool) {
+        let rows = i32::try_from(self.viewport.rows().saturating_sub(1)).unwrap_or(i32::MAX);
+        self.extend_caret(if down { rows } else { -rows }, 0);
+    }
+
+    /// Extend the selection to the start or end of the caret's line.
+    pub fn extend_line_edge(&mut self, end: bool) {
+        let anchor = self.anchor.unwrap_or_else(|| self.caret_offset());
+        let caret = self.caret();
+        let width = self.document.buffer().line_range(caret.line).len();
+        let head = self.offset(LineColumn::new(caret.line, if end { width } else { 0 }));
+        self.anchor = Some(anchor);
+        self.goal = None;
+        self.document
+            .set_selections(Selections::new(vec![Selection::new(anchor, head)], 0));
+        self.rebuild();
+        self.message = format!("{} line(s) selected", self.selected_lines());
+    }
+
+    /// Delete what visual mode selected, in one undo step.
+    pub fn delete_selection(&mut self, now: Instant) -> bool {
+        if !self.has_selection() {
+            self.message = "nothing selected".to_owned();
+            return false;
+        }
+        let lines = self.selected_lines();
+        let edited = self.document.delete_forward(now);
+        if edited {
+            self.anchor = None;
+            self.goal = None;
+            self.mode = Mode::Normal;
+            self.settle();
+            self.message = format!("deleted {lines} line(s)");
+        }
+        edited
     }
 
     /// The character offset a pane cell names.
@@ -466,29 +804,192 @@ impl EditorPane {
     /// counted from the top of the window, and the cell from the left of the text
     /// (the horizontal scroll is the viewport's, not the pane's).
     fn offset_at(&self, row: usize, cell: usize) -> usize {
-        let lines = self.document.buffer().line_count();
-        let line = (self.viewport.top() + row).min(lines.saturating_sub(1));
-        let cell = self.viewport.left() + cell;
-        let column = column_at(
-            self.document.buffer(),
-            line,
-            cell,
-            self.viewport.tab_width(),
-        );
-        self.offset(LineColumn::new(line, column))
+        let position = self.viewport.position_at(self.document.buffer(), row, cell);
+        self.offset(position)
+    }
+
+    /// Which mode the keys are in.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Whether the pane is modal.
+    #[must_use]
+    pub fn vim_mode(&self) -> bool {
+        self.vim_mode
+    }
+
+    /// Put the pane in the editing model the keymap preset names.
+    ///
+    /// The mode is the pane's, but whether there is a normal mode at all is the
+    /// preset's: a buffer opened under `vscode` starts typing immediately, and a
+    /// buffer opened under `vim` starts with commands. Called when the keymap is
+    /// read and when a file opens, so the two cannot disagree about the model.
+    pub fn set_vim_mode(&mut self, vim: bool) {
+        self.vim_mode = vim;
+        if vim {
+            if self.mode == Mode::Visual {
+                self.leave_visual();
+            }
+            self.set_mode(Mode::Normal);
+        } else {
+            if self.mode == Mode::Visual {
+                self.leave_visual();
+            }
+            self.clear_selection();
+            self.set_mode(Mode::Insert);
+            self.message = "insert · vim mode is off".to_owned();
+        }
+    }
+
+    /// The Esc key: leave a visual run, or leave the keys to the text when this
+    /// pane is modeless.
+    pub fn escape(&mut self) {
+        if self.vim_mode {
+            self.set_mode(Mode::Normal);
+        } else {
+            self.clear_selection();
+        }
+    }
+
+    /// Change mode, and say so.
+    ///
+    /// Said out loud because the two modes take the same keys differently, and a
+    /// mode change nobody noticed is a pane whose keyboard appears to have stopped
+    /// working: the status line says `insert`, and so does the pane's title.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.message = match mode {
+            Mode::Insert => "insert · Esc leaves".to_owned(),
+            Mode::Normal => "normal".to_owned(),
+            Mode::Visual => "visual · motions extend".to_owned(),
+        };
+    }
+
+    /// Type text at the caret, replacing whatever is selected.
+    ///
+    /// The one path every inserted character takes, so the parse and the caret are
+    /// brought up to date in one place — an edit that did not settle would paint
+    /// yesterday's colours over today's text.
+    pub fn type_text(&mut self, text: &str, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.insert(text, now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Take the character before the caret out, or the selection covering it.
+    pub fn backspace(&mut self, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.delete_backward(now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Take the character after the caret out — `Delete`, and `x` in normal mode.
+    pub fn delete_forward(&mut self, now: Instant) -> bool {
+        self.anchor = None;
+        let edited = self.document.delete_forward(now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Indent the lines the selection touches, or the caret's line.
+    ///
+    /// The style is the caller's, not a setting read here: the tab width and the
+    /// spaces-or-tabs answer come from the settings cascade (P4-7), and a pane that
+    /// read a config file would be a pane the browser cannot use.
+    pub fn indent(&mut self, mode: IndentMode, style: IndentStyle, now: Instant) -> bool {
+        let edited = self.document.indent(mode, style, now);
+        if edited {
+            self.settle();
+        }
+        edited
+    }
+
+    /// Put an empty line below the caret's, and leave the caret on it in insert
+    /// mode — the whole of what `o` means.
+    pub fn open_line_below(&mut self, now: Instant) {
+        self.line_edge(true);
+        if self.document.insert("\n", now) {
+            self.settle();
+        }
+        self.set_mode(Mode::Insert);
+    }
+
+    /// Put an empty line above the caret's, and leave the caret on *it*: the
+    /// newline lands at the line's start, which pushes the old line down, so the
+    /// caret has to walk back up one to be on the new one.
+    pub fn open_line_above(&mut self, now: Instant) {
+        self.line_edge(false);
+        if self.document.insert("\n", now) {
+            self.move_caret(-1, 0);
+            self.settle();
+        }
+        self.set_mode(Mode::Insert);
+    }
+
+    /// Take the last step back.
+    ///
+    /// A motion collapses a selection on the way, the same as any other motion: an
+    /// undo that left a highlight behind would be a pane still asking a question
+    /// about text that is no longer there.
+    pub fn undo(&mut self) -> bool {
+        let undone = self.document.undo();
+        if undone {
+            self.anchor = None;
+            self.settle();
+            self.message = format!("undo · {} step(s) left", self.document.undo_depth());
+        }
+        undone
+    }
+
+    /// Put the last undone step back.
+    pub fn redo(&mut self) -> bool {
+        let redone = self.document.redo();
+        if redone {
+            self.anchor = None;
+            self.settle();
+            self.message = "redo".to_owned();
+        }
+        redone
+    }
+
+    /// Whether the buffer holds edits that are not in the file.
+    ///
+    /// Read off the history rather than kept as a flag: the history started empty
+    /// when the file was opened, so "there is a step to take back" is exactly "this
+    /// text is not the text that was opened" — including after undoing all the way
+    /// back to it, which a flag would get wrong.
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.document.can_undo()
     }
 
     /// Put the caret at the start or the end of its line.
     pub fn line_edge(&mut self, end: bool) {
         let caret = self.caret();
         let width = self.document.buffer().line_range(caret.line).len();
+        self.goal = None;
         self.place(LineColumn::new(caret.line, if end { width } else { 0 }));
     }
 
     /// Put the caret somewhere and show it.
     ///
-    /// A motion collapses a selection rather than extending it: dragging is how this
-    /// pane selects, and Shift-extension is the keymap layer's to add (P6-5).
+    /// A motion collapses a selection rather than extending it: a drag and visual
+    /// mode are how this pane selects, and a bare motion is how a selection is
+    /// abandoned. The goal column is the caller's, because a vertical move keeps it
+    /// across the `place` calls in a walk.
     fn place(&mut self, at: LineColumn) {
         let offset = self.offset(at);
         self.anchor = None;
@@ -505,10 +1006,36 @@ impl EditorPane {
         }
     }
 
+    /// Put the caret at the start of a line, counting from one.
+    ///
+    /// The answer a jump list gives: a row names a line, and the file arrives after
+    /// the row was chosen. A line past the end lands on the last one rather than
+    /// refusing — the file may have changed since the search read it, and the end of
+    /// it is a more useful place to be than nowhere.
+    pub fn goto_line(&mut self, line: u32) {
+        let last = self.document.buffer().line_count().saturating_sub(1);
+        let index = usize::try_from(line.saturating_sub(1))
+            .unwrap_or(usize::MAX)
+            .min(last);
+        self.place(LineColumn::new(index, 0));
+        self.message = format!("line {}", index + 1);
+    }
+
     /// Open the go-to-line box.
     pub fn go_to_line(&mut self) {
         self.open(PromptKind::Line, String::new());
         self.message = "line[:column]".to_owned();
+    }
+
+    /// Open the ex command box.
+    pub fn open_command(&mut self) {
+        self.open(PromptKind::Command, String::new());
+        self.message = ":".to_owned();
+    }
+
+    /// Take the command Enter accepted, if one is waiting for the app.
+    pub fn take_command(&mut self) -> Option<String> {
+        self.command.take()
     }
 
     /// Open a prompt, remembering where the caret was.
@@ -585,6 +1112,16 @@ impl EditorPane {
                     false
                 }
             },
+            PromptKind::Command => {
+                let text = prompt.text.trim().to_owned();
+                if text.is_empty() {
+                    self.message.clear();
+                } else {
+                    self.message = format!(":{text}");
+                    self.command = Some(text);
+                }
+                true
+            }
         }
     }
 
@@ -660,7 +1197,15 @@ impl EditorPane {
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &spans, bracket, find, selection.as_ref()),
+                runs: runs(
+                    row,
+                    &spans,
+                    bracket,
+                    find,
+                    selection.as_ref(),
+                    &self.preferences.rulers,
+                    self.viewport.tab_width(),
+                ),
                 width: row.width(),
             })
             .collect()
@@ -675,24 +1220,75 @@ impl EditorPane {
             .iter()
             .map(|row| PaintedRow {
                 line: row.line,
-                runs: runs(row, &[], bracket, find, selection.as_ref()),
+                runs: runs(
+                    row,
+                    &[],
+                    bracket,
+                    find,
+                    selection.as_ref(),
+                    &self.preferences.rulers,
+                    self.viewport.tab_width(),
+                ),
                 width: row.width(),
             })
             .collect()
     }
 }
 
+/// The language a path's extension names, as the grammar registry spells it.
+///
+/// The registry is the authority on which grammars exist, and it is in `acpilot-text`
+/// rather than here for the reason the grammars are: the daemon's references search
+/// reads the same table, and two copies would be two answers about what a `.rs` is. An
+/// unknown suffix is `""`, which [`Grammars::get`] answers with `None`.
+#[must_use]
+pub fn language_for(path: &str) -> &'static str {
+    acpilot_text::language_for(path)
+}
+
 /// One row's cells, joined into runs of one token and one state.
+/// How bad a severity is, as a number a gutter can take the smallest of.
+fn rank(severity: acpilot_proto::file::DiagnosticSeverity) -> u8 {
+    use acpilot_proto::file::DiagnosticSeverity;
+    match severity {
+        DiagnosticSeverity::Error => 0,
+        DiagnosticSeverity::Warning => 1,
+        DiagnosticSeverity::Information => 2,
+        DiagnosticSeverity::Hint => 3,
+    }
+}
+
+/// Strip spaces and tabs at the end of every line, keeping the line endings.
+/// The buffer's text is `\n` throughout; the file's own line ending is applied on
+/// save, so this only has to strip before the `\n` it sees.
+fn trim_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (content, newline) = match line.strip_suffix('\n') {
+            Some(content) => (content, "\n"),
+            None => (line, ""),
+        };
+        out.push_str(content.trim_end_matches([' ', '\t']));
+        out.push_str(newline);
+    }
+    out
+}
+
 fn runs(
     row: &Row,
     spans: &[Span],
     bracket: Option<(usize, usize)>,
     find: &Find,
     selection: Option<&Range<usize>>,
+    rulers: &[u16],
+    tab_width: usize,
 ) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::with_capacity(row.cells.len());
+    let mut column = row.start;
     for cell in &row.cells {
-        let (token, state) = appearance(cell, spans, bracket, find, selection);
+        let ruler = rulers.contains(&u16::try_from(column).unwrap_or(u16::MAX));
+        let (token, state) = appearance(cell, spans, bracket, find, selection, ruler);
+        column += acpilot_text::pane::cells_of(cell.ch, column, tab_width).max(1);
         match runs.last_mut() {
             Some(run) if run.token == token && run.state == state => run.text.push(cell.ch),
             _ => runs.push(Run {
@@ -712,6 +1308,7 @@ fn appearance(
     bracket: Option<(usize, usize)>,
     find: &Find,
     selection: Option<&Range<usize>>,
+    ruler: bool,
 ) -> (Option<SyntaxToken>, State) {
     // A blank past the end of a line belongs to no character, so it cannot be part
     // of a selection: dragging over the end of a line copies the line's text, which
@@ -730,6 +1327,8 @@ fn appearance(
         State::Selected
     } else if bracket.is_some_and(|(open, close)| at == open || at == close) {
         State::Bracket
+    } else if ruler {
+        State::Ruler
     } else {
         match find.hit(at) {
             Hit::Match => State::Match,
@@ -782,6 +1381,97 @@ mod tests {
 
     fn text(pane: &EditorPane) -> String {
         pane.document().text()
+    }
+
+    #[test]
+    fn a_file_opens_as_a_document_with_the_language_its_path_names() {
+        let mut grammars = Grammars::new();
+        let pane = EditorPane::from_text(
+            "src/main.rs",
+            "fn main() {}",
+            LineChanges::default(),
+            &mut grammars,
+        );
+        assert_eq!(pane.path(), "src/main.rs");
+        assert_eq!(pane.tab(), "main.rs");
+        assert_eq!(pane.language(), "rust");
+        assert_eq!(pane.document().text(), "fn main() {}");
+        assert_eq!(pane.position(), (1, 1), "a file opens at its start");
+        assert!(!pane.dirty(), "nothing has been done to it yet");
+
+        let mut grammars = Grammars::new();
+        let unknown =
+            EditorPane::from_text("NOTES", "prose", LineChanges::default(), &mut grammars);
+        assert_eq!(unknown.language(), "", "no extension, no grammar");
+        assert_eq!(unknown.document().text(), "prose", "and it still opens");
+    }
+
+    #[test]
+    fn an_extension_maps_to_one_language_and_nothing_else() {
+        assert_eq!(language_for("a/b/c.rs"), "rust");
+        assert_eq!(language_for("main.py"), "python");
+        assert_eq!(language_for("Cargo.toml"), "toml");
+        assert_eq!(language_for("package.json"), "json");
+        assert_eq!(language_for("Makefile"), "");
+        assert_eq!(language_for("dir.d/file"), "");
+    }
+
+    #[test]
+    fn typing_lands_in_the_document_and_undo_is_the_text_that_was_opened() {
+        let mut pane = pane(&["one two"], (0, 0));
+        assert_eq!(pane.mode(), Mode::Normal, "keys are commands until asked");
+        pane.set_mode(Mode::Insert);
+        assert!(pane.type_text("X", Instant::now()));
+        assert_eq!(pane.document().text(), "Xone two");
+        assert_eq!(pane.position(), (1, 2), "the caret is past what it typed");
+        assert!(pane.dirty(), "typing is a step to take back");
+        assert!(pane.undo());
+        assert_eq!(pane.document().text(), "one two");
+        assert!(!pane.dirty(), "the history is how dirty is answered");
+        assert!(pane.redo());
+        assert_eq!(pane.document().text(), "Xone two");
+    }
+
+    #[test]
+    fn backspace_and_delete_take_a_character_from_either_side() {
+        let mut pane = pane(&["one two"], (0, 4));
+        assert!(pane.backspace(Instant::now()));
+        assert_eq!(pane.document().text(), "onetwo");
+        assert!(pane.delete_forward(Instant::now()));
+        assert_eq!(pane.document().text(), "onewo");
+    }
+
+    #[test]
+    fn opening_a_line_below_and_above_leave_the_caret_on_the_new_one() {
+        let mut below = pane(&["one", "two"], (0, 0));
+        below.open_line_below(Instant::now());
+        assert_eq!(below.document().text(), "one\n\ntwo");
+        assert_eq!(below.position(), (2, 1));
+        assert_eq!(below.mode(), Mode::Insert, "o leaves you typing on it");
+
+        let mut above = pane(&["one", "two"], (1, 0));
+        above.open_line_above(Instant::now());
+        assert_eq!(above.document().text(), "one\n\ntwo");
+        assert_eq!(above.position(), (2, 1), "the empty line is the one above");
+    }
+
+    #[test]
+    fn a_tab_is_one_indent_level_and_its_undo_is_one_step() {
+        let mut pane = pane(&["one"], (0, 0));
+        assert!(pane.indent(IndentMode::In, IndentStyle::Spaces(4), Instant::now()));
+        assert_eq!(pane.document().text(), "    one");
+        assert!(pane.indent(IndentMode::Out, IndentStyle::Spaces(4), Instant::now()));
+        assert_eq!(pane.document().text(), "one");
+    }
+
+    #[test]
+    fn a_mode_change_says_so_because_a_silent_one_looks_broken() {
+        let mut pane = pane(&["one"], (0, 0));
+        pane.set_mode(Mode::Insert);
+        assert_eq!(pane.mode(), Mode::Insert);
+        assert!(pane.message().contains("insert"), "{}", pane.message());
+        pane.set_mode(Mode::Normal);
+        assert_eq!(pane.message(), "normal");
     }
 
     #[test]
@@ -962,6 +1652,55 @@ mod tests {
     }
 
     #[test]
+    fn a_ruler_marks_the_column_without_changing_the_text() {
+        let mut pane = pane(&["abcd"], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.rulers = vec![2];
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        let states: Vec<State> = painted[0].runs.iter().map(|run| run.state).collect();
+        assert!(states.contains(&State::Ruler), "{states:?}");
+        let joined: String = painted[0]
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect();
+        assert_eq!(joined, "abcd", "a ruler is a decoration, not a character");
+    }
+
+    #[test]
+    fn a_wrapped_ruler_is_a_column_of_the_line_not_of_the_segment() {
+        let long = "x".repeat(70);
+        let mut pane = pane(&[long.as_str()], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.wrap = true;
+        preferences.rulers = vec![65];
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        assert!(
+            !painted[0].runs.iter().any(|run| run.state == State::Ruler),
+            "column 65 is not on the first segment"
+        );
+        assert!(
+            painted[1].runs.iter().any(|run| run.state == State::Ruler),
+            "the continuation starts at column 60, so 65 is five cells in"
+        );
+    }
+
+    #[test]
+    fn wrap_folds_a_long_line_into_continuation_rows() {
+        let long = "x".repeat(70);
+        let mut pane = pane(&[long.as_str(), "tail"], (0, 0));
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.wrap = true;
+        pane.set_preferences(&preferences);
+        let painted = pane.paint();
+        assert!(painted.len() > 2, "the long line took more than one row");
+        assert_eq!(painted[0].line, 0);
+        assert_eq!(painted[1].line, 0, "the continuation is the same line");
+    }
+
+    #[test]
     fn a_selected_cell_is_painted_as_selected() {
         let mut pane = pane(&["let x = 1;", "more"], (0, 0));
         pane.click(0, 0);
@@ -1107,6 +1846,120 @@ mod tests {
             .collect();
         assert!(states.contains(&State::CurrentMatch), "{states:?}");
         assert!(states.contains(&State::Match), "{states:?}");
+    }
+
+    #[test]
+    fn visual_mode_extends_with_the_motions_and_the_commands_are_about_the_run() {
+        let mut copying = pane(&["one", "two", "three"], (0, 0));
+        copying.toggle_visual();
+        assert_eq!(copying.mode(), Mode::Visual);
+        copying.extend_caret(1, 0);
+        assert_eq!(copying.selection(), Some(0..4), "the line and its newline");
+        assert_eq!(copying.yank().as_deref(), Some("one\n"));
+        assert_eq!(copying.mode(), Mode::Normal, "y ends the run");
+        assert!(!copying.has_selection());
+
+        let mut deleting = pane(&["one", "two", "three"], (0, 0));
+        deleting.toggle_visual();
+        deleting.extend_caret(1, 0);
+        assert!(deleting.delete_selection(Instant::now()));
+        assert_eq!(text(&deleting), "two\nthree");
+        assert_eq!(deleting.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn the_goal_column_survives_a_short_line_and_a_horizontal_motion_clears_it() {
+        let mut pane = pane(&["abcdef", "x", "abcdef"], (0, 4));
+        pane.move_caret(1, 0);
+        assert_eq!(
+            pane.caret(),
+            LineColumn::new(1, 1),
+            "clamped to the short line"
+        );
+        pane.move_caret(1, 0);
+        assert_eq!(pane.caret(), LineColumn::new(2, 4), "the column came back");
+
+        pane.move_caret(0, 1);
+        pane.move_caret(-1, 0);
+        pane.move_caret(-1, 0);
+        assert_eq!(
+            pane.caret(),
+            LineColumn::new(0, 5),
+            "a horizontal motion made the new column the goal"
+        );
+    }
+
+    #[test]
+    fn a_shift_click_grows_one_selection_from_its_start() {
+        let mut pane = pane(&["abcdef", "ghij"], (0, 1));
+        pane.extend_click(1, 2);
+        assert_eq!(pane.selection(), Some(1..9));
+        pane.extend_click(0, 3);
+        assert_eq!(pane.selection(), Some(1..3), "the anchor stayed put");
+    }
+
+    #[test]
+    fn the_command_box_hands_the_text_to_the_app() {
+        let mut pane = pane(&["one"], (0, 0));
+        pane.open_command();
+        for character in "wq".chars() {
+            pane.prompt_insert(character);
+        }
+        assert!(pane.prompt_apply());
+        assert_eq!(pane.take_command().as_deref(), Some("wq"));
+        assert!(pane.take_command().is_none(), "one command per Enter");
+    }
+
+    #[test]
+    fn trimming_whitespace_is_one_undo_step_and_keeps_the_line_endings() {
+        let mut buffer = pane(&["one  ", "two\t", "three"], (0, 0));
+        assert!(buffer.trim_trailing_whitespace(Instant::now()));
+        assert_eq!(text(&buffer), "one\ntwo\nthree");
+        assert!(buffer.undo(), "the save-time rewrite is still undoable");
+        assert_eq!(text(&buffer), "one  \ntwo\t\nthree");
+
+        // A Windows file keeps its CRLF on disk: the buffer is `\n` throughout and
+        // the line ending is applied on save, so trimming must not flatten it.
+        let mut grammars = Grammars::new();
+        let mut windows = EditorPane::from_text(
+            "src/main.rs",
+            "one  \r\ntwo\t\r\n",
+            LineChanges::default(),
+            &mut grammars,
+        );
+        assert!(windows.trim_trailing_whitespace(Instant::now()));
+        assert_eq!(windows.document().to_bytes(), b"one\r\ntwo\r\n");
+
+        // Nothing to trim is not an edit, so a save does not create an undo step.
+        let mut without_trailing = pane(&["one", "two"], (0, 0));
+        assert!(!without_trailing.trim_trailing_whitespace(Instant::now()));
+    }
+
+    #[test]
+    fn the_diagnostic_floor_hides_the_severities_below_it() {
+        let mut pane = pane(&["one", "two"], (0, 0));
+        let problem = |line, severity| acpilot_proto::file::Diagnostic {
+            line,
+            column: 1,
+            end_line: line,
+            end_column: 2,
+            severity,
+            message: "a problem".to_owned(),
+            source: None,
+            code: None,
+        };
+        pane.set_problems(vec![
+            problem(1, acpilot_proto::file::DiagnosticSeverity::Warning),
+            problem(2, acpilot_proto::file::DiagnosticSeverity::Error),
+        ]);
+        assert_eq!(pane.problem(0), Some('W'));
+        assert_eq!(pane.problem(1), Some('E'));
+
+        let mut preferences = acpilot_profile::prefs::defaults().expect("defaults");
+        preferences.diagnostics_min_severity = acpilot_proto::file::DiagnosticSeverity::Error;
+        pane.set_preferences(&preferences);
+        assert_eq!(pane.problem(0), None, "a warning is below an error floor");
+        assert_eq!(pane.problem(1), Some('E'));
     }
 
     #[test]

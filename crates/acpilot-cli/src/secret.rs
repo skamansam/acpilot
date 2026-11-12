@@ -88,31 +88,17 @@ pub fn remove(resolver: &KeyringResolver, reference: &SecretRef) -> Result<bool,
 /// secret is fetched. A missing manifest is reported as one line rather than an
 /// error, because a new profile legitimately has nothing to list.
 pub fn list(profile_dir: &Path, resolver: &KeyringResolver) -> Result<Vec<String>, String> {
-    let path = profile_dir.join(MANIFEST_FILE);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(vec![format!(
-                "no {MANIFEST_FILE} for this profile at {}",
-                path.display()
-            )]);
-        }
-        Err(error) => {
-            return Err(format!("{}: {error}", path.display()));
-        }
+    let Some((path, text)) = manifest(profile_dir)? else {
+        return Ok(vec![format!(
+            "no {MANIFEST_FILE} for this profile at {}",
+            profile_dir.join(MANIFEST_FILE).display()
+        )]);
     };
+    let references = parse_references(&path, &text)?;
 
-    let recorder = RecordingResolver::default();
-    manifest::parse(&path, &text, &recorder)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-
-    let mut seen = BTreeSet::new();
     let mut lines = Vec::new();
-    for reference in recorder.references() {
+    for reference in references {
         let account = resolver.account(&reference);
-        if !seen.insert(account.clone()) {
-            continue;
-        }
         let present = resolver
             .has(&reference)
             .map_err(|error| error.to_string())?;
@@ -124,6 +110,39 @@ pub fn list(profile_dir: &Path, resolver: &KeyringResolver) -> Result<Vec<String
         lines.push(format!("{} references no keyring secrets", path.display()));
     }
     Ok(lines)
+}
+
+/// The keyring references a profile's `agents.toml` names, once each.
+///
+/// `profile export --with-secrets` uses this to know which values belong in the
+/// export. No keyring is opened here: parsing with a recording resolver still
+/// validates the manifest, including the cross-profile opt-in.
+pub fn references(profile_dir: &Path) -> Result<Vec<acpilot_agent::SecretRef>, String> {
+    let Some((path, text)) = manifest(profile_dir)? else {
+        return Ok(Vec::new());
+    };
+    parse_references(&path, &text)
+}
+
+/// Read the profile's manifest, or `None` when there is no file.
+fn manifest(profile_dir: &Path) -> Result<Option<(PathBuf, String)>, String> {
+    let path = profile_dir.join(MANIFEST_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some((path, text))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+fn parse_references(path: &Path, text: &str) -> Result<Vec<acpilot_agent::SecretRef>, String> {
+    let recorder = RecordingResolver::default();
+    manifest::parse(path, text, &recorder)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+
+    let mut seen = BTreeSet::new();
+    let mut references = recorder.references();
+    references.retain(|reference| seen.insert(reference.account().to_owned()));
+    Ok(references)
 }
 
 /// A [`SecretResolver`] that records which references the manifest asks for.
@@ -150,20 +169,6 @@ impl SecretResolver for RecordingResolver {
         // Never exposed: `list` asks only whether an entry exists.
         Ok(Secret::new(String::new()))
     }
-}
-
-/// The profile directory, without resolving the extension store.
-///
-/// `Paths::resolve` also finds the store root, which these verbs never touch;
-/// failing to find an extension store must not stop someone from storing a
-/// credential.
-pub fn profile_dir(config: Option<&PathBuf>, profile: &str) -> Result<PathBuf, String> {
-    let root = match config {
-        Some(path) => path.clone(),
-        None => acpilot_extensions::activation::config_root().map_err(|error| error.to_string())?,
-    };
-    acpilot_extensions::activation::profile_dir_in(&root, profile)
-        .map_err(|error| error.to_string())
 }
 
 /// The service name, for messages.

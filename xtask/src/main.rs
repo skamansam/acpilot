@@ -1714,6 +1714,80 @@ fn run_schema() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// One job's text: from its key to the next sibling job key.
+    ///
+    /// Text and not YAML, for the same reason the other workflow tests read text: an
+    /// xtask is a build script, and a parser here would be a dependency to answer one
+    /// question. A job key is exactly two spaces and no space after them; a comment
+    /// is not, so a comment mentioning a job cannot move the boundary.
+    fn job_block<'a>(workflow: &'a str, job: &str) -> &'a str {
+        let start = workflow
+            .find(&format!("\n  {job}:"))
+            .unwrap_or_else(|| panic!("CI has no `{job}` job"));
+        let rest = &workflow[start + 1..];
+        let mut offset = 0;
+        for line in rest.lines() {
+            if offset > 0
+                && line.strip_prefix("  ").is_some_and(|tail| {
+                    !tail.is_empty() && !tail.contains(' ') && tail.ends_with(':')
+                })
+            {
+                return &rest[..offset];
+            }
+            offset += line.len() + 1;
+        }
+        rest
+    }
+
+    #[test]
+    fn no_push_can_publish_the_required_checks_name() {
+        // A push run and the pull request run of one branch share a concurrency group,
+        // so opening the pull request cancels the push a minute in, and GitHub records
+        // a check run for every job of the cancelled run. A `cancelled` entry under a
+        // name the ruleset requires counts as not-success: #302 read `BLOCKED` with
+        // all thirteen jobs green, twice, and deleting the cancelled push run is what
+        // moved it to `clean` each time.
+        //
+        // Two attempts that did not help are the reason this test reads the triggers
+        // and not only the job: `!cancelled()` still left the entry, and an `if:` that
+        // excludes push events still published the name, because a job that is in the
+        // run at all publishes it. Only the run's absence fixes it.
+        let workflow = fs::read_to_string(path_in_repo(".github/workflows/ci.yml"))
+            .expect("CI is a workflow file");
+
+        let on = workflow
+            .split_once("\non:\n")
+            .map(|(_, rest)| rest)
+            .expect("CI declares its triggers");
+        let on = on.split("\nconcurrency:").next().expect("the on: block");
+        let triggers = format!("\n{on}");
+        let push = job_block(&triggers, "push");
+        let push_branches: Vec<&str> = push
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert_eq!(
+            push_branches,
+            ["push:", "branches: [main]"],
+            "a push to a branch is a run whose cancelled jobs publish the required name; \
+             `main` is the only branch a push may start, because a merge landing green \
+             is what that run is for"
+        );
+
+        let jobs = format!("\n{workflow}");
+        let required = job_block(&jobs, "required");
+        assert!(
+            required.contains("\n    name: required checks\n"),
+            "no job is named `required checks`, so the ruleset's one context never appears"
+        );
+        assert!(
+            required.contains("github.event_name == 'pull_request'"),
+            "the job that publishes `required checks` must be a pull request's; on a push \
+             its entry is at best skipped, which is not success"
+        );
+    }
+
     #[test]
     fn building_the_tui_builds_the_daemon_it_spawns() {
         // `acpilot tui` looks for `acpilotd` beside its own executable, so a TUI

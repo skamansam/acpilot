@@ -54,7 +54,7 @@ to run, not about which documents describe this codebase.
 
 | File | Why |
 | --- | --- |
-| `TODO.md` | The plan. Every task has a code (`P2-7`, `XT-1`) that is also a commit reference and an issue title. Check the box state first: a task can be half-done with its `Open:` list at the bottom. |
+| `TODO.md` | The plan text. Every task has a code (`P2-7`, `XT-1`) that is also a commit reference and an issue title. The **ACPilot Roadmap** project is the source of truth for a ticket's state. A task can be half-done, with its `Open:` list at the bottom. |
 | `CONTRIBUTING.md` | The gate, the test rules, the platform rule, commits and releases. |
 | `README.md` §3 and §6 | The process model and the crate list. Read §3 before touching anything that crosses a process boundary. |
 | `docs/adr/` | Decisions that bind this codebase. An ADR is superseded, never edited. |

@@ -497,7 +497,10 @@ node .github/scripts/roadmap.mjs pr 42     # one pull request
 node .github/scripts/roadmap.mjs issue 17  # one issue
 ```
 
-The TODO.md import that filed the issues is `.github/scripts/todo_issues.py`. It is
+The **ACPilot Roadmap** project is the source of truth for a ticket's state: open,
+in progress or done. `TODO.md` keeps the plan text and each ticket's `Result:`.
+
+The import that filed the issues is `.github/scripts/todo_issues.py`. It is
 idempotent, and re-running it after editing `TODO.md` adds only what is new.
 
 `TODO.md` is a tree, and the board is too: one parent issue per phase and per

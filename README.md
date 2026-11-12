@@ -22,7 +22,8 @@ interface you prefer: terminal, TUI, native GUI, or browser.
 only step in to approve the dangerous bits.
 
 - Status: **pre-alpha**. The workspace, the daemon API and the agent engine build and
-  are tested. [TODO.md](TODO.md) tracks what is left.
+  are tested. The [ACPilot Roadmap](https://github.com/users/skamansam/projects/4)
+  project tracks what is left, and [TODO.md](TODO.md) holds the plan text.
 - License: dual MIT OR Apache-2.0.
 - Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon).
 - Directory: `acpilot/`, the planned Rust workspace (edition 2024). §6 gives the layout.

@@ -60,9 +60,11 @@ instrument panel. If it says a thing works, it works in the repository today.
 
 ## How this page stays honest
 
-The phases come from `TODO.md` in the repository, which is the source of truth.
-When a phase lands, its row here changes in the same pull request. A status page
-that drifts is just a rumour with better typography.
+The phases come from `TODO.md` in the repository, which holds the plan text. The
+[ACPilot Roadmap](https://github.com/users/skamansam/projects/4) project is the
+source of truth for a ticket's state: planned, in progress or shipped. When a
+phase lands, its row here changes in the same pull request. A status page that
+drifts is just a rumour with better typography.
 
 <Aside type="tip" title="Why publish this at all">
 Because "coming soon" is what people write when they mean "not started". A

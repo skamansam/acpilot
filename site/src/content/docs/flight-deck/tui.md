@@ -140,9 +140,9 @@ Between two words the list empties rather than name a word the caret is merely
 beside. It stops following while the keys are in another pane. That lets `Enter`
 open a use without the caret it lands on replacing the list you were reading.
 
-Project map and wiki are planned in `TODO.md`, which is where their state is kept
-honest. This page describes what they are for, so the shape is agreed before they
-are built.
+Project map and wiki are planned, and their state lives in the ACPilot Roadmap
+project. `TODO.md` keeps their plan text. This page describes what they are for,
+so the shape is agreed before they are built.
 
 ## What it is built on
 

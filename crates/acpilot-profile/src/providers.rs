@@ -13,12 +13,21 @@
 
 use std::path::{Path, PathBuf};
 
-use acpilot_proto::model::{AddProviderRequest, ProviderKind};
+use acpilot_proto::model::{AddProviderRequest, ProviderKind, ProviderSummary};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// The file a profile declares its model servers in.
 pub const PROVIDERS_FILE: &str = "providers.toml";
+
+/// The file a profile remembers its last probe answers in.
+///
+/// Kept apart from `providers.toml` on purpose. That file is somebody's
+/// declaration, and rewriting it after every probe would undo a hand edit and mix
+/// "what I declared" with "what I was told". This one is derived data: an
+/// unreadable copy is forgotten rather than failing a startup, because losing a
+/// memory costs one probe and losing a declaration costs the provider.
+pub const PROVIDERS_STATE_FILE: &str = "providers.state.toml";
 
 /// The schema this build reads and writes.
 pub const PROVIDERS_SCHEMA: u32 = 1;
@@ -131,6 +140,154 @@ impl DeclaredProvider {
 impl From<&DeclaredProvider> for AddProviderRequest {
     fn from(provider: &DeclaredProvider) -> Self {
         provider.request()
+    }
+}
+
+/// One remembered answer, with the declaration it belongs to.
+///
+/// The declaration's fields are repeated here rather than looked up by id alone: a
+/// `providers.toml` edit that points an id at another port must not keep showing
+/// the old server's model count as though the new one had answered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeRecord {
+    /// Identifier the declaration uses.
+    pub id: String,
+    /// Dialect when the answer was recorded.
+    pub kind: ProviderKind,
+    /// Base URL when the answer was recorded.
+    pub base_url: String,
+    /// Credential reference when the answer was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<String>,
+    /// Whether the provider was enabled when the answer was recorded.
+    pub enabled: bool,
+    /// The row the probe produced.
+    pub summary: ProviderSummary,
+}
+
+impl ProbeRecord {
+    /// Whether this record still describes `declaration`.
+    fn describes(&self, declaration: &DeclaredProvider) -> bool {
+        self.id == declaration.id
+            && self.kind == declaration.kind
+            && self.base_url == declaration.base_url
+            && self.credential_ref == declaration.credential_ref
+            && self.enabled == declaration.enabled
+    }
+}
+
+/// The answers this profile last received, by provider id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidersState {
+    /// Schema version, written so a later reader can tell what it found.
+    #[serde(default = "state_schema")]
+    pub schema_version: u32,
+    /// One row per provider that was asked, answered or failed.
+    #[serde(default)]
+    pub probes: Vec<ProbeRecord>,
+}
+
+fn state_schema() -> u32 {
+    PROVIDERS_SCHEMA
+}
+
+impl Default for ProvidersState {
+    fn default() -> Self {
+        Self {
+            schema_version: PROVIDERS_SCHEMA,
+            probes: Vec::new(),
+        }
+    }
+}
+
+impl ProvidersState {
+    /// Where a profile directory remembers its answers.
+    #[must_use]
+    pub fn path_in(directory: &Path) -> PathBuf {
+        directory.join(PROVIDERS_STATE_FILE)
+    }
+
+    /// Read the remembered answers. Anything unreadable is forgotten.
+    ///
+    /// Deliberately infallible: this file is a memory, and a daemon that refused to
+    /// start over a stale one would trade a missing fact for a missing product. A
+    /// probe writes a whole new copy, so the damage is one question.
+    #[must_use]
+    pub fn load(path: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let Ok(state) = toml::from_str::<Self>(&text) else {
+            return Self::default();
+        };
+        if state.schema_version != PROVIDERS_SCHEMA {
+            return Self::default();
+        }
+        state
+    }
+
+    /// The row remembered for `declaration`, when it still describes it.
+    #[must_use]
+    pub fn row(&self, declaration: &DeclaredProvider) -> Option<&ProviderSummary> {
+        self.probes
+            .iter()
+            .find(|record| record.describes(declaration))
+            .map(|record| &record.summary)
+    }
+
+    /// Remember `summary` for `declaration`, replacing an older answer in place.
+    ///
+    /// Replacing rather than appending keeps the file in the order the declarations
+    /// were probed, so two readers comparing it do not see a reshuffle.
+    pub fn record(&mut self, declaration: &DeclaredProvider, summary: &ProviderSummary) {
+        let record = ProbeRecord {
+            id: declaration.id.clone(),
+            kind: declaration.kind,
+            base_url: declaration.base_url.clone(),
+            credential_ref: declaration.credential_ref.clone(),
+            enabled: declaration.enabled,
+            summary: summary.clone(),
+        };
+        match self
+            .probes
+            .iter_mut()
+            .find(|existing| existing.id == declaration.id)
+        {
+            Some(existing) => *existing = record,
+            None => self.probes.push(record),
+        }
+    }
+
+    /// Write the file, creating its directory.
+    ///
+    /// # Errors
+    ///
+    /// The document cannot be serialised or the file cannot be written.
+    pub fn save(&self, path: &Path) -> Result<(), ProvidersError> {
+        let rendered = toml::to_string_pretty(self).map_err(|error| ProvidersError::Write {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
+        })?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| ProvidersError::Write {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        let temporary = path.with_extension("toml.tmp");
+        std::fs::write(&temporary, rendered).map_err(|source| ProvidersError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        std::fs::rename(&temporary, path).map_err(|source| {
+            let _ = std::fs::remove_file(&temporary);
+            ProvidersError::Write {
+                path: path.to_path_buf(),
+                source,
+            }
+        })
     }
 }
 
@@ -247,6 +404,21 @@ impl ProvidersFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acpilot_proto::model::ProviderStatus;
+
+    fn summary(id: &str, status: ProviderStatus) -> ProviderSummary {
+        ProviderSummary {
+            id: id.to_owned(),
+            kind: ProviderKind::LmStudio,
+            label: id.to_owned(),
+            base_url: "http://127.0.0.1:1234".to_owned(),
+            status,
+            model_count: 2,
+            credential_ref: None,
+            last_probed_at: Some("2026-11-12T07:00:00Z".to_owned()),
+            detail: Some("answered with 2 models".to_owned()),
+        }
+    }
 
     fn provider(id: &str) -> DeclaredProvider {
         DeclaredProvider {
@@ -335,6 +507,46 @@ mod tests {
         let text = std::fs::read_to_string(ProvidersFile::path_in(directory.path())).expect("text");
         assert!(text.contains("schema_version = 1"));
         assert!(text.contains("keyring:work/lmstudio"), "{text}");
+    }
+
+    #[test]
+    fn a_remembered_answer_comes_back_for_the_declaration_it_belongs_to() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = ProvidersState::path_in(directory.path());
+        let declared = provider("lm");
+        let mut state = ProvidersState::default();
+        state.record(&declared, &summary("lm", ProviderStatus::Reachable));
+        state.save(&path).expect("save");
+
+        let read = ProvidersState::load(&path);
+        let row = read.row(&declared).expect("the answer came back");
+        assert_eq!(row.status, ProviderStatus::Reachable);
+        assert_eq!(row.model_count, 2);
+        assert_eq!(row.last_probed_at.as_deref(), Some("2026-11-12T07:00:00Z"));
+
+        let moved = DeclaredProvider {
+            base_url: "http://127.0.0.1:9999".to_owned(),
+            ..provider("lm")
+        };
+        assert!(
+            read.row(&moved).is_none(),
+            "the same id on another port is a server nobody asked"
+        );
+    }
+
+    #[test]
+    fn a_state_file_that_does_not_parse_is_forgotten_and_not_an_error() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = ProvidersState::path_in(directory.path());
+        std::fs::write(&path, "this is not toml").expect("write");
+        assert_eq!(ProvidersState::load(&path), ProvidersState::default());
+
+        std::fs::write(&path, "schema_version = 9\nprobes = []\n").expect("write");
+        assert_eq!(
+            ProvidersState::load(&path),
+            ProvidersState::default(),
+            "a newer memory is not half-read"
+        );
     }
 
     #[test]

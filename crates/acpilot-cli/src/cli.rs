@@ -1451,6 +1451,16 @@ fn run_models(command: ModelsCommand, profile: Option<&str>) -> u8 {
             return exit::FAILURE;
         }
     };
+    // The keyring namespace is the profile's directory name, the same rule the
+    // daemon applies: two spellings would let one surface read a token the other
+    // cannot, and the difference would look like a server problem.
+    let keyring = profile
+        .root()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(acpilot_agent::KeyringResolver::new);
+    let state_path = acpilot_profile::providers::ProvidersState::path_in(profile.root());
+    let mut remembered = acpilot_profile::providers::ProvidersState::load(&state_path);
     let mut failed = false;
     for declaration in targets {
         let request = AddProviderRequest::from(declaration);
@@ -1462,17 +1472,26 @@ fn run_models(command: ModelsCommand, profile: Option<&str>) -> u8 {
         }
         // The daemon's own probe, not a copy: a second mapper would be a second
         // opinion about what a refused credential means.
-        let row = runtime.block_on(acpilotd::providers::probe(&request));
+        let credential = acpilotd::providers::Credential::resolve(keyring.as_ref(), &request);
+        let row = runtime.block_on(acpilotd::providers::probe(&request, credential));
         println!("{}", render_provider(&row));
         if let Some(detail) = &row.detail {
             println!("  {detail}");
         }
+        // Written where the daemon reads it, so a restart shows this answer. A
+        // verb that asked and then forgot would make every start look unprobed.
+        remembered.record(declaration, &row);
         if matches!(
             row.status,
             ProviderStatus::Unreachable | ProviderStatus::Unauthorized
         ) {
             failed = true;
         }
+    }
+    if !remembered.probes.is_empty()
+        && let Err(error) = remembered.save(&state_path)
+    {
+        eprintln!("acpilot models probe: the answers were not remembered: {error}");
     }
     if failed { exit::FAILURE } else { exit::SUCCESS }
 }

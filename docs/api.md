@@ -194,10 +194,14 @@ declaration lives in the profile's `providers.toml` as a `[[providers]]` table.
 Nothing scans the local network and nothing probes at startup. A probe is the one
 thing that contacts a server, and it happens because somebody asked.
 
-`GET /v1/providers` lists the declarations in file order. A row that no probe has
-answered since the daemon started reads `not_probed`. `unreachable` means a probe
-ran and failed, so the two states cannot be confused. A disabled provider reads
-`disabled` and is never contacted.
+`GET /v1/providers` lists the declarations in file order, each with the last answer
+this profile remembers. The answer is kept in `providers.state.toml`, beside the
+declaration and separate from it, so a restart says `unreachable at 12:04` rather
+than forgetting the one fact somebody needed. A declaration whose URL, dialect or
+credential reference changed is `not_probed` again: the old server's answer is not
+the new server's. `unreachable` means a probe ran and failed, so that state and
+`not_probed` cannot be confused. A disabled provider reads `disabled` and is never
+contacted.
 
 `POST /v1/providers` writes the declaration to that file and probes it once. A
 failed probe still answers `201`: the row carries the reason in `detail`, and a
@@ -206,9 +210,13 @@ failed probe still answers `201`: the row carries the reason in `detail`, and a
 provider, and a second declaration of that id is `409`. Replacing a row would move
 every recipe that names it to another server without saying so.
 
-`credential_ref` names a keyring entry and is returned as written. The token is
-never part of any answer. `acpilot models probe [id]` asks the same question from
-a terminal, with no daemon, and exits `1` when a provider answers with a failure.
+`credential_ref` names a keyring entry in the profile's namespace. The daemon reads
+it at probe time and sends it as a bearer token. A reference that cannot be read
+answers `unauthorized` with the account to add, and nothing is sent, because an
+anonymous request would let the server take the blame. The reference is returned as
+written and the token is never part of any answer. `acpilot models probe [id]` asks
+the same question from a terminal, with no daemon, using the same keyring and the
+same memory file, and exits `1` when a provider answers with a failure.
 
 ## Stats
 

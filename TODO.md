@@ -1153,9 +1153,18 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     written to the profile's `providers.toml` before the row is kept. A restart reads
     the rows back as `not_probed`: nothing was tried, so nothing failed. The loader
     refuses an unknown key, a newer `schema_version` and a repeated id.
-  - **Open:** `credential_ref` is kept and not resolved through the keyring, so a
-    server that needs a token answers `unauthorized`. Nothing removes a provider.
-    The last probe's answer is not cached, which is P4.5-2's remaining half.
+  - **Landed (2026-11-12):** `credential_ref` resolves through the profile's keyring
+    namespace at probe time, so a token-protected server answers `reachable`; a
+    reference with no entry stops before a request is sent and names the account.
+    The last answer is kept in `providers.state.toml`, beside the declaration and
+    separate from it, so a restart shows what was measured. The CLI verb writes the
+    same file, and the daemon re-reads it on a list, so the two cannot disagree.
+    **Tests:** the keyring path against an injected store in the daemon unit tests,
+    and a loopback server that answers only with the expected bearer in the
+    integration suite.
+  - **Open:** nothing removes a provider, so a declaration survives until somebody
+    edits `providers.toml`. A changed declaration drops its remembered answer rather
+    than clearing it, and nothing probes on a timer.
   - `ChatBackend` trait: `models()`, `probe()`, `chat(request) -> stream/response`, all
     cancel-safe and timeout-bounded (2 s connect, 10 s discovery, no timeout on generation
     beyond the HTTP client's idle read timeout).
@@ -1168,7 +1177,7 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     (it is the one failure the enum the foundation phase (P1) shipped could not describe without lying).
 
 - [x] **P4.5-2 · Discovery and capability probing** (1.5d) — discovery mapping,
-  `Backend::probe` and `acpilot models probe` are here; the probe cache is not.
+  `Backend::probe`, `acpilot models probe` and the remembered answer are here.
   - **Result (2026-11-12):** `acpilot models probe [id]` reads the profile's
     `providers.toml` and asks each enabled provider what it has. A named provider is
     asked even when it is disabled: the row says `disabled` and no request leaves.
@@ -1177,10 +1186,14 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     that is not usable exits `1` naming the field; no providers declared is exit `0`
     with the file named. **Tests:** three in `crates/acpilot-cli/src/cli.rs` for
     target selection, the unknown id, and the printed line.
-  - **Open:** the probe cache. A restart reads the declaration and says `not_probed`
-    instead of remembering the last answer, so `acpilot models probe` is the only way
-    to see the current state without a daemon. `Backend::probe` (one tool-shaped and
-    one JSON-schema request) has no caller yet: the lab button is P4.5-8's.
+  - **Landed (2026-11-12):** the answer is remembered in `providers.state.toml`, so a
+    restart reads `unreachable at 12:04` instead of `not_probed`. The record repeats
+    the declaration's URL, dialect and credential reference, so an edited declaration
+    is `not_probed` again rather than showing another server's count. A file that does
+    not parse is forgotten, not a startup failure: it is derived data.
+  - **Open:** `Backend::probe` (one tool-shaped and one JSON-schema request) has no
+    caller yet: the lab button is P4.5-8's. The remembered row carries reachability
+    and the model count, not per-model capabilities.
   - Map `/api/v0/models` fields into `DiscoveredModel` (`llm`→`chat`, `vlm`→`vision`,
     `embeddings`→`embedding`, `state`→`loaded`, `max_context_length`→`context_window` with
     `context_source = server`). Where a server says nothing, `context_source = unknown` and the

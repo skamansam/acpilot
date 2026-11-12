@@ -19,6 +19,7 @@ use acpilot_proto::model::{
 };
 use serde_json::{Map, Value};
 
+pub mod context;
 mod lmstudio;
 mod openai;
 mod wire;

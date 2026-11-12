@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 acpilot-core.workspace = true
 acpilot-proto.workspace = true
+# The corpus selectors walk a workspace, and that walk is the daemon's: a second
+# glob-and-gitignore implementation would disagree with the file tree about what a
+# workspace contains.
+ignore.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,6 +21,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

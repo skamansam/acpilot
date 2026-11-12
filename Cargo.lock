@@ -164,9 +164,11 @@ dependencies = [
  "acpilot-core",
  "acpilot-proto",
  "axum",
+ "ignore",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

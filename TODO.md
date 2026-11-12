@@ -1136,8 +1136,18 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
-- [ ] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
+- [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
+  - **Result (2026-11-12):** one enum dispatches both dialects, so a provider's shape
+    is a `match` rather than a trait object and every call site is checked. `GET` and
+    `POST /v1/providers` serve the declarations and appear in the OpenAPI document as
+    `list_providers` and `add_provider`. An add writes `providers.toml` before it
+    keeps the row, probes once, and keeps a refused probe as a row with the reason in
+    `detail`. The last answer lives in `providers.state.toml` beside the declaration
+    and repeats its URL, dialect and credential reference, so an edited declaration
+    reads `not_probed` again. `credential_ref` resolves through the profile's keyring
+    namespace, and a reference with no entry stops before a request leaves. The CLI
+    verb calls the same `probe` as the route, so the two cannot disagree.
   `acpilotd::providers` keeps the declared providers and serves `GET` and
   `POST /v1/providers`. Adding one is the explicit probe the phase asks for, so the row
   carries the server's own answer: `reachable` with the model count, `unreachable` with
@@ -1230,7 +1240,24 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     `max_corpus_bytes = 262144`, which cannot fit a 32,768-token window beside its reserved
     output, so `flight-test/recipes.md` now says 65536 and the field table states the rule.
 
-- [ ] **P4.5-4 · Context assembly** (2d)
+- [x] **P4.5-4 · Context assembly** (2d)
+  - **Result (2026-11-12):** `crates/acpilot-model/src/context.rs` splits a window into
+    system prompt, corpus, history, tool schemas and reserved output, and names every
+    section in tokens in the error and in `Plan`. Selection walks with the daemon's
+    `ignore` rules, so `.gitignore` still wins, then sorts by path and keeps one copy of
+    an overlapping match. A file is cut at its `max_bytes` on a character boundary, a
+    selector stops at `max_files`, a file that is not UTF-8 is skipped, and the corpus
+    ceiling counts the headers the model reads. Every trim is a `Notice` with numbers.
+    `TruncateOldest` drops from the front and never leaves a tool result without its
+    call. `Summarize` returns the messages to replace, because this crate sends no
+    request. `Refuse` returns the shortfall. A window too small for the system prompt
+    alone fails under all three, because no strategy shrinks it. `reconcile` clears
+    `Usage::reported` only when the server reported the counts. **Tests:** 25 in the
+    module, including a real `.gitignore`, a binary file, an overlapping selector pair
+    and each strategy.
+  - **Open:** nothing calls `assemble` yet: P4.5-5 sends the request and P4.5-6 records
+    the run. `ESTIMATE_BAND` is a planning allowance rather than a measurement, and
+    P4.5-6's records are what will calibrate it.
   - Budget split — system prompt, corpus, history, tool schemas, reserved output — with a
     per-section estimate; corpus from `CorpusSelector` globs honouring `max_files`/`max_bytes`,
     `ignore` rules, and a stable order so a run is reproducible.

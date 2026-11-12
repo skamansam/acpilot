@@ -103,6 +103,38 @@ streaming. An editor that loses your work because a file was half-written while
 you saved it is a bad editor.
 </Aside>
 
+## What a run's prompt is made of
+
+Before a request leaves, the window is divided into five parts: the system prompt, the
+corpus, the conversation, the tool schemas and the reserved output. A prompt that does
+not fit names the size of every part, in tokens.
+
+The corpus comes from the run's selectors. Each selector is a glob, a file ceiling and a
+byte ceiling per file.
+
+- The workspace's `.gitignore` applies. A corpus cannot read what the file tree hides.
+- The same workspace always produces the same order: paths sorted, each file once.
+- A file is cut at `max_bytes` on a character boundary. A file that is not UTF-8 is
+  skipped, because it is not text a model can read.
+- The context ceiling counts the file headers too, not only the file text.
+
+Every cut is a notice with its numbers, so a run can say what it left out.
+
+The strategy decides what happens when the conversation does not fit:
+
+| `strategy` | What happens |
+| --- | --- |
+| `truncate_oldest` | Drops the oldest messages. A tool result never outlives the call it answers |
+| `summarize` | Asks for a summary of the oldest messages. Assembly sends nothing, so the caller makes that request and assembles again |
+| `refuse` | Fails the run and names how many tokens are over |
+
+A window that cannot hold the system prompt, the corpus, the tools and the reserved
+output fails under every strategy, because none of them shrinks those parts.
+
+Token counts are estimates of four bytes per token until the server reports `usage`. A
+hint of 25 percent either way is the plan, and a run record says whether a count was
+measured or estimated.
+
 ## Why files and not a database
 
 Because a prompt change is a code change. It deserves a diff, a review, and a

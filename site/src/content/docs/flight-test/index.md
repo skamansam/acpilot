@@ -63,12 +63,13 @@ yesterday?":
 
 ## What exists today
 
-The provider crate, discovery, the recipe loader, prompt assembly, the run log and the
-shim agent (`acpilot-agent-lm`) are built and tested. The shim reads a recipe, runs the
-model loop and reaches files, terminals and permissions only through ACP callbacks. What
-is missing is the way in: the recipe and run routes (P4.5-7), the lab panes (P4.5-8) and
-the promotion command that writes the manifest entry (P4.5-9). Until P4.5-9, the shim is
-started by hand.
+Providers, discovery, recipes, prompt assembly, the run log, the model API and the shim
+agent (`acpilot-agent-lm`) are built and tested. A recipe is created over the API, a run
+streams and appends its record, and a page of runs is served. The shim reads a recipe,
+runs the model loop and reaches files, terminals and permissions only through ACP
+callbacks. What is missing is the surface: the lab panes (P4.5-8) and the promotion
+command that writes the manifest entry (P4.5-9). Until P4.5-9, the shim is started by
+hand.
 
 <Aside type="caution" title="Altitude check">
 Pages in this section describe the models phase (P4.5). The [flight status](../status/) page

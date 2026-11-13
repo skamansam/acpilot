@@ -481,6 +481,68 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreateRecipeRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `POST /v1/recipes`.\n\nThe same fields a recipe file has, without `updated_at`: the file's mtime is\nthe timestamp, and a client that supplied one would be writing a claim about a\nfile it does not own.",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "Context plan."
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier, also the file name under `recipes/`."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "model_id": {
+            "description": "Model identifier to send.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "What this recipe is for, and what it is bad at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider to call."
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/SamplingParams",
+            "description": "Sampling knobs. Absent means the agent-shaped defaults."
+          },
+          "schema_version": {
+            "description": "Schema version; this build reads 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "system_prompt": {
+            "description": "The master prompt.",
+            "type": "string"
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolExposure",
+            "description": "Tool ceiling for the promoted agent."
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "label",
+          "provider_id",
+          "model_id",
+          "system_prompt",
+          "context",
+          "tools"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "description": "Request body for `POST /v1/sessions`.",
         "properties": {
@@ -1867,6 +1929,48 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "ModelCatalogue": {
+        "description": "One model list, with the providers that could not answer.\n\nThe two halves are beside each other on purpose: a list that quietly omitted a\nserver would look like a server with no models.",
+        "properties": {
+          "models": {
+            "description": "Models from every provider that answered, in provider declaration order.",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredModel"
+            },
+            "type": "array"
+          },
+          "problems": {
+            "description": "Providers that did not answer, and why.",
+            "items": {
+              "$ref": "#/components/schemas/ModelProblem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "ModelProblem": {
+        "description": "A provider that could not answer a model list.",
+        "properties": {
+          "message": {
+            "description": "Why it did not answer.",
+            "type": "string"
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider id."
+          }
+        },
+        "required": [
+          "provider_id",
+          "message"
+        ],
+        "type": "object"
+      },
       "ModelRecipe": {
         "description": "A tuned configuration for one model, as returned by `GET /v1/recipes`.",
         "properties": {
@@ -2642,6 +2746,85 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "RecipePatch": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/recipes/{id}`.\n\nOnly the fields present move. A recipe id is not editable: the file name is the\nidentity a run record and an agent manifest refer to.",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextBudget",
+                "description": "New context plan."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "description": "New model identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "description": "New note.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "New provider."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampling": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SamplingParams",
+                "description": "New sampling knobs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "system_prompt": {
+            "description": "New master prompt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolExposure",
+                "description": "New tool ceiling."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Reference": {
         "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
         "properties": {
@@ -2714,11 +2897,38 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "RunPage": {
+        "description": "One page of a recipe's runs, newest first.",
+        "properties": {
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Pass back as `before` for the next page. Absent at the end."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "description": "The runs.",
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
       "RunRequest": {
         "description": "Request body for `POST /v1/recipes/{id}/runs`.",
         "properties": {
           "corpus": {
-            "description": "Corpus pulled from the current workspace, in order.",
+            "description": "Corpus pulled from the current workspace, in order. Absent means none.",
             "items": {
               "$ref": "#/components/schemas/CorpusSelector"
             },
@@ -2737,8 +2947,7 @@ expression: canonical(document)
           }
         },
         "required": [
-          "prompt",
-          "corpus"
+          "prompt"
         ],
         "type": "object"
       },
@@ -3251,6 +3460,41 @@ expression: canonical(document)
           "search",
           "max_steps"
         ],
+        "type": "object"
+      },
+      "UpdateProviderRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/providers/{id}`.\n\nAn omitted field is unchanged. Changing where the provider lives is a new\nquestion, so the route probes again; changing only a label does not.",
+        "properties": {
+          "base_url": {
+            "description": "New base URL.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_ref": {
+            "description": "New keyring reference.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether the provider may be contacted.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkspaceOpenRequest": {

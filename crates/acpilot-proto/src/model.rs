@@ -316,7 +316,8 @@ pub struct CorpusSelector {
 pub struct RunRequest {
     /// The user message.
     pub prompt: String,
-    /// Corpus pulled from the current workspace, in order.
+    /// Corpus pulled from the current workspace, in order. Absent means none.
+    #[serde(default)]
     pub corpus: Vec<CorpusSelector>,
     /// Client-generated key that makes retries safe.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,6 +385,123 @@ pub struct RunSummary {
     /// Error text when the run failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// Request body for `POST /v1/recipes`.
+///
+/// The same fields a recipe file has, without `updated_at`: the file's mtime is
+/// the timestamp, and a client that supplied one would be writing a claim about a
+/// file it does not own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateRecipeRequest {
+    /// Schema version; this build reads 1.
+    pub schema_version: u32,
+    /// Identifier, also the file name under `recipes/`.
+    pub id: RecipeId,
+    /// Display label.
+    pub label: String,
+    /// Provider to call.
+    pub provider_id: ProviderId,
+    /// Model identifier to send.
+    pub model_id: String,
+    /// The master prompt.
+    pub system_prompt: String,
+    /// Sampling knobs. Absent means the agent-shaped defaults.
+    #[serde(default)]
+    pub sampling: SamplingParams,
+    /// Context plan.
+    pub context: ContextBudget,
+    /// Tool ceiling for the promoted agent.
+    pub tools: ToolExposure,
+    /// What this recipe is for, and what it is bad at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+/// Request body for `PATCH /v1/recipes/{id}`.
+///
+/// Only the fields present move. A recipe id is not editable: the file name is the
+/// identity a run record and an agent manifest refer to.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecipePatch {
+    /// New display label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// New provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<ProviderId>,
+    /// New model identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// New master prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// New sampling knobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingParams>,
+    /// New context plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextBudget>,
+    /// New tool ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolExposure>,
+    /// New note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+/// Request body for `PATCH /v1/providers/{id}`.
+///
+/// An omitted field is unchanged. Changing where the provider lives is a new
+/// question, so the route probes again; changing only a label does not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateProviderRequest {
+    /// New display label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// New base URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// New keyring reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<String>,
+    /// Whether the provider may be contacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+/// One model list, with the providers that could not answer.
+///
+/// The two halves are beside each other on purpose: a list that quietly omitted a
+/// server would look like a server with no models.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ModelCatalogue {
+    /// Models from every provider that answered, in provider declaration order.
+    pub models: Vec<DiscoveredModel>,
+    /// Providers that did not answer, and why.
+    pub problems: Vec<ModelProblem>,
+}
+
+/// A provider that could not answer a model list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ModelProblem {
+    /// Provider id.
+    pub provider_id: ProviderId,
+    /// Why it did not answer.
+    pub message: String,
+}
+
+/// One page of a recipe's runs, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct RunPage {
+    /// The runs.
+    pub runs: Vec<RunSummary>,
+    /// Pass back as `before` for the next page. Absent at the end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<RunId>,
 }
 
 /// Request body for `POST /v1/recipes/{id}/promote`.

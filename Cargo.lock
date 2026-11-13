@@ -376,6 +376,7 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "utoipa",
+ "uuid",
  "vt100",
 ]
 

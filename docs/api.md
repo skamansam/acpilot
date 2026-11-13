@@ -182,10 +182,9 @@ write. A patch that would make them unreadable is rolled back and answered `400`
 The successful answer is the new effective object. It is also announced as a
 `prefs` frame, so an open client applies it without waiting for the file watcher.
 
-**Deliberately not v1**: the recipe routes, the ACP bridge and remote drivers, and
-extensions. The two provider routes below landed with the models phase and follow the
-same conventions. Recipes load from disk, but no route records or serves a run yet:
-that is P4.5-7. None of the remaining areas changes a route above.
+**Added after v1 was frozen**: the provider, model, recipe and run routes below. They
+follow the same conventions and change no route above. The ACP bridge and remote drivers
+(P4.5-10), promotion (P4.5-9) and extensions are still deliberately later.
 
 ## Providers
 
@@ -1071,3 +1070,33 @@ Nothing else was missing for v1. The provider routes landed later with the model
 phase (P4.5-1) and are described above. Recipes, the model lab and the ACP bridge
 stay out on purpose. They are planned for the same phase and for P8. Adding them
 now would freeze transports that have not been measured.
+
+## Recipes and runs
+
+| Route | Answers |
+| --- | --- |
+| `GET /v1/models` | Every enabled provider asked once. `models` holds what answered, `problems` names the providers that did not |
+| `PATCH /v1/providers/{id}` | Edit the label, base URL, token or `enabled`; `404` for an unknown id |
+| `DELETE /v1/providers/{id}` | `204`; `409` while a recipe names the provider |
+| `POST /v1/providers/{id}/probe` | Ask one provider now and keep `last_probed_at` and the model count |
+| `GET /v1/recipes` | Recipe summaries, in id order |
+| `POST /v1/recipes` | `201` with the stored recipe; `400` when validation fails |
+| `GET /v1/recipes/{id}` | The recipe as stored; `404` for an unknown id |
+| `PATCH /v1/recipes/{id}` | Replace only the named fields |
+| `DELETE /v1/recipes/{id}` | `204`; runs already recorded are left alone |
+| `POST /v1/recipes/{id}/runs` | Streams the run as SSE; `?root=` is required when `corpus` is not empty |
+| `GET /v1/recipes/{id}/runs` | Newest first, `?cursor=` and `?limit=` |
+
+A run is one HTTP response, so its status is `200` and not `202`. The frames are:
+
+```
+event: model.run.started    data: {"run_id":"…","recipe_id":"demo","model_id":"…"}
+event: model.run.delta      data: {"run_id":"…","text":"…"}
+event: model.run.finished   data: {"run_id":"…","status":"succeeded","usage":{…}}
+```
+
+The record is appended to `runs.jsonl` before `finished` is sent. A failed run ends with
+`status` `failed` and a `message`; the stream still closes with `200` because the request
+was accepted. Closing the response abandons the run, and no record is written.
+
+`POST /v1/recipes/{id}/promote` is not served yet; it is P4.5-9.

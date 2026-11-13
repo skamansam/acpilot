@@ -74,6 +74,7 @@ figment = { workspace = true, features = ["toml"] }
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }
 jiff = { workspace = true }
+uuid = { workspace = true }
 # `.gitignore` matching for the file tree. The daemon answers the listing, so the
 # patterns are read where the ignore files are rather than guessed at by a client
 # that never saw them — which is also what keeps a remote workspace's tree honest.

@@ -733,11 +733,8 @@ fn notice(
 ) -> Result<(), agent_client_protocol::Error> {
     connection.send_notification(SessionNotification::new(
         session_id.clone(),
-        SessionUpdate::Notice(
-            Notice::new(severity, "model agent").description(description.to_owned()),
-        ),
+        SessionUpdate::Notice(Notice::new(severity, title).description(description.to_owned())),
     ))?;
-    let _ = title;
     Ok(())
 }
 

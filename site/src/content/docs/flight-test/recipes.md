@@ -3,7 +3,7 @@ title: Recipes
 description: One model, one prompt, one budget — as a file you can diff, review, and share.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-3)
+<span class="pill pill--boarding">boarding</span> &nbsp; Models phase (P4.5-3, P4.5-7)
 
 A **recipe** is a tuned configuration for one model of one provider. It is TOML in
 the profile, and you can review it in a diff. Sharing one means sending a file.
@@ -160,10 +160,10 @@ came before. A broken line that is not the last one names its number, and a newe
 `schema_version` is refused rather than half-read.
 
 <Aside type="note" title="Status">
-The log, its paging and replay are in place (`acpilotd::runs`), and the agent that runs a
-recipe is `acpilot-agent-lm` (P4.5-5). The routes that assemble a request, write its
-record, and serve a page or a replay are P4.5-7. Until they land the file stays empty,
-and this page does not claim a route that answers.
+The routes are in place: `POST /v1/recipes/{id}/runs` writes a record and streams the
+run, and `GET /v1/recipes/{id}/runs` pages them. A recipe is a real file the API reads
+and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5). Replay has no route
+yet, and this page does not claim one.
 </Aside>
 
 ## Why files and not a database

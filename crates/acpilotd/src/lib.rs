@@ -55,7 +55,9 @@ mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
+pub mod model_runs;
 pub mod providers;
+pub mod recipes;
 // One line per model run, appended beside the transcripts (P4.5-6).
 pub mod runs;
 // The in-process listener: the same router, served by a client instead of a
@@ -345,6 +347,13 @@ pub struct AppState {
     /// because a restart's rows come from the profile's `[providers]` table and that
     /// file belongs to the recipes work.
     providers: Arc<providers::Providers>,
+    /// The profile's recipe files, when this daemon has a profile.
+    ///
+    /// A directory rather than a loaded table: a recipe edited by hand is visible on
+    /// the next read, and a write is what validates the whole set.
+    recipes: Option<Arc<recipes::Recipes>>,
+    /// Where this profile's runs are appended, when it has a profile.
+    run_log: Option<runs::RunLog>,
     /// The workspaces clients have opened, and the check that each root was there.
     ///
     /// In memory like the host list: a workspace is a host and a path, and both are
@@ -478,6 +487,8 @@ impl Default for AppState {
             index: None,
             hosts: Arc::new(hosts::Hosts::default()),
             providers: Arc::default(),
+            recipes: None,
+            run_log: None,
             workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
@@ -541,6 +552,30 @@ impl AppState {
     /// different list after every editor save. Nothing is probed here; a row reads
     /// `not_probed` until something asks.
     #[must_use]
+    /// Read and write recipes under `directory`.
+    pub fn with_recipes(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.recipes = Some(Arc::new(recipes::Recipes::open(directory)));
+        self
+    }
+
+    /// Append runs under `directory`.
+    pub fn with_run_log(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.run_log = Some(runs::RunLog::at(&directory.into()));
+        self
+    }
+
+    /// The profile's recipe files, when it has a profile.
+    #[must_use]
+    pub fn recipes(&self) -> Option<&recipes::Recipes> {
+        self.recipes.as_deref()
+    }
+
+    /// The profile's run log, when it has a profile.
+    #[must_use]
+    pub fn run_log(&self) -> Option<&runs::RunLog> {
+        self.run_log.as_ref()
+    }
+
     pub fn with_providers(mut self, providers: providers::Providers) -> Self {
         self.providers = Arc::new(providers);
         self
@@ -1243,6 +1278,10 @@ pub fn state_for_profile(
         .with_host_identities(identities)
         .with_broker(broker)
         .with_workspace(workspace)
+        // Recipes and runs are the profile's, not this process's: a recipe is a file
+        // beside `providers.toml`, and a run is appended under the profile's state.
+        .with_recipes(profile.recipes_dir())
+        .with_run_log(profile.data_dir())
         // A malformed declaration is a startup failure rather than an empty list:
         // the daemon would otherwise look healthy while the rows somebody wrote
         // were silently absent.
@@ -1898,6 +1937,8 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(commit::operations())
         .chain(project::operations())
         .chain(providers::operations())
+        .chain(recipes::operations())
+        .chain(model_runs::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
@@ -2294,6 +2335,8 @@ pub fn router_with(state: AppState) -> Router {
         .merge(commit::routes())
         .merge(hosts::routes())
         .merge(providers::routes())
+        .merge(recipes::routes())
+        .merge(model_runs::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
         .merge(project::routes())

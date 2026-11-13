@@ -1333,9 +1333,8 @@ run yet, and `runs.jsonl` stays empty until P4.5-7 records a run.
     is an empty log, a partial last line ends the read, a broken line that is not last names its
     number, and a newer `schema_version` is refused rather than half-read. **Tests:** twelve in
     the module.
-  - **Open:** no route serves a page or a replay yet; that is P4.5-7. Nothing writes a record
-    yet either: the agent (P4.5-5) runs the loop, but the request to record is assembled by
-    the route, so the write lands with P4.5-7.
+  - **Open:** `GET /v1/recipes/{id}/runs` serves a page and the run route writes a record
+    (P4.5-7). Replay has no route yet; `RunLog::replay` is ready for one.
   - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
     sampling, corpus selectors and resolved file list, budget), then the result (latency, first
     token, usage, stop reason, warnings).
@@ -1343,7 +1342,28 @@ run yet, and `runs.jsonl` stays empty until P4.5-7 records a run.
     stored request unchanged. Compare is a diff of two records, so "it was better an hour ago"
     has an answer.
 
-- [ ] **P4.5-7 · API** (1.5d)
+- [x] **P4.5-7 · API** (1.5d)
+  - **Result (2026-11-12):** the model surface is served. `PATCH`/`DELETE /v1/providers/{id}`
+    and `POST /v1/providers/{id}/probe` edit, remove and re-ask a declaration; a delete is
+    `409` while a recipe names it. `GET /v1/models` asks every enabled provider and returns
+    the models beside the providers that could not answer, because a list that silently
+    omits a server looks like a server with no models. `GET/POST /v1/recipes` and
+    `GET/PATCH/DELETE /v1/recipes/{id}` read and write one TOML file per recipe; every write
+    is validated by reading the directory back, and a rejected write restores the old bytes.
+    `POST /v1/recipes/{id}/runs?root=<dir>` assembles the prompt, calls the provider once,
+    appends the record to `runs.jsonl` and then streams `model.run.started`,
+    `model.run.delta` and `model.run.finished`; `GET /v1/recipes/{id}/runs` pages newest
+    first with a run-id cursor. The record is written before `finished` is sent, so a pane
+    that sees the frame has a line to point at. **Tests:** eight in `tests/recipes.rs`
+    (CRUD, refusal, models with one provider down, streamed run and record, root refusal,
+    provider edit/delete conflict, probe, no-profile refusal), six in
+    `tests/mock_server.rs` for the adapters, and two more in the agent's stdio suite.
+  - **Open:** promotion (`POST /v1/recipes/{id}/promote`) is P4.5-9 and is not served yet.
+    The run response is `200` with an SSE body, not the ticket's `202`: a `202` cannot carry
+    the stream, and a second polling route would be a run id nobody needs. A delta carries
+    the whole answer until `acpilot-model` streams (P4.5-11). Closing the stream abandons
+    the run and writes no record. `acpilot-client` has no typed wrappers for these routes
+    yet; the OpenAPI document and the TypeScript client are the contract.
   - `GET/POST /v1/providers`, `PATCH/DELETE /v1/providers/{id}`, `POST /v1/providers/{id}/probe`,
     `GET /v1/models`, `GET/POST /v1/recipes`, `GET/PATCH/DELETE /v1/recipes/{id}`,
     `POST /v1/recipes/{id}/runs` (202 + SSE stream), `GET /v1/recipes/{id}/runs`,

@@ -56,10 +56,20 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
 
     let line = format!(
         "{} --acp --profile {} --workspace {} --database {} --foreground",
-        env!("CARGO_BIN_EXE_acpilotd"),
-        profile.display(),
-        workspace.display(),
-        directory.path().join("profile.sqlite").display(),
+        // Every path in this line is a Windows path on one of the CI jobs, and the
+        // ACP crate's command parser treats a backslash as an escape: `D:\a\…`
+        // reaches the process spawner as `D:a…` and the failure is `program not
+        // found`, not a spawn error naming the path. Win32 accepts forward slashes,
+        // so the whole line is slash-normalised instead of quoted per argument.
+        env!("CARGO_BIN_EXE_acpilotd").replace('\\', "/"),
+        profile.display().to_string().replace('\\', "/"),
+        workspace.display().to_string().replace('\\', "/"),
+        directory
+            .path()
+            .join("profile.sqlite")
+            .display()
+            .to_string()
+            .replace('\\', "/"),
     );
     let agent = AcpAgent::from_str(&line).expect("a bridge command");
 

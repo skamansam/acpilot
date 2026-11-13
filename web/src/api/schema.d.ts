@@ -739,6 +739,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recipes/{id}/runs/{run}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One run's record: the answer and the request that produced it
+         * @description The page returns summaries because that is what a history draws. This returns the stored request as well: the prompt, the corpus selectors, the files they resolved to with sizes, and the budget the assembly planned against. A run the log does not hold is `404`, including a run id that belongs to another recipe.
+         */
+        get: operations["get_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -2350,6 +2370,26 @@ export interface components {
             tools?: components["schemas"]["ToolExposure"] | null;
         };
         /**
+         * @description The request half of a run record.
+         *
+         *     This is what the run sent, not what the recipe would send now: the recipe may
+         *     have been edited since, and the lab's point is to show the run that happened.
+         */
+        RecordedRunRequest: {
+            /** @description The budget the assembly planned against. */
+            budget: components["schemas"]["ContextBudget"];
+            /** @description Selectors in the order the run used them. */
+            corpus: components["schemas"]["CorpusSelector"][];
+            /** @description The files they resolved to, in prompt order. */
+            files: components["schemas"]["ResolvedCorpusFile"][];
+            /** @description The user message, unchanged. */
+            prompt: string;
+            /** @description `sha256:` and the hex digest of the prompt. */
+            prompt_sha256: string;
+            /** @description The master prompt's digest, when the recipe had one. */
+            system_prompt_sha256?: string | null;
+        };
+        /**
          * @description One use of an identifier, for the references panel.
          *
          *     `column` is a character column rather than a byte offset: a pane places a caret on
@@ -2409,11 +2449,44 @@ export interface components {
             /** @description Workspace id, when the client names one. The daemon serves exactly one. */
             workspace?: string | null;
         };
+        /**
+         * @description One file a corpus selector resolved to, as the run recorded it.
+         *
+         *     Recorded rather than re-derived: the lab shows the files a run actually read,
+         *     with their sizes, and a replay must not depend on the workspace still looking
+         *     the way it did.
+         */
+        ResolvedCorpusFile: {
+            /**
+             * Format: int64
+             * @description Bytes read from disk.
+             */
+            bytes: number;
+            /** @description Path relative to the workspace root, with `/` separators. */
+            path: string;
+            /**
+             * Format: int32
+             * @description Tokens the file was estimated at.
+             */
+            tokens: number;
+        };
         /** @description One page of a recipe's runs, newest first. */
         RunPage: {
             next?: components["schemas"]["String"] | null;
             /** @description The runs. */
             runs: components["schemas"]["RunSummary"][];
+        };
+        /** @description One run's record: what it answered, and what it was asked. */
+        RunRecordView: {
+            /** @description The request that produced it. */
+            request: components["schemas"]["RecordedRunRequest"];
+            /**
+             * Format: int32
+             * @description Schema version of the stored line.
+             */
+            schema_version: number;
+            /** @description The run, as the page also returns it. */
+            summary: components["schemas"]["RunSummary"];
         };
         /** @description Request body for `POST /v1/recipes/{id}/runs`. */
         RunRequest: {
@@ -4839,6 +4912,40 @@ export interface operations {
             };
             /** @description The provider is not declared, disabled, or unreachable */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description Run id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRecordView"];
+                };
+            };
+            /** @description No such run for this recipe */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

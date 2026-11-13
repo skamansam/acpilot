@@ -117,6 +117,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.commit.is_some() {
         draw_commit_composer(frame, app, body);
     }
+    if let Some(lab) = &app.lab {
+        crate::lab::draw(frame, lab, &app.theme, body);
+    }
     if app.first_run {
         draw_first_run(frame, &app.theme, body);
     }

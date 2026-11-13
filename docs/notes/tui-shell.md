@@ -360,3 +360,37 @@ session's stored events at 45 ms a chunk.
    the divider moves the same width, so neither gesture is the only way. What is
    still open is whether the drag should also persist: the widths reset on
    launch today.
+## The model lab
+
+`Session → Build an Agent in the Model Lab…` opens a page over the panes
+(P4.5-8), not a fourth column: a recipe is about the model, and a settings screen
+in a column would be a fourth panel in a shell whose point is three.
+
+Three panes answer three questions. **Recipe** is the draft that will be sent:
+label, master prompt, sampling, budget, tool ceiling. **Corpus** is what the
+workspace contributes — selectors, the files the last run resolved them to, and a
+byte meter against the recipe's ceiling. **Output** is the answer as it streams,
+the gauges the provider reported, and the run history.
+
+The rules are the ones a lab needs to be worth reading:
+
+- A figure the provider did not report is absent or says `not reported`. Estimated
+  tokens carry a sentence saying the server reported no usage, and the gauges are
+  coloured as an estimate.
+- The inspector (`v`) shows the exact request a run sent: prompt, selectors, the
+  files with sizes and tokens, the budget, and the parameters. The files come from
+  the run's record, which is why `GET /v1/recipes/{id}/runs/{run}` exists; without
+  a record the inspector says what the plan is and leaves the file list empty
+  rather than guessing.
+- A parameter the server refused is named in the run's warnings, beside the
+  request, because a knob that silently does nothing is worse than no knob.
+- Compare (`c`) marks a run as the base; the selected run's gauges then carry the
+  token and latency difference. A run that did not report a duration is compared
+  in tokens only and says so.
+- Editing is local until `^S`. `Esc` backs out one step at a time — the prompt,
+  the inspector, the draft, the page — so the key that means "not that" cannot
+  throw away a half-typed prompt.
+
+Promotion is one keystroke away in the ticket, not here: `POST
+/v1/recipes/{id}/promote` is P4.5-9's route, so the lab saves and runs but does
+not write `agents.toml` yet.

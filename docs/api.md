@@ -853,8 +853,7 @@ session and checks the answer with `acpilot_core::commit`. The staged diff is
 the only change it sees. Nothing is committed, and the draft is not stored, so the
 editor can change it before the commit action of P6.5-4. `prompt` replaces the
 template for this request only. `generator` is `session:<id>`. The model-lab recipe
-half of the ticket waits on the recipe routes of P4.5-7. Providers answer today, and
-recipes load from disk, but no route serves one yet.
+half of the ticket uses the recipe routes of P4.5-7, which serve a recipe from disk.
 
 The format is enforced rather than fixed. An unknown type, a missing
 description, a subject over 72 characters, or a body without a blank line is a
@@ -1086,6 +1085,7 @@ now would freeze transports that have not been measured.
 | `DELETE /v1/recipes/{id}` | `204`; runs already recorded are left alone |
 | `POST /v1/recipes/{id}/runs` | Streams the run as SSE; `?root=` is required when `corpus` is not empty |
 | `GET /v1/recipes/{id}/runs` | Newest first, `?cursor=` and `?limit=` |
+| `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, and the budget it was assembled from; `404` for a run the log does not hold, including another recipe's |
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 

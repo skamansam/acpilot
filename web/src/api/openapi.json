@@ -2821,6 +2821,52 @@
         },
         "type": "object"
       },
+      "RecordedRunRequest": {
+        "description": "The request half of a run record.\n\nThis is what the run sent, not what the recipe would send now: the recipe may\nhave been edited since, and the lab's point is to show the run that happened.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "The budget the assembly planned against."
+          },
+          "corpus": {
+            "description": "Selectors in the order the run used them.",
+            "items": {
+              "$ref": "#/components/schemas/CorpusSelector"
+            },
+            "type": "array"
+          },
+          "files": {
+            "description": "The files they resolved to, in prompt order.",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedCorpusFile"
+            },
+            "type": "array"
+          },
+          "prompt": {
+            "description": "The user message, unchanged.",
+            "type": "string"
+          },
+          "prompt_sha256": {
+            "description": "`sha256:` and the hex digest of the prompt.",
+            "type": "string"
+          },
+          "system_prompt_sha256": {
+            "description": "The master prompt's digest, when the recipe had one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prompt",
+          "prompt_sha256",
+          "corpus",
+          "files",
+          "budget"
+        ],
+        "type": "object"
+      },
       "Reference": {
         "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
         "properties": {
@@ -2893,6 +2939,33 @@
         ],
         "type": "object"
       },
+      "ResolvedCorpusFile": {
+        "description": "One file a corpus selector resolved to, as the run recorded it.\n\nRecorded rather than re-derived: the lab shows the files a run actually read,\nwith their sizes, and a replay must not depend on the workspace still looking\nthe way it did.",
+        "properties": {
+          "bytes": {
+            "description": "Bytes read from disk.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path relative to the workspace root, with `/` separators.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Tokens the file was estimated at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "tokens"
+        ],
+        "type": "object"
+      },
       "RunPage": {
         "description": "One page of a recipe's runs, newest first.",
         "properties": {
@@ -2917,6 +2990,31 @@
         },
         "required": [
           "runs"
+        ],
+        "type": "object"
+      },
+      "RunRecordView": {
+        "description": "One run's record: what it answered, and what it was asked.",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/RecordedRunRequest",
+            "description": "The request that produced it."
+          },
+          "schema_version": {
+            "description": "Schema version of the stored line.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunSummary",
+            "description": "The run, as the page also returns it."
+          }
+        },
+        "required": [
+          "schema_version",
+          "summary",
+          "request"
         ],
         "type": "object"
       },
@@ -6056,6 +6154,55 @@
           }
         },
         "summary": "Run a recipe and stream the answer"
+      }
+    },
+    "/v1/recipes/{id}/runs/{run}": {
+      "get": {
+        "description": "The page returns summaries because that is what a history draws. This returns the stored request as well: the prompt, the corpus selectors, the files they resolved to with sizes, and the budget the assembly planned against. A run the log does not hold is `404`, including a run id that belongs to another recipe.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecordView"
+                }
+              }
+            },
+            "description": "The run's record"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such run for this recipe"
+          }
+        },
+        "summary": "One run's record: the answer and the request that produced it"
       }
     },
     "/v1/sessions": {

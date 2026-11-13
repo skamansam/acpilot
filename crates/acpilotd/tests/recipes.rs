@@ -243,6 +243,46 @@ async fn a_run_streams_three_frames_and_appends_a_record() {
 }
 
 #[tokio::test]
+async fn a_run_record_is_read_back_with_the_request_it_sent() {
+    let profile = tempfile::tempdir().expect("profile");
+    let base_url = provider();
+    let app = app(profile.path(), &base_url);
+    let (status, created) = send(&app, "POST", "/v1/recipes", Some(recipe("demo"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let root = profile.path().to_string_lossy().to_string();
+    let (status, _) = raw(
+        &app,
+        "POST",
+        &format!("/v1/recipes/demo/runs?root={root}"),
+        Some(json!({ "prompt": "say hello", "corpus": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, page) = send(&app, "GET", "/v1/recipes/demo/runs", None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let id = page["runs"][0]["id"]
+        .as_str()
+        .expect("the page carries the run id")
+        .to_owned();
+
+    // The lab asks what the run read, which the page does not carry.
+    let (status, record) = send(&app, "GET", &format!("/v1/recipes/demo/runs/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    assert_eq!(record["summary"]["id"], id.as_str());
+    assert_eq!(record["request"]["prompt"], "say hello");
+    assert_eq!(record["request"]["budget"]["window"], 4096);
+    assert!(
+        record["request"]["files"].is_array(),
+        "a run with no selectors read no files, and says so: {record}"
+    );
+
+    let (status, body) = send(&app, "GET", "/v1/recipes/demo/runs/not-a-run", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
 async fn a_run_with_corpus_but_no_root_is_refused_before_anything_is_sent() {
     let profile = tempfile::tempdir().expect("profile");
     let app = app(profile.path(), "http://127.0.0.1:1");

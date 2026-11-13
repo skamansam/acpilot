@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use acpilot_client::terminal::{Terminal as Attached, TerminalEvent};
-use acpilot_client::{Client, ClientError, ProfileStream, SessionStream};
+use acpilot_client::{Client, ClientError, ModelRunStream, ProfileStream, SessionStream};
 use acpilot_proto::agent::AgentSummary;
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
@@ -43,7 +43,11 @@ const RECONNECT: Duration = Duration::from_secs(2);
 const STATS_POLL: Duration = Duration::from_secs(15);
 
 /// What the UI asks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` and not `Eq`: a save carries a recipe, and a recipe carries `f32`
+/// sampling knobs. An equality that had to lie about those to be total would be
+/// worse than one that says a value can be "not equal" but never equivalent.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Re-read sessions, agents and pending permissions.
     Refresh {
@@ -159,6 +163,28 @@ pub enum Request {
     LspStatus,
     /// Read the project map the agent wrote under `.acpilot/`.
     ProjectMap,
+    /// Read the profile's recipes and the model catalogue for the lab.
+    LabLoad,
+    /// Read one recipe's runs for the lab.
+    LabRuns(String),
+    /// Read one run's record, including the files it read.
+    LabRecord {
+        /// The recipe the run belongs to.
+        recipe: String,
+        /// The run to read.
+        run: String,
+    },
+    /// Write a recipe back, through the daemon's own validation.
+    LabSave(Box<acpilot_proto::model::ModelRecipe>),
+    /// Run a recipe and stream its answer.
+    LabRun {
+        /// The recipe to run.
+        recipe: String,
+        /// The workspace the corpus selectors resolve against.
+        root: String,
+        /// The prompt and selectors.
+        request: acpilot_proto::model::RunRequest,
+    },
     /// Read a file, by workspace-relative path.
     OpenFile(String),
     /// Write a buffer back, with the token the read came with.
@@ -217,6 +243,32 @@ pub enum Update {
         /// Version string.
         version: String,
     },
+    /// The profile's recipes and what the providers reported.
+    LabLoaded {
+        /// Every recipe, in the daemon's order.
+        recipes: Vec<acpilot_proto::model::ModelRecipe>,
+        /// Models from every provider that answered.
+        models: Vec<acpilot_proto::model::DiscoveredModel>,
+        /// Providers that did not answer the model list, and why.
+        problems: Vec<acpilot_proto::model::ModelProblem>,
+    },
+    /// A recipe was written, and this is the daemon's version of it.
+    LabSaved(acpilot_proto::model::ModelRecipe),
+    /// One recipe's runs, newest first.
+    LabRuns(Vec<acpilot_proto::model::RunSummary>),
+    /// One run's record.
+    LabRecord(Box<acpilot_proto::model::RunRecordView>),
+    /// A run started; deltas follow.
+    LabRunStarted {
+        /// The run the frames belong to.
+        run_id: String,
+    },
+    /// Answer text from a run.
+    LabRunDelta(String),
+    /// A run ended, and its record is written.
+    LabRunFinished(Box<acpilot_proto::model::RunSummary>),
+    /// The lab's last request failed, worded for the status line.
+    LabError(String),
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
     /// The workspace root the daemon serves, for the tree's title.
@@ -729,6 +781,101 @@ async fn run(
                             let _ = updates.send(Update::Status(describe(&error)));
                         }
                     }
+                }
+                Some(Request::LabLoad) => {
+                    let recipes = client.recipes().await;
+                    let models = client.models().await;
+                    match (recipes, models) {
+                        (Ok(recipes), Ok(catalogue)) => {
+                            let _ = updates.send(Update::LabLoaded {
+                                recipes,
+                                models: catalogue.models,
+                                problems: catalogue.problems,
+                            });
+                        }
+                        (Err(error), _) | (_, Err(error)) => {
+                            let _ = updates.send(Update::LabError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::LabRuns(id)) => match client.runs(&id).await {
+                    Ok(page) => {
+                        let _ = updates.send(Update::LabRuns(page.runs));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::LabError(describe(&error)));
+                    }
+                },
+                Some(Request::LabRecord { recipe, run }) => {
+                    match client.run_record(&recipe, &run).await {
+                        Ok(record) => {
+                            let _ = updates.send(Update::LabRecord(Box::new(record)));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::LabError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::LabSave(recipe)) => {
+                    // Every editable field travels: the lab's draft is the whole
+                    // recipe it drew, and a patch of one field would be a save that
+                    // silently dropped the others.
+                    let patch = acpilot_proto::model::RecipePatch {
+                        label: Some(recipe.label.clone()),
+                        provider_id: Some(recipe.provider_id.clone()),
+                        model_id: Some(recipe.model_id.clone()),
+                        system_prompt: Some(recipe.system_prompt.clone()),
+                        sampling: Some(recipe.sampling.clone()),
+                        context: Some(recipe.context.clone()),
+                        tools: Some(recipe.tools.clone()),
+                        notes: recipe.notes.clone(),
+                    };
+                    match client.patch_recipe(&recipe.id, &patch).await {
+                        Ok(recipe) => {
+                            let _ = updates.send(Update::LabSaved(recipe));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::LabError(describe(&error)));
+                        }
+                    }
+                }
+                Some(Request::LabRun {
+                    recipe,
+                    root,
+                    request,
+                }) => {
+                    // Its own task: a generation is seconds, and the worker's loop
+                    // must keep delivering polls, keys and the terminal while it
+                    // runs. The run cannot be cancelled yet; closing the lab leaves
+                    // it streaming into a lab nobody draws.
+                    let client = client.clone();
+                    let updates = updates.clone();
+                    tokio::spawn(async move {
+                        let root = (!root.is_empty()).then_some(root.as_str());
+                        let mut frames = client.run_recipe(&recipe, root, &request);
+                        while let Some(frame) = frames.next().await {
+                            match frame {
+                                Ok(ModelRunStream::Started { run_id }) => {
+                                    let _ = updates.send(Update::LabRunStarted { run_id });
+                                }
+                                Ok(ModelRunStream::Delta { text, .. }) => {
+                                    let _ = updates.send(Update::LabRunDelta(text));
+                                }
+                                Ok(ModelRunStream::Finished(run)) => {
+                                    let _ = updates.send(Update::LabRunFinished(run));
+                                    break;
+                                }
+                                Ok(ModelRunStream::Other { .. }) => {}
+                                Err(error) => {
+                                    let _ = updates.send(Update::LabError(describe(&error)));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Ok(page) = client.runs(&recipe).await {
+                            let _ = updates.send(Update::LabRuns(page.runs));
+                        }
+                    });
                 }
                 Some(Request::Git) => match read_source(&client).await {
                     Ok(update) => {
@@ -1537,6 +1684,15 @@ async fn run_demo(
                     query: query.clone(),
                     rows,
                 });
+            }
+            Request::LabLoad
+            | Request::LabRuns(_)
+            | Request::LabRecord { .. }
+            | Request::LabSave(_)
+            | Request::LabRun { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · the model lab needs the daemon".to_owned(),
+                ));
             }
             Request::Prompt(_) => {
                 // The composer works, the turn does not: the reply is a script, so

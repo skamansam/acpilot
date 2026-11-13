@@ -19,6 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::backend::{Request, Update};
 use crate::editor::{EditorPane, Mode};
 use crate::keymap::{Action, Context, Keymap};
+use crate::lab::{FIELDS, Lab, Pane};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
@@ -1923,6 +1924,12 @@ pub struct App {
     pub review: Option<Review>,
     /// The workspace content search, when one is up.
     pub grep: Option<GrepSearch>,
+    /// The model lab, when it is over the panes.
+    ///
+    /// A page rather than a pane: a recipe is about the model, not the workspace,
+    /// and a pane that opened a settings screen would be a fourth column that is
+    /// not part of the three-panel model every frontend shares.
+    pub lab: Option<Lab>,
     /// The source-control pane, when one is up.
     pub source: Option<SourceControl>,
     /// The commit composer, when it is over the source-control pane.
@@ -2729,6 +2736,7 @@ impl App {
             diff: None,
             review: None,
             grep: None,
+            lab: None,
             source: None,
             commit: None,
             pending_line: None,
@@ -3460,6 +3468,89 @@ impl App {
                 self.connected = true;
                 self.status = format!("connected · acpilotd {version}");
             }
+            Update::LabLoaded {
+                recipes,
+                models,
+                problems,
+            } => {
+                let mut lab = self.lab.take().unwrap_or_default();
+                lab.recipes = recipes;
+                lab.models = models;
+                lab.problems = problems;
+                lab.loading = false;
+                lab.selected = lab.selected.min(lab.recipes.len().saturating_sub(1));
+                if lab.recipes.is_empty() {
+                    self.status = "model lab · no recipes in this profile".to_owned();
+                } else {
+                    self.status = format!("model lab · {} recipes", lab.recipes.len());
+                    if let Some(recipe) = lab.recipe() {
+                        self.pending.push(Request::LabRuns(recipe.id.clone()));
+                    }
+                }
+                self.lab = Some(lab);
+            }
+            Update::LabSaved(recipe) => {
+                if let Some(lab) = self.lab.as_mut()
+                    && let Some(slot) = lab.recipes.get_mut(lab.selected)
+                    && slot.id == recipe.id
+                {
+                    *slot = recipe;
+                    lab.dirty = false;
+                }
+                self.status = "recipe saved".to_owned();
+            }
+            Update::LabRuns(runs) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.runs = runs;
+                    lab.run_selected = lab.run_selected.min(lab.runs.len().saturating_sub(1));
+                    lab.record = None;
+                    lab.loading = false;
+                }
+            }
+            Update::LabRecord(record) => {
+                if let Some(lab) = self.lab.as_mut()
+                    && lab
+                        .current_run()
+                        .is_some_and(|run| run.id == record.summary.id)
+                {
+                    lab.record = Some(*record);
+                }
+            }
+            Update::LabRunStarted { run_id } => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = true;
+                    lab.output.clear();
+                    lab.error = None;
+                    lab.status = Some(format!("running · {run_id}"));
+                }
+            }
+            Update::LabRunDelta(text) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.output.push_str(&text);
+                }
+            }
+            Update::LabRunFinished(run) => {
+                let run = *run;
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = false;
+                    lab.runs.retain(|existing| existing.id != run.id);
+                    lab.runs.insert(0, run.clone());
+                    lab.run_selected = 0;
+                    lab.record = None;
+                    self.pending.push(Request::LabRecord {
+                        recipe: run.recipe_id.clone(),
+                        run: run.id.clone(),
+                    });
+                }
+            }
+            Update::LabError(message) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = false;
+                    lab.loading = false;
+                    lab.error = Some(message.clone());
+                }
+                self.status = format!("model lab · {message}");
+            }
             Update::Agents(agents) => {
                 self.agents = agents;
                 // The roster can shrink under a picker that is already up, and a
@@ -4097,6 +4188,12 @@ impl App {
         // The content search is the next question out: it is drawn over every pane
         // and its keys are text, so letting a key through to a pane would be a key
         // acting on something nobody can see.
+        // The model lab is a page over every pane, drawn rather than put beside
+        // them, so while it is up a key belongs to it and to nothing behind it.
+        if self.lab.is_some() {
+            return self.lab_key(key);
+        }
+
         if self.grep.is_some() {
             return self.grep_key(key);
         }
@@ -6064,7 +6161,7 @@ impl App {
             }
             MenuAction::SelectAgent => return self.select_agent(),
             MenuAction::CloseAssistant => self.close_assistant(),
-            MenuAction::ModelLab => self.planned("P4.5", "the model lab"),
+            MenuAction::ModelLab => return self.toggle_lab(),
             MenuAction::Cancel => return Some(Request::Cancel),
             MenuAction::AnswerPermission => self.reopen_permission(),
             MenuAction::Quit => {
@@ -6631,6 +6728,230 @@ impl App {
                 Some(Request::Quit)
             }
         }
+    }
+
+    /// Open the model lab, or put it away.
+    ///
+    /// The design pass has no daemon, so it says so instead of opening a page that
+    /// would spend its first frame apologising.
+    fn toggle_lab(&mut self) -> Option<Request> {
+        if self.lab.take().is_some() {
+            self.notice("the model lab is closed");
+            return None;
+        }
+        if self.demo {
+            self.notice("the design pass has no daemon, so it has no model lab");
+            return None;
+        }
+        self.lab = Some(Lab {
+            loading: true,
+            ..Lab::default()
+        });
+        self.status = "model lab · reading recipes…".to_owned();
+        Some(Request::LabLoad)
+    }
+
+    /// The model lab's keys.
+    ///
+    /// A page over every pane, so it owns the keyboard the way the palette does.
+    /// `Esc` backs out one step at a time — the prompt, the inspector, then the
+    /// page — because the first `Esc` out of a half-typed prompt meaning "close"
+    /// would lose the prompt to the key that means "not that".
+    fn lab_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let mut lab = self.lab.take()?;
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let mut request = None;
+        let mut close = false;
+
+        if let Some(draft) = lab.draft.as_mut() {
+            match key.code {
+                KeyCode::Esc => lab.draft = None,
+                KeyCode::Enter if draft.multiline() => {
+                    let at = Self::offset(&draft.text, draft.cursor);
+                    draft.text.insert(at, '\n');
+                    draft.cursor += 1;
+                }
+                KeyCode::Enter => match lab.commit() {
+                    Ok(()) => lab.status = Some("applied · ^S writes the recipe".to_owned()),
+                    Err(reason) => lab.status = Some(reason),
+                },
+                KeyCode::Backspace if draft.cursor > 0 => {
+                    let at = Self::offset(&draft.text, draft.cursor - 1);
+                    draft.text.remove(at);
+                    draft.cursor -= 1;
+                }
+                KeyCode::Char(character) if !control => {
+                    let at = Self::offset(&draft.text, draft.cursor);
+                    draft.text.insert(at, character);
+                    draft.cursor += 1;
+                }
+                _ => {}
+            }
+        } else if lab.typing {
+            match key.code {
+                KeyCode::Esc => lab.typing = false,
+                KeyCode::Backspace => {
+                    lab.prompt.pop();
+                }
+                KeyCode::Enter => {
+                    lab.typing = false;
+                    if lab.prompt.trim().is_empty() {
+                        lab.status = Some("write a prompt first · i".to_owned());
+                    } else {
+                        request = self.lab_run(&lab);
+                    }
+                }
+                KeyCode::Char(character) if !control => lab.prompt.push(character),
+                _ => {}
+            }
+        } else {
+            match key.code {
+                KeyCode::Esc if lab.inspector => lab.inspector = false,
+                KeyCode::Esc => close = true,
+                KeyCode::Tab => lab.pane = lab.pane.next(),
+                KeyCode::BackTab => lab.pane = lab.pane.previous(),
+                KeyCode::Up => request = Self::lab_move(&mut lab, false),
+                KeyCode::Down => request = Self::lab_move(&mut lab, true),
+                KeyCode::Char('k') if !control => request = Self::lab_move(&mut lab, false),
+                KeyCode::Char('j') if !control => request = Self::lab_move(&mut lab, true),
+                KeyCode::Char(' ') if lab.pane == Pane::Recipe => {
+                    if let Some(value) = lab.toggle_field() {
+                        lab.status = Some(value);
+                    }
+                }
+                KeyCode::Enter => match lab.pane {
+                    Pane::Recipe => {
+                        if FIELDS.get(lab.field).is_some_and(|field| field.editable()) {
+                            lab.begin_field();
+                        } else if let Some(value) = lab.toggle_field() {
+                            lab.status = Some(value);
+                        }
+                    }
+                    Pane::Corpus => lab.begin_selector(),
+                    Pane::Output => {
+                        if let (Some(recipe), Some(run)) = (lab.recipe(), lab.current_run()) {
+                            request = Some(Request::LabRecord {
+                                recipe: recipe.id.clone(),
+                                run: run.id.clone(),
+                            });
+                        }
+                    }
+                },
+                KeyCode::Char('i') if !control && lab.pane == Pane::Output => {
+                    lab.typing = true;
+                    lab.status = Some("prompt · Enter runs · Esc leaves".to_owned());
+                }
+                KeyCode::Char('v') if !control => lab.inspector = !lab.inspector,
+                KeyCode::Char('c') if !control => {
+                    lab.compare = Some(lab.run_selected);
+                    lab.status = Some(format!("comparing against run {}", lab.run_selected + 1));
+                }
+                KeyCode::Char('a') if !control && lab.pane == Pane::Corpus => lab.add_selector(),
+                KeyCode::Char('x') if !control && lab.pane == Pane::Corpus => lab.remove_selector(),
+                KeyCode::Char('[') => {
+                    lab.step_recipe(false);
+                    request = lab
+                        .recipe()
+                        .map(|recipe| Request::LabRuns(recipe.id.clone()));
+                }
+                KeyCode::Char(']') => {
+                    lab.step_recipe(true);
+                    request = lab
+                        .recipe()
+                        .map(|recipe| Request::LabRuns(recipe.id.clone()));
+                }
+                KeyCode::Char('r') if !control => {
+                    lab.loading = true;
+                    request = Some(Request::LabLoad);
+                }
+                KeyCode::Char('r') if control => {
+                    if lab.prompt.trim().is_empty() {
+                        lab.status = Some("write a prompt first · i".to_owned());
+                    } else {
+                        request = self.lab_run(&lab);
+                    }
+                }
+                KeyCode::Char('s') if control => {
+                    if let Some(recipe) = lab.recipe().cloned() {
+                        request = Some(Request::LabSave(Box::new(recipe)));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if close {
+            self.status = "the model lab is closed".to_owned();
+            return None;
+        }
+        if let Some(status) = lab.status.take() {
+            self.status = status;
+        }
+        self.lab = Some(lab);
+        request
+    }
+
+    /// Run the recipe with the prompt as typed, or say what is missing.
+    ///
+    /// An empty prompt is refused here rather than at the daemon: the run would
+    /// still read the corpus and record a line, and "why did nothing happen" is a
+    /// worse answer than naming the key that writes one.
+    fn lab_run(&self, lab: &Lab) -> Option<Request> {
+        let recipe = lab.recipe()?;
+        Some(Request::LabRun {
+            recipe: recipe.id.clone(),
+            root: self.workspace.clone(),
+            request: acpilot_proto::model::RunRequest {
+                prompt: lab.prompt.clone(),
+                corpus: lab.selectors.clone(),
+                idempotency_key: None,
+            },
+        })
+    }
+
+    /// Move the lab's cursor within the pane it is in.
+    fn lab_move(lab: &mut Lab, forward: bool) -> Option<Request> {
+        match lab.pane {
+            Pane::Recipe => {
+                lab.field = if forward {
+                    (lab.field + 1).min(FIELDS.len().saturating_sub(1))
+                } else {
+                    lab.field.saturating_sub(1)
+                };
+            }
+            Pane::Corpus => {
+                lab.selector = if forward {
+                    (lab.selector + 1).min(lab.selectors.len().saturating_sub(1))
+                } else {
+                    lab.selector.saturating_sub(1)
+                };
+            }
+            Pane::Output => {
+                let next = if forward {
+                    (lab.run_selected + 1).min(lab.runs.len().saturating_sub(1))
+                } else {
+                    lab.run_selected.saturating_sub(1)
+                };
+                if next != lab.run_selected {
+                    lab.run_selected = next;
+                    lab.record = None;
+                    let recipe = lab.recipe()?;
+                    let run = lab.current_run()?;
+                    return Some(Request::LabRecord {
+                        recipe: recipe.id.clone(),
+                        run: run.id.clone(),
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// The byte offset of a character index, or the end of the text.
+    fn offset(text: &str, character: usize) -> usize {
+        text.char_indices()
+            .nth(character)
+            .map_or(text.len(), |(index, _)| index)
     }
 
     /// Say that a command is designed and not built, naming the task.

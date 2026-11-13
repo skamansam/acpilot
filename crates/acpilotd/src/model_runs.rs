@@ -24,13 +24,16 @@ use acpilot_core::AcpilotError;
 use acpilot_model::context::{Assembly, assemble};
 use acpilot_model::{Backend, ChatMessage, ChatRequest, Provider, Role, Usage};
 use acpilot_proto::ErrorBody;
-use acpilot_proto::model::{RunPage, RunRequest, RunStatus, RunSummary, TokenUsage};
+use acpilot_proto::model::{
+    RecordedRunRequest, ResolvedCorpusFile, RunPage, RunRecordView, RunRequest, RunStatus,
+    RunSummary, TokenUsage,
+};
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, Sse};
-use axum::routing::post;
+use axum::routing::{get, post};
 use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::json;
@@ -56,7 +59,9 @@ struct PageParams {
 
 /// The run routes.
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/v1/recipes/{id}/runs", post(start).get(page))
+    Router::new()
+        .route("/v1/recipes/{id}/runs", post(start).get(page))
+        .route("/v1/recipes/{id}/runs/{run}", get(record))
 }
 
 /// Everything a run needs, resolved before the first frame.
@@ -386,6 +391,56 @@ async fn page(
     }))
 }
 
+/// One run's record: the summary and the request that produced it.
+///
+/// The page returns summaries because that is what a history draws; the lab also
+/// asks what a single run read, which lives in the record's request half. A run
+/// the log does not hold is `404`, including one that belongs to another recipe.
+async fn record(
+    State(state): State<AppState>,
+    Path((id, run_id)): Path<(String, String)>,
+) -> Result<Json<RunRecordView>, ApiError> {
+    let Some(log) = state.run_log() else {
+        return Err(ApiError::new(AcpilotError::invalid(
+            "this daemon has no profile, so it has no run log",
+        )));
+    };
+    match log.get(&id, &run_id) {
+        Ok(Some(record)) => Ok(Json(record_view(&record))),
+        Ok(None) => Err(ApiError::new(AcpilotError::not_found(format!(
+            "no run `{run_id}` for recipe `{id}`"
+        )))),
+        Err(error) => Err(ApiError::new(AcpilotError::Io(std::io::Error::other(
+            error.to_string(),
+        )))),
+    }
+}
+
+/// The wire shape of a stored record.
+fn record_view(record: &RunRecord) -> RunRecordView {
+    RunRecordView {
+        schema_version: record.schema_version,
+        summary: record.summary.clone(),
+        request: RecordedRunRequest {
+            prompt: record.request.prompt.clone(),
+            prompt_sha256: record.request.prompt_sha256.clone(),
+            system_prompt_sha256: record.request.system_prompt_sha256.clone(),
+            corpus: record.request.corpus.clone(),
+            files: record
+                .request
+                .files
+                .iter()
+                .map(|file| ResolvedCorpusFile {
+                    path: file.path.clone(),
+                    bytes: file.bytes,
+                    tokens: file.tokens,
+                })
+                .collect(),
+            budget: record.request.budget.clone(),
+        },
+    }
+}
+
 /// The run operations, for the OpenAPI document.
 pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
     vec![
@@ -398,6 +453,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             "/v1/recipes/{id}/runs",
             HttpMethod::Get,
             <__path_page_doc as utoipa::Path>::operation(),
+        ),
+        (
+            "/v1/recipes/{id}/runs/{run}",
+            HttpMethod::Get,
+            <__path_record_doc as utoipa::Path>::operation(),
         ),
     ]
 }
@@ -440,3 +500,22 @@ fn start_doc() {}
     )
 )]
 fn page_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    operation_id = "get_run",
+    path = "/v1/recipes/{id}/runs/{run}",
+    tag = "models",
+    summary = "One run's record: the answer and the request that produced it",
+    description = "The page returns summaries because that is what a history draws. This returns the stored request as well: the prompt, the corpus selectors, the files they resolved to with sizes, and the budget the assembly planned against. A run the log does not hold is `404`, including a run id that belongs to another recipe.",
+    params(
+        ("id" = String, Path, description = "Recipe id"),
+        ("run" = String, Path, description = "Run id")
+    ),
+    responses(
+        (status = 200, description = "The run's record", body = RunRecordView),
+        (status = 404, description = "No such run for this recipe", body = ErrorBody)
+    )
+)]
+fn record_doc() {}

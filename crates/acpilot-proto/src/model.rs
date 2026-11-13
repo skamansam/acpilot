@@ -504,6 +504,53 @@ pub struct RunPage {
     pub next: Option<RunId>,
 }
 
+/// One file a corpus selector resolved to, as the run recorded it.
+///
+/// Recorded rather than re-derived: the lab shows the files a run actually read,
+/// with their sizes, and a replay must not depend on the workspace still looking
+/// the way it did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ResolvedCorpusFile {
+    /// Path relative to the workspace root, with `/` separators.
+    pub path: String,
+    /// Bytes read from disk.
+    pub bytes: u64,
+    /// Tokens the file was estimated at.
+    pub tokens: u32,
+}
+
+/// The request half of a run record.
+///
+/// This is what the run sent, not what the recipe would send now: the recipe may
+/// have been edited since, and the lab's point is to show the run that happened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct RecordedRunRequest {
+    /// The user message, unchanged.
+    pub prompt: String,
+    /// `sha256:` and the hex digest of the prompt.
+    pub prompt_sha256: String,
+    /// The master prompt's digest, when the recipe had one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_sha256: Option<String>,
+    /// Selectors in the order the run used them.
+    pub corpus: Vec<CorpusSelector>,
+    /// The files they resolved to, in prompt order.
+    pub files: Vec<ResolvedCorpusFile>,
+    /// The budget the assembly planned against.
+    pub budget: ContextBudget,
+}
+
+/// One run's record: what it answered, and what it was asked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct RunRecordView {
+    /// Schema version of the stored line.
+    pub schema_version: u32,
+    /// The run, as the page also returns it.
+    pub summary: RunSummary,
+    /// The request that produced it.
+    pub request: RecordedRunRequest,
+}
+
 /// Request body for `POST /v1/recipes/{id}/promote`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PromoteRecipeRequest {

@@ -701,6 +701,107 @@ impl Client {
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger
     /// wants; a pane asks for the ones its session opened.
+    /// `GET /v1/providers`: the declarations, with their last probe answer.
+    pub async fn providers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::model::ProviderSummary>, ClientError> {
+        self.get("/v1/providers").await
+    }
+
+    /// `GET /v1/models`: what every enabled provider reports, and who did not answer.
+    pub async fn models(&self) -> Result<acpilot_proto::model::ModelCatalogue, ClientError> {
+        self.get("/v1/models").await
+    }
+
+    /// `GET /v1/recipes`: every recipe in the profile, in file order.
+    pub async fn recipes(&self) -> Result<Vec<acpilot_proto::model::ModelRecipe>, ClientError> {
+        self.get("/v1/recipes").await
+    }
+
+    /// `GET /v1/recipes/{id}`.
+    pub async fn recipe(&self, id: &str) -> Result<acpilot_proto::model::ModelRecipe, ClientError> {
+        self.get(&format!("/v1/recipes/{id}")).await
+    }
+
+    /// `PATCH /v1/recipes/{id}`. Only the fields present move.
+    pub async fn patch_recipe(
+        &self,
+        id: &str,
+        patch: &acpilot_proto::model::RecipePatch,
+    ) -> Result<acpilot_proto::model::ModelRecipe, ClientError> {
+        let path = format!("/v1/recipes/{id}");
+        let request = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(request, &path).await
+    }
+
+    /// `GET /v1/recipes/{id}/runs`: one page of summaries, newest first.
+    pub async fn runs(&self, id: &str) -> Result<acpilot_proto::model::RunPage, ClientError> {
+        self.get(&format!("/v1/recipes/{id}/runs")).await
+    }
+
+    /// `GET /v1/recipes/{id}/runs/{run}`: the record, including what the run read.
+    pub async fn run_record(
+        &self,
+        id: &str,
+        run: &str,
+    ) -> Result<acpilot_proto::model::RunRecordView, ClientError> {
+        self.get(&format!("/v1/recipes/{id}/runs/{run}")).await
+    }
+
+    /// Start a run and follow its frames.
+    ///
+    /// The stream is the run: there is no job to poll. `root` is the workspace the
+    /// corpus selectors resolve against, and is refused by the daemon when a run
+    /// has selectors and names none.
+    pub fn run_recipe(
+        &self,
+        id: &str,
+        root: Option<&str>,
+        request: &acpilot_proto::model::RunRequest,
+    ) -> BoxStream<'static, Result<ModelRunStream, ClientError>> {
+        let client = self.clone();
+        let id = id.to_owned();
+        let query = root.map(|root| format!("?root={}", query_value(root)));
+        let request = request.clone();
+        stream::once(async move { client.open_run(&id, query.as_deref(), &request).await })
+            .then(|opened| async move {
+                match opened {
+                    Ok(frames) => frames,
+                    Err(error) => Box::pin(stream::once(async move { Err(error) })),
+                }
+            })
+            .flatten()
+            .boxed()
+    }
+
+    async fn open_run(
+        &self,
+        id: &str,
+        query: Option<&str>,
+        request: &acpilot_proto::model::RunRequest,
+    ) -> Result<BoxStream<'static, Result<ModelRunStream, ClientError>>, ClientError> {
+        let path = match query {
+            Some(query) => format!("/v1/recipes/{id}/runs{query}"),
+            None => format!("/v1/recipes/{id}/runs"),
+        };
+        let response = self
+            .http
+            .post(self.request_url(&path))
+            .json(request)
+            .send()
+            .await
+            .map_err(|source| self.transport(&path, source))?;
+        if !response.status().is_success() {
+            return Err(self.api_error(response, &path).await);
+        }
+        Ok(Box::pin(response.bytes_stream().eventsource().map(
+            |frame| match frame {
+                Ok(frame) => model_run_frame(&frame),
+                Err(error) => Err(ClientError::Stream(error.to_string())),
+            },
+        )))
+    }
+
     pub async fn terminals(
         &self,
         session: Option<&str>,
@@ -959,6 +1060,66 @@ fn query_value(value: &str) -> String {
 
 fn status_code(status: StatusCode) -> &'static str {
     status.canonical_reason().unwrap_or("unknown")
+}
+
+/// One frame of a recipe run's stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelRunStream {
+    /// The run exists; the frames after this one carry its id.
+    Started {
+        /// Run identifier, which the record is fetched by.
+        run_id: String,
+    },
+    /// Answer text. Today one frame carries the whole answer.
+    Delta {
+        /// Run identifier.
+        run_id: String,
+        /// The text.
+        text: String,
+    },
+    /// The run ended, and its record is written before this frame.
+    Finished(Box<acpilot_proto::model::RunSummary>),
+    /// A frame this build does not know, kept so the stream is not silently short.
+    Other {
+        /// The event name.
+        event: String,
+        /// Its data, unparsed.
+        data: String,
+    },
+}
+
+fn model_run_frame(frame: &eventsource_stream::Event) -> Result<ModelRunStream, ClientError> {
+    let value = |data: &str| -> Result<serde_json::Value, ClientError> {
+        serde_json::from_str(data)
+            .map_err(|error| ClientError::Stream(format!("a run frame did not parse: {error}")))
+    };
+    match frame.event.as_str() {
+        "model.run.started" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Started {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.delta" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Delta {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+                text: value["text"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.finished" => {
+            let value = value(&frame.data)?;
+            serde_json::from_value(value["run"].clone())
+                .map(|run| ModelRunStream::Finished(Box::new(run)))
+                .map_err(|error| {
+                    ClientError::Stream(format!("a finished run did not parse: {error}"))
+                })
+        }
+        other => Ok(ModelRunStream::Other {
+            event: other.to_owned(),
+            data: frame.data.clone(),
+        }),
+    }
 }
 
 fn session_frame(frame: &eventsource_stream::Event) -> Result<SessionStream, ClientError> {

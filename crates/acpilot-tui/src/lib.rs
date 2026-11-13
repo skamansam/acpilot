@@ -20,6 +20,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod editor;
 pub mod keymap;
+pub mod lab;
 pub mod layout;
 pub mod markdown;
 pub mod theme;

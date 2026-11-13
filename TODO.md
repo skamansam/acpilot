@@ -1151,10 +1151,11 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
 **Status (2026-11-12):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
 (discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
 reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
-loop) and P4.5-6 (the append-only run log with paging and replay). Open: P4.5-7, the recipe
-and run routes; P4.5-8 to P4.5-10, the lab, promotion and the ACP bridge; and P4.5-11 to
-P4.5-13, the mock-server tests, integration stats and skills. No route serves a recipe or a
-run yet, and `runs.jsonl` stays empty until P4.5-7 records a run.
+loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
+and run routes) and P4.5-8 (the lab page in the TUI). Open: P4.5-9 promotion, P4.5-10 the
+ACP bridge, and P4.5-11 to P4.5-13, the mock-server tests, integration stats and skills. A
+run writes its record before the `finished` frame, and the lab reads that record back
+through `GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
 
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
@@ -1371,7 +1372,25 @@ run yet, and `runs.jsonl` stays empty until P4.5-7 records a run.
   - SSE gains `model.run.started`, `model.run.delta`, `model.run.finished`, `model.provider.status`.
     OpenAPI snapshot updated in the same PR.
 
-- [ ] **P4.5-8 · The lab UI** (2.5d, TUI first; web and desktop reuse the API)
+- [x] **P4.5-8 · The lab UI** (2.5d, TUI first; web and desktop reuse the API)
+  - **Result (2026-11-12):** `crates/acpilot-tui/src/lab.rs` is a page over the panes, opened by
+    Session → Build an Agent in the Model Lab… . Recipes, the model catalogue and runs come from
+    the P4.5-7 routes; `^S` sends every editable field as a `PATCH`, so the daemon's validation
+    is the only rule and a refused value leaves the draft open with the reason. `^R` streams a
+    run, and the finished frames append to the history. `GET /v1/recipes/{id}/runs/{run}` is new:
+    the page carries summaries, and the corpus pane and the inspector need the files a run
+    resolved with their sizes, which only the record holds. Estimated token counts are coloured
+    and say the server reported no usage; a gauge it did not report says `not reported`; a
+    refused parameter is named from the run's warnings. `c` marks a base run and the selected run
+    shows token and latency deltas, or tokens alone when a duration is missing. **Tests:** nine
+    in the lab module (refused ranges, empty optional knobs, the strategy cycle, a tool toggle, a
+    cancelled draft, selector parsing, comparison, the budget meter and the inspector) and one in
+    `crates/acpilotd/tests/recipes.rs` for the record route and its `404`.
+  - **Open:** promotion is not here: `POST /v1/recipes/{id}/promote` is P4.5-9, so the lab saves
+    and runs but writes no `agents.toml`. A run is not cancellable once started; closing the page
+    leaves it streaming into a lab nobody draws. Corpus selectors belong to the run request, not
+    the recipe, so they start empty each time the page opens and only the record remembers what a
+    run used. The web and desktop labs do not exist yet; they use the same routes.
   - Three panes: recipe (master prompt, sampling sliders, context budget, tool ceiling), corpus
     (globs, resolved file list with sizes, budget meter), output (streaming text, run history).
   - Gauges show only what the provider reported: first token, tok/s, stop reason, usage. Estimated

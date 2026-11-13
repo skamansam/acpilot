@@ -34,12 +34,17 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
     // path a driver on macOS gets from the system: `/var` is `/private/var`.
     let workspace = std::fs::canonicalize(&workspace).expect("the workspace resolves");
 
-    // A TOML *literal* string, so a Windows path is taken byte for byte. A basic
-    // string needs every backslash doubled, and one that reaches `Command` with a
-    // separator missing is `program not found` rather than a parse error.
+    // Forward slashes on every platform: Win32 accepts them, and a command that
+    // travels through a manifest is then a string no separator escaping can
+    // mangle. A backslash path that loses one separator reaches `Command` as
+    // `program not found` rather than as a parse error.
     let fixture = common::mock_agent();
     assert!(fixture.exists(), "the fixture agent is built: {fixture:?}");
-    let command = fixture.display();
+    let command = fixture.display().to_string().replace('\\', "/");
+    assert!(
+        std::path::Path::new(&command).exists(),
+        "the fixture is here: {command}"
+    );
     std::fs::write(
         profile.join("agents.toml"),
         format!(
@@ -98,7 +103,8 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
                                 .client_info(Implementation::new("bridge-test", "0.0.0")),
                         )
                         .block_task()
-                        .await?;
+                        .await
+                        .expect("initialize");
                     let initialize = serde_json::to_value(&initialize).unwrap_or_default();
                     assert_eq!(
                         initialize
@@ -111,7 +117,8 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
                     let session = connection
                         .send_request(NewSessionRequest::new(workspace))
                         .block_task()
-                        .await?;
+                        .await
+                        .expect("session/new");
                     let session = serde_json::to_value(&session).unwrap_or_default();
                     let session_id = session
                         .get("sessionId")
@@ -125,7 +132,8 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
                             vec![ContentBlock::Text(TextContent::new("stream 2"))],
                         ))
                         .block_task()
-                        .await?;
+                        .await
+                        .expect("session/prompt");
                     let response = serde_json::to_value(&response).unwrap_or_default();
                     assert_eq!(
                         response

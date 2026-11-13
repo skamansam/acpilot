@@ -5,6 +5,14 @@ description: A remote driver — Devin, a CI job, another editor — can fly ses
 
 <span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-10)
 
+<Aside type="note" title="Status">
+The **local** transport is built: `acpilotd --acp` serves ACP over stdin/stdout for one
+profile, opens a session from `session/new`, streams a turn and cancels it. The remote
+half — HTTPS, `acpilot acp pair`, the token verbs, scopes and `GET /v1/acp/*` — is not
+served yet. The sections below describe the endpoint's design; where a section needs the
+remote half, it says so.
+</Aside>
+
 Acpilot is usually the ACP **client**. It spawns agents and answers their
 callbacks. The bridge flips one seat. A remote driver connects to `acpilotd`,
 opens a session on your machine, and prompts the agents that live here. The
@@ -61,6 +69,10 @@ acpilot acp token show          # prints the reference, not the token
 acpilot acp token rotate        # writes a new 0600 file, argon2-hashed on disk
 acpilot acp pair                # one-time code, 2 minutes, shown in the cockpit
 ```
+
+None of those verbs exist yet: they belong to the remote transport, which is open
+on P4.5-10. The local transport needs none of them — the client that spawned
+`acpilotd --acp` already holds the pipes.
 
 | Readout | Value |
 | --- | --- |
@@ -141,7 +153,14 @@ gets. That answer is no. The bridge changes who is typing, not what it allows.
 
 ## Configuring the driver
 
-Any ACP client can drive the bridge. It needs three values and nothing else:
+Any ACP client can drive the bridge. For the local transport it needs one value —
+the command line — and nothing else:
+
+```bash
+acpilotd --acp --profile work --workspace /home/sam/code/api
+```
+
+For a remote driver it would need three values:
 
 | Value | From |
 | --- | --- |

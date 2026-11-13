@@ -698,6 +698,23 @@ impl Profiles {
         Registry::load(&self.registry_path).map_err(registry_error)
     }
 
+    /// The state behind one profile, for a caller that is not an HTTP client.
+    ///
+    /// The ACP bridge over stdio serves one profile and has no header to select
+    /// it with, so it asks for the same state a request would have been routed
+    /// to. Cloned rather than borrowed because a bridge outlives the read.
+    #[must_use]
+    pub fn state(&self, id: &str) -> Option<AppState> {
+        if id.is_empty() {
+            return self.anonymous.as_ref().map(|entry| entry.state.clone());
+        }
+        self.entries
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(|entry| entry.state.clone())
+    }
+
     /// The active profile's name, empty when the daemon has no profile.
     #[must_use]
     pub fn active(&self) -> String {

@@ -242,6 +242,26 @@ impl Sessions {
         }
     }
 
+    /// Ask the owner task to stop the turn in flight.
+    ///
+    /// Best-effort like the cancel route: `false` when the session is unknown or
+    /// its mailbox will not take another command. The ACP bridge's
+    /// `session/cancel` is a notification, so there is no answer to give back —
+    /// the daemon's own `cancelled` event is the record that it worked.
+    pub fn cancel(&self, id: &str) -> bool {
+        self.handle(id)
+            .is_some_and(|record| record.commands.try_send(Command::Cancel).is_ok())
+    }
+
+    /// Watch one session's events as they are recorded.
+    ///
+    /// The ACP bridge forwards a turn while it runs, and a second subscription
+    /// alongside [`Self::ask`] is what lets it stream: the record is a broadcast,
+    /// so two readers see the same events rather than one stealing the other's.
+    pub fn subscribe(&self, id: &str) -> Option<broadcast::Receiver<SessionEvent>> {
+        self.handle(id).map(|record| record.subscribe())
+    }
+
     /// The id a client holds for the conversation the agent calls `acp_id`.
     ///
     /// A scan rather than a second map: a daemon has one session per open
@@ -703,7 +723,7 @@ impl Record {
     }
 
     /// A subscription to events recorded from now on.
-    fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
         self.log
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

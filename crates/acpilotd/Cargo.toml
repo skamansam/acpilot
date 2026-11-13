@@ -47,6 +47,11 @@ acpilot-stats = { workspace = true }
 # mention is the parse tree, and it has to run where the text is. The grammars are the
 # ones the editor links, so one crate answers both surfaces.
 acpilot-text = { workspace = true, optional = true }
+# The ACP bridge is this daemon answering as an agent (P4.5-10): a driver speaks
+# ACP to `acpilotd --acp`, and the protocol's own types are what it reads and
+# writes. The same crate the client engine uses, so one schema describes both
+# seats rather than two transcriptions drifting apart.
+agent-client-protocol = { workspace = true }
 # References come from a language server where one is installed: scope is the
 # server's answer rather than the parse tree's guess.
 acpilot-lsp = { workspace = true }
@@ -108,9 +113,6 @@ utoipa = { workspace = true }
 vt100 = { workspace = true }
 
 [dev-dependencies]
-# A pane over an agent's terminal is tested by asking the agent side for one, so
-# this crate needs the protocol's request type — tests only: no route speaks ACP.
-agent-client-protocol = { workspace = true }
 # The socket test talks to the daemon the way a client does, over the transport a
 # client uses, rather than through `oneshot` on the router.
 acpilot-client = { workspace = true }

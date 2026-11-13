@@ -1153,10 +1153,12 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
 reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
 loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
 and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
-`agents.toml` entry, and `acpilot agents rm` reverses it). Open: P4.5-10 the ACP bridge, and
-P4.5-11 to P4.5-13, the mock-server tests, integration stats and skills. A run writes its
-record before the `finished` frame, and the lab reads that record back through
-`GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
+`agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
+landed (`acpilotd --acp`, stdio) and P4.5-10 remains open for its remote half — HTTP/JSON-RPC,
+pairing, scopes and the cockpit routes. P4.5-11 to P4.5-13, the mock-server tests, integration
+stats and skills, are also open. A run writes its record before the `finished` frame, and the
+lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
+resolved.
 
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
@@ -1439,6 +1441,31 @@ record before the `finished` frame, and the lab reads that record back through
     migration.
 
 - [ ] **P4.5-10 · ACP bridge for remote drivers** (2d)
+  - **Result so far (2026-11-13):** the local transport is served. `acpilotd --acp` answers
+    ACP over stdin/stdout for the profile the daemon was started with, and it is the same
+    state a request with that profile's header would reach — same workspace, agents and
+    broker (`Profiles::state`, `crates/acpilotd/src/bridge.rs`). `session/new` checks the
+    driver's `cwd` is inside the workspace, then opens one of this profile's agents: the
+    only declared agent when there is one, or the one named in `_meta.acpilot.agent`, and
+    several unnamed agents are refused with the list rather than guessed at.
+    `session/prompt` runs the turn through `Sessions::ask` while a second subscription
+    forwards the assistant's text chunks and the daemon's notices as `session/update`
+    notifications, so the driver reads the words as they arrive; `session/cancel` reaches
+    the session's owner task, and the stop reason is `end_turn`. stdout is the protocol, so
+    nothing binds and no pidfile or token is written. **Tests:** five unit tests (one agent
+    needs no naming, several are refused with the list and the way to choose, a named agent
+    is honoured and an unknown one names what exists, a directory outside the workspace is
+    refused, a prompt is its text blocks and an image is dropped rather than described) and
+    one end-to-end test that spawns the binary with `--acp` and drives it with a real ACP
+    client — handshake, `session/new`, a prompt, `chunk 1|chunk 2` received as notifications,
+    and `end_turn`.
+  - **Open (the remote half, and one translation):** ACP over HTTP/JSON-RPC at `/acp`, the
+    bearer token argon2-hashed in a 0600 file, single-use two-minute pairing codes, scopes
+    intersected with the grant, `answer_permissions` off by default with the blocking call
+    answered by a human and a `Notice` explaining why, per-driver rate limits, driver ids on
+    sessions and audit rows, and `GET /v1/acp/{bridge,drivers}` with revoke. Tool-call, plan
+    and mode-change events are not translated to ACP updates yet; they are dropped rather
+    than approximated, which is why a driver's transcript is thinner than the TUI's.
   - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
     `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
     Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip

@@ -1129,3 +1129,29 @@ asked once, on the explicit action: a model that did not call the probe tool, or
 provider that could not be asked, is promoted with the reason attached. A recipe
 that exposes `tools.search` warns that ACP has no workspace-search callback, so
 the promoted agent does not offer it.
+
+## The ACP bridge (local transport)
+
+`acpilotd --acp` does not listen: it serves ACP over stdin/stdout, with the
+profile's agents, workspace and permission broker behind it. A driver that spawns
+it is an ordinary ACP client — `initialize`, `session/new`, `session/prompt`,
+`session/cancel` — and each session it opens is one this daemon records like any
+other.
+
+`session/new` takes a directory, not an agent. A profile that declares one agent
+needs no choice; one with several is refused with the list unless the request
+names one in ACP's extension point:
+
+```json
+{"cwd": "/home/sam/code/api", "mcpServers": [],
+ "_meta": {"acpilot": {"agent": "corpus-scraper"}}}
+```
+
+The directory has to be inside the workspace this daemon serves. A turn streams
+the assistant's text and the daemon's notices as `session/update`, and answers
+`end_turn`; tool-call, plan and mode-change events are not translated yet.
+
+The remote transport — ACP over HTTP/JSON-RPC at `/acp`, bearer tokens, pairing
+codes, scopes, rate limits and `GET /v1/acp/{bridge,drivers}` — is not served yet.
+It is P4.5-10's remaining half, and the routes are deliberately absent rather
+than answering `501`.

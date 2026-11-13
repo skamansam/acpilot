@@ -41,8 +41,11 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
+// The ACP bridge: this daemon answering as an agent for a driver that attached
+// over stdio (P4.5-10). Remote transports, pairing and scopes are not here yet.
 mod auth;
 mod base64;
+pub mod bridge;
 // The daemon's settings: two files, then the flags (P3-1). Public because the
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;

@@ -67,6 +67,7 @@ mod lsp_remote;
 pub mod pidfile;
 mod platform;
 mod project;
+mod promote;
 mod pty_remote;
 // Every profile under `<config>/profiles`, and the header rule that picks one per
 // request: `GET /v1/profiles` and `X-Acpilot-Profile` are its surface.
@@ -1439,9 +1440,9 @@ pub fn workspace_at(root: &std::path::Path) -> Result<Workspace, StateError> {
 /// prevent.
 fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry>>, StateError> {
     let path = profile.agents_path();
-    if !path.is_file() {
-        return Ok(None);
-    }
+    // A missing manifest is an empty registry, not no registry: promotion writes
+    // the first entry while the daemon runs, and `GET /v1/agents` has to show it
+    // from the next read rather than from the next restart.
     // Secrets are namespaced by profile name, and the directory is the name: the profiles phase's task P4-2
     // resolves `<name>` to exactly this path. A path with no last segment names
     // no profile, and then nothing has been stored under that name either.
@@ -1938,6 +1939,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(project::operations())
         .chain(providers::operations())
         .chain(recipes::operations())
+        .chain(promote::operations())
         .chain(model_runs::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
@@ -2336,6 +2338,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(hosts::routes())
         .merge(providers::routes())
         .merge(recipes::routes())
+        .merge(promote::routes())
         .merge(model_runs::routes())
         .merge(sessions::routes())
         .merge(stats::routes())

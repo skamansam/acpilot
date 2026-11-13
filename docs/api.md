@@ -184,7 +184,7 @@ The successful answer is the new effective object. It is also announced as a
 
 **Added after v1 was frozen**: the provider, model, recipe and run routes below. They
 follow the same conventions and change no route above. The ACP bridge and remote drivers
-(P4.5-10), promotion (P4.5-9) and extensions are still deliberately later.
+(P4.5-10) and extensions are still deliberately later.
 
 ## Providers
 
@@ -1086,6 +1086,7 @@ now would freeze transports that have not been measured.
 | `POST /v1/recipes/{id}/runs` | Streams the run as SSE; `?root=` is required when `corpus` is not empty |
 | `GET /v1/recipes/{id}/runs` | Newest first, `?cursor=` and `?limit=` |
 | `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, and the budget it was assembled from; `404` for a run the log does not hold, including another recipe's |
+| `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent; `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 
@@ -1099,4 +1100,32 @@ The record is appended to `runs.jsonl` before `finished` is sent. A failed run e
 `status` `failed` and a `message`; the stream still closes with `200` because the request
 was accepted. Closing the response abandons the run, and no record is written.
 
-`POST /v1/recipes/{id}/promote` is not served yet; it is P4.5-9.
+## Promotion
+
+`POST /v1/recipes/{id}/promote` takes an `agent_id` (and an optional `name`, which
+defaults to the recipe's label) and writes one `[[agents]]` entry:
+
+```toml
+[[agents]]
+# acpilot:promoted recipe="recipes/corpus-scraper.toml" mtime="2026-11-12T12:00:00Z"
+id = "corpus-scraper"
+name = "Corpus scraper (Qwen 7B)"
+transport = "acp-stdio"
+command = "acpilot-agent-lm"
+args = ["--recipe", "corpus-scraper"]
+restart = "on-crash"
+env = { ACPILOT_RECIPE_PROFILE = "work" }
+```
+
+The entry is an ordinary agent from that moment: `GET /v1/agents` lists it and the
+session routes can start it. The comment is what makes the entry promotion's: the
+same id without it was written by hand, and the route answers `409` rather than
+replacing somebody's command, `restart` or environment. Promoting the same recipe
+twice replaces the block, so no second entry is appended. `acpilot agents rm <id>`
+is the inverse, and removes the file when the entry was the last agent.
+
+The answer carries `warnings`, which never block the write. The tools probe is
+asked once, on the explicit action: a model that did not call the probe tool, or a
+provider that could not be asked, is promoted with the reason attached. A recipe
+that exposes `tools.search` warns that ACP has no workspace-search callback, so
+the promoted agent does not offer it.

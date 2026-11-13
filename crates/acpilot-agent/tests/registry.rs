@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use acpilot_agent::AgentProcess;
 use acpilot_agent::keyring::{CredentialStore, KeyringResolver, SERVICE};
-use acpilot_agent::{AgentError, MapResolver, Parser, Registry, SecretResolver, Transport};
+use acpilot_agent::{MapResolver, Parser, Registry, SecretResolver, Transport};
 use acpilot_proto::agent::AgentTransport;
 
 const FIRST: &str = r#"
@@ -157,15 +157,20 @@ fn a_manifest_that_does_not_validate_does_not_load_at_all() {
 }
 
 #[test]
-fn a_missing_file_is_reported_with_its_path() {
+fn a_missing_file_is_an_empty_registry_and_is_not_created() {
+    // A profile with no manifest has no agents, which is the ordinary first-run
+    // state. Promotion writes the first entry while the daemon runs, and removal
+    // of the last entry deletes the file, so both ends of that life have to read
+    // "no file" as "no agents" rather than as a failure.
     let dir = tempfile::tempdir().expect("tempdir");
-    let error = Registry::load(manifest_path(dir.path()), resolver()).expect_err("should fail");
-    let message = error.to_string();
-    assert!(message.contains("agents.toml"), "{message}");
-    assert!(matches!(error, AgentError::Io { .. }), "{error:?}");
+    let registry =
+        Registry::load(manifest_path(dir.path()), resolver()).expect("an empty registry");
+    assert!(registry.agents().is_empty());
+    assert_eq!(registry.path(), manifest_path(dir.path()));
+    assert!(registry.last_error().is_none(), "nothing failed");
     assert!(
         !manifest_path(dir.path()).exists(),
-        "a missing manifest is reported, not created"
+        "reading a profile never creates its manifest"
     );
 }
 
@@ -219,16 +224,24 @@ fn a_broken_edit_keeps_the_last_good_snapshot_and_the_reason() {
 }
 
 #[test]
-fn a_file_deleted_out_from_under_a_running_registry_does_not_lose_the_agents() {
+fn a_deleted_manifest_reloads_as_no_agents() {
+    // Removal of the last promoted entry deletes the file, and the daemon that
+    // promoted it has to stop listing the agent without a restart. That is the
+    // same answer a restart would give; the momentary absence in an editor's
+    // write-then-rename is covered by `watching_survives_an_atomic_save`, which
+    // settles on the file that arrives.
     let dir = tempfile::tempdir().expect("tempdir");
     write(dir.path(), FIRST);
     let registry = load(dir.path());
+    assert!(registry.get("claude").is_some());
 
     fs::remove_file(manifest_path(dir.path())).expect("remove manifest");
-    let error = registry.reload().expect_err("a missing file is a failure");
-    assert!(matches!(error, AgentError::Io { .. }), "{error:?}");
-    assert!(registry.get("claude").is_some());
-    assert!(registry.last_error().is_some());
+    assert!(
+        registry.reload().expect("a missing manifest is no agents"),
+        "the snapshot changed"
+    );
+    assert!(registry.get("claude").is_none());
+    assert!(registry.last_error().is_none(), "it is not a failure");
 }
 
 #[test]

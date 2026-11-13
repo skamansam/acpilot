@@ -38,7 +38,7 @@ parsing English. This table is a promise. Changing it is a breaking change.
 ```text
 acpilot host add|ls|test|rm
 acpilot workspace open|ls|rm
-acpilot agents list|refresh|show
+acpilot agents rm <id>
 acpilot session new|ls|show|rm|fork
 acpilot prompt <text> [--session <id|@alias>] [--file <path>] [--follow]
 acpilot watch <session>

@@ -734,6 +734,21 @@ impl Client {
         self.send(request, &path).await
     }
 
+    /// `POST /v1/recipes/{id}/promote`: write the entry, read the caveats.
+    ///
+    /// The warnings are the answer as much as the agent is: a model whose tools
+    /// probe did not call anything is promoted anyway, and a caller that shows
+    /// only the success hides the reason to reconsider.
+    pub async fn promote_recipe(
+        &self,
+        id: &str,
+        request: &acpilot_proto::model::PromoteRecipeRequest,
+    ) -> Result<acpilot_proto::model::PromotedAgent, ClientError> {
+        let path = format!("/v1/recipes/{id}/promote");
+        let request = self.http.post(self.request_url(&path)).json(request);
+        self.send(request, &path).await
+    }
+
     /// `GET /v1/recipes/{id}/runs`: one page of summaries, newest first.
     pub async fn runs(&self, id: &str) -> Result<acpilot_proto::model::RunPage, ClientError> {
         self.get(&format!("/v1/recipes/{id}/runs")).await

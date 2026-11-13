@@ -1148,14 +1148,15 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
-**Status (2026-11-12):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
+**Status (2026-11-13):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
 (discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
 reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
 loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
-and run routes) and P4.5-8 (the lab page in the TUI). Open: P4.5-9 promotion, P4.5-10 the
-ACP bridge, and P4.5-11 to P4.5-13, the mock-server tests, integration stats and skills. A
-run writes its record before the `finished` frame, and the lab reads that record back
-through `GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
+and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
+`agents.toml` entry, and `acpilot agents rm` reverses it). Open: P4.5-10 the ACP bridge, and
+P4.5-11 to P4.5-13, the mock-server tests, integration stats and skills. A run writes its
+record before the `finished` frame, and the lab reads that record back through
+`GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
 
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
@@ -1401,7 +1402,34 @@ through `GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
   - Compare mode: two runs side by side with a token and latency delta; promote is one keystroke
     from here, and it warns first.
 
-- [ ] **P4.5-9 · Promotion** (1d)
+- [x] **P4.5-9 · Promotion** (1d)
+  - **Result (2026-11-13):** `POST /v1/recipes/{id}/promote` writes one `[[agents]]` block —
+    `transport = "acp-stdio"`, `command = "acpilot-agent-lm"`, `args = ["--recipe", "<id>"]`,
+    `restart = "on-crash"` and `env = { ACPILOT_RECIPE_PROFILE = "work" }` — under a
+    `# acpilot:promoted recipe="recipes/<id>.toml" mtime="…"` comment. The text edit and its
+    rules are `crates/acpilot-agent/src/promote.rs`, shared with the CLI: a second promotion
+    replaces the block instead of appending one, and an entry with the same id that has no
+    marker is `409` and is left byte-for-byte alone. `acpilot agents rm <id>` removes the
+    block, and removes the file when it was the last agent, which is exactly the state before
+    promotion. The registry now loads a missing `agents.toml` as an empty list, so a daemon
+    started before the first promotion lists the new agent on its next read instead of after a
+    restart, and removing the last entry returns it to an empty list. Warnings travel in the
+    response and never block: a model that did not call the tools probe, a provider that
+    could not be asked, and `tools.search` (which ACP cannot offer) are each named with the
+    reason. **Tests:** eleven in `promote.rs` (create, replace, hand-written refusal for both
+    directions, preservation of neighbouring blocks and comments, deleting the last entry, an
+    id the loader refuses, a quoted label), three in `crates/acpilotd/tests/recipes.rs`
+    (promote then re-promote with `GET /v1/agents` showing it, `409` for a hand-written id,
+    `404` for a recipe that is not there) and one in `crates/acpilot-cli/tests/cli.rs` for the
+    reversal.
+  - **Open:** two of the ticket's three warnings are not computable from what exists. The run
+    log records model-only runs, which never call a tool, so there is no tool-call validity
+    rate to average over the last ten runs; that needs the ACP agent's turns to be recorded
+    (P4.5-11's DoD). Nothing in the tree reports host memory, and a token window is not a byte
+    quantity, so "the window exceeds host memory" has no arithmetic to implement yet. The lab
+    still has no promote key: promotion is the route and the CLI reversal, and the lab's one
+    keystroke is open with the web and desktop labs. There is no `acpilot recipes promote`
+    verb; the route is the contract, as with the other recipe routes.
   - Write the `agents.toml` entry (`transport = "acp-stdio"`, `command = "acpilot-agent-lm"`,
     `args = ["--recipe", "<id>"]`, `env = { ACPILOT_RECIPE_PROFILE = "work" }`), with a comment
     naming the recipe file and its mtime, and refuse to overwrite a hand-written entry.

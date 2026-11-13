@@ -6023,6 +6023,65 @@
         "summary": "One recipe"
       }
     },
+    "/v1/recipes/{id}/promote": {
+      "post": {
+        "description": "Writes one `acp-stdio` entry whose command is `acpilot-agent-lm`, with a comment naming the recipe file and its mtime. An entry with the same id that promotion did not write is `409` and is left untouched. The tools probe is asked once and its answer, when it is bad or could not be given, comes back in `warnings`; warnings never block the write. Removing the entry is `acpilot agents rm`.",
+        "operationId": "promote_recipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotedAgent"
+                }
+              }
+            },
+            "description": "The agent as `GET /v1/agents` will now report it"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile directory, or an id the manifest loader refuses"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such recipe"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A hand-written entry already owns the id"
+          }
+        },
+        "summary": "Write a recipe into `agents.toml` as an agent"
+      }
+    },
     "/v1/recipes/{id}/runs": {
       "get": {
         "description": "The cursor is a run id, not an offset: the log only grows, and an offset would repeat or skip a line when something is appended between two pages. A cursor naming another recipe's run is `400`.",

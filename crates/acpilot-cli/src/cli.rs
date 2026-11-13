@@ -222,6 +222,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ModelsCommand,
     },
+    /// List and remove the agents a profile declares.
+    Agents {
+        /// Which agents verb.
+        #[command(subcommand)]
+        command: AgentsCommand,
+    },
 }
 
 /// Everything under `acpilot models`.
@@ -235,6 +241,21 @@ pub enum ModelsCommand {
     Probe {
         /// Provider id from the profile's `providers.toml`.
         id: Option<String>,
+    },
+}
+
+/// Everything under `acpilot agents`.
+#[derive(Debug, Subcommand)]
+pub enum AgentsCommand {
+    /// Remove the `agents.toml` entry promotion wrote for a recipe.
+    ///
+    /// This is the inverse of `POST /v1/recipes/{id}/promote`: the block leaves,
+    /// and when it was the only agent the file is removed rather than left as an
+    /// empty manifest the loader would refuse. An entry a person wrote by hand is
+    /// refused, because promotion never owned it.
+    Rm {
+        /// Agent id, as the manifest spells it.
+        id: String,
     },
 }
 
@@ -577,6 +598,7 @@ pub fn run(cli: Cli) -> u8 {
             mouse: !no_mouse,
         }),
         Some(Command::Models { command }) => run_models(command, profile.as_deref()),
+        Some(Command::Agents { command }) => run_agents(command, profile.as_deref()),
         Some(Command::Doctor {
             path,
             api_url,
@@ -1407,6 +1429,38 @@ fn run_config(command: ConfigCommand, profile: Option<&str>) -> u8 {
         Err(error) => {
             eprintln!("acpilot config explain: {error}");
             exit::FAILURE
+        }
+    }
+}
+
+/// `acpilot agents rm`.
+fn run_agents(command: AgentsCommand, profile: Option<&str>) -> u8 {
+    match command {
+        AgentsCommand::Rm { id } => {
+            let profile = match models_profile(profile) {
+                Ok(profile) => profile,
+                Err(message) => {
+                    eprintln!("acpilot agents rm: {message}");
+                    return exit::NOT_FOUND;
+                }
+            };
+            let path = acpilot_agent::promote::path_in(profile.root());
+            match acpilot_agent::promote::demote(&path, &id) {
+                Ok(()) => {
+                    println!("removed {id} from {}", path.display());
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    // Nothing to remove is a different answer from a refusal, and
+                    // a script should be able to tell them apart.
+                    let code = match &error {
+                        acpilot_agent::promote::PromoteError::Missing { .. } => exit::NOT_FOUND,
+                        _ => exit::FAILURE,
+                    };
+                    eprintln!("acpilot agents rm: {error}");
+                    code
+                }
+            }
         }
     }
 }

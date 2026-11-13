@@ -834,3 +834,66 @@ fn a_profile_export_imports_and_a_second_import_is_a_conflict() {
         stderr(&again)
     );
 }
+
+#[test]
+fn agents_rm_removes_a_promoted_entry_and_refuses_a_hand_written_one() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/work");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\n\
+         # acpilot:promoted recipe=\"recipes/demo.toml\" mtime=\"2026-11-12T12:00:00Z\"\n\
+         id = \"demo\"\ntransport = \"acp-stdio\"\ncommand = \"acpilot-agent-lm\"\n\
+         args = [\"--recipe\", \"demo\"]\n",
+    )
+    .expect("manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "--profile",
+            profile.to_str().expect("path"),
+            "agents",
+            "rm",
+            "demo",
+        ])
+        .current_dir(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !profile.join("agents.toml").exists(),
+        "the last promoted entry takes the file with it"
+    );
+
+    // A hand-written entry is not promotion's to remove: the id is refused and
+    // the file is left exactly as it was.
+    let hand_written = "schema_version = 1\n\n[[agents]]\nid = \"mine\"\n\
+                        transport = \"acp-stdio\"\ncommand = \"my-agent\"\n";
+    fs::write(profile.join("agents.toml"), hand_written).expect("manifest");
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "--profile",
+            profile.to_str().expect("path"),
+            "agents",
+            "rm",
+            "mine",
+        ])
+        .current_dir(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("written by hand"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(profile.join("agents.toml")).expect("manifest"),
+        hand_written
+    );
+}

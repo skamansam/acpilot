@@ -6,34 +6,39 @@ description: A recipe becomes an agent by becoming a process that speaks ACP —
 <span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-5, P4.5-9)
 
 <Aside type="note" title="Status">
-The shim is built: `acpilot-agent-lm` runs a recipe and reaches the world only through
-ACP callbacks (P4.5-5). The manifest entry described here is written by hand until
-promotion lands (P4.5-9).
+The shim and promotion are built: `acpilot-agent-lm` runs a recipe and reaches the world
+only through ACP callbacks (P4.5-5), and `POST /v1/recipes/{id}/promote` writes the
+manifest entry below (P4.5-9). `acpilot agents rm` reverses it. The lab's promote key and
+the web lab are still open.
 </Aside>
 
-Promotion is one command. The command writes one manifest entry. That is the
-whole trick:
+Promotion is one request. It writes one manifest entry. That is the whole trick:
 
 ```bash
-acpilot recipes promote corpus-scraper --as corpus-scraper
+curl -X POST --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" \
+     http://localhost/v1/recipes/corpus-scraper/promote \
+     -H 'content-type: application/json' \
+     -d '{"agent_id": "corpus-scraper"}'
 ```
 
 ```toml
 # ~/.config/acpilot/profiles/work/agents.toml
 [[agents]]
+# acpilot:promoted recipe="recipes/corpus-scraper.toml" mtime="2026-10-20T14:02:11Z"
 id = "corpus-scraper"
 name = "Corpus scraper (Qwen 7B)"
 transport = "acp-stdio"
 command = "acpilot-agent-lm"
 args = ["--recipe", "corpus-scraper"]
 restart = "on-crash"
-# recipe: profiles/work/recipes/corpus-scraper.toml (mtime 2026-10-20T14:02:11Z)
+env = { ACPILOT_RECIPE_PROFILE = "work" }
 ```
 
-From that moment it is not a model. It is an agent like any other. `acpilot
-agents ls` lists it. The TUI's session picker shows it. The transcript records
+From that moment it is not a model. It is an agent like any other. `GET
+/v1/agents` lists it. The TUI's session picker shows it. The transcript records
 it. The permission broker guards it. `acpilot agents rm corpus-scraper` removes
-it without a migration.
+it without a migration — and it removes only the line promotion wrote. An entry
+with the same id that a person wrote by hand is refused rather than replaced.
 
 ## What actually happens in a turn
 
@@ -94,16 +99,21 @@ failed tool call. Pretending progress is worse than admitting the format.
 
 ## Promotion is honest about the odds
 
-The command warns before it writes:
+The route warns in its answer, before anybody starts the agent:
 
-- The model never passed the tools probe (`tools: false`). It can still answer
-  questions, but the schema is not offered. The agent will say so rather than
-  describe commands it cannot run.
-- Tool calls parsed in fewer than 90% of the recipe's recent runs. That number is
-  in the manifest comment, so the next person to read the file inherits the
-  warning instead of discovering it.
-- The recipe's window exceeds what the host can load. LM Studio will be the one to
-  fail, and it will fail at the worst moment.
+- The model did not call the tools probe. It can still answer questions, but
+  nothing confirms it understands a tool schema, and the agent repairs a bad call
+  once and then reports the failure rather than guessing an argument.
+- The provider could not be asked at all: unreachable, disabled, or a credential
+  the daemon cannot read. The entry is still written, with the reason attached.
+- The recipe exposes `tools.search`, which the promoted agent does not offer: ACP
+  has no workspace-search callback, so the agent says so instead of running a
+  shell to fake it.
+
+Two checks the design wanted are not measured yet: tool-call validity across the
+last ten runs (the run log records model-only runs, which call no tools) and a
+window larger than the host's memory (nothing reports host memory yet). They are
+open in `TODO.md` rather than guessed at here.
 
 Warnings do not block. A workbench that refuses to let you try is not a workbench.
 But none of them are silent, and none of them hide in a log file.

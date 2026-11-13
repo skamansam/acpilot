@@ -65,7 +65,7 @@ fn recipe(id: &str) -> Value {
 }
 
 /// A profile with one declared provider pointing at `base_url`.
-fn app(profile: &std::path::Path, base_url: &str) -> Router {
+fn state(profile: &std::path::Path, base_url: &str) -> AppState {
     std::fs::create_dir_all(profile.join("recipes")).expect("recipes");
     std::fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
     std::fs::write(
@@ -76,12 +76,29 @@ fn app(profile: &std::path::Path, base_url: &str) -> Router {
     )
     .expect("providers");
     let providers = Providers::load(ProvidersFile::path_in(profile)).expect("providers load");
-    router_with(
-        AppState::new()
-            .with_providers(providers)
-            .with_recipes(profile.join("recipes"))
-            .with_run_log(profile),
+    AppState::new()
+        .with_providers(providers)
+        .with_recipes(profile.join("recipes"))
+        .with_run_log(profile)
+        .with_profile_root(Some(profile.to_path_buf()))
+}
+
+fn app(profile: &std::path::Path, base_url: &str) -> Router {
+    router_with(state(profile, base_url))
+}
+
+/// The same profile, with the agents registry a real daemon always has.
+///
+/// Promotion writes `agents.toml` and asks the registry to read it back, so a
+/// state without a registry is a state where the route has nowhere to report the
+/// agent it just wrote.
+fn app_with_agents(profile: &std::path::Path, base_url: &str) -> Router {
+    let registry = acpilot_agent::registry::Registry::load(
+        profile.join("agents.toml"),
+        std::sync::Arc::new(acpilot_agent::secret::MapResolver::new()),
     )
+    .expect("an absent manifest is an empty registry");
+    router_with(state(profile, base_url).with_registry(std::sync::Arc::new(registry)))
 }
 
 /// A loopback server answering a model list and a chat completion.
@@ -303,6 +320,118 @@ async fn a_run_with_corpus_but_no_root_is_refused_before_anything_is_sent() {
         body["details"][0]["field"] == "root",
         "the refusal names the missing parameter: {body}"
     );
+}
+
+#[tokio::test]
+async fn a_promoted_recipe_becomes_an_agent_and_promoting_again_replaces_the_entry() {
+    let profile = tempfile::tempdir().expect("profile");
+    let app = app_with_agents(profile.path(), &provider());
+    let (status, created) = send(&app, "POST", "/v1/recipes", Some(recipe("demo"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/recipes/demo/promote",
+        Some(json!({ "agent_id": "demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["agent"]["id"], "demo");
+    assert_eq!(
+        body["agent"]["transport"], "acp_stdio",
+        "the wire spelling, which is what a client switches on: {body}"
+    );
+    assert_eq!(
+        body["agent"]["command"], "acpilot-agent-lm --recipe demo",
+        "the command is the one documented: {body}"
+    );
+    assert!(
+        body["manifest_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("agents.toml")),
+        "the response says where it wrote: {body}"
+    );
+    // The mock answers with text and no tool call, so the probe is a warning and
+    // not a refusal: warnings do not block.
+    assert!(
+        body["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains("tools probe")))),
+        "{body}"
+    );
+
+    let manifest = std::fs::read_to_string(profile.path().join("agents.toml")).expect("manifest");
+    assert!(
+        manifest.contains("# acpilot:promoted recipe=\"recipes/demo.toml\""),
+        "the entry names the recipe it came from: {manifest}"
+    );
+
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/v1/recipes/demo/promote",
+        Some(json!({ "agent_id": "demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let manifest = std::fs::read_to_string(profile.path().join("agents.toml")).expect("manifest");
+    assert_eq!(
+        manifest.matches("[[agents]]").count(),
+        1,
+        "a second promotion replaces the entry: {manifest}"
+    );
+
+    let (status, agents) = send(&app, "GET", "/v1/agents", None).await;
+    assert_eq!(status, StatusCode::OK, "{agents}");
+    assert!(
+        agents
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == "demo")),
+        "the running daemon lists the agent without a restart: {agents}"
+    );
+}
+
+#[tokio::test]
+async fn promotion_refuses_to_replace_a_hand_written_entry() {
+    let profile = tempfile::tempdir().expect("profile");
+    let app = app_with_agents(profile.path(), &provider());
+    send(&app, "POST", "/v1/recipes", Some(recipe("demo"))).await;
+    std::fs::write(
+        profile.path().join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\nid = \"demo\"\ntransport = \"acp-stdio\"\ncommand = \"mine\"\n",
+    )
+    .expect("manifest");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/recipes/demo/promote",
+        Some(json!({ "agent_id": "demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let manifest = std::fs::read_to_string(profile.path().join("agents.toml")).expect("manifest");
+    assert!(
+        manifest.contains("command = \"mine\""),
+        "the hand-written entry survived: {manifest}"
+    );
+}
+
+#[tokio::test]
+async fn promoting_a_recipe_that_is_not_there_is_a_not_found() {
+    let profile = tempfile::tempdir().expect("profile");
+    let app = app_with_agents(profile.path(), &provider());
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/recipes/ghost/promote",
+        Some(json!({ "agent_id": "ghost" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 #[tokio::test]

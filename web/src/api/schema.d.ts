@@ -715,6 +715,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recipes/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write a recipe into `agents.toml` as an agent
+         * @description Writes one `acp-stdio` entry whose command is `acpilot-agent-lm`, with a comment naming the recipe file and its mtime. An entry with the same id that promotion did not write is `409` and is left untouched. The tools probe is asked once and its answer, when it is bad or could not be given, comes back in `warnings`; warnings never block the write. Removing the entry is `acpilot agents rm`.
+         */
+        post: operations["promote_recipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/recipes/{id}/runs": {
         parameters: {
             query?: never;
@@ -4818,6 +4838,57 @@ export interface operations {
             };
             /** @description No such recipe */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    promote_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description The agent as `GET /v1/agents` will now report it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotedAgent"];
+                };
+            };
+            /** @description No profile directory, or an id the manifest loader refuses */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A hand-written entry already owns the id */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -425,6 +425,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the declared providers report right now
+         * @description Asks every enabled provider, or the one named by `?provider=`. A provider that cannot answer is listed in `problems` beside the models the others returned, because a list that quietly omitted a server would look like a server with no models.
+         */
+        get: operations["list_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/permissions": {
         parameters: {
             query?: never;
@@ -607,6 +627,112 @@ export interface paths {
          * @description Writes the declaration to the profile's `providers.toml` and probes it once. A refused or failed probe is still `201` with the reason in `detail`, because the row is what the person needs in order to correct it. One id is one provider: a second declaration of the same id is `409`.
          */
         post: operations["add_provider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a provider declaration
+         * @description Removes the row from `providers.toml` and forgets its last answer. A recipe that still names it makes this `409`: deleting the server would leave a recipe with no clue why it cannot run.
+         */
+        delete: operations["delete_provider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/providers/{id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask one provider what it has, and keep the answer
+         * @description The only route that contacts a server without a declaration changing. A disabled provider is reported as disabled and is not contacted. A refused credential is `unauthorized`, not `unreachable`.
+         */
+        post: operations["probe_provider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recipes this profile holds
+         * @description One row per `recipes/<id>.toml`, sorted by id. Each read re-reads the directory, so a file edited by hand is visible without a restart. A file that does not load is a `400` naming it, not a silently shorter list.
+         */
+        get: operations["list_recipes"];
+        put?: never;
+        /**
+         * Write a recipe file
+         * @description Writes `recipes/<id>.toml` and reads the directory back. A recipe naming an undeclared or disabled provider is `400`, and the new file is removed. An id that is already a file is `409`.
+         */
+        post: operations["create_recipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One recipe */
+        get: operations["get_recipe"];
+        put?: never;
+        post?: never;
+        /** Remove a recipe file */
+        delete: operations["delete_recipe"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One page of a recipe's runs, newest first
+         * @description The cursor is a run id, not an offset: the log only grows, and an offset would repeat or skip a line when something is appended between two pages. A cursor naming another recipe's run is `400`.
+         */
+        get: operations["list_runs"];
+        put?: never;
+        /**
+         * Run a recipe and stream the answer
+         * @description Assembles the prompt (master prompt, corpus selectors, budget), calls the configured provider once and appends a record to the profile's `runs.jsonl`. The response is an SSE stream: `model.run.started`, `model.run.delta`, `model.run.finished`. A run with corpus selectors needs a `root` query parameter. There is no job to poll and no second request: the stream is the run.
+         */
+        post: operations["start_run"];
         delete?: never;
         options?: never;
         head?: never;
@@ -978,6 +1104,38 @@ export interface components {
             address?: string | null;
             /** @description How the daemon would reach the host. */
             kind: components["schemas"]["HostKind"];
+        };
+        /**
+         * @description Request body for `POST /v1/recipes`.
+         *
+         *     The same fields a recipe file has, without `updated_at`: the file's mtime is
+         *     the timestamp, and a client that supplied one would be writing a claim about a
+         *     file it does not own.
+         */
+        CreateRecipeRequest: {
+            /** @description Context plan. */
+            context: components["schemas"]["ContextBudget"];
+            /** @description Identifier, also the file name under `recipes/`. */
+            id: components["schemas"]["String"];
+            /** @description Display label. */
+            label: string;
+            /** @description Model identifier to send. */
+            model_id: string;
+            /** @description What this recipe is for, and what it is bad at. */
+            notes?: string | null;
+            /** @description Provider to call. */
+            provider_id: components["schemas"]["String"];
+            /** @description Sampling knobs. Absent means the agent-shaped defaults. */
+            sampling?: components["schemas"]["SamplingParams"];
+            /**
+             * Format: int32
+             * @description Schema version; this build reads 1.
+             */
+            schema_version: number;
+            /** @description The master prompt. */
+            system_prompt: string;
+            /** @description Tool ceiling for the promoted agent. */
+            tools: components["schemas"]["ToolExposure"];
         };
         /** @description Request body for `POST /v1/sessions`. */
         CreateSessionRequest: {
@@ -1692,6 +1850,25 @@ export interface components {
             /** @description Accepts images alongside text. */
             vision: boolean;
         };
+        /**
+         * @description One model list, with the providers that could not answer.
+         *
+         *     The two halves are beside each other on purpose: a list that quietly omitted a
+         *     server would look like a server with no models.
+         */
+        ModelCatalogue: {
+            /** @description Models from every provider that answered, in provider declaration order. */
+            models: components["schemas"]["DiscoveredModel"][];
+            /** @description Providers that did not answer, and why. */
+            problems: components["schemas"]["ModelProblem"][];
+        };
+        /** @description A provider that could not answer a model list. */
+        ModelProblem: {
+            /** @description Why it did not answer. */
+            message: string;
+            /** @description Provider id. */
+            provider_id: components["schemas"]["String"];
+        };
         /** @description A tuned configuration for one model, as returned by `GET /v1/recipes`. */
         ModelRecipe: {
             /** @description Context plan. */
@@ -2153,6 +2330,26 @@ export interface components {
             status: components["schemas"]["ProviderStatus"];
         };
         /**
+         * @description Request body for `PATCH /v1/recipes/{id}`.
+         *
+         *     Only the fields present move. A recipe id is not editable: the file name is the
+         *     identity a run record and an agent manifest refer to.
+         */
+        RecipePatch: {
+            context?: components["schemas"]["ContextBudget"] | null;
+            /** @description New display label. */
+            label?: string | null;
+            /** @description New model identifier. */
+            model_id?: string | null;
+            /** @description New note. */
+            notes?: string | null;
+            provider_id?: components["schemas"]["String"] | null;
+            sampling?: components["schemas"]["SamplingParams"] | null;
+            /** @description New master prompt. */
+            system_prompt?: string | null;
+            tools?: components["schemas"]["ToolExposure"] | null;
+        };
+        /**
          * @description One use of an identifier, for the references panel.
          *
          *     `column` is a character column rather than a byte offset: a pane places a caret on
@@ -2212,10 +2409,16 @@ export interface components {
             /** @description Workspace id, when the client names one. The daemon serves exactly one. */
             workspace?: string | null;
         };
+        /** @description One page of a recipe's runs, newest first. */
+        RunPage: {
+            next?: components["schemas"]["String"] | null;
+            /** @description The runs. */
+            runs: components["schemas"]["RunSummary"][];
+        };
         /** @description Request body for `POST /v1/recipes/{id}/runs`. */
         RunRequest: {
-            /** @description Corpus pulled from the current workspace, in order. */
-            corpus: components["schemas"]["CorpusSelector"][];
+            /** @description Corpus pulled from the current workspace, in order. Absent means none. */
+            corpus?: components["schemas"]["CorpusSelector"][];
             /** @description Client-generated key that makes retries safe. */
             idempotency_key?: string | null;
             /** @description The user message. */
@@ -2498,6 +2701,22 @@ export interface components {
             search: boolean;
             /** @description Offer file writes. */
             write_files: boolean;
+        };
+        /**
+         * @description Request body for `PATCH /v1/providers/{id}`.
+         *
+         *     An omitted field is unchanged. Changing where the provider lives is a new
+         *     question, so the route probes again; changing only a label does not.
+         */
+        UpdateProviderRequest: {
+            /** @description New base URL. */
+            base_url?: string | null;
+            /** @description New keyring reference. */
+            credential_ref?: string | null;
+            /** @description Whether the provider may be contacted. */
+            enabled?: boolean | null;
+            /** @description New display label. */
+            label?: string | null;
         };
         /**
          * @description Request body for `POST /v1/workspaces`.
@@ -3818,6 +4037,29 @@ export interface operations {
             };
         };
     };
+    list_models: {
+        parameters: {
+            query?: {
+                /** @description Only this provider id */
+                provider?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Models and the providers that could not answer */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogue"];
+                };
+            };
+        };
+    };
     permissions_doc: {
         parameters: {
             query?: {
@@ -4320,6 +4562,283 @@ export interface operations {
             };
             /** @description The id is already declared */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_provider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declaration is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A recipe still names it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    probe_provider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The provider, with the answer it gave */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSummary"];
+                };
+            };
+            /** @description No such provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_recipes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every recipe that loads */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"][];
+                };
+            };
+        };
+    };
+    create_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description The recipe as it now reads */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"];
+                };
+            };
+            /** @description An id or field this build cannot use */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The id is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recipe */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_runs: {
+        parameters: {
+            query?: {
+                /** @description Runs per page; 20 when absent */
+                limit?: number;
+                /** @description Return runs older than this run id */
+                before?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of summaries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPage"];
+                };
+            };
+            /** @description The cursor does not belong to this recipe */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    start_run: {
+        parameters: {
+            query?: {
+                /** @description Workspace root for corpus selectors */
+                root?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description The run's frames */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description A body or corpus root this build cannot use */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The provider is not declared, disabled, or unreachable */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

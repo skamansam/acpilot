@@ -30,17 +30,21 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("config");
 
-    // The command is escaped rather than pasted: a Windows path in a TOML string is
-    // `C:\\…` twice over, and the parse error names the column rather than the cause.
-    let command = common::mock_agent()
-        .display()
-        .to_string()
-        .replace('\\', "\\\\");
+    // The driver and the daemon compare a canonical path, and this is also the
+    // path a driver on macOS gets from the system: `/var` is `/private/var`.
+    let workspace = std::fs::canonicalize(&workspace).expect("the workspace resolves");
+
+    // A TOML *literal* string, so a Windows path is taken byte for byte. A basic
+    // string needs every backslash doubled, and one that reaches `Command` with a
+    // separator missing is `program not found` rather than a parse error.
+    let fixture = common::mock_agent();
+    assert!(fixture.exists(), "the fixture agent is built: {fixture:?}");
+    let command = fixture.display();
     std::fs::write(
         profile.join("agents.toml"),
         format!(
             "schema_version = 1\n\n[[agents]]\nid = \"mock\"\nname = \"Mock\"\n\
-             transport = \"acp-stdio\"\ncommand = \"{command}\"\n"
+             transport = \"acp-stdio\"\ncommand = '{command}'\n"
         ),
     )
     .expect("agents.toml");

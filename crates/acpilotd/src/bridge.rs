@@ -144,7 +144,16 @@ async fn open_session(
     let workspace = state
         .workspace()
         .ok_or_else(|| failure("this daemon has no workspace to open sessions in"))?;
-    if !request.cwd.starts_with(&workspace.root) {
+    // Both sides are resolved before they are compared: the workspace root was
+    // canonicalised when the daemon started, and a driver's `cwd` may be a
+    // symlinked spelling of it — on macOS a temp directory under `/var` resolves
+    // to `/private/var`. Comparing the text would refuse a directory the agent
+    // would see correctly.
+    let cwd = request
+        .cwd
+        .canonicalize()
+        .unwrap_or_else(|_| request.cwd.clone());
+    if !cwd.starts_with(&workspace.root) {
         return Err(failure(format!(
             "`{}` is outside the workspace this daemon serves ({})",
             request.cwd.display(),

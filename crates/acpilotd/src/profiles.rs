@@ -270,7 +270,11 @@ impl Profiles {
         for (name, directory) in &directories {
             match startup_with_stores(Some(directory), workspace, Arc::clone(&stores)) {
                 Ok(state) => {
-                    let state = attach_index(state, index, name, workspace).with_cors(cors);
+                    let state = attach_index(state, index, name, workspace)
+                        .with_cors(cors)
+                        .with_drivers(Arc::new(crate::drivers::Drivers::at(
+                            directory.join("drivers.toml"),
+                        )));
                     let record = registry_for(&registry, name);
                     entries.insert(
                         name.clone(),
@@ -682,8 +686,11 @@ impl Profiles {
         let state =
             startup_with_stores(Some(&directory), &self.workspace, Arc::clone(&self.stores))
                 .map_err(state_error)?;
-        let state =
-            attach_index(state, self.index.as_ref(), name, &self.workspace).with_cors(self.cors);
+        let state = attach_index(state, self.index.as_ref(), name, &self.workspace)
+            .with_cors(self.cors)
+            .with_drivers(Arc::new(crate::drivers::Drivers::at(
+                directory.join("drivers.toml"),
+            )));
         Ok(Entry::new(
             name,
             directory,
@@ -713,6 +720,21 @@ impl Profiles {
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
             .map(|entry| entry.state.clone())
+    }
+
+    /// Tell every profile's state what the bridge's settings are.
+    ///
+    /// The settings come from the files and flags, which the profiles were built
+    /// before; a cockpit that answered `enabled: false` while a driver was being
+    /// paired would be the daemon disagreeing with itself.
+    pub fn set_bridge(&self, settings: crate::config::BridgeSettings) {
+        if let Some(entry) = &self.anonymous {
+            entry.state.set_bridge(settings.clone());
+        }
+        let entries = self.entries.read().unwrap_or_else(PoisonError::into_inner);
+        for entry in entries.values() {
+            entry.state.set_bridge(settings.clone());
+        }
     }
 
     /// The active profile's name, empty when the daemon has no profile.

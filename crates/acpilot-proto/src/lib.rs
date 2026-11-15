@@ -161,6 +161,8 @@ pub const API_PREFIX: &str = "/v1";
         bridge::AcpDriverSummary,
         bridge::PairingCode,
         bridge::PairDriverRequest,
+        bridge::CreatePairingRequest,
+        bridge::PairedDriver,
         extension::ExtensionKind,
         extension::ExtensionSource,
         extension::ExtensionStatus,

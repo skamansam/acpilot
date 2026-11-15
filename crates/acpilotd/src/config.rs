@@ -61,6 +61,23 @@ pub struct Daemon {
     pub cors: Option<bool>,
 }
 
+/// The `[acp.bridge]` table: the remote driver endpoint.
+///
+/// Off unless `enabled`, and enabled needs a `bind`: a port is a decision a person
+/// makes, not a default this daemon chooses. The cockpit's pairing routes are on
+/// the daemon's own listener — this table is the driver-facing one.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BridgeSettings {
+    /// Listen for remote ACP drivers.
+    pub enabled: bool,
+    /// Address the bridge listener binds, for example `127.0.0.1:7778`.
+    pub bind: Option<String>,
+    /// Address a driver should use, when it differs from `bind` — a tunnel or a
+    /// reverse proxy terminates TLS in front of the daemon (ADR 0004 §3).
+    pub public_url: Option<String>,
+}
+
 /// What the command line asked for.
 ///
 /// A flag is `Some` only when it was given, so "not mentioned" stays distinct from
@@ -101,6 +118,8 @@ pub struct Config {
     pub foreground: bool,
     /// Answer cross-origin requests (`[daemon] cors`).
     pub cors: bool,
+    /// The remote driver bridge (`[acp.bridge]`).
+    pub bridge: BridgeSettings,
 }
 
 /// Resolve the daemon's settings from the files and the flags.
@@ -115,12 +134,20 @@ pub fn resolve(flags: Flags) -> Result<Config, ConfigError> {
     // Read twice: the first pass names the profile, and the profile's file is a
     // layer of the second. Reading one file twice is cheaper than a rule that says
     // "a profile can only be named in a file if the file is the user's".
-    let first = effective(read(std::slice::from_ref(&user))?, &flags);
-    let layers = match &first.profile {
+    let (first_layers, _) = read(std::slice::from_ref(&user))?;
+    let first = effective(first_layers, &flags);
+    let (layers, bridge) = match &first.profile {
         Some(directory) => read(&[user, profile_file(directory)])?,
-        None => first,
+        None => (first, BridgeSettings::default()),
     };
     let settings = effective(layers, &flags);
+    if bridge.enabled && bridge.bind.is_none() {
+        return Err(ConfigError::Endpoint(
+            "`[acp.bridge] enabled = true` needs a `bind` address; nothing listens where it \
+             was not told to"
+                .to_owned(),
+        ));
+    }
 
     let target = resolve_target(settings.addr.clone(), settings.socket.clone())
         .map_err(ConfigError::Endpoint)?;
@@ -141,6 +168,7 @@ pub fn resolve(flags: Flags) -> Result<Config, ConfigError> {
         pidfile,
         foreground: settings.foreground.unwrap_or(false),
         cors: settings.cors.unwrap_or(false),
+        bridge,
     })
 }
 
@@ -166,7 +194,7 @@ pub(crate) fn effective(layers: Daemon, flags: &Flags) -> Daemon {
 ///
 /// A missing file is not an error: every layer is optional by definition, and a
 /// machine that never wrote a `config.toml` runs on the defaults.
-fn read(paths: &[PathBuf]) -> Result<Daemon, ConfigError> {
+fn read(paths: &[PathBuf]) -> Result<(Daemon, BridgeSettings), ConfigError> {
     let mut figment = Figment::new();
     for path in paths {
         figment = figment.merge(Toml::file(path));
@@ -174,7 +202,7 @@ fn read(paths: &[PathBuf]) -> Result<Daemon, ConfigError> {
     let layered: Layered = figment.extract().map_err(|source| ConfigError::File {
         message: source.to_string(),
     })?;
-    Ok(layered.daemon)
+    Ok((layered.daemon, layered.acp.bridge))
 }
 
 /// The file a profile keeps its `[daemon]` table in.
@@ -201,6 +229,15 @@ fn default_database(profile: Option<&Path>) -> PathBuf {
 #[serde(default)]
 struct Layered {
     daemon: Daemon,
+    #[serde(default)]
+    acp: Acp,
+}
+
+/// The `[acp]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Acp {
+    bridge: BridgeSettings,
 }
 
 /// Why the settings could not be resolved.
@@ -240,7 +277,7 @@ mod tests {
             "[daemon]\nworkspace = \"/srv/profile\"\nforeground = true\n",
         );
 
-        let layers = read(&[user, profile]).expect("the cascade");
+        let (layers, _) = read(&[user, profile]).expect("the cascade");
         assert_eq!(layers.workspace, Some(PathBuf::from("/srv/profile")));
         assert_eq!(layers.foreground, Some(true));
 
@@ -262,8 +299,26 @@ mod tests {
     #[test]
     fn a_missing_file_is_the_defaults() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let layers = read(&[directory.path().join("absent.toml")]).expect("no file, no error");
+        let (layers, bridge) =
+            read(&[directory.path().join("absent.toml")]).expect("no file, no error");
         assert_eq!(layers, Daemon::default());
+        assert_eq!(
+            bridge,
+            BridgeSettings::default(),
+            "the bridge is off by default"
+        );
+
+        // The bridge table is its own section, and a bind without `enabled` is a
+        // route nobody is serving: the resolution refuses the half-decision rather
+        // than listening on a port the person did not ask for.
+        let path = directory.path().join("bridge.toml");
+        write(
+            &path,
+            "[acp.bridge]\nenabled = true\nbind = \"127.0.0.1:0\"\n",
+        );
+        let (_, bridge) = read(std::slice::from_ref(&path)).expect("the bridge table");
+        assert!(bridge.enabled);
+        assert_eq!(bridge.bind.as_deref(), Some("127.0.0.1:0"));
     }
 
     #[test]
@@ -300,7 +355,7 @@ mod tests {
             &path,
             "schema_version = 1\n[policy]\ndefault = \"ask\"\n[daemon]\nforeground = true\n",
         );
-        let layers = read(&[path]).expect("the other tables are ignored");
+        let (layers, _) = read(&[path]).expect("the other tables are ignored");
         assert_eq!(layers.foreground, Some(true));
     }
 }

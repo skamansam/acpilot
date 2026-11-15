@@ -1154,9 +1154,10 @@ reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent th
 loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
 and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
 `agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
-landed (`acpilotd --acp`, stdio) and P4.5-10 remains open for its remote half — HTTP/JSON-RPC,
-pairing, scopes and the cockpit routes. P4.5-11's request-body snapshots landed, but streaming
-and the bridge tests are open, as are P4.5-12 (integration stats) and P4.5-13 (skills). A run writes its record before the `finished` frame, and the
+landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC with pairing,
+scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming and the
+five bridge tests have landed; its DoD's interactive and real-model halves remain, as do
+P4.5-12 (integration stats) and P4.5-13 (skills). A run writes its record before the `finished` frame, and the
 lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
 resolved.
 
@@ -1460,13 +1461,31 @@ resolved.
     one end-to-end test that spawns the binary with `--acp` and drives it with a real ACP
     client — handshake, `session/new`, a prompt, `chunk 1|chunk 2` received as notifications,
     and `end_turn`.
-  - **Open (the remote half, and one translation):** ACP over HTTP/JSON-RPC at `/acp`, the
-    bearer token argon2-hashed in a 0600 file, single-use two-minute pairing codes, scopes
-    intersected with the grant, `answer_permissions` off by default with the blocking call
-    answered by a human and a `Notice` explaining why, per-driver rate limits, driver ids on
-    sessions and audit rows, and `GET /v1/acp/{bridge,drivers}` with revoke. Tool-call, plan
-    and mode-change events are not translated to ACP updates yet; they are dropped rather
-    than approximated, which is why a driver's transcript is thinner than the TUI's.
+  - **Remote half landed (2026-11-15).** `[acp.bridge] enabled = true` with an explicit
+    `bind` starts a second listener, and the daemon refuses to start rather than enable a
+    port it was not told to bind. A driver claims a single-use two-minute code at
+    `POST /pair` and receives a bearer token once; the ledger (`<profile>/drivers.toml`,
+    `0600`) keeps an Argon2id hash of it, the scopes actually granted, the client name from
+    `initialize`, and the session and prompt counts. `POST /acp` dispatches `initialize`,
+    `session/new`, `session/prompt`, `session/cancel` and `session/answer_permission`, and
+    `GET /acp/events` is the driver's notification stream. Scopes default to
+    observe/prompt/cancel; `answer_permissions` needs the person's grant when the code is
+    issued, and a driver answering without it is `-32003`. A driver owns the sessions it
+    opened: another driver's prompt, cancel or answer is refused. A fixed 60 requests a
+    minute per driver. The cockpit serves `POST /v1/acp/pairings`,
+    `GET /v1/acp/{bridge,drivers}` and `POST /v1/acp/drivers/{id}/revoke`; a revoked
+    driver's next call is `401` and its row stays. **Tests:** six ledger unit tests, two
+    router unit tests, and seven in `tests/acp_bridge.rs` — single-use and expired codes,
+    missing and wrong tokens, scope escalation, a granted answer reaching the broker,
+    revocation, a prompt through a real mock agent, and the scripted driver waiting while
+    the cockpit answers.
+  - **Open:** tool-call, plan and mode-change events are still dropped rather than
+    approximated, so a driver's transcript is thinner than the TUI's. The store's session
+    and audit rows do not carry the driver id yet — the ledger records ownership and
+    counts, not the SQLite rows. The token is required even on loopback: the ticket allowed
+    skipping it, and this build does not offer that half-decision. The rate limit is a fixed
+    60 a minute, not configurable. No `acpilot acp ...` verbs exist; pairing and revocation
+    are the HTTP routes, like the rest of the cockpit.
   - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
     `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
     Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip
@@ -1508,10 +1527,19 @@ resolved.
     unfinished stream, a refusal retried before the stream starts, tool-call fragments),
     three parser unit tests, and the agent's stdio suite against a server that ignores the
     flag.
-  - **Open:** the bridge tests — expired pairing code, wrong token, scope escalation
-    refused, a permission answered without the grant, a revoked driver's `401` — need
-    P4.5-10's remote transport, which is not built; the DoD's scripted `devin` client is
-    blocked on the same half.
+  - **Bridge tests landed (2026-11-15) with the remote transport.** `tests/acp_bridge.rs`
+    covers the five the ticket named: a code is single-use and an expired one is refused by
+    name, a missing or wrong driver token is `401` in the envelope, a driver asking for
+    `answer_permissions` it was not granted holds only what it has and its answer is
+    `-32003`, a granted driver's answer reaches the broker's waiting asker, and a revoked
+    driver's next call is `401` while its row stays. Two more cover the DoD's shape: a
+    driver opens a session and prompts a real mock agent to `end_turn`, and a driver without
+    the grant prompts a permission-raising turn while the cockpit lists and answers it — the
+    driver's stream carries the notice and never `session/request_permission`.
+  - **Open:** the rest of the DoD is not automated here — a run against a real LM Studio on
+    port 1234 (needs the server), a byte-identical replay of a run record, the promoted
+    agent's P2 session smoke, and the TUI drawing the permission prompt while the script
+    does not. The cockpit half of that last one is tested; the terminal's drawing is not.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

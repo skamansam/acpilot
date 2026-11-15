@@ -137,6 +137,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.workspace,
         config.cors,
     )?);
+    // The cockpit's answers and the driver listener read one settings value: a
+    // pairing route that said the bridge was off while it was listening would be
+    // two answers to the same question.
+    profiles.set_bridge(config.bridge.clone());
+
+    if config.bridge.enabled {
+        let bind = config
+            .bridge
+            .bind
+            .clone()
+            .ok_or("`[acp.bridge] enabled = true` needs a `bind` address")?;
+        let state = profiles.state(&profiles.active()).ok_or_else(|| {
+            format!(
+                "the ACP bridge serves the active profile, and `{}` did not load",
+                profiles.active()
+            )
+        })?;
+        let listener = tokio::net::TcpListener::bind(&bind).await?;
+        tracing::info!(%bind, "serving ACP over HTTP for paired drivers");
+        // A separate listener on purpose: a driver token and the daemon token are
+        // different credentials, and one middleware deciding both would be one
+        // mistake away from treating them as the same one.
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, acpilotd::acp_http::router(state)).await {
+                tracing::error!(%error, "the ACP bridge listener stopped");
+            }
+        });
+    }
+
     tracing::info!(
         endpoint = %config.target,
         database = %config.database.display(),

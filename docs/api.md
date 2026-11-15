@@ -182,9 +182,33 @@ write. A patch that would make them unreadable is rolled back and answered `400`
 The successful answer is the new effective object. It is also announced as a
 `prefs` frame, so an open client applies it without waiting for the file watcher.
 
-**Added after v1 was frozen**: the provider, model, recipe and run routes below. They
-follow the same conventions and change no route above. The ACP bridge and remote drivers
-(P4.5-10) and extensions are still deliberately later.
+**Added after v1 was frozen**: the provider, model, recipe and run routes below, and the
+remote-driver bridge (P4.5-10). They follow the same conventions and change no route above.
+Extensions are still deliberately later.
+
+## Remote drivers
+
+The bridge has two surfaces because it has two credentials. The cockpit's routes are on
+the daemon's listener and need the daemon token; the driver's routes are on the listener
+`[acp.bridge]` names and need the driver token a pairing code minted.
+
+| Route | Token | What it does |
+| --- | --- | --- |
+| `POST /v1/acp/pairings` | daemon | Issues a single-use code, two minutes. `grant_answer_permissions` is the person's decision. |
+| `GET /v1/acp/bridge` | daemon | Whether the driver listener is on, its bind, and the connected/known counts. |
+| `GET /v1/acp/drivers` | daemon | Every driver on record, revoked ones included. |
+| `POST /v1/acp/drivers/{id}/revoke` | daemon | Makes the driver's next call `401`; the row stays. |
+| `POST /pair` | the code | Claims a code and returns the driver's row and its token, once. |
+| `POST /acp` | driver | JSON-RPC: `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/answer_permission`. |
+| `GET /acp/events` | driver | The driver's `session/update` and `session/request_permission` notifications. |
+
+The bridge is off unless `[acp.bridge] enabled = true` names a `bind`; an enabled bridge
+with no address is a startup error rather than a listener nobody chose. The driver token
+is required even on loopback, and is kept in the profile's `drivers.toml` as an Argon2id
+hash, `0600`. Scopes are `observe`/`prompt`/`cancel` by default; `answer_permissions`
+needs the grant at issue, and without it a permission request stays on `GET /v1/permissions`
+for a person rather than reaching the driver. Driver ids are recorded on the ledger row,
+not yet on the store's session or audit rows.
 
 ## Providers
 

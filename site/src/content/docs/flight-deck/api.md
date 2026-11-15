@@ -93,7 +93,22 @@ shell an agent started without a second process behind it.
 | LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
 | Models (started) | `GET/POST /v1/providers` are live; `POST /v1/providers/{id}/probe` and `GET /v1/models` are planned |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
-| Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`. ACP itself at `/acp` |
+
+## Remote drivers
+
+The bridge is served, and it has two surfaces because it has two credentials.
+The cockpit's routes are on the daemon's listener and need the daemon token:
+
+| Route | What it does |
+| --- | --- |
+| `POST /v1/acp/pairings` | Issues a single-use two-minute code; `grant_answer_permissions` is the person's decision |
+| `GET /v1/acp/bridge` | Whether the driver listener is on, its bind, connected and known counts |
+| `GET /v1/acp/drivers` | Every driver on record, revoked rows included |
+| `POST /v1/acp/drivers/{id}/revoke` | Makes the next call with that token `401`; the row stays |
+
+On the listener `[acp.bridge]` names, a driver claims its code at `POST /pair`,
+speaks JSON-RPC at `POST /acp`, and reads its notifications at `GET /acp/events`.
+The token is required even on loopback, and only its Argon2id hash is kept.
 
 ## The error envelope
 

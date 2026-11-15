@@ -42,10 +42,16 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
 // The ACP bridge: this daemon answering as an agent for a driver that attached
-// over stdio (P4.5-10). Remote transports, pairing and scopes are not here yet.
+// over stdio or over HTTP with a paired token (P4.5-10).
 mod auth;
+// The remote half of that bridge: JSON-RPC over HTTP, the driver's event stream
+// and the cockpit routes that pair and revoke drivers.
+pub mod acp_http;
 mod base64;
 pub mod bridge;
+// Who may drive this daemon remotely, and what they may do: pairing codes, the
+// Argon2id hashes of their tokens, scopes and revocation.
+pub mod drivers;
 // The daemon's settings: two files, then the flags (P3-1). Public because the
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
@@ -316,6 +322,11 @@ impl StoreSlot {
 pub struct AppState {
     agents: Option<Arc<Registry>>,
     broker: Option<Arc<Broker>>,
+    /// Who may drive this daemon over the ACP bridge, and with what scopes.
+    drivers: Arc<drivers::Drivers>,
+    /// The bridge's settings, shared so a profile that is already built can hear
+    /// what the command line and the files said.
+    bridge: Arc<Mutex<crate::config::BridgeSettings>>,
     /// The workspace sessions open in, when the daemon was given one.
     workspace: Option<Workspace>,
     /// The profile this daemon serves, by directory name.
@@ -485,6 +496,8 @@ impl Default for AppState {
         Self {
             agents: None,
             broker: None,
+            drivers: Arc::default(),
+            bridge: Arc::default(),
             workspace: None,
             profile: None,
             profile_root: None,
@@ -642,6 +655,44 @@ impl AppState {
     /// The broker behind the permission routes, when the daemon has one.
     pub fn broker(&self) -> Option<&Arc<Broker>> {
         self.broker.as_ref()
+    }
+
+    /// The drivers paired with this daemon.
+    #[must_use]
+    pub fn drivers(&self) -> &Arc<drivers::Drivers> {
+        &self.drivers
+    }
+
+    /// Keep driver tokens in this ledger.
+    ///
+    /// A profile passes the file beside its own config; a test or an embedded
+    /// daemon keeps them in memory, because a listener that ends with its process
+    /// has nothing to remember them for.
+    #[must_use]
+    pub fn with_drivers(mut self, drivers: Arc<drivers::Drivers>) -> Self {
+        self.drivers = drivers;
+        self
+    }
+
+    /// The bridge's settings, as the files and flags resolved them.
+    #[must_use]
+    pub fn bridge(&self) -> crate::config::BridgeSettings {
+        self.bridge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Tell an already-built state what the bridge's settings are.
+    pub fn set_bridge(&self, settings: crate::config::BridgeSettings) {
+        *self.bridge.lock().unwrap_or_else(PoisonError::into_inner) = settings;
+    }
+
+    /// Build a state that already knows the bridge's settings.
+    #[must_use]
+    pub fn with_bridge(mut self, settings: crate::config::BridgeSettings) -> Self {
+        self.bridge = Arc::new(Mutex::new(settings));
+        self
     }
 
     /// The language servers behind `GET /v1/files/references`.
@@ -1944,6 +1995,7 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(recipes::operations())
         .chain(promote::operations())
         .chain(model_runs::operations())
+        .chain(acp_http::operations())
         .chain(stats::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
@@ -2343,6 +2395,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(recipes::routes())
         .merge(promote::routes())
         .merge(model_runs::routes())
+        .merge(acp_http::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
         .merge(project::routes())

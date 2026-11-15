@@ -481,6 +481,16 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreatePairingRequest": {
+        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests; a driver cannot grant itself one by asking.",
+        "properties": {
+          "grant_answer_permissions": {
+            "description": "Allow the paired driver to answer permission requests for the turns it\nstarts. Off by default, and off is the safe answer.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "CreateRecipeRequest": {
         "additionalProperties": false,
         "description": "Request body for `POST /v1/recipes`.\n\nThe same fields a recipe file has, without `updated_at`: the file's mtime is\nthe timestamp, and a client that supplied one would be writing a claim about a\nfile it does not own.",
@@ -2071,6 +2081,24 @@ expression: canonical(document)
           "code",
           "name",
           "requested_scopes"
+        ],
+        "type": "object"
+      },
+      "PairedDriver": {
+        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else — the ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
+        "properties": {
+          "driver": {
+            "$ref": "#/components/schemas/AcpDriverSummary",
+            "description": "The driver, as the cockpit will list it."
+          },
+          "token": {
+            "description": "The bearer token every later request carries.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "driver",
+          "token"
         ],
         "type": "object"
       },

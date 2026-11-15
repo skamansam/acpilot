@@ -153,6 +153,26 @@ impl Sessions {
     /// to a question the client did not ask, and the ticket's rule is to reject
     /// rather than repair.
     pub async fn ask(&self, id: &str, text: String) -> Result<String, ApiError> {
+        self.ask_with(id, text, true).await
+    }
+
+    /// Ask for a turn and accept one that spoke only through notices.
+    ///
+    /// The ACP bridge's prompt is a protocol turn, not a text generation: an agent
+    /// that raises a permission question and reports the answer it heard has done
+    /// what was asked of it, and the driver's response is still `end_turn`. The
+    /// commit-message path keeps [`Self::ask`], because an empty commit message is
+    /// a failure there.
+    pub async fn ask_turn(&self, id: &str, text: String) -> Result<String, ApiError> {
+        self.ask_with(id, text, false).await
+    }
+
+    async fn ask_with(
+        &self,
+        id: &str,
+        text: String,
+        require_text: bool,
+    ) -> Result<String, ApiError> {
         let record = self.handle(id).ok_or_else(|| unknown(id))?;
         match record.status() {
             SessionStatus::Busy | SessionStatus::AwaitingPermission => {
@@ -235,9 +255,11 @@ impl Sessions {
                     message: format!("session {id} failed before it wrote a message"),
                 }))
             }
-            _ if answer.trim().is_empty() => Err(ApiError::new(AcpilotError::AgentFailed {
-                message: format!("session {id} answered with no text"),
-            })),
+            _ if require_text && answer.trim().is_empty() => {
+                Err(ApiError::new(AcpilotError::AgentFailed {
+                    message: format!("session {id} answered with no text"),
+                }))
+            }
             _ => Ok(answer),
         }
     }

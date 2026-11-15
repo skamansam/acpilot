@@ -137,7 +137,7 @@ pub async fn serve_stdio(state: AppState) -> Result<(), Error> {
 /// The directory has to be inside the workspace this daemon serves: an ACP
 /// `session/new` is a promise that the agent sees that directory, and a bridge that
 /// accepted one elsewhere would break the promise silently.
-async fn open_session(
+pub(crate) async fn open_session(
     state: &AppState,
     request: &NewSessionRequest,
 ) -> Result<SessionSummary, Error> {
@@ -250,7 +250,9 @@ async fn turn(
         .sessions()
         .subscribe(&key)
         .ok_or_else(|| failure(format!("no session `{key}` in this daemon")))?;
-    let ask = state.sessions().ask(&key, text);
+    // The bridge's turn is the protocol's, not a generation: an agent that only
+    // reported a permission answer has still finished it.
+    let ask = state.sessions().ask_turn(&key, text);
     tokio::pin!(ask);
     let mut open = true;
 
@@ -364,7 +366,7 @@ fn forward(
 /// ACP carries a list of content blocks; the session engine takes text. Joining
 /// text blocks with a newline is exact for the case the bridge supports, and an
 /// image or audio block is dropped rather than rendered into a sentence about it.
-fn prompt_text(request: &PromptRequest) -> String {
+pub(crate) fn prompt_text(request: &PromptRequest) -> String {
     request
         .prompt
         .iter()

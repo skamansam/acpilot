@@ -121,6 +121,30 @@ pub struct PairingCode {
     pub handshake_url: Option<String>,
 }
 
+/// Ask for a code, from the cockpit.
+///
+/// The person issuing the code decides whether the driver may answer permission
+/// requests; a driver cannot grant itself one by asking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CreatePairingRequest {
+    /// Allow the paired driver to answer permission requests for the turns it
+    /// starts. Off by default, and off is the safe answer.
+    #[serde(default)]
+    pub grant_answer_permissions: bool,
+}
+
+/// What a driver gets when it claims a pair: its row, and the token once.
+///
+/// The token is in this response and nowhere else — the ledger keeps an Argon2id
+/// hash of it, so a driver that loses it asks for another code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PairedDriver {
+    /// The driver, as the cockpit will list it.
+    pub driver: AcpDriverSummary,
+    /// The bearer token every later request carries.
+    pub token: String,
+}
+
 /// Request the driver sends over the bridge to claim a pair.
 ///
 /// Scopes are a request, not a grant: the daemon intersects them with what the

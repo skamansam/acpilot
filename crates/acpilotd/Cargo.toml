@@ -69,6 +69,14 @@ acpilot-extensions = { workspace = true }
 # the files are. Shelling out keeps the daemon agreeing with the command line
 # about what is staged, and the crate's absence is a tree without letters.
 acpilot-git = { workspace = true }
+# A remote driver's token is kept as an Argon2id hash in a `0600` ledger: the file
+# records who may drive this machine, and a file that records it must not also
+# hand out the credential. The workspace already pins the crate for exactly this.
+argon2 = { workspace = true }
+# The pairing code and the salt are both drawn from the system source, the same one
+# `acpilot-host` uses for the daemon token; a code from a weaker source is a code
+# that can be guessed while it is being typed.
+getrandom = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 # The daemon's settings are a cascade rather than a flag per file: a user-level

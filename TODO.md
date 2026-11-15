@@ -1155,8 +1155,8 @@ loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the reci
 and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
 `agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
 landed (`acpilotd --acp`, stdio) and P4.5-10 remains open for its remote half — HTTP/JSON-RPC,
-pairing, scopes and the cockpit routes. P4.5-11 to P4.5-13, the mock-server tests, integration
-stats and skills, are also open. A run writes its record before the `finished` frame, and the
+pairing, scopes and the cockpit routes. P4.5-11's request-body snapshots landed, but streaming
+and the bridge tests are open, as are P4.5-12 (integration stats) and P4.5-13 (skills). A run writes its record before the `finished` frame, and the
 lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
 resolved.
 
@@ -1481,6 +1481,24 @@ resolved.
     cockpit's connection panel.
 
 - [ ] **P4.5-11 · Tests** (1.5d)
+  - **Result so far (2026-11-13):** the request bodies are frozen.
+    `crates/acpilot-model/tests/wire_snapshot.rs` sends one request with every knob set
+    through both dialects and snapshots what left (`chat_body`), the refusal retry pair
+    (`refusal_retry`), and the probe's two requests (`probe_requests`), with keys sorted so
+    the snapshot records the body rather than `preserve_order`. It also pins the two things
+    a snapshot cannot show: a server that answers 200 and silently ignores `top_k` is *not*
+    reported as refusing it — the run says nothing because nothing was said — and a 200
+    followed by a truncated body is `model_unavailable`, not half an answer. The snapshot
+    earned its keep at once: `temperature: 0.2` and `top_p: 0.95` reach the wire as
+    `0.20000000298023224` and `0.949999988079071`, because `SamplingParams` is `f32` and
+    JSON widens it. Servers accept that, so it is recorded rather than changed.
+  - **Open:** streaming. "A server that 500s mid-stream" and "a server that never finishes"
+    are streaming cases, and `Backend::chat` still asks for the whole answer
+    (`"stream": false`), so neither has a behaviour to test; the lab still draws an answer
+    when it is finished rather than as it arrives. The bridge tests — expired code, wrong
+    token, scope escalation refused, a permission answered without the grant, a revoked
+    driver's `401` — need P4.5-10's remote transport, which is not built, and the DoD's
+    scripted `devin` client is blocked on the same half.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

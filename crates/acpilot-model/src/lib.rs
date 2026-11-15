@@ -13,6 +13,8 @@
 
 use std::time::Duration;
 
+use futures::StreamExt;
+
 use acpilot_core::AcpilotError;
 use acpilot_proto::model::{
     DiscoveredModel, MetadataSource, ModelCapabilities, ProviderKind, SamplingParams,
@@ -316,6 +318,25 @@ impl Backend {
         }
     }
 
+    /// Send one chat request, handing each piece of assistant text to `on_text`
+    /// as the server produces it.
+    ///
+    /// The assembled answer is the same type [`Backend::chat`] returns, so a
+    /// caller can stream the words and still read the tool calls and stop reason.
+    /// Text is delivered exactly once: a caller that draws it must not draw
+    /// `content` again. A server that ignores `stream: true` sends one JSON body,
+    /// which arrives only in `content` — a caller that saw no text must draw it.
+    pub async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<ChatResponse, AcpilotError> {
+        match self {
+            Self::LmStudio(backend) => backend.chat_stream(request, on_text).await,
+            Self::OpenAiCompatible(backend) => backend.chat_stream(request, on_text).await,
+        }
+    }
+
     /// Ask a loaded model to demonstrate tools and structured output.
     ///
     /// Two requests, both cheap: one offers a single trivial tool, one demands a
@@ -422,38 +443,140 @@ pub(crate) async fn post_chat(
             return Ok((value, unsupported));
         }
 
-        let refused = status.as_u16() == 400 || status.as_u16() == 422;
         let detail = response.text().await.unwrap_or_default();
-        let next = if refused {
-            OPTIONAL_PARAMS
-                .iter()
-                .find(|name| body.contains_key(**name))
-                .copied()
-        } else {
-            None
-        };
+        if let Some(error) = refusal(provider, status, &detail, body, &mut unsupported) {
+            return Err(error);
+        }
+    }
+}
 
-        let Some(name) = next else {
-            return Err(AcpilotError::ModelUnavailable {
+/// Decide what a non-success chat status means.
+///
+/// `None` means one optional parameter was removed from `body` and the request
+/// may be sent again. `Some(error)` is the server's refusal, reported as-is:
+/// guessing again at a broken server only makes it a slow one.
+fn refusal(
+    provider: &Provider,
+    status: reqwest::StatusCode,
+    detail: &str,
+    body: &mut Map<String, Value>,
+    unsupported: &mut Vec<String>,
+) -> Option<AcpilotError> {
+    let refused = status.as_u16() == 400 || status.as_u16() == 422;
+    let next = if refused {
+        OPTIONAL_PARAMS
+            .iter()
+            .find(|name| body.contains_key(**name))
+            .copied()
+    } else {
+        None
+    };
+
+    let Some(name) = next else {
+        return Some(AcpilotError::ModelUnavailable {
+            provider: provider.id.clone(),
+            message: format!(
+                "server answered {status}{}",
+                if detail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", truncate(detail, 400))
+                }
+            ),
+        });
+    };
+
+    tracing::debug!(
+        provider = %provider.id,
+        parameter = name,
+        "server refused an optional parameter; retrying without it"
+    );
+    body.remove(name);
+    unsupported.push(name.to_owned());
+    None
+}
+
+/// POST a chat body asking for a stream, and deliver the text as it arrives.
+///
+/// The retry rule is the one [`post_chat`] follows, and it only ever runs before
+/// the body is read: once the first frame is delivered, a failure is reported
+/// rather than retried, because a retry would show the same words twice.
+pub(crate) async fn post_chat_stream(
+    client: &reqwest::Client,
+    provider: &Provider,
+    url: &str,
+    body: &mut Map<String, Value>,
+    on_text: &mut (dyn FnMut(&str) + Send),
+) -> Result<ChatResponse, AcpilotError> {
+    let mut unsupported = Vec::new();
+
+    loop {
+        let mut request = client
+            .post(url)
+            .timeout(CHAT_TIMEOUT)
+            .json(&Value::Object(body.clone()));
+        if let Some(token) = &provider.token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| transport_error(&provider.id, &error))?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let detail = response.text().await.unwrap_or_default();
+            if let Some(error) = refusal(provider, status, &detail, body, &mut unsupported) {
+                return Err(error);
+            }
+            continue;
+        }
+
+        // A server is allowed to ignore `stream: true` and answer one JSON body.
+        // That is a complete answer, not an empty stream, and refusing it would
+        // break every compatible server that is silent about a flag it drops.
+        let streaming = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        if !streaming {
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|error| unexpected(&provider.id, &error))?;
+            return wire::parse(value, unsupported)
+                .map_err(|error| unexpected(&provider.id, &error));
+        }
+
+        let mut sse = wire::Sse::default();
+        let mut streamed = wire::Streamed::default();
+        let mut bytes = response.bytes_stream();
+        while let Some(chunk) = bytes.next().await {
+            let chunk = chunk.map_err(|error| AcpilotError::ModelUnavailable {
                 provider: provider.id.clone(),
-                message: format!(
-                    "server answered {status}{}",
-                    if detail.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", truncate(&detail, 400))
-                    }
-                ),
-            });
-        };
+                message: format!("the stream broke mid-answer: {error}"),
+            })?;
+            for payload in sse.push(&String::from_utf8_lossy(&chunk)) {
+                let frame: Value = serde_json::from_str(&payload).map_err(|error| {
+                    unexpected(&provider.id, &format!("unreadable stream frame: {error}"))
+                })?;
+                let text = streamed
+                    .push(frame)
+                    .map_err(|error| unexpected(&provider.id, &error))?;
+                if !text.is_empty() {
+                    on_text(&text);
+                }
+            }
+            if sse.done() {
+                break;
+            }
+        }
 
-        tracing::debug!(
-            provider = %provider.id,
-            parameter = name,
-            "server refused an optional parameter; retrying without it"
-        );
-        body.remove(name);
-        unsupported.push(name.to_owned());
+        return streamed
+            .finish(sse.done(), unsupported)
+            .map_err(|error| unexpected(&provider.id, &error));
     }
 }
 

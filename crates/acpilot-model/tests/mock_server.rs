@@ -111,7 +111,10 @@ async fn the_body_that_leaves_is_the_request_and_nothing_else() {
     assert_eq!(bodies.len(), 1);
     let body = &bodies[0];
     assert_eq!(body["model"], "mock-1");
-    assert_eq!(body["stream"], false, "this adapter does not stream yet");
+    assert_eq!(
+        body["stream"], false,
+        "`chat` is the whole-answer call; `chat_stream` asks for frames"
+    );
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][1]["content"], "say hi");
     assert_eq!(body["top_k"], 40);

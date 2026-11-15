@@ -1364,8 +1364,9 @@ resolved.
     `tests/mock_server.rs` for the adapters, and two more in the agent's stdio suite.
   - **Open:** promotion (`POST /v1/recipes/{id}/promote`) is P4.5-9 and is not served yet.
     The run response is `200` with an SSE body, not the ticket's `202`: a `202` cannot carry
-    the stream, and a second polling route would be a run id nobody needs. A delta carries
-    the whole answer until `acpilot-model` streams (P4.5-11). Closing the stream abandons
+    the stream,    and a second polling route would be a run id nobody needs. A delta carries text as the
+    provider produces it; one that ignores `stream: true` answers one body, so the run
+    emits one delta. Closing the stream abandons
     the run and writes no record. `acpilot-client` has no typed wrappers for these routes
     yet; the OpenAPI document and the TypeScript client are the contract.
   - `GET/POST /v1/providers`, `PATCH/DELETE /v1/providers/{id}`, `POST /v1/providers/{id}/probe`,
@@ -1492,13 +1493,25 @@ resolved.
     earned its keep at once: `temperature: 0.2` and `top_p: 0.95` reach the wire as
     `0.20000000298023224` and `0.949999988079071`, because `SamplingParams` is `f32` and
     JSON widens it. Servers accept that, so it is recorded rather than changed.
-  - **Open:** streaming. "A server that 500s mid-stream" and "a server that never finishes"
-    are streaming cases, and `Backend::chat` still asks for the whole answer
-    (`"stream": false`), so neither has a behaviour to test; the lab still draws an answer
-    when it is finished rather than as it arrives. The bridge tests — expired code, wrong
-    token, scope escalation refused, a permission answered without the grant, a revoked
-    driver's `401` — need P4.5-10's remote transport, which is not built, and the DoD's
-    scripted `devin` client is blocked on the same half.
+  - **Streaming landed with it (2026-11-13).** `Backend::chat_stream` hands each piece of
+    assistant text to a callback as the server produces it. The decoder does not assume
+    chunk boundaries, joins tool-call fragments by index, and treats three things as
+    errors rather than short answers: an error frame after the first delta, a transport
+    that breaks mid-answer, and a stream that stops without `finish_reason` or `[DONE]`.
+    A server that ignores `stream: true` and answers one JSON body is a complete answer,
+    not an empty stream. `acpilot-agent-lm` posts each delta to the client as it arrives —
+    ACP notifications are synchronous, so no forwarding task can reorder a chunk behind
+    the turn's usage update — and draws `content` itself only when no delta was seen. The
+    daemon's run route now owns a run task and emits `model.run.delta` per chunk, so the
+    lab draws tokens as they are generated. **Tests:** six in `tests/mock_stream.rs`
+    (order, LM Studio's own route, an error frame mid-stream, a broken transport, an
+    unfinished stream, a refusal retried before the stream starts, tool-call fragments),
+    three parser unit tests, and the agent's stdio suite against a server that ignores the
+    flag.
+  - **Open:** the bridge tests — expired pairing code, wrong token, scope escalation
+    refused, a permission answered without the grant, a revoked driver's `401` — need
+    P4.5-10's remote transport, which is not built; the DoD's scripted `devin` client is
+    blocked on the same half.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

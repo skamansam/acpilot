@@ -7,10 +7,9 @@
 //!
 //! The response is an SSE stream rather than a `202` with a job id, because a run
 //! is short and the caller is the pane that wants the text as it arrives. The
-//! frames are `model.run.started`, `model.run.delta` and `model.run.finished`;
-//! `acpilot-model` sends no streaming chunks yet, so a delta currently carries the
-//! whole answer. The shape is the one the lab needs, and P4.5-11 is where a server
-//! that streams is tested.
+//! frames are `model.run.started`, `model.run.delta` and `model.run.finished`. A
+//! delta carries text as the provider produces it; a provider that ignores
+//! `stream: true` answers one body, and the run emits one delta for it.
 //!
 //! The record is written before `finished` is sent. A pane that sees the frame has
 //! a line in `runs.jsonl` to point at, which is what makes "why was it better an
@@ -37,6 +36,7 @@ use axum::routing::{get, post};
 use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::mpsc;
 use utoipa::openapi::path::{HttpMethod, Operation};
 
 use crate::providers::Credential;
@@ -79,16 +79,25 @@ struct Plan {
 enum Phase {
     /// Announce the run, then start it.
     Started,
-    /// Assemble, call the model, record the answer.
-    Running,
-    /// Send the finished frame that the running step prepared.
-    Finishing(Event),
+    /// The run is going; each poll takes the next piece of assistant text.
+    Streaming {
+        /// Text as the provider produces it. Closed when the run ends, which is
+        /// also when its record has been written.
+        deltas: mpsc::UnboundedReceiver<String>,
+        /// The run itself, spawned so it keeps going while this stream waits for
+        /// its next delta. It must not be merely stored: a future nobody polls
+        /// never produces a delta and never closes the channel.
+        run: tokio::task::JoinHandle<RunSummary>,
+    },
     /// Nothing more to say.
     Ended,
 }
 
 struct Frames {
-    plan: Plan,
+    /// The id the frames name. Kept outside the run future, which owns the rest
+    /// of the plan, because every delta carries it.
+    run_id: String,
+    plan: Option<Plan>,
     phase: Phase,
 }
 
@@ -105,7 +114,8 @@ async fn start(
     })?;
     let plan = prepare(&state, &id, request, query.root)?;
     let frames = Frames {
-        plan,
+        run_id: plan.run_id.clone(),
+        plan: Some(plan),
         phase: Phase::Started,
     };
     Ok(Sse::new(futures::stream::unfold(
@@ -204,43 +214,53 @@ fn prepare(
 async fn step(frames: &mut Frames) -> Option<Event> {
     match std::mem::replace(&mut frames.phase, Phase::Ended) {
         Phase::Started => {
-            frames.phase = Phase::Running;
-            Some(frame(
+            let plan = frames.plan.take().expect("a run starts once");
+            let started = frame(
                 "model.run.started",
                 json!({
-                    "run_id": frames.plan.run_id,
-                    "recipe_id": frames.plan.recipe.id,
-                    "provider_id": frames.plan.recipe.provider_id,
-                    "model_id": frames.plan.recipe.model_id,
-                    "started_at": frames.plan.started_at,
+                    "run_id": plan.run_id,
+                    "recipe_id": plan.recipe.id,
+                    "provider_id": plan.recipe.provider_id,
+                    "model_id": plan.recipe.model_id,
+                    "started_at": plan.started_at,
                 }),
-            ))
+            );
+            let (sender, deltas) = mpsc::unbounded_channel();
+            frames.phase = Phase::Streaming {
+                deltas,
+                run: tokio::spawn(run_once(plan, sender)),
+            };
+            Some(started)
         }
-        Phase::Running => {
-            let (summary, content) = run_once(frames).await;
-            let delta = (!content.is_empty()).then(|| {
-                frame(
-                    "model.run.delta",
-                    json!({ "run_id": summary.id, "text": content }),
-                )
-            });
-            let finished = frame("model.run.finished", json!({ "run": summary }));
-            match delta {
-                Some(delta) => {
-                    frames.phase = Phase::Finishing(finished);
+        Phase::Streaming { mut deltas, run } => {
+            match deltas.recv().await {
+                Some(text) => {
+                    let delta = frame(
+                        "model.run.delta",
+                        json!({ "run_id": frames.run_id, "text": text }),
+                    );
+                    frames.phase = Phase::Streaming { deltas, run };
                     Some(delta)
                 }
-                None => Some(finished),
+                // The sender closes only when the run returns, and the record is
+                // written before that, so this frame never points at nothing.
+                None => {
+                    // A run reports its own failures as records, so a join error is
+                    // a bug rather than a failed run.
+                    let summary = run.await.expect("the run task reports its own failures");
+                    Some(frame("model.run.finished", json!({ "run": summary })))
+                }
             }
         }
-        Phase::Finishing(event) => Some(event),
         Phase::Ended => None,
     }
 }
 
 /// Assemble, call, and write the record. Never fails: a failed run is a record.
-async fn run_once(frames: &mut Frames) -> (RunSummary, String) {
-    let plan = &frames.plan;
+///
+/// It owns the plan so it can run while the stream polls the deltas it sends.
+async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<String>) -> RunSummary {
+    let plan = &plan;
     let clock = Instant::now();
     let assembly = assemble(
         &plan.root,
@@ -287,7 +307,6 @@ async fn run_once(frames: &mut Frames) -> (RunSummary, String) {
     let mut warnings = warnings;
     let mut stop_reason = None;
     let mut usage = Usage::default();
-    let mut content = String::new();
     let mut message = None;
 
     if let Some(prompt) = prompt {
@@ -306,9 +325,23 @@ async fn run_once(frames: &mut Frames) -> (RunSummary, String) {
             tools: Vec::new(),
             json_schema: None,
         };
-        match plan.backend.chat(&request).await {
+        // Each delta goes straight down the stream: the lab draws the answer as
+        // the model writes it, not when the model stops.
+        let mut streamed = false;
+        match plan
+            .backend
+            .chat_stream(&request, &mut |text| {
+                streamed = true;
+                let _ = deltas.send(text.to_owned());
+            })
+            .await
+        {
             Ok(answer) => {
-                content = answer.content;
+                // A provider that ignored `stream: true` answered one body, so
+                // this is the only chance to send its text.
+                if !streamed && !answer.content.is_empty() {
+                    let _ = deltas.send(answer.content.clone());
+                }
                 usage = answer.usage;
                 stop_reason = answer.stop_reason;
                 warnings.extend(
@@ -352,9 +385,9 @@ async fn run_once(frames: &mut Frames) -> (RunSummary, String) {
         warnings.push(format!("the run record could not be written: {error}"));
         let mut summary = summary;
         summary.warnings = warnings;
-        return (summary, content);
+        return summary;
     }
-    (summary, content)
+    summary
 }
 
 fn frame(event: &str, data: serde_json::Value) -> Event {

@@ -216,6 +216,210 @@ pub(crate) fn parse(value: Value, unsupported_params: Vec<String>) -> Result<Cha
     })
 }
 
+/// One frame of a streamed completion.
+///
+/// Both dialects stream the same shape: a `delta` with text, tool-call fragments
+/// that are only complete once the stream ends, and a `finish_reason` on the last
+/// frame. `error` is seen in practice from servers that fail after the headers
+/// went out, and it is a value because servers disagree on whether it is a
+/// string or an object.
+#[derive(Debug, Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<UsageBody>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+/// One streamed choice.
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Delta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+/// The part of the next token that arrived in this frame.
+#[derive(Debug, Default, Deserialize)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<DeltaToolCall>,
+}
+
+/// A tool call, assembled from the frames that mention it.
+///
+/// `index` is what makes that possible: one call's name may arrive in one frame
+/// and its arguments over the next ten, interleaved with a second call.
+#[derive(Debug, Deserialize)]
+struct DeltaToolCall {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    function: Option<DeltaFunction>,
+}
+
+/// One piece of a tool call's function.
+#[derive(Debug, Default, Deserialize)]
+struct DeltaFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// Decode `text/event-stream` frames without assuming chunk boundaries.
+///
+/// The transport decides where a read ends, so a frame may arrive in three reads
+/// and two frames in one. Only text up to a blank line is decoded; everything
+/// after it stays in the buffer.
+#[derive(Debug, Default)]
+pub(crate) struct Sse {
+    buffer: String,
+    done: bool,
+}
+
+impl Sse {
+    /// Feed bytes and take every complete event's payload.
+    pub(crate) fn push(&mut self, chunk: &str) -> Vec<String> {
+        self.buffer.push_str(chunk);
+        // A `\r\n` may be split across two reads, so normalise the whole buffer
+        // rather than the arriving slice.
+        self.buffer = self.buffer.replace("\r\n", "\n");
+
+        let mut payloads = Vec::new();
+        while let Some(end) = self.buffer.find("\n\n") {
+            let frame: String = self.buffer.drain(..end + 2).collect();
+            let data: Vec<&str> = frame
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(|value| value.trim_start())
+                .collect();
+            if data.is_empty() {
+                // A comment (`: keep-alive`) or a field with no data.
+                continue;
+            }
+            let payload = data.join("\n");
+            if payload == "[DONE]" {
+                self.done = true;
+                break;
+            }
+            payloads.push(payload);
+        }
+        payloads
+    }
+
+    /// Whether the server sent the `[DONE]` sentinel.
+    pub(crate) fn done(&self) -> bool {
+        self.done
+    }
+}
+
+/// A completion assembled from streamed deltas.
+#[derive(Debug, Default)]
+pub(crate) struct Streamed {
+    content: String,
+    calls: Vec<(String, String)>,
+    finish: Option<String>,
+    finished: bool,
+    usage: Option<UsageBody>,
+}
+
+impl Streamed {
+    /// Fold one frame in and return the assistant text it carried, if any.
+    pub(crate) fn push(&mut self, frame: Value) -> Result<String, String> {
+        let chunk: StreamChunk = serde_json::from_value(frame)
+            .map_err(|error| format!("unreadable stream chunk: {error}"))?;
+
+        if let Some(error) = chunk.error {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| error.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "the server reported an error mid-stream".to_owned());
+            return Err(message);
+        }
+
+        let mut text = String::new();
+        for choice in chunk.choices {
+            if let Some(content) = choice.delta.content {
+                text.push_str(&content);
+            }
+            for call in choice.delta.tool_calls {
+                while self.calls.len() <= call.index {
+                    self.calls.push((String::new(), String::new()));
+                }
+                let slot = &mut self.calls[call.index];
+                if let Some(function) = call.function {
+                    if let Some(name) = function.name.filter(|name| !name.is_empty()) {
+                        slot.0 = name;
+                    }
+                    if let Some(arguments) = function.arguments {
+                        slot.1.push_str(&arguments);
+                    }
+                }
+            }
+            if choice.finish_reason.is_some() {
+                self.finish = choice.finish_reason;
+                self.finished = true;
+            }
+        }
+        if let Some(usage) = chunk.usage {
+            self.usage = Some(usage);
+        }
+
+        self.content.push_str(&text);
+        Ok(text)
+    }
+
+    /// The assembled answer, or why the stream cannot be one.
+    ///
+    /// A stream that stops without a `finish_reason` and without `[DONE]` is an
+    /// error, never a short answer: a silent truncation is the one failure a
+    /// model lab must not present as a result.
+    pub(crate) fn finish(
+        self,
+        done: bool,
+        unsupported: Vec<String>,
+    ) -> Result<ChatResponse, String> {
+        if !self.finished && !done {
+            return Err("the stream ended before the answer finished".to_owned());
+        }
+
+        Ok(ChatResponse {
+            content: self.content,
+            tool_calls: self
+                .calls
+                .into_iter()
+                .filter(|(name, _)| !name.is_empty())
+                .map(|(name, arguments)| ToolCall { name, arguments })
+                .collect(),
+            stop_reason: self.finish,
+            usage: match self.usage {
+                Some(usage) => Usage {
+                    prompt_tokens: usage.prompt_tokens,
+                    completion_tokens: usage.completion_tokens,
+                    reported: true,
+                },
+                None => Usage {
+                    reported: false,
+                    ..Usage::default()
+                },
+            },
+            // A stream reports text as it goes and timings not at all. A number
+            // here would be ours, not the server's, and the lab draws those
+            // differently on purpose.
+            stats: Stats::default(),
+            unsupported_params: unsupported,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +472,62 @@ mod tests {
             response.stop_reason.as_deref(),
             Some("maxPredictedTokensReached")
         );
+    }
+
+    #[test]
+    fn a_frame_split_across_reads_is_decoded_once() {
+        let mut sse = Sse::default();
+        assert!(sse.push("data: one").is_empty(), "no blank line yet");
+        assert_eq!(
+            sse.push(" and a half\n\ndata: two\n\n"),
+            vec!["one and a half", "two"]
+        );
+    }
+
+    #[test]
+    fn comments_and_other_fields_are_not_payload() {
+        let mut sse = Sse::default();
+        assert!(
+            sse.push(": keep-alive\n\nevent: message\nid: 7\n\n")
+                .is_empty()
+        );
+        assert!(sse.push("data: [DONE]\n\n").is_empty());
+        assert!(sse.done(), "[DONE] is the sentinel, not a chunk");
+    }
+
+    #[test]
+    fn tool_call_fragments_are_joined_by_index() {
+        let mut streamed = Streamed::default();
+        streamed
+            .push(serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "function": { "name": "read_file" } }
+                ] } }]
+            }))
+            .expect("a frame");
+        streamed
+            .push(serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "function": { "arguments": "{\"path\":" } },
+                    { "index": 1, "function": { "name": "run_command" } }
+                ] } }]
+            }))
+            .expect("a frame");
+        streamed
+            .push(serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "function": { "arguments": "\"/a.rs\"}" } }
+                ] }, "finish_reason": "tool_calls" }]
+            }))
+            .expect("a frame");
+
+        let answer = streamed.finish(false, Vec::new()).expect("an answer");
+        assert_eq!(answer.tool_calls.len(), 2);
+        assert_eq!(answer.tool_calls[0].name, "read_file");
+        assert_eq!(answer.tool_calls[0].arguments, "{\"path\":\"/a.rs\"}");
+        assert_eq!(answer.tool_calls[1].name, "run_command");
+        assert_eq!(answer.tool_calls[1].arguments, "");
+        assert_eq!(answer.stop_reason.as_deref(), Some("tool_calls"));
     }
 
     #[test]

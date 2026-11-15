@@ -13,6 +13,10 @@ acpilot-proto.workspace = true
 # glob-and-gitignore implementation would disagree with the file tree about what a
 # workspace contains.
 ignore.workspace = true
+# `response.bytes_stream()` is polled with `StreamExt`; futures is already a
+# workspace dependency (the daemon uses it), so this is a feature of the same
+# tree rather than a new one.
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,6 +25,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+futures.workspace = true
 insta.workspace = true
 tempfile.workspace = true
 

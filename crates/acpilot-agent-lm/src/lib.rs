@@ -317,24 +317,44 @@ pub async fn turn(
             json_schema: None,
         };
 
-        let answer = tokio::select! {
-            biased;
-            () = session.wake.notified() => {
-                session.cancel.store(true, Ordering::SeqCst);
-                return Ok(TurnResult { stop: StopReason::Cancelled, steps, usage });
+        // The answer is delivered as the server produces it, through ACP
+        // notifications on the session stream. `send_notification` is
+        // synchronous, so each delta is queued before the next frame is read:
+        // nothing here can reorder a chunk behind the turn's usage update.
+        let mut send_error: Option<agent_client_protocol::Error> = None;
+        let mut streamed_any = false;
+        let answer = {
+            let mut on_text = |text: &str| {
+                streamed_any = true;
+                if send_error.is_none() {
+                    send_error = chunk(connection, session_id, text).err();
+                }
+            };
+            tokio::select! {
+                biased;
+                () = session.wake.notified() => {
+                    session.cancel.store(true, Ordering::SeqCst);
+                    return Ok(TurnResult { stop: StopReason::Cancelled, steps, usage });
+                }
+                result = loaded.backend.chat_stream(&request, &mut on_text) => result.map_err(|error| {
+                    agent_client_protocol::Error::new(
+                        i32::from(ErrorCode::InternalError),
+                        error.to_string(),
+                    )
+                })?,
             }
-            result = loaded.backend.chat(&request) => result.map_err(|error| {
-                agent_client_protocol::Error::new(
-                    i32::from(ErrorCode::InternalError),
-                    error.to_string(),
-                )
-            })?,
         };
-        usage = answer.usage;
-
-        if !answer.content.is_empty() {
+        // A client that went away mid-stream ends the turn: continuing would
+        // generate tokens nobody can read.
+        if let Some(error) = send_error {
+            return Err(error);
+        }
+        // A server that ignored `stream: true` answered one body, so this is the
+        // only chance to show it; a streamed answer already reached the client.
+        if !streamed_any && !answer.content.is_empty() {
             chunk(connection, session_id, &answer.content)?;
         }
+        usage = answer.usage;
 
         let used =
             u64::from(answer.usage.prompt_tokens) + u64::from(answer.usage.completion_tokens);

@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::wire;
 use crate::{
-    ChatRequest, ChatResponse, DISCOVERY_TIMEOUT, Provider, post_chat, transport_error, unexpected,
-    wire::chat_body,
+    ChatRequest, ChatResponse, DISCOVERY_TIMEOUT, Provider, post_chat, post_chat_stream,
+    transport_error, unexpected, wire::chat_body,
 };
 
 /// The LM Studio adapter.
@@ -89,6 +89,21 @@ impl LmStudio {
         let mut body = chat_body(request);
         let (value, unsupported) = post_chat(&self.client, &self.provider, &url, &mut body).await?;
         wire::parse(value, unsupported).map_err(|error| unexpected(&self.provider.id, &error))
+    }
+
+    /// `POST /api/v0/chat/completions` with `stream: true`.
+    ///
+    /// LM Studio streams the same frames as the OpenAI-compatible surface, so the
+    /// decoding is shared; only the URL differs.
+    pub async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        on_text: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<ChatResponse, AcpilotError> {
+        let url = self.provider.url("/api/v0/chat/completions");
+        let mut body = chat_body(request);
+        body.insert("stream".to_owned(), Value::Bool(true));
+        post_chat_stream(&self.client, &self.provider, &url, &mut body, on_text).await
     }
 }
 

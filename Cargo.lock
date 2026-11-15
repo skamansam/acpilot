@@ -183,6 +183,7 @@ dependencies = [
  "acpilot-core",
  "acpilot-proto",
  "axum",
+ "futures",
  "ignore",
  "insta",
  "reqwest",

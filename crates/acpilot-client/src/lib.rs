@@ -1085,7 +1085,8 @@ pub enum ModelRunStream {
         /// Run identifier, which the record is fetched by.
         run_id: String,
     },
-    /// Answer text. Today one frame carries the whole answer.
+    /// Answer text, as the provider produced it. A provider that ignores
+    /// `stream: true` sends one frame carrying the whole answer.
     Delta {
         /// Run identifier.
         run_id: String,

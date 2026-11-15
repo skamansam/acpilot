@@ -4,6 +4,86 @@
  */
 
 export interface paths {
+    "/v1/acp/bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the ACP bridge is doing
+         * @description Whether the driver listener is on, the address it bound, and how many drivers are connected or on record. Off unless `[acp.bridge] enabled = true` names a `bind` address.
+         */
+        get: operations["acp_bridge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/drivers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The drivers paired with this daemon
+         * @description Including revoked drivers: the row answers who prompted a turn after the credential has stopped working.
+         */
+        get: operations["acp_drivers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/drivers/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a driver's token
+         * @description The next request carrying the old token is `401`; the row stays so a transcript can still answer who prompted a turn.
+         */
+        post: operations["revoke_driver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/pairings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time pairing code
+         * @description The code is shown to a person, typed into a driver, single-use and expires in two minutes. `grant_answer_permissions` is the person's decision, not the driver's: without it the driver's turns wait for a human to answer the agent's permission requests.
+         */
+        post: operations["pair_driver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents": {
         parameters: {
             query?: never;
@@ -1146,6 +1226,19 @@ export interface components {
             kind: components["schemas"]["HostKind"];
         };
         /**
+         * @description Ask for a code, from the cockpit.
+         *
+         *     The person issuing the code decides whether the driver may answer permission
+         *     requests; a driver cannot grant itself one by asking.
+         */
+        CreatePairingRequest: {
+            /**
+             * @description Allow the paired driver to answer permission requests for the turns it
+             *     starts. Off by default, and off is the safe answer.
+             */
+            grant_answer_permissions?: boolean;
+        };
+        /**
          * @description Request body for `POST /v1/recipes`.
          *
          *     The same fields a recipe file has, without `updated_at`: the file's mtime is
@@ -1958,6 +2051,18 @@ export interface components {
             name: string;
             /** @description Scopes it would like. `answer_permissions` requires an explicit grant. */
             requested_scopes: components["schemas"]["DriverScope"][];
+        };
+        /**
+         * @description What a driver gets when it claims a pair: its row, and the token once.
+         *
+         *     The token is in this response and nowhere else — the ledger keeps an Argon2id
+         *     hash of it, so a driver that loses it asks for another code.
+         */
+        PairedDriver: {
+            /** @description The driver, as the cockpit will list it. */
+            driver: components["schemas"]["AcpDriverSummary"];
+            /** @description The bearer token every later request carries. */
+            token: string;
         };
         /**
          * @description A one-time pairing code, from `POST /v1/acp/pairings`.
@@ -2867,6 +2972,120 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    acp_bridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bridge's state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpBridgeSummary"];
+                };
+            };
+        };
+    };
+    acp_drivers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per driver */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpDriverSummary"][];
+                };
+            };
+        };
+    };
+    revoke_driver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Driver id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpDriverSummary"];
+                };
+            };
+            /** @description No such driver */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    pair_driver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePairingRequest"];
+            };
+        };
+        responses: {
+            /** @description The code and when it expires */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingCode"];
+                };
+            };
+            /** @description The body is not a pairing request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The bridge is not enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     agents_doc: {
         parameters: {
             query?: never;

@@ -477,6 +477,16 @@
         ],
         "type": "object"
       },
+      "CreatePairingRequest": {
+        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests; a driver cannot grant itself one by asking.",
+        "properties": {
+          "grant_answer_permissions": {
+            "description": "Allow the paired driver to answer permission requests for the turns it\nstarts. Off by default, and off is the safe answer.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "CreateRecipeRequest": {
         "additionalProperties": false,
         "description": "Request body for `POST /v1/recipes`.\n\nThe same fields a recipe file has, without `updated_at`: the file's mtime is\nthe timestamp, and a client that supplied one would be writing a claim about a\nfile it does not own.",
@@ -2067,6 +2077,24 @@
           "code",
           "name",
           "requested_scopes"
+        ],
+        "type": "object"
+      },
+      "PairedDriver": {
+        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else — the ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
+        "properties": {
+          "driver": {
+            "$ref": "#/components/schemas/AcpDriverSummary",
+            "description": "The driver, as the cockpit will list it."
+          },
+          "token": {
+            "description": "The bearer token every later request carries.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "driver",
+          "token"
         ],
         "type": "object"
       },
@@ -3684,6 +3712,136 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/acp/bridge": {
+      "get": {
+        "description": "Whether the driver listener is on, the address it bound, and how many drivers are connected or on record. Off unless `[acp.bridge] enabled = true` names a `bind` address.",
+        "operationId": "acp_bridge",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcpBridgeSummary"
+                }
+              }
+            },
+            "description": "The bridge's state"
+          }
+        },
+        "summary": "What the ACP bridge is doing"
+      }
+    },
+    "/v1/acp/drivers": {
+      "get": {
+        "description": "Including revoked drivers: the row answers who prompted a turn after the credential has stopped working.",
+        "operationId": "acp_drivers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AcpDriverSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "One row per driver"
+          }
+        },
+        "summary": "The drivers paired with this daemon"
+      }
+    },
+    "/v1/acp/drivers/{id}/revoke": {
+      "post": {
+        "description": "The next request carrying the old token is `401`; the row stays so a transcript can still answer who prompted a turn.",
+        "operationId": "revoke_driver",
+        "parameters": [
+          {
+            "description": "Driver id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcpDriverSummary"
+                }
+              }
+            },
+            "description": "The revoked row"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such driver"
+          }
+        },
+        "summary": "Revoke a driver's token"
+      }
+    },
+    "/v1/acp/pairings": {
+      "post": {
+        "description": "The code is shown to a person, typed into a driver, single-use and expires in two minutes. `grant_answer_permissions` is the person's decision, not the driver's: without it the driver's turns wait for a human to answer the agent's permission requests.",
+        "operationId": "pair_driver",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            },
+            "description": "The code and when it expires"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not a pairing request"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The bridge is not enabled"
+          }
+        },
+        "summary": "Issue a one-time pairing code"
+      }
+    },
     "/v1/agents": {
       "get": {
         "description": "The document lives in `acpilot-proto` and cannot name a daemon handler without\ndepending on it, so the path is registered here, from the handler's own\nmetadata. The function body is never called.",

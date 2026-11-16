@@ -365,6 +365,12 @@ pub struct AppState {
     /// because a restart's rows come from the profile's `[providers]` table and that
     /// file belongs to the recipes work.
     providers: Arc<providers::Providers>,
+    /// The provider balances this daemon has read, and when.
+    ///
+    /// A cache rather than a field on the row: `/v1/stats` is polled while a person
+    /// watches, and a balance endpoint is somebody else's server. The store is here
+    /// so both the API and the page read one reading rather than two.
+    balances: Arc<stats::Balances>,
     /// The profile's recipe files, when this daemon has a profile.
     ///
     /// A directory rather than a loaded table: a recipe edited by hand is visible on
@@ -507,6 +513,7 @@ impl Default for AppState {
             index: None,
             hosts: Arc::new(hosts::Hosts::default()),
             providers: Arc::default(),
+            balances: Arc::default(),
             recipes: None,
             run_log: None,
             workspaces: Arc::default(),

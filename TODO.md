@@ -1158,7 +1158,7 @@ landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC wi
 scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming, the
 five bridge tests, byte-identical replay, the promoted agent's P2 smoke, the TUI's
 permission card and the live LM Studio run have landed.
-P4.5-12 (integration stats) and P4.5-13 (skills) remain. A run writes its record before the `finished` frame, and the
+P4.5-13 (skills) remains. A run writes its record before the `finished` frame, and the
 lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
 resolved.
 
@@ -1619,11 +1619,30 @@ resolved.
     session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while
     the permission prompt appears in the TUI and not in the script.
 
-- [ ] **P4.5-12 · Integration stats** (1d) — the shared contract landed:
+- [x] **P4.5-12 · Integration stats** (1d) — the shared contract landed:
   `acpilot_proto::stats::IntegrationStats` covers providers and agents, every figure carries
   `StatSource` (`server`, `configured`, `estimated`, `unknown`), and
   `acpilot_core::stats::{context_fill, credit_fill}` is the tested fill math both UIs use.
-  Still open: `GET /v1/stats`, the collector that fills it, and provider balance reads.
+  - **Result (2026-11-16):** `/v1/stats` lists a `provider` row per declaration in
+    `providers.toml`, ahead of the agent roster and in declaration order. A provider has no
+    conversation, so its `context` is absent rather than zero. `credits` is read from the one
+    balance endpoint this build knows — OpenRouter's `GET /api/v1/credits`, through
+    `acpilot_model::balance` — with the declaration's `credential_ref`, and reports used,
+    remaining and limit in USD with `source: server`. The read is cached for a minute: the bar
+    polls every fifteen seconds, and a stats request is not a reason to hammer an account. A
+    provider with no endpoint, a disabled one, a failed read, or a credential that cannot be
+    read has no `credits` key rather than `0.00`; an unreadable credential is never sent
+    anonymously. A row with a reading carries the read's timestamp, so a balance that stopped
+    refreshing goes old; a quiet row carries its last probe. **Tests:** four in
+    `acpilot_model::credits` (endpoint recognition, the spend/purchase mapping, a body with no
+    purchase reporting nothing, the token-bearing read and a refusal against a loopback
+    server) plus one in `acpilotd/tests/http.rs` (provider rows first, quiet, no invented
+    credits).
+  - **Open:** configured windows and plan ceilings have no field in `providers.toml`, so
+    neither is reported and `window_tokens` stays absent; agent context still comes from the
+    transcript rather than the provider's `max_context_length`. Only OpenRouter's balance URL
+    is recognized — a provider that documents another one needs its own endpoint rather than a
+    guessed URL.
   - Context: the window and usage come from the provider when it reports them (LM Studio
     `max_context_length`, `usage`) and from the session transcript (marked `estimated`)
     otherwise; no default window is ever substituted.

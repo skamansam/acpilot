@@ -276,8 +276,22 @@ own usage update replaces the count when it sends one (`source: server`, and the
 window it names). A session that has done nothing yet reports no `context` at all.
 A row with a reading carries that session's last event as its `updated_at`, so a
 conversation that stopped goes old on the bar. Without that, it would look fresh
-for as long as the roster can be read. Provider rows, configured windows and the
-balance reads are the models phase's task (P4.5-12).
+for as long as the roster can be read.
+
+A `provider` row per entry in `providers.toml` comes first, in declaration order.
+It has no conversation behind it, so it reports no `context`; it reports `credits`
+only when this build knows the provider's balance endpoint — today OpenRouter's
+`GET /api/v1/credits`. The read uses the declaration's `credential_ref`, is cached
+for a minute because the bar polls faster than a balance moves, and reports
+`used`, `remaining` and `limit` in USD with `source: server`. A provider with no
+such endpoint, a disabled one, or one whose read failed has no `credits` key
+rather than `0.00`; a credential that cannot be read sends nothing at all. The
+row's `updated_at` is when the balance was read, or the last probe for a quiet
+row.
+
+Configured windows and plan ceilings have no field in `providers.toml` yet, so
+neither is invented here: `window_tokens` stays absent until an agent names a
+window or a profile states one.
 
 `GET /app/stats` is the page's copy: the same rows with `fill`, `text` and
 `source` worked out. A browser cannot link `acpilot-stats`, and a second

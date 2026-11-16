@@ -22,10 +22,12 @@ use acpilot_proto::model::{
 use serde_json::{Map, Value};
 
 pub mod context;
+mod credits;
 mod lmstudio;
 mod openai;
 mod wire;
 
+pub use credits::{BALANCE_TIMEOUT, balance, balance_endpoint};
 pub use lmstudio::LmStudio;
 pub use openai::OpenAi;
 

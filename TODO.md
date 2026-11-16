@@ -1576,7 +1576,10 @@ resolved.
     `a_promoted_agents_thinking_is_its_own_paragraph` in `crates/acpilot-tui/src/app.rs`
     feeds two `Thought` events and an answer chunk and asserts the thinking is its own
     `Kind::Thought` paragraph, kept apart from the assistant's and drawn as a thought row
-    (which is what applies the dim italic style). `acpilot recipes run` writes thinking to
+    (which is what applies the dim italic style). The transcript's thinking rows fold with
+    `Enter` like a tool call (`enter_folds_a_long_thought_to_one_row`): open by default,
+    one `thinking · N lines · Enter opens it` row when folded, so a long reason can be put
+    away without losing the answer. `acpilot recipes run` writes thinking to
     stderr as it arrives, so a terminal shows a reasoning-only run instead of an empty one
     while stdout stays the answer and `--json` stays one object.
     `tests/lm_studio.rs` gained `a_tight_budget_spends_it_thinking_and_the_run_says_so`:

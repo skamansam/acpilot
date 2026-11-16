@@ -407,7 +407,7 @@ impl Action {
     pub const fn what_in(self, context: Context) -> &'static str {
         match (self, context) {
             (Self::Activate, Context::Files | Context::Sessions) => "open",
-            (Self::Activate, Context::Copy) => "open the tool call",
+            (Self::Activate, Context::Copy) => "open / fold",
             (Self::Find, Context::Copy) => "find in what is above",
             (Self::Visual, Context::Copy) => "select",
             (Self::Yank, Context::Copy) => "copy and leave",

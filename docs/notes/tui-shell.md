@@ -81,8 +81,9 @@ point of the split.
   order. They answer what you can open, what it said, and what you want to say.
   The transcript renders an assistant reply's markdown (headings, lists, quotes,
   fenced code, inline code, bold, italic, links). It folds every tool call to
-  one row whose status moves in place. `Enter` under the copy cursor opens the
-  result. While the open session is busy, a cursor sits at the end of the last
+  one row whose status moves in place, and draws the agent's thinking as its own
+  softly styled row. `Enter` under the copy cursor folds or opens the tool call
+  or thinking row, so a long reason can be put away without hiding the answer. While the open session is busy, a cursor sits at the end of the last
   line and the title says `streaming`. The composer is multiline, and `@` opens
   a path completion the daemon walks. - The **status line** is connection,
   profile, focused pane, cursor, last message, and the daemon address when there
@@ -105,7 +106,7 @@ document open.
 | Pane | Today | Task |
 | --- | --- | --- |
 | Menu bar, About | real, and every row is an existing path | — |
-| Sessions, transcript, composer | real, over the daemon. The transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and a streaming cursor. The composer is multiline with `@path` completion from the daemon's walk | — |
+| Sessions, transcript, composer | real, over the daemon. The transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and thinking rows, and a streaming cursor. The composer is multiline with `@path` completion from the daemon's walk | — |
 | Permission card | real: the request's own title, kind and session, a preview of the write when it is one, and one row per option the request actually sent (`y` once, `a` always for the session, `n` deny). `Tab`/`Shift-Tab` move between questions that are waiting, and `Esc` answers later. The card is drawn over the transcript while it streams, because a turn in flight is exactly when an agent asks | — |
 | Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
 | Source control | real: `F6` opens a modal pane over the shell, fed by `GET /v1/git/status` and both halves of `GET /v1/git/diff`. The changed paths are on the left. The selected file's **Unstaged** and **Staged** sections are on the right, one hunk at a time, with the chosen unstaged hunk marked. `j`/`k` choose a path and `h`/`l` choose an unstaged hunk. `Shift-S` stages that one hunk through `POST /v1/git/stage-hunk`, `PgUp`/`PgDn` scroll the diff, and `s`/`u` move the selected path in or out of the index through `POST /v1/git/stage` and `/unstage`. `r` asks the daemon again. `d` arms `POST /v1/git/discard` (working tree back to the index, staged changes kept) and `x` arms `POST /v1/git/checkout` (both halves back to `HEAD`). Both wait for `y`, and `n` or `Esc` cancels. Checkout is refused before the first commit and for an untracked path, where discard is the action that removes it. `--demo` uses its one seeded changed file and refuses the writes | — |
@@ -129,7 +130,7 @@ document open.
 | terminal picker | `j`/`k` choose · `Enter` attach · `n` start a shell in the session's workspace · `Esc`/`q` close |
 | agent picker | `j`/`k` choose · `Enter` chooses the agent and reveals the assistant · `Esc`/`q` close |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
-| transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call under the cursor |
+| transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call or thinking row under the cursor |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |
 | editor | `h`/`j`/`k`/`l` cursor in a column that Up/Down remembers · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `v` visual selection · `y` copy the selection · `Esc` clear it · `Ctrl-S` or `:w` save · `:` command line (`:q` refuses unsaved text, `:q!` discards) · `i`/`a` insert at the caret or after it · `I`/`A` at the line's start or end · `o`/`O` a line below or above · `u`/`Ctrl-Z` undo · `Ctrl-Y` redo · `x` delete a character · `F12` definition · click puts the caret · Shift-click extends the selection · drag selects · wheel scrolls the view |
 | visual mode | motions (`h`/`j`/`k`/`l`, arrows, `0`/`$`, `PgUp`/`PgDn`) extend the run · `y` copy · `d`/`x` delete · `:` a command · `v`/`Esc`/click leave |

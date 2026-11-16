@@ -206,7 +206,9 @@ already taught. `?` lists those keys rather than the editor's while a pane is
 being read. The answer is rendered rather than dumped: headings, lists, quotes,
 fenced code and inline emphasis become styled lines. Every tool call is one row,
 `[completed] Edit src/app.rs`, whose result is folded away until `Enter` opens it
-under the copy cursor. While the session is busy a cursor sits at the end of the
+under the copy cursor. The agent's thinking is a row of its own, styled softly
+ahead of the answer; `Enter` folds a long one to `thinking · 12 lines · Enter
+opens it`, so the reply stays findable while the reasoning is still one key away. While the session is busy a cursor sits at the end of the
 newest line. The title says `streaming`, so a reply still arriving does not read
 as one that stopped.
 

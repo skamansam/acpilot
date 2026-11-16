@@ -584,11 +584,13 @@ pub struct Entry {
     /// then `completed` — is one row whose status moved, not two rows. The agent
     /// names the call, so the name is what the second event is matched on.
     pub tool: Option<ToolCall>,
-    /// Whether a tool call's detail is hidden.
+    /// Whether a foldable entry's detail is hidden.
     ///
-    /// Folded by default: the header says which tool ran, and a transcript that
-    /// printed every result in full is a conversation nobody can find the reply
-    /// in. `Enter` in the transcript opens the one under the cursor.
+    /// A tool call is folded by default: the header says which tool ran, and a
+    /// transcript that printed every result in full is a conversation nobody can
+    /// find the reply in. A thought starts open, because it is what the agent
+    /// said, and is folded when its length is in the way. `Enter` in the
+    /// transcript opens or folds the row under the cursor.
     pub folded: bool,
 }
 
@@ -2961,6 +2963,18 @@ impl App {
                 }
                 continue;
             }
+            if entry.kind == Kind::Thought && entry.folded {
+                let lines = entry.text.matches('\n').count() + 1;
+                let noun = if lines == 1 { "line" } else { "lines" };
+                rows.push(TranscriptRow {
+                    kind: entry.kind,
+                    segments: vec![crate::markdown::Segment::plain(format!(
+                        "thinking · {lines} {noun} · Enter opens it"
+                    ))],
+                    entry: index,
+                });
+                continue;
+            }
             rows.extend(entry.text.split('\n').map(|line| TranscriptRow {
                 kind: entry.kind,
                 segments: vec![crate::markdown::Segment::plain(line)],
@@ -2989,6 +3003,8 @@ impl App {
                             .map_or(0, |call| call.detail.lines().count())
                     };
                     1 + detail
+                } else if entry.kind == Kind::Thought && entry.folded {
+                    1
                 } else {
                     entry.text.matches('\n').count() + 1
                 }
@@ -3177,9 +3193,9 @@ impl App {
 
     /// Open or close the tool call under the transcript's cursor.
     ///
-    /// A tool call is a row until it is asked about, and a result nobody can open
-    /// is a result a person scrolls past without knowing it is there.
-    fn toggle_tool(&mut self) {
+    /// A tool call or a thought is a row until it is asked about, and detail
+    /// nobody can open is detail a person scrolls past without knowing it is there.
+    fn toggle_fold(&mut self) {
         let (height, _) = self.transcript_grid();
         let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
         self.transcript.view.clamp((height, u16::MAX), max_scroll);
@@ -3188,14 +3204,18 @@ impl App {
             return;
         };
         let entry = row.entry;
-        if !self
-            .entries
-            .get(entry)
-            .is_some_and(|entry| entry.tool.is_some())
-        {
-            self.status = "that row is not a tool call".to_owned();
+        let Some(target) = self.entries.get(entry) else {
+            return;
+        };
+        if target.tool.is_none() && target.kind != Kind::Thought {
+            self.status = "that row does not fold".to_owned();
             return;
         }
+        let label = if target.kind == Kind::Thought {
+            "thinking"
+        } else {
+            "tool call"
+        };
         let folded = self
             .entries
             .get_mut(entry)
@@ -3204,14 +3224,25 @@ impl App {
                 entry.folded
             })
             .unwrap_or(false);
-        // The length changed under the cursor; putting the view back at the tail
-        // when it was live is what keeps a fold from scrolling the transcript.
+        // The entries under the cursor changed height, so the row that was there
+        // may no longer exist. Put the cursor on the entry's new first row — its
+        // folded header, or its first line when it opens — before clamping, or a
+        // second `Enter` would act on a blank row and the fold could not be undone.
+        let row = self
+            .transcript_rows()
+            .iter()
+            .position(|row| row.entry == entry)
+            .unwrap_or(0);
+        self.transcript.view.cursor = (row, self.transcript.view.cursor.1);
         let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
-        self.transcript.view.scroll = self.transcript.view.scroll.min(max_scroll);
+        self.transcript.view.clamp((height, u16::MAX), max_scroll);
+        // Keep the row that moved on screen, without scrolling a live transcript
+        // away from its tail when the fold happened above it.
+        self.transcript.view.scroll = self.transcript.view.scroll.min(row);
         self.status = if folded {
-            "tool call folded · Enter opens it".to_owned()
+            format!("{label} folded · Enter opens it")
         } else {
-            "tool call opened · Enter folds it".to_owned()
+            format!("{label} opened · Enter folds it")
         };
     }
 
@@ -3296,11 +3327,11 @@ impl App {
         if self.transcript.typing.is_some() {
             return self.transcript_search_key(key);
         }
-        // `Enter` opens or folds the tool call under the cursor: a read-only pane
-        // has the key free, and a result a person can see is the difference between
-        // a call they can judge and a line they scroll past.
+        // `Enter` opens or folds the tool call or thought under the cursor: a
+        // read-only pane has the key free, and detail a person can see is the
+        // difference between a call they can judge and a line they scroll past.
         if key.code == KeyCode::Enter {
-            self.toggle_tool();
+            self.toggle_fold();
             return None;
         }
         let grid = self.transcript_grid();
@@ -11922,6 +11953,31 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert!(app.entries[0].folded, "and it closes again");
         assert_eq!(app.transcript_len(), 1);
+    }
+
+    #[test]
+    fn enter_folds_a_long_thought_to_one_row() {
+        let mut app = transcript_app();
+        app.entries = vec![Entry {
+            kind: Kind::Thought,
+            text: "first\nsecond\nthird".to_owned(),
+            ..Entry::default()
+        }];
+        app.handle_key(key(KeyCode::F(3)));
+        assert_eq!(app.transcript_len(), 3, "thinking starts open");
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.entries[0].folded, "the thought folded");
+        assert_eq!(app.transcript_len(), 1);
+        let rows = app.transcript_rows();
+        assert_eq!(rows.len(), 1, "a folded thought is one row");
+        assert_eq!(rows[0].kind, Kind::Thought, "it keeps its own styling");
+        assert_eq!(rows[0].text(), "thinking · 3 lines · Enter opens it");
+        assert!(app.status.contains("thinking folded"), "{}", app.status);
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.entries[0].folded, "and it opens again");
+        assert_eq!(app.transcript_len(), 3);
     }
 
     #[test]

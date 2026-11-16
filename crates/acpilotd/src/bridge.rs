@@ -22,26 +22,27 @@
 //!
 //! # What a driver sees
 //!
-//! The assistant's text, chunk by chunk, and the daemon's notices. Everything else
-//! in the session record — tool calls, plans, mode changes — is not translated yet,
-//! so a driver reads a conversation that is thinner than the TUI's, never one that
-//! is wrong. Tool-call updates are the next translation, and they are listed as open
-//! on the ticket rather than approximated here.
+//! The conversation as the session recorded it: assistant text and thoughts, tool
+//! calls with their patches, the plan, mode changes and the daemon's notices. The
+//! translation from the record to ACP lives in [`crate::acp_update`] and is shared
+//! with the remote transport, so the two bridges cannot disagree about what a driver
+//! is told.
+//!
+//! Compaction and a changed command list have no ACP update in this schema version;
+//! they are dropped rather than turned into a notice the protocol does not define.
 
 use std::sync::Arc;
 
-use acpilot_proto::event::{SessionEvent, SessionEventKind};
+use acpilot_proto::event::SessionEvent;
 use acpilot_proto::session::{CreateSessionRequest, SessionSummary};
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, ErrorCode, Implementation,
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, Notice,
-    NoticeSeverity, PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
-    StopReason, TextContent,
+    AgentCapabilities, CancelNotification, ContentBlock, ErrorCode, Implementation,
+    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, SessionId, SessionNotification, StopReason,
 };
 use agent_client_protocol::{
     Agent, Client, ConnectionTo, Error, Stdio, on_receive_notification, on_receive_request,
 };
-use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::AppState;
@@ -315,48 +316,15 @@ async fn settle(
 
 /// One recorded event, as the driver's protocol spells it.
 ///
-/// Only what this bridge can say exactly: assistant text and the daemon's notices.
-/// Every other kind is dropped rather than translated into something it is not.
+/// The translation is shared with the remote transport ([`crate::acp_update`]), so a
+/// tool call cannot reach one kind of driver and not the other.
 fn forward(
     connection: &ConnectionTo<Client>,
     session_id: &SessionId,
     event: SessionEvent,
 ) -> Result<(), Error> {
-    let update = match event.kind {
-        SessionEventKind::MessageChunk => {
-            // The driver sent the prompt; echoing it back as an assistant chunk
-            // would make it read as if the agent had said its own words.
-            if event.payload.get("role").and_then(Value::as_str) != Some("assistant") {
-                return Ok(());
-            }
-            let Some(text) = event
-                .payload
-                .get("content")
-                .and_then(|content| content.get("text"))
-                .and_then(Value::as_str)
-            else {
-                return Ok(());
-            };
-            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
-                TextContent::new(text),
-            )))
-        }
-        SessionEventKind::Notice => {
-            let title = event
-                .payload
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("Acpilot");
-            let description = event
-                .payload
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            SessionUpdate::Notice(
-                Notice::new(NoticeSeverity::Info, title).description(description.to_owned()),
-            )
-        }
-        _ => return Ok(()),
+    let Some(update) = crate::acp_update::update(&event) else {
+        return Ok(());
     };
     connection.send_notification(SessionNotification::new(session_id.clone(), update))
 }
@@ -387,6 +355,7 @@ fn failure(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use acpilot_agent::{MapResolver, Registry};
+    use agent_client_protocol::schema::v1::TextContent;
     use std::path::Path;
 
     fn manifest(agents: &str) -> (tempfile::TempDir, Registry) {

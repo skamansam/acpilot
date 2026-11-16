@@ -22,8 +22,9 @@
 //!
 //! JSON-RPC over HTTP has a request and a response; ACP's `session/update` is a
 //! notification the agent sends unprompted. `GET /acp/events` is the driver's
-//! stream, filtered to that driver, and it is where a prompt's chunks and permission
-//! questions arrive while `POST /acp` still holds the prompt's response open. A
+//! stream, filtered to that driver, and it is where a prompt's chunks, tool calls and
+//! permission questions arrive while `POST /acp` still holds the prompt's response
+//! open. A
 //! driver that never opens it can still prompt and gets the answer at the end, but
 //! it reads the turn as one silence.
 //!
@@ -43,11 +44,11 @@ use std::time::Duration;
 use acpilot_proto::bridge::{
     AcpBridgeSummary, AcpDriverSummary, CreatePairingRequest, PairDriverRequest,
 };
-use acpilot_proto::event::{SessionEvent, SessionEventKind};
+use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ContentChunk, NewSessionRequest, Notice, NoticeSeverity,
-    PromptRequest, SessionId, SessionNotification, SessionUpdate, StopReason, TextContent,
+    CancelNotification, NewSessionRequest, Notice, NoticeSeverity, PromptRequest, SessionId,
+    SessionNotification, SessionUpdate, StopReason,
 };
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path as ApiPath, Request, State};
@@ -585,29 +586,15 @@ async fn next_permission(
 }
 
 /// What a driver sees of one turn as it happens.
+///
+/// The same translation the stdio bridge uses ([`crate::acp_update`]): text, thoughts,
+/// tool calls, plans, mode changes and notices. Compaction and a changed command list
+/// have no ACP spelling in this schema version and are dropped rather than approximated.
 fn stream(state: &AppState, driver: &Driver, session_id: &SessionId, event: SessionEvent) {
-    if event.kind != SessionEventKind::MessageChunk {
-        return;
-    }
-    if event.payload.get("role").and_then(Value::as_str) != Some("assistant") {
-        return;
-    }
-    let Some(text) = event
-        .payload
-        .get("content")
-        .and_then(|content| content.get("text"))
-        .and_then(Value::as_str)
-    else {
+    let Some(update) = crate::acp_update::update(&event) else {
         return;
     };
-    send_update(
-        state,
-        driver,
-        session_id,
-        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
-            text,
-        )))),
-    );
+    send_update(state, driver, session_id, update);
 }
 
 /// Send one `session/update` to a driver's stream.

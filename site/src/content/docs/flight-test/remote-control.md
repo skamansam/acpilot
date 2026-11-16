@@ -146,12 +146,13 @@ scope. If it asks for a file outside the workspace, it gets the same answer your
 TUI gets. That answer is no. The bridge changes who is typing, not what it allows.
 </Aside>
 
-## What is not translated
+## What a driver sees
 
-Tool-call, plan and mode-change events are dropped rather than approximated, so a
-driver's transcript is thinner than the TUI's. The ticket lists them as open. A
-driver reading a session sees the assistant's words and the daemon's notices,
-which are the two things it can act on without a second protocol.
+The turn's assistant text and thoughts, tool calls with their patches, the plan,
+mode changes and the daemon's notices. A patch carries only the fields the agent
+changed, so a driver merges it into the row it already drew. Compaction and a
+changed command list have no ACP update in this schema version, so they are
+dropped rather than approximated.
 
 ## Configuring the driver
 

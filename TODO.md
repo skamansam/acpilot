@@ -1483,13 +1483,25 @@ resolved.
     missing and wrong tokens, scope escalation, a granted answer reaching the broker,
     revocation, a prompt through a real mock agent, and the scripted driver waiting while
     the cockpit answers.
-  - **Open:** tool-call, plan and mode-change events are still dropped rather than
-    approximated, so a driver's transcript is thinner than the TUI's. The store's session
-    and audit rows do not carry the driver id yet — the ledger records ownership and
-    counts, not the SQLite rows. The token is required even on loopback: the ticket allowed
-    skipping it, and this build does not offer that half-decision. The rate limit is a fixed
-    60 a minute, not configurable. No `acpilot acp ...` verbs exist; pairing and revocation
-    are the HTTP routes, like the rest of the cockpit.
+  - **Both transports now forward the whole turn (2026-11-16).** One
+    `acpilotd::acp_update` translates the session record for the stdio bridge and the
+    remote stream, so a driver reads assistant text and thoughts, a tool call's start
+    and every patch, the plan, the mode id and the daemon's notices. A patch carries
+    only the fields the agent changed, so a driver merges it into the row it has and
+    the call's title is not blanked. Notices now keep their description — the old
+    forwarder read `description` where the record writes `message`, so every notice
+    reached a driver as a bare title. Compaction and a changed command list are still
+    dropped: this schema version has no ACP update for either, and a notice would tell
+    a driver something the protocol does not say. **Tests:** five unit tests over the
+    payload shapes in `acp_update.rs`, and one in `tests/acp_bridge.rs` that prompts a
+    real mock agent and reads the tool call, its completion, the plan and the mode
+    change from a paired driver's stream.
+  - **Open:** the store's session and audit rows do not carry the driver id yet — the
+    ledger records ownership and counts, not the SQLite rows. The token is required even
+    on loopback: the ticket allowed skipping it, and this build does not offer that
+    half-decision. The rate limit is a fixed 60 a minute, not configurable. No
+    `acpilot acp ...` verbs exist; pairing and revocation are the HTTP routes, like the
+    rest of the cockpit.
   - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
     `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
     Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip

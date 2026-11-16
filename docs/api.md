@@ -1179,10 +1179,15 @@ names one in ACP's extension point:
 ```
 
 The directory has to be inside the workspace this daemon serves. A turn streams
-the assistant's text and the daemon's notices as `session/update`, and answers
-`end_turn`; tool-call, plan and mode-change events are not translated yet.
+the assistant's text and thoughts, each tool call and its patches, the plan, mode
+changes and the daemon's notices as `session/update`, and answers `end_turn`.
+Compaction and a changed command list have no ACP update in this schema version,
+so they are dropped rather than approximated.
 
-The remote transport — ACP over HTTP/JSON-RPC at `/acp`, bearer tokens, pairing
-codes, scopes, rate limits and `GET /v1/acp/{bridge,drivers}` — is not served yet.
-It is P4.5-10's remaining half, and the routes are deliberately absent rather
-than answering `501`.
+The remote transport is served too: ACP over HTTP/JSON-RPC at `/acp` on the
+listener `[acp.bridge]` names, with bearer tokens minted by a single-use pairing
+code, scopes, revocation, a fixed 60 requests a minute per driver, and
+`GET /v1/acp/{bridge,drivers}` for the cockpit. A bridge is off unless
+`[acp.bridge] enabled = true` names a `bind`, and an enabled bridge with no bind is
+a startup error rather than a port chosen on the person's behalf. A token is
+required even on loopback.

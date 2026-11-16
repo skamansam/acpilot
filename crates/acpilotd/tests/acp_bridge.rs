@@ -476,6 +476,124 @@ async fn a_scripted_driver_waits_while_the_cockpit_answers_the_permission() {
 }
 
 #[tokio::test]
+async fn a_driver_reads_the_tool_calls_a_plan_and_a_mode_change() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let profile = directory.path().join("profile");
+    let workspace = directory.path().join("workspace");
+    std::fs::create_dir_all(&profile).expect("profile");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let fixture = crate::common::mock_agent();
+    std::fs::write(
+        profile.join("agents.toml"),
+        format!(
+            "schema_version = 1\n\n[[agents]]\nid = \"mock\"\nname = \"Mock\"\n\
+             transport = \"acp-stdio\"\ncommand = '{}'\n",
+            fixture.display().to_string().replace('\\', "/")
+        ),
+    )
+    .expect("agents.toml");
+    let registry = acpilot_agent::Registry::load(
+        profile.join("agents.toml"),
+        Arc::new(acpilot_agent::MapResolver::new()),
+    )
+    .expect("a registry");
+    let workspace = std::fs::canonicalize(&workspace).expect("the workspace resolves");
+    let broker = Arc::new(Broker::new(Policy::shipped(), workspace.clone()));
+    let state = AppState::new()
+        .with_registry(Arc::new(registry))
+        .with_workspace(Workspace {
+            id: "work".to_owned(),
+            profile: String::new(),
+            root: workspace.clone(),
+        })
+        .with_broker(Arc::clone(&broker))
+        .with_drivers(Arc::new(Drivers::memory()))
+        .with_bridge(BridgeSettings {
+            enabled: true,
+            bind: Some("127.0.0.1:0".to_owned()),
+            public_url: None,
+        });
+    let code = state.drivers().issue(false, None);
+    let mut stream = state.drivers().subscribe();
+    let app = acp_http::router(state.clone());
+    let (status, paired) = claim(&app, &code.code, &["observe", "prompt"]).await;
+    assert_eq!(status, StatusCode::OK, "{paired}");
+    let token = paired["token"].as_str().expect("a token").to_owned();
+    let driver = paired["driver"]["id"].as_str().expect("an id").to_owned();
+
+    let (status, session) = send(
+        &app,
+        "POST",
+        "/acp",
+        Some(&token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/new",
+            "params": { "cwd": workspace.clone(), "mcpServers": [] }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    let session_id = session["result"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a session id: {session}"))
+        .to_owned();
+
+    let (status, answer) = send(
+        &app,
+        "POST",
+        "/acp",
+        Some(&token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{ "type": "text", "text": "tools" }]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+
+    // Every update the paired driver was sent during the turn. The agent emitted
+    // these through a real session process, so the payloads are the ones the event
+    // log actually writes rather than ones this test made up.
+    let mut updates = Vec::new();
+    while let Ok(message) = stream.try_recv() {
+        if message.driver != driver {
+            continue;
+        }
+        if let Some(update) = message.message["params"].get("update") {
+            updates.push(update.clone());
+        }
+    }
+    let find = |name: &str| {
+        updates
+            .iter()
+            .find(|update| update["sessionUpdate"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("`{name}` in {updates:?}"))
+    };
+
+    let call = find("tool_call");
+    assert_eq!(call["toolCallId"], "tool-1");
+    assert_eq!(call["title"], "Read seed.txt");
+    assert_eq!(call["kind"], "read");
+    assert_eq!(
+        call["locations"][0]["path"],
+        workspace.join("seed.txt").display().to_string(),
+        "the driver is told which file the call touches"
+    );
+    assert_eq!(find("tool_call_update")["status"], "completed");
+    assert_eq!(find("plan")["entries"][0]["content"], "Read seed.txt");
+    assert_eq!(find("current_mode_update")["currentModeId"], "code");
+}
+
+#[tokio::test]
 async fn a_revoked_driver_is_refused_by_its_next_request() {
     let state = state();
     let code = state.drivers().issue(false, None);

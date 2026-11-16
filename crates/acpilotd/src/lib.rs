@@ -47,6 +47,9 @@ mod auth;
 // The remote half of that bridge: JSON-RPC over HTTP, the driver's event stream
 // and the cockpit routes that pair and revoke drivers.
 pub mod acp_http;
+// One session event, as the driver's protocol spells it. Shared by both transports,
+// because two translations would disagree about what a driver is told.
+mod acp_update;
 mod base64;
 pub mod bridge;
 // Who may drive this daemon remotely, and what they may do: pairing codes, the

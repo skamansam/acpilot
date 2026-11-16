@@ -2623,6 +2623,14 @@ export interface components {
         };
         /** @description One run's record: what it answered, and what it was asked. */
         RunRecordView: {
+            /**
+             * @description What the model thought before it answered, when the server reported any.
+             *
+             *     Absent for a model that does not think out loud. A reasoning model with a
+             *     tight answer budget can spend all of it here and return no `content`, so
+             *     this is what tells a person the run worked and the budget was short.
+             */
+            reasoning?: string | null;
             /** @description The request that produced it. */
             request: components["schemas"]["RecordedRunRequest"];
             /**

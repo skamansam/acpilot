@@ -3514,12 +3514,18 @@ impl App {
                         .is_some_and(|run| run.id == record.summary.id)
                 {
                     lab.record = Some(*record);
+                    lab.thinking = lab
+                        .record
+                        .as_ref()
+                        .and_then(|record| record.reasoning.clone())
+                        .unwrap_or_default();
                 }
             }
             Update::LabRunStarted { run_id } => {
                 if let Some(lab) = self.lab.as_mut() {
                     lab.running = true;
                     lab.output.clear();
+                    lab.thinking.clear();
                     lab.error = None;
                     lab.status = Some(format!("running · {run_id}"));
                 }
@@ -3527,6 +3533,11 @@ impl App {
             Update::LabRunDelta(text) => {
                 if let Some(lab) = self.lab.as_mut() {
                     lab.output.push_str(&text);
+                }
+            }
+            Update::LabThought(text) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.thinking.push_str(&text);
                 }
             }
             Update::LabRunFinished(run) => {

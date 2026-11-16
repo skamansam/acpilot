@@ -1600,6 +1600,7 @@ fn run_recipes(command: RecipesCommand, profile: Option<&str>) -> u8 {
                 Ok(acpilot_client::ModelRunStream::Delta { .. }) => {}
                 Ok(
                     acpilot_client::ModelRunStream::Started { .. }
+                    | acpilot_client::ModelRunStream::Thought { .. }
                     | acpilot_client::ModelRunStream::Other { .. },
                 ) => {}
                 Err(error) => {

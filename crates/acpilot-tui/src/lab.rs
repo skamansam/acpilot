@@ -414,6 +414,11 @@ pub struct Lab {
     pub record: Option<RunRecordView>,
     /// The answer text, as it arrives.
     pub output: String,
+    /// The model's thinking, as it arrives.
+    ///
+    /// Kept apart from `output` because it is not the answer: a reasoning model
+    /// writes this first, and a budget spent here leaves `output` empty.
+    pub thinking: String,
     /// The prompt the next run sends.
     pub prompt: String,
     /// Which pane has the keyboard.
@@ -471,6 +476,7 @@ impl Lab {
         self.compare = None;
         self.record = None;
         self.output.clear();
+        self.thinking.clear();
         self.selectors.clear();
         self.field = 0;
         self.selector = 0;
@@ -1155,15 +1161,37 @@ fn draw_output(frame: &mut Frame, lab: &Lab, theme: &Theme, area: Rect) {
     frame.render_widget(Paragraph::new(rows), gauges);
 
     let width = answer.width.saturating_sub(1);
-    let mut lines = wrapped(&lab.output, width);
     let height = usize::from(answer.height).max(1);
+    let mut lines: Vec<Line> = Vec::new();
+    if !lab.thinking.trim().is_empty() {
+        // Drawn, but never at the answer's expense: the thinking gets at most
+        // half the pane and gives up its oldest lines first, the way any live
+        // stream does. A model that spent its whole budget thinking is exactly
+        // the run where the thinking is the only thing to read.
+        let cap = (height / 2).max(1);
+        let mut thought = wrapped(lab.thinking.trim(), width);
+        if thought.len() > cap {
+            thought = thought.split_off(thought.len() - cap);
+        }
+        let style = Style::default()
+            .fg(theme.text_muted())
+            .add_modifier(Modifier::ITALIC);
+        lines.push(Line::from(Span::styled(" thinking", style)));
+        lines.extend(
+            thought
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, style))),
+        );
+    }
+    let answer_lines = wrapped(&lab.output, width);
+    if !lines.is_empty() && !answer_lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines.extend(answer_lines.into_iter().map(Line::from));
     if lines.len() > height {
         lines = lines.split_off(lines.len() - height);
     }
-    frame.render_widget(
-        Paragraph::new(lines.into_iter().map(Line::from).collect::<Vec<_>>()),
-        answer,
-    );
+    frame.render_widget(Paragraph::new(lines), answer);
 
     let mut rows: Vec<Line> = Vec::new();
     rows.push(heading("runs", theme));
@@ -1402,6 +1430,7 @@ mod tests {
                     }],
                     budget: recipe().context,
                 },
+                reasoning: None,
             }),
             ..Lab::default()
         };
@@ -1465,6 +1494,7 @@ mod tests {
                     }],
                     budget: recipe().context,
                 },
+                reasoning: None,
             }),
             ..Lab::default()
         };

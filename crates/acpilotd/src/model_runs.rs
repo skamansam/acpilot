@@ -7,9 +7,12 @@
 //!
 //! The response is an SSE stream rather than a `202` with a job id, because a run
 //! is short and the caller is the pane that wants the text as it arrives. The
-//! frames are `model.run.started`, `model.run.delta` and `model.run.finished`. A
-//! delta carries text as the provider produces it; a provider that ignores
-//! `stream: true` answers one body, and the run emits one delta for it.
+//! frames are `model.run.started`, `model.run.delta`, `model.run.thought` and
+//! `model.run.finished`. A delta carries text as the provider produces it; a
+//! thought carries the model's reasoning, which is a different thing and is never
+//! folded into the answer. A provider that ignores `stream: true` answers one
+//! body, and the run emits one delta for it — and one thought, when the body
+//! carried reasoning.
 //!
 //! The record is written before `finished` is sent. A pane that sees the frame has
 //! a line in `runs.jsonl` to point at, which is what makes "why was it better an
@@ -76,15 +79,28 @@ struct Plan {
     log: RunLog,
 }
 
+/// One piece of a run as the provider produces it.
+///
+/// Answer and reasoning travel on one channel so their order is the order the
+/// model wrote them, and stay distinguishable so the frame can name which is
+/// which.
+enum Chunk {
+    /// Assistant text: the answer itself.
+    Answer(String),
+    /// The model's thinking, which a reasoning model writes first.
+    Thought(String),
+}
+
 /// Where a run's stream is.
 enum Phase {
     /// Announce the run, then start it.
     Started,
-    /// The run is going; each poll takes the next piece of assistant text.
+    /// The run is going; each poll takes the next piece of text.
     Streaming {
-        /// Text as the provider produces it. Closed when the run ends, which is
-        /// also when its record has been written.
-        deltas: mpsc::UnboundedReceiver<String>,
+        /// Text as the provider produces it, answer and thinking kept apart.
+        /// Closed when the run ends, which is also when its record has been
+        /// written.
+        deltas: mpsc::UnboundedReceiver<Chunk>,
         /// The run itself, spawned so it keeps going while this stream waits for
         /// its next delta. It must not be merely stored: a future nobody polls
         /// never produces a delta and never closes the channel.
@@ -274,11 +290,12 @@ async fn step(frames: &mut Frames) -> Option<Event> {
         }
         Phase::Streaming { mut deltas, run } => {
             match deltas.recv().await {
-                Some(text) => {
-                    let delta = frame(
-                        "model.run.delta",
-                        json!({ "run_id": frames.run_id, "text": text }),
-                    );
+                Some(chunk) => {
+                    let (event, text) = match chunk {
+                        Chunk::Answer(text) => ("model.run.delta", text),
+                        Chunk::Thought(text) => ("model.run.thought", text),
+                    };
+                    let delta = frame(event, json!({ "run_id": frames.run_id, "text": text }));
                     frames.phase = Phase::Streaming { deltas, run };
                     Some(delta)
                 }
@@ -299,7 +316,7 @@ async fn step(frames: &mut Frames) -> Option<Event> {
 /// Assemble, call, and write the record. Never fails: a failed run is a record.
 ///
 /// It owns the plan so it can run while the stream polls the deltas it sends.
-async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<String>) -> RunSummary {
+async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<Chunk>) -> RunSummary {
     let plan = &plan;
     let clock = Instant::now();
     let assembly = assemble(
@@ -348,6 +365,7 @@ async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<String>) -> RunSumma
     let mut stop_reason = None;
     let mut usage = Usage::default();
     let mut message = None;
+    let mut reasoning = String::new();
 
     if let Some(prompt) = prompt {
         let mut messages = prompt.history.clone();
@@ -366,22 +384,35 @@ async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<String>) -> RunSumma
             json_schema: None,
         };
         // Each delta goes straight down the stream: the lab draws the answer as
-        // the model writes it, not when the model stops.
+        // the model writes it, not when the model stops. Thinking takes the same
+        // route on its own frame, so a reasoning model that never reaches its
+        // answer still shows what it spent the budget on.
         let mut streamed = false;
         match plan
             .backend
-            .chat_stream(&request, &mut |text| {
-                streamed = true;
-                let _ = deltas.send(text.to_owned());
-            })
+            .chat_stream(
+                &request,
+                &mut |text| {
+                    streamed = true;
+                    let _ = deltas.send(Chunk::Answer(text.to_owned()));
+                },
+                &mut |text| {
+                    let _ = deltas.send(Chunk::Thought(text.to_owned()));
+                },
+            )
             .await
         {
             Ok(answer) => {
                 // A provider that ignored `stream: true` answered one body, so
-                // this is the only chance to send its text.
-                if !streamed && !answer.content.is_empty() {
-                    let _ = deltas.send(answer.content.clone());
+                // this is the only chance to send its text — and its thinking,
+                // which a reasoning model may have produced all of.
+                if !streamed && !answer.reasoning.is_empty() {
+                    let _ = deltas.send(Chunk::Thought(answer.reasoning.clone()));
                 }
+                if !streamed && !answer.content.is_empty() {
+                    let _ = deltas.send(Chunk::Answer(answer.content.clone()));
+                }
+                reasoning = answer.reasoning;
                 usage = answer.usage;
                 stop_reason = answer.stop_reason;
                 warnings.extend(
@@ -420,7 +451,7 @@ async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<String>) -> RunSumma
         message,
     };
 
-    let record = RunRecord::new(summary.clone(), stored);
+    let record = RunRecord::new(summary.clone(), stored).with_reasoning(reasoning);
     if let Err(error) = plan.log.append(&record) {
         warnings.push(format!("the run record could not be written: {error}"));
         let mut summary = summary;
@@ -511,6 +542,7 @@ fn record_view(record: &RunRecord) -> RunRecordView {
                 .collect(),
             budget: record.request.budget.clone(),
         },
+        reasoning: (!record.reasoning.is_empty()).then(|| record.reasoning.clone()),
     }
 }
 

@@ -1561,10 +1561,16 @@ resolved.
     `/api/v0`. `wire::stream_body` now sends it, `stream_options` is in the refusal retry list
     so a server that rejects the key is retried without it, and
     `a_stream_asks_for_usage_so_the_counts_are_not_an_estimate` pins the request.
-  - **Open:** LM Studio's reasoning models spend the answer budget on `reasoning_content`
-    before any `content`; the adapter drops reasoning deltas, so a recipe with a tight
-    `max_tokens` can record an empty answer. That is visible in the record and has not been
-    given a rendering decision.
+  - **Reasoning is kept (2026-11-16).** A reasoning model writes its thinking before its
+    answer, and a tight `max_tokens` can spend the whole budget there and answer nothing.
+    The adapter now reads `reasoning_content` (and the `reasoning` spelling) from a
+    streamed delta and from a whole body, delivers it on its own callback, and the run
+    route emits it as `model.run.thought` rather than folding it into `model.run.delta`.
+    The record keeps it in `runs.jsonl`, `GET /v1/recipes/{id}/runs/{run}` returns it, and
+    the lab draws it dimmed above the answer, capped at half the pane so it never crowds
+    the answer out. The ACP turn forwards it as `AgentThoughtChunk`.
+  - **Open:** no test yet asserts the TUI session transcript draws those thought chunks
+    from a promoted agent, as opposed to the lab drawing its run's.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

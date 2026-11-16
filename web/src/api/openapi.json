@@ -3024,6 +3024,13 @@
       "RunRecordView": {
         "description": "One run's record: what it answered, and what it was asked.",
         "properties": {
+          "reasoning": {
+            "description": "What the model thought before it answered, when the server reported any.\n\nAbsent for a model that does not think out loud. A reasoning model with a\ntight answer budget can spend all of it here and return no `content`, so\nthis is what tells a person the run worked and the budget was short.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "request": {
             "$ref": "#/components/schemas/RecordedRunRequest",
             "description": "The request that produced it."

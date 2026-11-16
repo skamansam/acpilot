@@ -114,10 +114,19 @@ impl OpenAi {
         &self,
         request: &ChatRequest,
         on_text: &mut (dyn FnMut(&str) + Send),
+        on_reasoning: &mut (dyn FnMut(&str) + Send),
     ) -> Result<ChatResponse, AcpilotError> {
         let url = self.provider.url("/v1/chat/completions");
         let mut body = stream_body(request);
-        post_chat_stream(&self.client, &self.provider, &url, &mut body, on_text).await
+        post_chat_stream(
+            &self.client,
+            &self.provider,
+            &url,
+            &mut body,
+            on_text,
+            on_reasoning,
+        )
+        .await
     }
 }
 

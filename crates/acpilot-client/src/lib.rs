@@ -1093,6 +1093,17 @@ pub enum ModelRunStream {
         /// The text.
         text: String,
     },
+    /// The model's thinking, which a reasoning model writes before its answer.
+    ///
+    /// A separate frame rather than a flag on `Delta`: thinking is not the
+    /// answer, and a client that drew it in the answer's place would be inventing
+    /// one.
+    Thought {
+        /// Run identifier.
+        run_id: String,
+        /// The thinking.
+        text: String,
+    },
     /// The run ended, and its record is written before this frame.
     Finished(Box<acpilot_proto::model::RunSummary>),
     /// A frame this build does not know, kept so the stream is not silently short.
@@ -1119,6 +1130,13 @@ fn model_run_frame(frame: &eventsource_stream::Event) -> Result<ModelRunStream, 
         "model.run.delta" => {
             let value = value(&frame.data)?;
             Ok(ModelRunStream::Delta {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+                text: value["text"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.thought" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Thought {
                 run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
                 text: value["text"].as_str().unwrap_or_default().to_owned(),
             })

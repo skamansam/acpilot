@@ -225,6 +225,13 @@ pub struct Stats {
 pub struct ChatResponse {
     /// Assistant text, empty when the answer was only tool calls.
     pub content: String,
+    /// The model's thinking, empty when it produced none.
+    ///
+    /// A reasoning model writes this before it writes `content`, and an answer
+    /// budget spent thinking leaves `content` empty. Kept apart because it is not
+    /// the answer: a caller that drew it in the answer's place would be putting
+    /// words in the model's mouth.
+    pub reasoning: String,
     /// Tool calls in the order the model produced them.
     pub tool_calls: Vec<ToolCall>,
     /// Why generation stopped, as the server phrased it.
@@ -326,21 +333,28 @@ impl Backend {
     }
 
     /// Send one chat request, handing each piece of assistant text to `on_text`
-    /// as the server produces it.
+    /// and each piece of the model's thinking to `on_reasoning`.
     ///
     /// The assembled answer is the same type [`Backend::chat`] returns, so a
     /// caller can stream the words and still read the tool calls and stop reason.
     /// Text is delivered exactly once: a caller that draws it must not draw
     /// `content` again. A server that ignores `stream: true` sends one JSON body,
     /// which arrives only in `content` — a caller that saw no text must draw it.
+    ///
+    /// Thinking is never passed to `on_text`: it is a different thing the model
+    /// said, and a reasoning model's tight budget can leave `content` empty while
+    /// the thinking is all there was.
     pub async fn chat_stream(
         &self,
         request: &ChatRequest,
         on_text: &mut (dyn FnMut(&str) + Send),
+        on_reasoning: &mut (dyn FnMut(&str) + Send),
     ) -> Result<ChatResponse, AcpilotError> {
         match self {
-            Self::LmStudio(backend) => backend.chat_stream(request, on_text).await,
-            Self::OpenAiCompatible(backend) => backend.chat_stream(request, on_text).await,
+            Self::LmStudio(backend) => backend.chat_stream(request, on_text, on_reasoning).await,
+            Self::OpenAiCompatible(backend) => {
+                backend.chat_stream(request, on_text, on_reasoning).await
+            }
         }
     }
 
@@ -514,6 +528,7 @@ pub(crate) async fn post_chat_stream(
     url: &str,
     body: &mut Map<String, Value>,
     on_text: &mut (dyn FnMut(&str) + Send),
+    on_reasoning: &mut (dyn FnMut(&str) + Send),
 ) -> Result<ChatResponse, AcpilotError> {
     let mut unsupported = Vec::new();
 
@@ -569,11 +584,14 @@ pub(crate) async fn post_chat_stream(
                 let frame: Value = serde_json::from_str(&payload).map_err(|error| {
                     unexpected(&provider.id, &format!("unreadable stream frame: {error}"))
                 })?;
-                let text = streamed
+                let piece = streamed
                     .push(frame)
                     .map_err(|error| unexpected(&provider.id, &error))?;
-                if !text.is_empty() {
-                    on_text(&text);
+                if !piece.answer.is_empty() {
+                    on_text(&piece.answer);
+                }
+                if !piece.reasoning.is_empty() {
+                    on_reasoning(&piece.reasoning);
                 }
             }
             if sse.done() {

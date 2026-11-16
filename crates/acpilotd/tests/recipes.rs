@@ -177,7 +177,10 @@ fn provider() -> String {
                         post(|| async {
                             Json(json!({
                                 "choices": [{
-                                    "message": { "content": "hello from the model" },
+                                    "message": {
+                                        "content": "hello from the model",
+                                        "reasoning_content": "weighing it"
+                                    },
                                     "finish_reason": "stop"
                                 }],
                                 "usage": { "prompt_tokens": 11, "completion_tokens": 5 }
@@ -289,12 +292,17 @@ async fn a_run_streams_three_frames_and_appends_a_record() {
     let text = String::from_utf8(body).expect("SSE is text");
     for event in [
         "event: model.run.started",
+        "event: model.run.thought",
         "event: model.run.delta",
         "event: model.run.finished",
     ] {
         assert!(text.contains(event), "missing {event}:\n{text}");
     }
     assert!(text.contains("hello from the model"), "{text}");
+    assert!(
+        text.contains("weighing it"),
+        "the model's thinking is a frame of its own, not the answer:\n{text}"
+    );
 
     let (status, page) = send(&app, "GET", "/v1/recipes/demo/runs", None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
@@ -341,6 +349,10 @@ async fn a_run_record_is_read_back_with_the_request_it_sent() {
     assert_eq!(status, StatusCode::OK, "{record}");
     assert_eq!(record["summary"]["id"], id.as_str());
     assert_eq!(record["request"]["prompt"], "say hello");
+    assert_eq!(
+        record["reasoning"], "weighing it",
+        "the record says what the answer budget was spent on: {record}"
+    );
     assert_eq!(record["request"]["budget"]["window"], 4096);
     assert!(
         record["request"]["files"].is_array(),

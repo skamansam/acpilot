@@ -189,17 +189,36 @@ pub struct RunRecord {
     pub summary: RunSummary,
     /// What was sent.
     pub request: StoredRequest,
+    /// What the model thought before it answered.
+    ///
+    /// Absent when the server sent no reasoning, so an old line and a model that
+    /// does not think out loud read the same; the key is left out rather than
+    /// written empty, which would claim the model thought nothing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning: String,
 }
 
 impl RunRecord {
-    /// A record at the current schema.
+    /// A record at the current schema, without reasoning.
     #[must_use]
     pub fn new(summary: RunSummary, request: StoredRequest) -> Self {
         Self {
             schema_version: RUNS_SCHEMA,
             summary,
             request,
+            reasoning: String::new(),
         }
+    }
+
+    /// Attach the model's thinking to the line.
+    ///
+    /// The answer itself is not stored: a record answers what was asked, what it
+    /// cost and why it stopped. Thinking is stored because it explains an empty
+    /// answer, which the token counts alone would make look like a broken run.
+    #[must_use]
+    pub fn with_reasoning(mut self, reasoning: String) -> Self {
+        self.reasoning = reasoning;
+        self
     }
 }
 

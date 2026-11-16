@@ -35,6 +35,12 @@ pub(crate) struct Choice {
 pub(crate) struct Message {
     #[serde(default)]
     pub content: Option<String>,
+    /// The model's thinking, which reasoning servers send beside `content`.
+    ///
+    /// `reasoning` is the other spelling servers use for the same field, so it
+    /// is accepted rather than lost.
+    #[serde(default, alias = "reasoning")]
+    pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallBody>,
 }
@@ -181,6 +187,7 @@ pub(crate) fn parse(value: Value, unsupported_params: Vec<String>) -> Result<Cha
         .ok_or_else(|| "no choices in response".to_owned())?;
     let message = choice.message.unwrap_or(Message {
         content: None,
+        reasoning_content: None,
         tool_calls: Vec::new(),
     });
 
@@ -224,6 +231,7 @@ pub(crate) fn parse(value: Value, unsupported_params: Vec<String>) -> Result<Cha
 
     Ok(ChatResponse {
         content: message.content.unwrap_or_default(),
+        reasoning: message.reasoning_content.unwrap_or_default(),
         tool_calls,
         stop_reason,
         usage,
@@ -263,8 +271,25 @@ struct StreamChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// The thinking behind this frame's answer, with the same two spellings a
+    /// whole body allows.
+    #[serde(default, alias = "reasoning")]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<DeltaToolCall>,
+}
+
+/// What one frame carried: the answer, the thinking that led to it, or both.
+///
+/// They are reported together rather than by two methods because one frame can
+/// hold both, and a caller has to hand each to its own consumer in the frame's
+/// order.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Piece {
+    /// Assistant text.
+    pub answer: String,
+    /// The model's thinking.
+    pub reasoning: String,
 }
 
 /// A tool call, assembled from the frames that mention it.
@@ -339,6 +364,7 @@ impl Sse {
 #[derive(Debug, Default)]
 pub(crate) struct Streamed {
     content: String,
+    reasoning: String,
     calls: Vec<(String, String)>,
     finish: Option<String>,
     finished: bool,
@@ -346,8 +372,8 @@ pub(crate) struct Streamed {
 }
 
 impl Streamed {
-    /// Fold one frame in and return the assistant text it carried, if any.
-    pub(crate) fn push(&mut self, frame: Value) -> Result<String, String> {
+    /// Fold one frame in and return the text it carried, if any.
+    pub(crate) fn push(&mut self, frame: Value) -> Result<Piece, String> {
         let chunk: StreamChunk = serde_json::from_value(frame)
             .map_err(|error| format!("unreadable stream chunk: {error}"))?;
 
@@ -361,10 +387,13 @@ impl Streamed {
             return Err(message);
         }
 
-        let mut text = String::new();
+        let mut piece = Piece::default();
         for choice in chunk.choices {
             if let Some(content) = choice.delta.content {
-                text.push_str(&content);
+                piece.answer.push_str(&content);
+            }
+            if let Some(reasoning) = choice.delta.reasoning_content {
+                piece.reasoning.push_str(&reasoning);
             }
             for call in choice.delta.tool_calls {
                 while self.calls.len() <= call.index {
@@ -389,8 +418,9 @@ impl Streamed {
             self.usage = Some(usage);
         }
 
-        self.content.push_str(&text);
-        Ok(text)
+        self.content.push_str(&piece.answer);
+        self.reasoning.push_str(&piece.reasoning);
+        Ok(piece)
     }
 
     /// The assembled answer, or why the stream cannot be one.
@@ -409,6 +439,7 @@ impl Streamed {
 
         Ok(ChatResponse {
             content: self.content,
+            reasoning: self.reasoning,
             tool_calls: self
                 .calls
                 .into_iter()
@@ -544,6 +575,52 @@ mod tests {
         assert_eq!(answer.tool_calls[1].name, "run_command");
         assert_eq!(answer.tool_calls[1].arguments, "");
         assert_eq!(answer.stop_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[test]
+    fn a_body_carries_thinking_apart_from_the_answer() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": { "content": "", "reasoning_content": "I should say hi." },
+                "finish_reason": "length"
+            }]
+        });
+        let response = parse(body, Vec::new()).expect("parses");
+        assert_eq!(response.reasoning, "I should say hi.");
+        assert_eq!(
+            response.content, "",
+            "thinking is what the model wrote before the answer, not the answer"
+        );
+    }
+
+    #[test]
+    fn a_streams_thinking_is_reported_beside_its_answer() {
+        let mut streamed = Streamed::default();
+        let thinking = streamed
+            .push(serde_json::json!({
+                "choices": [{ "delta": { "reasoning": "weighing it" } }]
+            }))
+            .expect("a frame");
+        assert_eq!(
+            thinking,
+            Piece {
+                answer: String::new(),
+                reasoning: "weighing it".to_owned(),
+            },
+            "the other spelling of reasoning is thinking too"
+        );
+
+        let answer = streamed
+            .push(serde_json::json!({
+                "choices": [{ "delta": { "content": "hi" }, "finish_reason": "stop" }]
+            }))
+            .expect("a frame");
+        assert_eq!(answer.answer, "hi");
+        assert!(answer.reasoning.is_empty());
+
+        let response = streamed.finish(false, Vec::new()).expect("an answer");
+        assert_eq!(response.content, "hi");
+        assert_eq!(response.reasoning, "weighing it");
     }
 
     #[test]

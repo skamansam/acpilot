@@ -549,6 +549,13 @@ pub struct RunRecordView {
     pub summary: RunSummary,
     /// The request that produced it.
     pub request: RecordedRunRequest,
+    /// What the model thought before it answered, when the server reported any.
+    ///
+    /// Absent for a model that does not think out loud. A reasoning model with a
+    /// tight answer budget can spend all of it here and return no `content`, so
+    /// this is what tells a person the run worked and the budget was short.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// Request body for `POST /v1/recipes/{id}/promote`.

@@ -265,6 +265,8 @@ pub enum Update {
     },
     /// Answer text from a run.
     LabRunDelta(String),
+    /// The model's thinking, kept apart from the answer.
+    LabThought(String),
     /// A run ended, and its record is written.
     LabRunFinished(Box<acpilot_proto::model::RunSummary>),
     /// The lab's last request failed, worded for the status line.
@@ -860,6 +862,9 @@ async fn run(
                                 }
                                 Ok(ModelRunStream::Delta { text, .. }) => {
                                     let _ = updates.send(Update::LabRunDelta(text));
+                                }
+                                Ok(ModelRunStream::Thought { text, .. }) => {
+                                    let _ = updates.send(Update::LabThought(text));
                                 }
                                 Ok(ModelRunStream::Finished(run)) => {
                                     let _ = updates.send(Update::LabRunFinished(run));

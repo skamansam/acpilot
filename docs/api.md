@@ -1109,7 +1109,7 @@ now would freeze transports that have not been measured.
 | `DELETE /v1/recipes/{id}` | `204`; runs already recorded are left alone |
 | `POST /v1/recipes/{id}/runs` | Streams the run as SSE; `?root=` is required when `corpus` is not empty |
 | `GET /v1/recipes/{id}/runs` | Newest first, `?cursor=` and `?limit=` |
-| `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, and the budget it was assembled from; `404` for a run the log does not hold, including another recipe's |
+| `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, the budget it was assembled from, and the model's reasoning when the server reported any; `404` for a run the log does not hold, including another recipe's |
 | `POST /v1/recipes/{id}/runs/{run}/replay` | Re-send the stored prompt and selectors as a new run with its own record; `?root=` is required when the selectors are not empty, and `404` names a run the log does not hold. The corpus is read again, so the request is byte-identical while the workspace and recipe are unchanged |
 | `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent; `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
 
@@ -1117,9 +1117,15 @@ A run is one HTTP response, so its status is `200` and not `202`. The frames are
 
 ```
 event: model.run.started    data: {"run_id":"…","recipe_id":"demo","model_id":"…"}
+event: model.run.thought    data: {"run_id":"…","text":"…"}
 event: model.run.delta      data: {"run_id":"…","text":"…"}
 event: model.run.finished   data: {"run_id":"…","status":"succeeded","usage":{…}}
 ```
+
+`thought` is the model's reasoning, which a reasoning model writes before its answer. It
+is never folded into `delta`: a client that drew it as the answer would be inventing one,
+and a run whose answer budget was spent thinking has a `delta`-free stream and a real
+`thought`. The record keeps it too, so a stored run says what the budget bought.
 
 The record is appended to `runs.jsonl` before `finished` is sent. A failed run ends with
 `status` `failed` and a `message`; the stream still closes with `200` because the request

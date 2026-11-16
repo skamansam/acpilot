@@ -64,7 +64,7 @@ async fn streamed_text_arrives_in_order_and_adds_up_to_the_answer() {
     let answer = {
         let mut sink = |text: &str| deltas.push(text.to_owned());
         backend(&base, ProviderKind::OpenAiCompatible)
-            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink, &mut |_| {})
             .await
             .expect("the stream")
     };
@@ -76,6 +76,43 @@ async fn streamed_text_arrives_in_order_and_adds_up_to_the_answer() {
         !answer.usage.reported,
         "this server sent no usage frame, and an absent count is not invented"
     );
+}
+
+#[tokio::test]
+async fn a_reasoning_models_thinking_arrives_beside_its_answer() {
+    async fn stream() -> Response {
+        sse(frames(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"let me think"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"hi"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            "[DONE]",
+        ]))
+    }
+
+    let base = serve(Router::new().route("/v1/chat/completions", post(stream))).await;
+    let mut answer_text: Vec<String> = Vec::new();
+    let mut thoughts: Vec<String> = Vec::new();
+    let answer = backend(&base, ProviderKind::OpenAiCompatible)
+        .chat_stream(
+            &ChatRequest::new("m", "hi"),
+            &mut |text: &str| answer_text.push(text.to_owned()),
+            &mut |text: &str| thoughts.push(text.to_owned()),
+        )
+        .await
+        .expect("the stream");
+
+    assert_eq!(
+        thoughts,
+        vec!["let me think"],
+        "thinking has its own channel"
+    );
+    assert_eq!(
+        answer_text,
+        vec!["hi"],
+        "the answer is what the model said, not why it said it"
+    );
+    assert_eq!(answer.content, "hi");
+    assert_eq!(answer.reasoning, "let me think");
 }
 
 #[tokio::test]
@@ -104,7 +141,7 @@ async fn a_stream_asks_for_usage_so_the_counts_are_not_an_estimate() {
     .await;
     let mut sink = |_text: &str| {};
     let answer = backend(&base, ProviderKind::OpenAiCompatible)
-        .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+        .chat_stream(&ChatRequest::new("m", "hi"), &mut sink, &mut |_| {})
         .await
         .expect("the stream");
 
@@ -137,7 +174,7 @@ async fn lm_studio_streams_the_same_frames_on_its_own_route() {
     let answer = {
         let mut sink = |text: &str| deltas.push(text.to_owned());
         backend(&base, ProviderKind::LmStudio)
-            .chat_stream(&ChatRequest::new("m", "ping"), &mut sink)
+            .chat_stream(&ChatRequest::new("m", "ping"), &mut sink, &mut |_| {})
             .await
             .expect("the stream")
     };
@@ -166,7 +203,7 @@ async fn a_server_error_after_the_first_delta_is_an_error_not_a_partial_answer()
     let error = {
         let mut sink = |text: &str| seen.push(text.to_owned());
         backend(&base, ProviderKind::OpenAiCompatible)
-            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink, &mut |_| {})
             .await
             .expect_err("an error frame is not an answer")
     };
@@ -216,7 +253,7 @@ async fn a_transport_that_breaks_mid_stream_is_an_error() {
     let error = {
         let mut sink = |text: &str| seen.push(text.to_owned());
         backend(&base, ProviderKind::OpenAiCompatible)
-            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+            .chat_stream(&ChatRequest::new("m", "hi"), &mut sink, &mut |_| {})
             .await
             .expect_err("a broken stream is not an answer")
     };
@@ -241,7 +278,7 @@ async fn a_stream_that_stops_without_finishing_is_an_error() {
     let base = serve(Router::new().route("/v1/chat/completions", post(stops_early))).await;
     let mut sink = |_text: &str| {};
     let error = backend(&base, ProviderKind::OpenAiCompatible)
-        .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+        .chat_stream(&ChatRequest::new("m", "hi"), &mut sink, &mut |_| {})
         .await
         .expect_err("an unfinished stream is not an answer");
 
@@ -270,7 +307,7 @@ async fn tool_call_fragments_spanning_frames_become_one_call() {
     let answer = {
         let mut sink = |text: &str| deltas.push(text.to_owned());
         backend(&base, ProviderKind::OpenAiCompatible)
-            .chat_stream(&ChatRequest::new("m", "read it"), &mut sink)
+            .chat_stream(&ChatRequest::new("m", "read it"), &mut sink, &mut |_| {})
             .await
             .expect("the stream")
     };
@@ -321,7 +358,7 @@ async fn a_refused_parameter_is_retried_before_the_stream_starts() {
     let answer = {
         let mut sink = |text: &str| deltas.push(text.to_owned());
         backend(&base, ProviderKind::OpenAiCompatible)
-            .chat_stream(&request, &mut sink)
+            .chat_stream(&request, &mut sink, &mut |_| {})
             .await
             .expect("the retry")
     };

@@ -321,13 +321,27 @@ pub async fn turn(
         // notifications on the session stream. `send_notification` is
         // synchronous, so each delta is queued before the next frame is read:
         // nothing here can reorder a chunk behind the turn's usage update.
-        let mut send_error: Option<agent_client_protocol::Error> = None;
+        // Both callbacks report a failed send into one slot, so the slot is a
+        // mutex: two closures alive at once cannot each hold a mutable borrow of
+        // the same `Option`, and the callbacks are handed to a `Send` bound.
+        let send_error: std::sync::Mutex<Option<agent_client_protocol::Error>> =
+            std::sync::Mutex::new(None);
         let mut streamed_any = false;
         let answer = {
             let mut on_text = |text: &str| {
                 streamed_any = true;
-                if send_error.is_none() {
-                    send_error = chunk(connection, session_id, text).err();
+                let mut slot = send_error.lock().expect("the send slot");
+                if slot.is_none() {
+                    *slot = chunk(connection, session_id, text).err();
+                }
+            };
+            // A reasoning model writes its thinking before its answer. The
+            // client draws the two apart, and a budget spent thinking leaves the
+            // answer empty rather than the thought missing.
+            let mut on_thought = |text: &str| {
+                let mut slot = send_error.lock().expect("the send slot");
+                if slot.is_none() {
+                    *slot = thought(connection, session_id, text).err();
                 }
             };
             tokio::select! {
@@ -336,7 +350,7 @@ pub async fn turn(
                     session.cancel.store(true, Ordering::SeqCst);
                     return Ok(TurnResult { stop: StopReason::Cancelled, steps, usage });
                 }
-                result = loaded.backend.chat_stream(&request, &mut on_text) => result.map_err(|error| {
+                result = loaded.backend.chat_stream(&request, &mut on_text, &mut on_thought) => result.map_err(|error| {
                     agent_client_protocol::Error::new(
                         i32::from(ErrorCode::InternalError),
                         error.to_string(),
@@ -346,7 +360,10 @@ pub async fn turn(
         };
         // A client that went away mid-stream ends the turn: continuing would
         // generate tokens nobody can read.
-        if let Some(error) = send_error {
+        if let Some(error) = send_error
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
             return Err(error);
         }
         // A server that ignored `stream: true` answered one body, so this is the
@@ -744,6 +761,19 @@ fn chunk(
     ))
 }
 
+fn thought(
+    connection: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    text: &str,
+) -> Result<(), agent_client_protocol::Error> {
+    connection.send_notification(SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            text,
+        )))),
+    ))
+}
+
 fn notice(
     connection: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -897,6 +927,7 @@ mod tests {
     fn every_finish_reason_a_client_draws_differently_is_mapped() {
         let mut answer = ChatResponse {
             content: String::new(),
+            reasoning: String::new(),
             tool_calls: Vec::new(),
             stop_reason: Some("length".to_owned()),
             usage: Usage::default(),

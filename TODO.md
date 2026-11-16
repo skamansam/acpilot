@@ -1156,8 +1156,8 @@ and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes a
 `agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
 landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC with pairing,
 scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming, the
-five bridge tests, byte-identical replay, the promoted agent's P2 smoke and the TUI's
-permission card have landed; only a live LM Studio run is unobserved, as its `Open:` says.
+five bridge tests, byte-identical replay, the promoted agent's P2 smoke, the TUI's
+permission card and the live LM Studio run have landed.
 P4.5-12 (integration stats) and P4.5-13 (skills) remain. A run writes its record before the `finished` frame, and the
 lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
 resolved.
@@ -1526,9 +1526,10 @@ resolved.
     ACP notifications are synchronous, so no forwarding task can reorder a chunk behind
     the turn's usage update — and draws `content` itself only when no delta was seen. The
     daemon's run route now owns a run task and emits `model.run.delta` per chunk, so the
-    lab draws tokens as they are generated. **Tests:** six in `tests/mock_stream.rs`
+    lab draws tokens as they are generated. **Tests:** eight in `tests/mock_stream.rs`
     (order, LM Studio's own route, an error frame mid-stream, a broken transport, an
-    unfinished stream, a refusal retried before the stream starts, tool-call fragments),
+    unfinished stream, a refusal retried before the stream starts, tool-call fragments,
+    and the usage request that keeps a record measured),
     three parser unit tests, and the agent's stdio suite against a server that ignores the
     flag.
   - **Bridge tests landed (2026-11-15) with the remote transport.** `tests/acp_bridge.rs`
@@ -1549,9 +1550,21 @@ resolved.
     paired driver causes, while `tests/acp_bridge.rs` proves the driver's stream never carries
     it. `tests/lm_studio.rs` is the real-server end to end, ignored like the LSP tests that
     need a tool: `cargo test -p acpilotd --test lm_studio -- --ignored`.
-  - **Open:** the live LM Studio half could not be observed on this machine: port 1234 listed
-    models but every chat completion timed out, so the ignored test has not been run against an
-    answering server. Nothing in the tree claims otherwise.
+  - **The live LM Studio half ran (2026-11-15).** `cargo test -p acpilotd --test lm_studio
+    -- --ignored` passes against port 1234 with `ornith-1.5-9b@q4_k_m` loaded: the run streams,
+    records usage, and replays into a second record. The earlier timeouts were the server
+    stalling, not the adapter. Two faults were ours. The test read `status` off the
+    `model.run.finished` frame's envelope instead of its `run`, which nothing caught because
+    the test is ignored. And no stream asked for `usage`, so every streamed run recorded an
+    estimate even where the server could measure it; LM Studio returns `prompt_tokens` and
+    `completion_tokens` when `stream_options.include_usage` is set, on both `/v1` and
+    `/api/v0`. `wire::stream_body` now sends it, `stream_options` is in the refusal retry list
+    so a server that rejects the key is retried without it, and
+    `a_stream_asks_for_usage_so_the_counts_are_not_an_estimate` pins the request.
+  - **Open:** LM Studio's reasoning models spend the answer budget on `reasoning_content`
+    before any `content`; the adapter drops reasoning deltas, so a recipe with a tight
+    `max_tokens` can record an empty answer. That is visible in the record and has not been
+    given a rendering decision.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

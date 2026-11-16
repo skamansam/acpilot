@@ -21,7 +21,10 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-/// The SSE body's `model.run.finished` payload.
+/// The record inside the SSE body's `model.run.finished` payload.
+///
+/// The frame wraps the summary in `run`, exactly as `acpilot-client` reads it;
+/// returning the envelope here made every field on the run a null.
 fn finished(body: &str) -> Value {
     let mut event = String::new();
     for line in body.lines() {
@@ -30,7 +33,8 @@ fn finished(body: &str) -> Value {
         } else if event == "model.run.finished"
             && let Some(data) = line.strip_prefix("data: ")
         {
-            return serde_json::from_str(data).expect("the finished frame is JSON");
+            let frame: Value = serde_json::from_str(data).expect("the finished frame is JSON");
+            return frame["run"].clone();
         }
     }
     panic!("no finished frame in:\n{body}");

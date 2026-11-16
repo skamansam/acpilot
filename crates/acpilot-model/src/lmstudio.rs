@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::wire;
 use crate::{
     ChatRequest, ChatResponse, DISCOVERY_TIMEOUT, Provider, post_chat, post_chat_stream,
-    transport_error, unexpected, wire::chat_body,
+    transport_error, unexpected, wire::chat_body, wire::stream_body,
 };
 
 /// The LM Studio adapter.
@@ -101,8 +101,7 @@ impl LmStudio {
         on_text: &mut (dyn FnMut(&str) + Send),
     ) -> Result<ChatResponse, AcpilotError> {
         let url = self.provider.url("/api/v0/chat/completions");
-        let mut body = chat_body(request);
-        body.insert("stream".to_owned(), Value::Bool(true));
+        let mut body = stream_body(request);
         post_chat_stream(&self.client, &self.provider, &url, &mut body, on_text).await
     }
 }

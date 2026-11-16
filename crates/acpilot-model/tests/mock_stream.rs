@@ -74,8 +74,52 @@ async fn streamed_text_arrives_in_order_and_adds_up_to_the_answer() {
     assert_eq!(answer.stop_reason.as_deref(), Some("stop"));
     assert!(
         !answer.usage.reported,
-        "a stream carries no usage unless the server chooses to send it"
+        "this server sent no usage frame, and an absent count is not invented"
     );
+}
+
+#[tokio::test]
+async fn a_stream_asks_for_usage_so_the_counts_are_not_an_estimate() {
+    #[derive(Clone, Default)]
+    struct Seen {
+        bodies: Arc<Mutex<Vec<Value>>>,
+    }
+
+    async fn stream(State(seen): State<Seen>, Json(body): Json<Value>) -> Response {
+        seen.bodies.lock().expect("bodies").push(body);
+        sse(frames(&[
+            r#"{"choices":[{"delta":{"content":"hi"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1}}"#,
+            "[DONE]",
+        ]))
+    }
+
+    let seen = Seen::default();
+    let base = serve(
+        Router::new()
+            .route("/v1/chat/completions", post(stream))
+            .with_state(seen.clone()),
+    )
+    .await;
+    let mut sink = |_text: &str| {};
+    let answer = backend(&base, ProviderKind::OpenAiCompatible)
+        .chat_stream(&ChatRequest::new("m", "hi"), &mut sink)
+        .await
+        .expect("the stream");
+
+    let bodies = seen.bodies.lock().expect("bodies").clone();
+    assert_eq!(
+        bodies[0]["stream_options"]["include_usage"], true,
+        "the request asks for the counts that make the record measured: {}",
+        bodies[0]
+    );
+    assert!(
+        answer.usage.reported,
+        "the usage frame is the server speaking"
+    );
+    assert_eq!(answer.usage.prompt_tokens, 9);
+    assert_eq!(answer.usage.completion_tokens, 1);
 }
 
 #[tokio::test]

@@ -40,7 +40,14 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Optional parameters that a server may reject. They are removed one at a time
 /// on a `400`, and the removal is reported rather than hidden.
-const OPTIONAL_PARAMS: [&str; 5] = ["top_k", "repeat_penalty", "seed", "stop", "response_format"];
+const OPTIONAL_PARAMS: [&str; 6] = [
+    "top_k",
+    "repeat_penalty",
+    "seed",
+    "stop",
+    "response_format",
+    "stream_options",
+];
 
 /// A declared model server.
 ///

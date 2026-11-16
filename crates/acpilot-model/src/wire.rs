@@ -145,6 +145,22 @@ pub(crate) fn chat_body(request: &ChatRequest) -> Map<String, Value> {
     body
 }
 
+/// The body for a streamed chat: [`chat_body`] plus the two keys a stream needs.
+///
+/// `include_usage` is asked for because a stream otherwise carries no counts at
+/// all, and a run record that could hold the server's number should not fall back
+/// to an estimate. Servers that reject the key are retried without it by
+/// [`crate::post_chat_stream`], so asking costs nothing but one round trip.
+pub(crate) fn stream_body(request: &ChatRequest) -> Map<String, Value> {
+    let mut body = chat_body(request);
+    body.insert("stream".to_owned(), Value::Bool(true));
+    body.insert(
+        "stream_options".to_owned(),
+        serde_json::json!({ "include_usage": true }),
+    );
+    body
+}
+
 /// `f32` into JSON without the `1.0` becoming a string or a null.
 fn number(value: f32) -> Value {
     Value::from(f64::from(value))

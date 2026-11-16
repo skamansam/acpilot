@@ -2616,7 +2616,7 @@ gen-lsp-types              = { version = "0.11", features = ["url"] }
 async-lsp                  = "0.2"           # probe candidate only; see P7-2
 url                        = "2"
 # hosts
-russh                      = "0.64"
+russh                      = "0.65"
 russh-sftp                 = "3"
 ssh2-config                = "0.9"
 openssh                    = "0.11"          # optional fallback

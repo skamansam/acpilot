@@ -468,7 +468,7 @@ over SSE events plus optimistic local edits.
 
 | Need | Choice | Notes |
 | --- | --- | --- |
-| SSH client | **`russh` 0.64** | Pure Rust, async, client *and* server, no C toolchain, no libssh2. Track advisories (it had a DoS, CVE-2026-73429, patched — pin and audit). |
+| SSH client | **`russh` 0.65** | Pure Rust, async, client *and* server, no C toolchain, no libssh2. Track advisories (it had a DoS, CVE-2026-73429, patched — pin and audit). |
 | SSH config parsing | `ssh2-config` 0.9 | Parses `~/.ssh/config` including `ProxyJump`/`Include`, then feeds the results into russh. |
 | SFTP | `russh-sftp` 3.0 | Remote file read/write and workspace browsing. |
 | Escalation path | `openssh` 0.11 | Shell out to the system `ssh` when a config uses FIDO keys / `Match` / ControlMaster and russh cannot express it. Feature-flagged "system ssh" mode. |

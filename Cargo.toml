@@ -162,11 +162,10 @@ async-lsp = "0.2" # probe candidate only; see P7-2
 url = "2"
 
 # hosts
-# Default features minus `rsa`: russh's default graph pulls `rsa` 0.10.0-rc.18,
-# which carries RUSTSEC-2023-0071 (Marvin timing attack) with no fixed release,
-# and `cargo deny` fails on it. The cost is explicit: RSA host keys and RSA user
-# keys are not accepted yet, so a server offering only `ssh-rsa` is unreachable;
-# ed25519 and ECDSA are unaffected. P8-1 re-adds `rsa` with a written
+# Default features minus `rsa`: RSA host keys and RSA user keys are not accepted
+# yet, so a server offering only `ssh-rsa` is unreachable; ed25519 and ECDSA are
+# unaffected. Keeping `rsa` off also holds the crypto graph to aws-lc-rs instead
+# of adding a second primitive stack. P8-1 re-adds it with a written
 # justification when a host needs it. Feature selection lives here because cargo
 # forbids a member overriding `default-features` on an inherited dependency.
 russh = { version = "0.65", default-features = false, features = ["flate2", "aws-lc-rs"] }

@@ -1569,8 +1569,19 @@ resolved.
     The record keeps it in `runs.jsonl`, `GET /v1/recipes/{id}/runs/{run}` returns it, and
     the lab draws it dimmed above the answer, capped at half the pane so it never crowds
     the answer out. The ACP turn forwards it as `AgentThoughtChunk`.
-  - **Open:** no test yet asserts the TUI session transcript draws those thought chunks
-    from a promoted agent, as opposed to the lab drawing its run's.
+  - **The session transcript and the CLI show thinking too (2026-11-16).**
+    `a_promoted_agents_thinking_is_its_own_paragraph` in `crates/acpilot-tui/src/app.rs`
+    feeds two `Thought` events and an answer chunk and asserts the thinking is its own
+    `Kind::Thought` paragraph, kept apart from the assistant's and drawn as a thought row
+    (which is what applies the dim italic style). `acpilot recipes run` writes thinking to
+    stderr as it arrives, so a terminal shows a reasoning-only run instead of an empty one
+    while stdout stays the answer and `--json` stays one object.
+    `tests/lm_studio.rs` gained `a_tight_budget_spends_it_thinking_and_the_run_says_so`:
+    a recipe with `max_tokens = 48` spends the budget thinking, the stream carries
+    `model.run.thought` and no delta, and the record read back from
+    `GET /v1/recipes/studio/runs/{id}` keeps the reasoning. Both live tests pass in 3.2 s,
+    run with `--test-threads=1` — parallel requests queue behind one loaded model and hit
+    the 300 s chat timeout.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

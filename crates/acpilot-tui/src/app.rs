@@ -8249,6 +8249,56 @@ mod tests {
     }
 
     #[test]
+    fn a_promoted_agents_thinking_is_its_own_paragraph() {
+        // What `acpilot-agent-lm` sends for a recipe's reasoning: an
+        // `AgentThoughtChunk`, which the daemon records as a `Thought` event.
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.apply_event(event(
+            1,
+            SessionEventKind::Thought,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "weighing " }
+            }),
+        ));
+        app.apply_event(event(
+            2,
+            SessionEventKind::Thought,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "it" }
+            }),
+        ));
+        app.apply_event(event(
+            3,
+            SessionEventKind::MessageChunk,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "hello" }
+            }),
+        ));
+
+        assert_eq!(app.entries.len(), 2, "thinking is not part of the answer");
+        assert_eq!(app.entries[0].kind, Kind::Thought);
+        assert_eq!(
+            app.entries[0].text, "weighing it",
+            "chunks of one thought are one paragraph"
+        );
+        assert_eq!(app.entries[1].kind, Kind::Assistant);
+        assert_eq!(app.entries[1].text, "hello");
+
+        // The pane draws the row with its kind, which is what gives it the dim
+        // italic style instead of the answer's.
+        let rows = app.transcript_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, Kind::Thought);
+        assert_eq!(rows[0].text(), "weighing it");
+        assert_eq!(rows[1].kind, Kind::Assistant);
+        assert_eq!(rows[1].text(), "hello");
+    }
+
+    #[test]
     fn a_content_block_is_read_as_its_text() {
         // The shape the daemon actually sends: ACP's content block, not a string.
         let mut app = App::new("http://127.0.0.1:7777");

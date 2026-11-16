@@ -165,7 +165,8 @@ The routes are in place: `POST /v1/recipes/{id}/runs` writes a record and stream
 run, `GET /v1/recipes/{id}/runs` pages them, `GET /v1/recipes/{id}/runs/{run}` reads one
 back, and `POST /v1/recipes/{id}/runs/{run}/replay` re-sends it. A recipe is a real file
 the API reads and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5), and
-`acpilot recipes run <id> "…"` prints a run's stream in a terminal.
+`acpilot recipes run <id> "…"` prints a run's answer on stdout and its thinking
+on stderr, so a terminal shows a reasoning run that spent its budget thinking.
 </Aside>
 
 ## Why files and not a database

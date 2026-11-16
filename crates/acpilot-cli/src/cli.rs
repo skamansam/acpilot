@@ -276,9 +276,11 @@ pub enum RecipesCommand {
     /// Run a recipe's prompt and print the model's answer as it streams.
     ///
     /// The daemon resolves the recipe and its provider, assembles the corpus and
-    /// appends the record; this verb only watches the frames. A failed run prints
-    /// the daemon's reason on stderr and exits non-zero, so a script can tell an
-    /// answer from a refusal.
+    /// appends the record; this verb only watches the frames. The answer is
+    /// stdout and a reasoning model's thinking is stderr, so a redirect keeps the
+    /// answer alone while a terminal shows both. A failed run prints the daemon's
+    /// reason on stderr and exits non-zero, so a script can tell an answer from a
+    /// refusal.
     Run {
         /// Recipe id, as it appears under the profile's `recipes/`.
         id: String,
@@ -1570,11 +1572,29 @@ fn run_recipes(command: RecipesCommand, profile: Option<&str>) -> u8 {
 
         let mut stream = running.client.run_recipe(&id, root.as_deref(), &request);
         let mut out = std::io::stdout();
+        let mut err = std::io::stderr();
+        // Whether a thought is open on stderr, so the answer starts on its own
+        // line instead of continuing the thought's.
+        let mut thinking = false;
         while let Some(frame) = stream.next().await {
             match frame {
                 Ok(acpilot_client::ModelRunStream::Delta { text, .. }) if !json => {
+                    if thinking {
+                        let _ = writeln!(err);
+                        thinking = false;
+                    }
                     let _ = out.write_all(text.as_bytes());
                     let _ = out.flush();
+                }
+                Ok(acpilot_client::ModelRunStream::Thought { text, .. }) if !json => {
+                    // The answer is stdout and thinking is not the answer, so a
+                    // run piped to a file stays the answer alone. On a terminal
+                    // both streams reach the screen, which is where a reasoning
+                    // run that spends its budget thinking would otherwise look
+                    // empty.
+                    let _ = err.write_all(text.as_bytes());
+                    let _ = err.flush();
+                    thinking = true;
                 }
                 Ok(acpilot_client::ModelRunStream::Finished(run)) => {
                     if json {
@@ -1590,6 +1610,10 @@ fn run_recipes(command: RecipesCommand, profile: Option<&str>) -> u8 {
                     } else {
                         // The answer is stdout; the record's id is a note for the
                         // person, so piping the answer stays clean.
+                        if thinking {
+                            let _ = writeln!(err);
+                            thinking = false;
+                        }
                         let _ = writeln!(out);
                     }
                     let _ = out.flush();

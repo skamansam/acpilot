@@ -1155,9 +1155,10 @@ loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the reci
 and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
 `agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
 landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC with pairing,
-scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming and the
-five bridge tests have landed; its DoD's interactive and real-model halves remain, as do
-P4.5-12 (integration stats) and P4.5-13 (skills). A run writes its record before the `finished` frame, and the
+scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming, the
+five bridge tests, byte-identical replay, the promoted agent's P2 smoke and the TUI's
+permission card have landed; only a live LM Studio run is unobserved, as its `Open:` says.
+P4.5-12 (integration stats) and P4.5-13 (skills) remain. A run writes its record before the `finished` frame, and the
 lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
 resolved.
 
@@ -1338,8 +1339,11 @@ resolved.
     is an empty log, a partial last line ends the read, a broken line that is not last names its
     number, and a newer `schema_version` is refused rather than half-read. **Tests:** twelve in
     the module.
-  - **Open:** `GET /v1/recipes/{id}/runs` serves a page and the run route writes a record
-    (P4.5-7). Replay has no route yet; `RunLog::replay` is ready for one.
+  - **Replay served (2026-11-15):** `POST /v1/recipes/{id}/runs/{run}/replay` reads the
+    record through `RunLog::replay` and sends its prompt and selectors through the same
+    prepared run as a fresh start, appending a new record. The corpus is read from `root`
+    again because the record keeps paths and sizes, not bytes; the OpenAPI description and
+    `docs/api.md` say so, and the route is in the generated web client.
   - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
     sampling, corpus selectors and resolved file list, budget), then the result (latency, first
     token, usage, stop reason, warnings).
@@ -1500,7 +1504,7 @@ resolved.
     proxy in v0.1 (documented, not hand-waved), and `GET /v1/acp/{bridge,drivers}` for the
     cockpit's connection panel.
 
-- [ ] **P4.5-11 · Tests** (1.5d)
+- [x] **P4.5-11 · Tests** (1.5d)
   - **Result so far (2026-11-13):** the request bodies are frozen.
     `crates/acpilot-model/tests/wire_snapshot.rs` sends one request with every knob set
     through both dialects and snapshots what left (`chat_body`), the refusal retry pair
@@ -1536,10 +1540,18 @@ resolved.
     driver opens a session and prompts a real mock agent to `end_turn`, and a driver without
     the grant prompts a permission-raising turn while the cockpit lists and answers it — the
     driver's stream carries the notice and never `session/request_permission`.
-  - **Open:** the rest of the DoD is not automated here — a run against a real LM Studio on
-    port 1234 (needs the server), a byte-identical replay of a run record, the promoted
-    agent's P2 session smoke, and the TUI drawing the permission prompt while the script
-    does not. The cockpit half of that last one is tested; the terminal's drawing is not.
+  - **The DoD's automatable halves landed (2026-11-15).** `POST /v1/recipes/{id}/runs/{run}/replay`
+    re-sends the stored prompt and selectors; `tests/recipes.rs` compares the two HTTP bodies
+    byte for byte. `acpilot recipes run <id> "…"` streams a run to stdout (`--json` prints the
+    finished summary instead). `acpilot-agent-lm`'s stdio suite promotes a recipe, reads the
+    manifest entry promotion wrote and runs the command it names through the P2 session smoke
+    (`initialize`, `session/new`, a prompt, `end_turn`). The TUI test draws the permission a
+    paired driver causes, while `tests/acp_bridge.rs` proves the driver's stream never carries
+    it. `tests/lm_studio.rs` is the real-server end to end, ignored like the LSP tests that
+    need a tool: `cargo test -p acpilotd --test lm_studio -- --ignored`.
+  - **Open:** the live LM Studio half could not be observed on this machine: port 1234 listed
+    models but every chat completion timed out, so the ignored test has not been run against an
+    answering server. Nothing in the tree claims otherwise.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

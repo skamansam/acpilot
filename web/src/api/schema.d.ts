@@ -859,6 +859,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recipes/{id}/runs/{run}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a recorded request again, unchanged
+         * @description Re-sends the prompt and corpus selectors the record holds, through the recipe as it is now, and appends a new record with its own id: a replay is an experiment to compare with the first line, not a retry that overwrites it. The corpus is read from `root` again because the record stores paths and sizes rather than file bytes, so a replay is byte-identical only while the workspace and recipe are unchanged.
+         */
+        post: operations["replay_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -5236,6 +5256,52 @@ export interface operations {
             };
             /** @description No such run for this recipe */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    replay_run: {
+        parameters: {
+            query?: {
+                /** @description Workspace root for corpus selectors */
+                root?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description Run id to replay */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new run's frames */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description No such run for this recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The provider is not declared, disabled, or unreachable */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

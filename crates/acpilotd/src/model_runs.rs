@@ -62,6 +62,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/recipes/{id}/runs", post(start).get(page))
         .route("/v1/recipes/{id}/runs/{run}", get(record))
+        .route("/v1/recipes/{id}/runs/{run}/replay", post(replay))
 }
 
 /// Everything a run needs, resolved before the first frame.
@@ -113,20 +114,59 @@ async fn start(
         )))
     })?;
     let plan = prepare(&state, &id, request, query.root)?;
+    Ok(frames(plan))
+}
+
+/// Run a recorded request again, unchanged.
+///
+/// The prompt and the selectors come from the record, not from the caller: a
+/// replay that accepted a new prompt would be a new run wearing an old run's
+/// name. The corpus itself is read from `root` again, because the record keeps
+/// the files' paths and sizes rather than their bytes; a workspace that changed
+/// since is a different experiment, and the record that comes back says what it
+/// actually sent.
+///
+/// The replay appends its own record with its own id. It is not a retry of the
+/// old one and must not overwrite it: the point of replaying is to compare the
+/// two lines.
+async fn replay(
+    State(state): State<AppState>,
+    Path((id, run_id)): Path<(String, String)>,
+    Query(query): Query<RunQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let Some(log) = state.run_log() else {
+        return Err(ApiError::new(AcpilotError::invalid(
+            "this daemon has no profile, so it has no run log",
+        )));
+    };
+    let record = log.get(&id, &run_id).map_err(|error| match error {
+        crate::runs::RunsError::NotFound { .. } => {
+            ApiError::new(AcpilotError::not_found(error.to_string()))
+        }
+        other => ApiError::new(AcpilotError::Io(std::io::Error::other(other.to_string()))),
+    })?;
+    let Some(record) = record else {
+        return Err(ApiError::new(AcpilotError::not_found(format!(
+            "no run `{run_id}` for recipe `{id}`"
+        ))));
+    };
+    let plan = prepare(&state, &id, record.request.request(), query.root)?;
+    Ok(frames(plan))
+}
+
+/// The SSE body a prepared run becomes.
+fn frames(plan: Plan) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let frames = Frames {
         run_id: plan.run_id.clone(),
         plan: Some(plan),
         phase: Phase::Started,
     };
-    Ok(Sse::new(futures::stream::unfold(
-        Some(frames),
-        |frames| async move {
-            let mut frames = frames?;
-            step(&mut frames)
-                .await
-                .map(|event| (Ok::<_, Infallible>(event), Some(frames)))
-        },
-    )))
+    Sse::new(futures::stream::unfold(Some(frames), |frames| async move {
+        let mut frames = frames?;
+        step(&mut frames)
+            .await
+            .map(|event| (Ok::<_, Infallible>(event), Some(frames)))
+    }))
 }
 
 /// Resolve the recipe, the provider and the log before any frame is sent.
@@ -492,6 +532,11 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             HttpMethod::Get,
             <__path_record_doc as utoipa::Path>::operation(),
         ),
+        (
+            "/v1/recipes/{id}/runs/{run}/replay",
+            HttpMethod::Post,
+            <__path_replay_doc as utoipa::Path>::operation(),
+        ),
     ]
 }
 
@@ -552,3 +597,24 @@ fn page_doc() {}
     )
 )]
 fn record_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    operation_id = "replay_run",
+    path = "/v1/recipes/{id}/runs/{run}/replay",
+    tag = "models",
+    summary = "Run a recorded request again, unchanged",
+    description = "Re-sends the prompt and corpus selectors the record holds, through the recipe as it is now, and appends a new record with its own id: a replay is an experiment to compare with the first line, not a retry that overwrites it. The corpus is read from `root` again because the record stores paths and sizes rather than file bytes, so a replay is byte-identical only while the workspace and recipe are unchanged.",
+    params(
+        ("id" = String, Path, description = "Recipe id"),
+        ("run" = String, Path, description = "Run id to replay"),
+        ("root" = Option<String>, Query, description = "Workspace root for corpus selectors")
+    ),
+    responses(
+        (status = 200, description = "The new run's frames", content_type = "text/event-stream"),
+        (status = 404, description = "No such run for this recipe", body = ErrorBody),
+        (status = 502, description = "The provider is not declared, disabled, or unreachable", body = ErrorBody)
+    )
+)]
+fn replay_doc() {}

@@ -150,10 +150,11 @@ A page of runs is newest first. The cursor is a run id, not an offset, because a
 only grows: an offset would repeat a line when something was appended between two
 pages. A cursor that names another recipe's run is refused.
 
-A replay re-sends the stored request unchanged. It is a new run with its own record,
-so it does not carry the old idempotency key. The workspace is not read again: the
-files are in the record, and a replay must not depend on the tree still looking the
-same.
+A replay re-sends the stored prompt and selectors as a new run with its own record,
+so it does not carry the old idempotency key. The corpus is read from the workspace
+again: the record keeps each file's path and size, not its bytes. A replay is
+byte-identical while the tree and the recipe are unchanged, and the record it writes
+says what it actually sent.
 
 A partial last line means a crash during a write. Reading stops there and keeps what
 came before. A broken line that is not the last one names its number, and a newer
@@ -161,9 +162,10 @@ came before. A broken line that is not the last one names its number, and a newe
 
 <Aside type="note" title="Status">
 The routes are in place: `POST /v1/recipes/{id}/runs` writes a record and streams the
-run, and `GET /v1/recipes/{id}/runs` pages them. A recipe is a real file the API reads
-and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5). Replay has no route
-yet, and this page does not claim one.
+run, `GET /v1/recipes/{id}/runs` pages them, `GET /v1/recipes/{id}/runs/{run}` reads one
+back, and `POST /v1/recipes/{id}/runs/{run}/replay` re-sends it. A recipe is a real file
+the API reads and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5), and
+`acpilot recipes run <id> "…"` prints a run's stream in a terminal.
 </Aside>
 
 ## Why files and not a database

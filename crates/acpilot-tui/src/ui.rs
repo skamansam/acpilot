@@ -3288,6 +3288,35 @@ mod tests {
         assert!(text.contains("y allow once"), "{text}");
     }
 
+    /// The DoD's other half: a paired driver causes a permission request, and the
+    /// person at the machine sees it. The driver's own stream never carries it —
+    /// that is `a_driver_without_the_grant_is_told_why_it_waits` in
+    /// `acpilotd/tests/acp_bridge.rs`; this is the drawing.
+    #[test]
+    fn the_permission_a_paired_driver_causes_is_drawn_in_the_tui() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::AwaitingPermission;
+        app.permissions.push(permission(
+            "bridge-1",
+            PermissionKind::Terminal,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Run `cargo test`",
+        ));
+        app.permission_card = true;
+
+        let text = render(&mut app);
+        assert!(text.contains("Permission needed"), "{text}");
+        assert!(text.contains("Run `cargo test`"), "{text}");
+        assert!(
+            text.contains("y allow once"),
+            "the person can answer without the driver: {text}"
+        );
+        assert!(
+            !text.contains("session/request_permission"),
+            "the card is a person's question, not the protocol's request: {text}"
+        );
+    }
+
     #[test]
     fn the_permission_card_covers_the_middle_of_the_screen() {
         let mut app = app_with_session();

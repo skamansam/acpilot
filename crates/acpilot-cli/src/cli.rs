@@ -228,6 +228,17 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentsCommand,
     },
+    /// Run a recipe's prompt and stream the answer.
+    ///
+    /// This is the terminal's window onto `POST /v1/recipes/{id}/runs`: the same
+    /// stream the model lab draws, printed as it arrives. It needs a daemon, and
+    /// starts one when none is running, because a run is the daemon's work and a
+    /// second model client here would be a second answer to provider resolution.
+    Recipes {
+        /// Which recipes verb.
+        #[command(subcommand)]
+        command: RecipesCommand,
+    },
 }
 
 /// Everything under `acpilot models`.
@@ -256,6 +267,38 @@ pub enum AgentsCommand {
     Rm {
         /// Agent id, as the manifest spells it.
         id: String,
+    },
+}
+
+/// Everything under `acpilot recipes`.
+#[derive(Debug, Subcommand)]
+pub enum RecipesCommand {
+    /// Run a recipe's prompt and print the model's answer as it streams.
+    ///
+    /// The daemon resolves the recipe and its provider, assembles the corpus and
+    /// appends the record; this verb only watches the frames. A failed run prints
+    /// the daemon's reason on stderr and exits non-zero, so a script can tell an
+    /// answer from a refusal.
+    Run {
+        /// Recipe id, as it appears under the profile's `recipes/`.
+        id: String,
+        /// The user message.
+        prompt: String,
+        /// Workspace root the recipe's corpus selectors resolve against.
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
+        /// Print the finished run's record as one JSON object instead of the text.
+        ///
+        /// Deltas are suppressed: a script that pipes this to `jq` wants the
+        /// summary, and a summary mixed with answer text is neither.
+        #[arg(long)]
+        json: bool,
+        /// Endpoint of the daemon: a URL, or a unix socket path.
+        #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+        api_url: Option<String>,
+        /// Bearer token for a daemon on a TCP endpoint.
+        #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -599,6 +642,7 @@ pub fn run(cli: Cli) -> u8 {
         }),
         Some(Command::Models { command }) => run_models(command, profile.as_deref()),
         Some(Command::Agents { command }) => run_agents(command, profile.as_deref()),
+        Some(Command::Recipes { command }) => run_recipes(command, profile.as_deref()),
         Some(Command::Doctor {
             path,
             api_url,
@@ -1463,6 +1507,109 @@ fn run_agents(command: AgentsCommand, profile: Option<&str>) -> u8 {
             }
         }
     }
+}
+
+/// `acpilot recipes run <id> "…"`.
+fn run_recipes(command: RecipesCommand, profile: Option<&str>) -> u8 {
+    let RecipesCommand::Run {
+        id,
+        prompt,
+        root,
+        json,
+        api_url,
+        token,
+    } = command;
+    // `--profile` is a name here and a directory at the daemon, the same split
+    // `workspace open` makes: a daemon started with `--profile work` would treat
+    // it as a relative path.
+    let mut daemon_args = Vec::new();
+    if let Some(name) = profile {
+        match acpilot_profile::Profile::named(name) {
+            Ok(profile) => {
+                daemon_args.push("--profile".to_owned());
+                daemon_args.push(profile.root().display().to_string());
+            }
+            Err(error) => {
+                eprintln!("acpilot recipes run: {error}");
+                return exit::NOT_FOUND;
+            }
+        }
+    }
+    let options = acpilot_client::daemon::Options {
+        endpoint: api_url,
+        no_spawn: false,
+        token: token.or_else(acpilot_host::token::local),
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot recipes run: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot recipes run: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let request = acpilot_proto::model::RunRequest {
+        prompt,
+        corpus: Vec::new(),
+        idempotency_key: None,
+    };
+    let root = root.map(|root| root.to_string_lossy().into_owned());
+    runtime.block_on(async move {
+        use futures::StreamExt;
+        use std::io::Write as _;
+
+        let mut stream = running.client.run_recipe(&id, root.as_deref(), &request);
+        let mut out = std::io::stdout();
+        while let Some(frame) = stream.next().await {
+            match frame {
+                Ok(acpilot_client::ModelRunStream::Delta { text, .. }) if !json => {
+                    let _ = out.write_all(text.as_bytes());
+                    let _ = out.flush();
+                }
+                Ok(acpilot_client::ModelRunStream::Finished(run)) => {
+                    if json {
+                        match serde_json::to_string(&run) {
+                            Ok(record) => {
+                                let _ = writeln!(out, "{record}");
+                            }
+                            Err(error) => {
+                                eprintln!("acpilot recipes run: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else {
+                        // The answer is stdout; the record's id is a note for the
+                        // person, so piping the answer stays clean.
+                        let _ = writeln!(out);
+                    }
+                    let _ = out.flush();
+                    if !json {
+                        eprintln!("run {}", run.id);
+                    }
+                }
+                Ok(acpilot_client::ModelRunStream::Delta { .. }) => {}
+                Ok(
+                    acpilot_client::ModelRunStream::Started { .. }
+                    | acpilot_client::ModelRunStream::Other { .. },
+                ) => {}
+                Err(error) => {
+                    eprintln!("acpilot recipes run: {error}");
+                    return exit::FAILURE;
+                }
+            }
+        }
+        exit::SUCCESS
+    })
 }
 
 /// `acpilot models probe`.

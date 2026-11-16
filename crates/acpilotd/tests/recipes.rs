@@ -5,10 +5,13 @@
 //! stubbed `Value`. The recipe directory is a temporary profile, so validation runs
 //! through the same loader the daemon uses.
 
+use std::sync::{Arc, Mutex};
+
 use acpilot_profile::providers::ProvidersFile;
 use acpilotd::providers::Providers;
 use acpilotd::{AppState, router_with};
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::{get, post};
 use axum::{Json, Router, Router as AxumRouter};
@@ -99,6 +102,55 @@ fn app_with_agents(profile: &std::path::Path, base_url: &str) -> Router {
     )
     .expect("an absent manifest is an empty registry");
     router_with(state(profile, base_url).with_registry(std::sync::Arc::new(registry)))
+}
+
+/// A loopback server that keeps the exact bytes of every chat request.
+///
+/// The replay test compares bodies rather than parsed values: a `Value` that
+/// sorts its keys on the way out would hide the regression the snapshot is for.
+fn recording_provider() -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::clone(&bodies);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    listener.set_nonblocking(true).expect("nonblocking");
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+            axum::serve(
+                listener,
+                AxumRouter::new()
+                    .route(
+                        "/v1/models",
+                        get(|| async { Json(json!({ "data": [{ "id": "mock-1" }] })) }),
+                    )
+                    .route(
+                        "/v1/chat/completions",
+                        post(
+                            |State(bodies): State<Arc<Mutex<Vec<Vec<u8>>>>>,
+                             body: axum::body::Bytes| async move {
+                                bodies.lock().expect("bodies").push(body.to_vec());
+                                Json(json!({
+                                    "choices": [{
+                                        "message": { "content": "hello from the model" },
+                                        "finish_reason": "stop"
+                                    }],
+                                    "usage": { "prompt_tokens": 11, "completion_tokens": 5 }
+                                }))
+                            },
+                        ),
+                    )
+                    .with_state(state),
+            )
+            .await
+            .expect("mock provider");
+        });
+    });
+    (format!("http://127.0.0.1:{port}"), bodies)
 }
 
 /// A loopback server answering a model list and a chat completion.
@@ -297,6 +349,85 @@ async fn a_run_record_is_read_back_with_the_request_it_sent() {
 
     let (status, body) = send(&app, "GET", "/v1/recipes/demo/runs/not-a-run", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn a_replay_sends_the_recorded_bytes_and_appends_a_second_record() {
+    let profile = tempfile::tempdir().expect("profile");
+    let (base_url, bodies) = recording_provider();
+    let app = app(profile.path(), &base_url);
+    let (status, created) = send(&app, "POST", "/v1/recipes", Some(recipe("demo"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let root = profile.path().to_string_lossy().to_string();
+    let (status, first) = raw(
+        &app,
+        "POST",
+        &format!("/v1/recipes/demo/runs?root={root}"),
+        Some(json!({ "prompt": "say hello", "corpus": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first_text = String::from_utf8(first).expect("SSE is text");
+    assert!(
+        first_text.contains("event: model.run.finished"),
+        "{first_text}"
+    );
+
+    let (_, page) = send(&app, "GET", "/v1/recipes/demo/runs", None).await;
+    let id = page["runs"][0]["id"]
+        .as_str()
+        .expect("the page carries the run id")
+        .to_owned();
+
+    let (status, second) = raw(
+        &app,
+        "POST",
+        &format!("/v1/recipes/demo/runs/{id}/replay?root={root}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_text = String::from_utf8(second).expect("SSE is text");
+    assert!(
+        second_text.contains("event: model.run.finished"),
+        "{second_text}"
+    );
+    {
+        let recorded = bodies.lock().expect("bodies");
+        assert_eq!(
+            recorded.len(),
+            2,
+            "one request for the run, one for its replay"
+        );
+        assert_eq!(
+            recorded[0], recorded[1],
+            "the replayed request is the stored one, byte for byte"
+        );
+    }
+
+    let (_, page) = send(&app, "GET", "/v1/recipes/demo/runs", None).await;
+    assert_eq!(
+        page["runs"].as_array().map(Vec::len),
+        Some(2),
+        "a replay is a new record, not a retry over the old one: {page}"
+    );
+    assert_ne!(page["runs"][0]["id"], page["runs"][1]["id"], "{page}");
+
+    let (status, body) = send(&app, "POST", "/v1/recipes/demo/runs/not-a-run/replay", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn the_openapi_document_documents_the_run_and_replay_routes() {
+    let profile = tempfile::tempdir().expect("profile");
+    let app = app(profile.path(), "http://127.0.0.1:1");
+    let (status, document) = send(&app, "GET", "/v1/openapi.json", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        document["paths"]["/v1/recipes/{id}/runs/{run}/replay"]["post"].is_object(),
+        "a client that can only replay what the document names would not see it: {document}"
+    );
 }
 
 #[tokio::test]

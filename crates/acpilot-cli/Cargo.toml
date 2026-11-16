@@ -40,6 +40,10 @@ acpilot-tui = { workspace = true }
 # `tui --demo`: the seeded world the design pass draws, which needs no daemon.
 acpilot-demo = { workspace = true }
 clap = { workspace = true }
+# `acpilot recipes run` prints the run's frames as they arrive, and polling a
+# `BoxStream` needs `StreamExt`; the workspace already pins futures for the
+# daemon's SSE, so this declares the half the CLI calls rather than a new crate.
+futures = { workspace = true }
 # `profile export` is a structured document with file bodies in it; JSON keeps
 # both the envelope and the contents unambiguous without a new format to parse.
 serde_json = { workspace = true }

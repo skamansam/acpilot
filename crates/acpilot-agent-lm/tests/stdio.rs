@@ -112,17 +112,22 @@ struct Harness {
 
 impl Harness {
     fn spawn(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_acpilot-agent-lm"))
-            .arg("--recipe")
-            .arg("demo")
-            .arg("--profile")
-            .arg("work")
+        Self::spawn_with(home, &["--recipe", "demo", "--profile", "work"], &[])
+    }
+
+    /// Spawn with the arguments and environment a manifest entry names.
+    fn spawn_with(home: &std::path::Path, args: &[&str], envs: &[(&str, &str)]) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_acpilot-agent-lm"));
+        command
+            .args(args)
             .env("ACPILOT_HOME", home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn the agent");
+            .stderr(Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("spawn the agent");
         let stdin = child.stdin.take().expect("stdin");
         let stdout = child.stdout.take().expect("stdout");
         Self {
@@ -384,6 +389,70 @@ fn the_step_limit_ends_the_turn_with_the_protocols_own_reason() {
         mock.bodies.lock().expect("bodies").len(),
         2,
         "the second call is requested, then refused"
+    );
+}
+
+#[test]
+fn a_promoted_recipe_passes_the_engine_session_smoke() {
+    // The promotion route and this test must agree about one file: the route
+    // writes `agents.toml`, and this test runs the command that entry names. A
+    // recipe that cannot answer `initialize`, `session/new` and a prompt is not
+    // an agent, however good its run page looked.
+    let home = tempfile::tempdir().expect("home");
+    let (mock, base_url) = provider(vec![final_answer("promoted and answering")]);
+    profile(home.path(), &base_url, 3);
+
+    let root = home.path().join("profiles/work");
+    let entry = acpilot_agent::promote::Promoted {
+        id: "demo".to_owned(),
+        name: "Demo".to_owned(),
+        recipe: "recipes/demo.toml".to_owned(),
+        modified_at: "2026-11-15T00:00:00Z".to_owned(),
+        profile: "work".to_owned(),
+    };
+    acpilot_agent::promote::promote(&acpilot_agent::promote::path_in(&root), &entry)
+        .expect("promote the recipe");
+
+    let manifest = std::fs::read_to_string(root.join("agents.toml")).expect("manifest");
+    assert!(
+        manifest.contains("command = \"acpilot-agent-lm\""),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains("args = [\"--recipe\", \"demo\"]"),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains("ACPILOT_RECIPE_PROFILE = \"work\""),
+        "the entry names the profile, so the agent needs no flag: {manifest}"
+    );
+
+    // Exactly what the entry says, with the built binary standing in for the
+    // installed command it names.
+    let mut client = Harness::spawn_with(
+        home.path(),
+        &["--recipe", "demo"],
+        &[("ACPILOT_RECIPE_PROFILE", "work")],
+    );
+    let prompt = client.prompt(home.path(), "answer the smoke test");
+    assert_eq!(
+        prompt["stopReason"], "end_turn",
+        "the promoted agent finishes a turn: {prompt}"
+    );
+    assert!(
+        client
+            .updates()
+            .iter()
+            .any(|update| update["sessionUpdate"] == "agent_message_chunk"
+                && update["content"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("promoted and answering"))),
+        "the answer is streamed to the client"
+    );
+    assert_eq!(
+        mock.bodies.lock().expect("bodies").len(),
+        1,
+        "a text answer needs one model call"
     );
 }
 

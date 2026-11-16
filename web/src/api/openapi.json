@@ -6422,6 +6422,70 @@
         "summary": "One run's record: the answer and the request that produced it"
       }
     },
+    "/v1/recipes/{id}/runs/{run}/replay": {
+      "post": {
+        "description": "Re-sends the prompt and corpus selectors the record holds, through the recipe as it is now, and appends a new record with its own id: a replay is an experiment to compare with the first line, not a retry that overwrites it. The corpus is read from `root` again because the record stores paths and sizes rather than file bytes, so a replay is byte-identical only while the workspace and recipe are unchanged.",
+        "operationId": "replay_run",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Run id to replay",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Workspace root for corpus selectors",
+            "in": "query",
+            "name": "root",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "The new run's frames"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such run for this recipe"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The provider is not declared, disabled, or unreachable"
+          }
+        },
+        "summary": "Run a recorded request again, unchanged"
+      }
+    },
     "/v1/sessions": {
       "get": {
         "operationId": "list_sessions",

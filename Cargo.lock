@@ -63,6 +63,7 @@ dependencies = [
  "acpilot-tui",
  "acpilotd",
  "clap",
+ "futures",
  "insta",
  "serde_json",
  "tempfile",

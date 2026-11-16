@@ -19,7 +19,7 @@ use std::time::Duration;
 use acpilot_agent::Terminals;
 use acpilot_agent::terminal::TerminalHandle;
 use acpilot_host::LocalHost;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     CreateTerminalRequest, KillTerminalRequest, SessionId as AgentSessionId,
 };
 use tokio::time::timeout;

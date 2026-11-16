@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use acpilot_agent::session::{Session, SessionError, SessionOptions};
 use acpilot_proto::event::SessionEventKind;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
@@ -39,7 +39,7 @@ fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
         // another has already taken.
         let seen_modes = Arc::clone(&seen);
         let result = Agent
-            .builder()
+            .v1()
             .name("mock-agent")
             .on_receive_request(
                 async |request: InitializeRequest, responder, _cx| {

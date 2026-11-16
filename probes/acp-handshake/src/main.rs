@@ -25,13 +25,14 @@ use std::{
 };
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     ClientCapabilities, ContentBlock, Implementation, InitializeRequest, LoadSessionRequest,
     NewSessionRequest, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
     SessionNotification, SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, LineDirection};
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::{AcpAgent, Agent, LineDirection};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -246,7 +247,7 @@ usage: acp-handshake [--agent claude|opencode] [--command 'CMD ARGS'] \\
         let timeout = self.timeout;
 
         agent_client_protocol::Client
-            .builder()
+            .v1()
             .on_receive_notification(
                 async move |notification: SessionNotification, _cx| {
                     let payload = serde_json::to_value(&notification).unwrap_or(Value::Null);

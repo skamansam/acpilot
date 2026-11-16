@@ -82,8 +82,8 @@ acpilot-web = { version = "0.1.0", path = "crates/acpilot-web" }
 acpilot-host = { version = "0.1.0", path = "crates/acpilot-host", default-features = false }
 
 # protocol
-agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }
-agent-client-protocol-schema = "1.12" # versioned separately from the 3.x runtime
+agent-client-protocol = { version = "5.3", features = ["process", "stdio"] }
+agent-client-protocol-schema = "1.18" # versioned separately from the 5.x runtime
 
 # runtime
 tokio = { version = "1.54", features = ["full"] }
@@ -175,7 +175,7 @@ openssh = "0.11" # optional fallback
 portable-pty = "0.9"
 
 # storage & config
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 rusqlite_migration = "2"
 # `profile rm` moves a profile to the platform's own trash (freedesktop on
 # Linux, Finder's Trash on macOS, the Recycle Bin on Windows). Hand-rolling that
@@ -201,7 +201,7 @@ serde-saphyr = { version = "2", default-features = false, features = ["deseriali
 schemars = "1"
 # The published manifest schema is checked against the presets in a test. Local
 # `$ref`s only, so the TLS and HTTP resolver features are off at the call site.
-jsonschema = { version = "0.60", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 toml = "1.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = "0.2"

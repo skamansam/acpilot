@@ -1588,6 +1588,15 @@ resolved.
     `GET /v1/recipes/studio/runs/{id}` keeps the reasoning. Both live tests pass in 3.2 s,
     run with `--test-threads=1` — parallel requests queue behind one loaded model and hit
     the 300 s chat timeout.
+  - **A stalled stream is cancelled in a minute (2026-11-16).** `CHAT_TIMEOUT` still caps a
+    whole generation at 300 s, but silence inside a streaming body is now its own failure:
+    `STREAM_STALL_TIMEOUT` (60 s) wraps each read, so a provider that sends headers and then
+    stops sending fails the run with "the stream stalled: the provider sent nothing for 60s"
+    instead of holding the turn for the full five minutes. Dropping the body cancels the
+    HTTP request, and the failure is recorded like any other `model_unavailable` run.
+    `stall_guard` owns the timeout, and
+    `a_quiet_stream_is_stalled_and_a_delivered_chunk_precedes_it` pins it with paused
+    time after a delivered chunk, so the test spends no real minute.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.

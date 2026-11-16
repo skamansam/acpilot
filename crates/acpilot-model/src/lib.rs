@@ -34,6 +34,14 @@ pub const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a single generation may take. Generous on purpose: a 70B model on a
 /// laptop is slow, not broken, and cancelling a turn is the user's job.
 pub const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long a streaming body may go without a byte before it is called stalled.
+///
+/// [`CHAT_TIMEOUT`] caps the request; this caps the silence inside it. A server
+/// that accepted the request and then stopped sending would otherwise hold a run
+/// for the full five minutes, which to the person watching is a hung daemon. One
+/// minute is long enough for a slow token on a loaded machine and short enough
+/// that a stall is reported while the person still remembers asking.
+pub const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Connection timeout. A local server either answers the TCP handshake at once or
 /// is not running; waiting longer only delays the honest error.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -575,7 +583,11 @@ pub(crate) async fn post_chat_stream(
         let mut sse = wire::Sse::default();
         let mut streamed = wire::Streamed::default();
         let mut bytes = response.bytes_stream();
-        while let Some(chunk) = bytes.next().await {
+        loop {
+            let next = stall_guard(bytes.next(), &provider.id, STREAM_STALL_TIMEOUT).await?;
+            let Some(chunk) = next else {
+                break;
+            };
             let chunk = chunk.map_err(|error| AcpilotError::ModelUnavailable {
                 provider: provider.id.clone(),
                 message: format!("the stream broke mid-answer: {error}"),
@@ -602,6 +614,31 @@ pub(crate) async fn post_chat_stream(
         return streamed
             .finish(sse.done(), unsupported)
             .map_err(|error| unexpected(&provider.id, &error));
+    }
+}
+
+/// Await one read from a streaming body, failing the run if the provider goes
+/// quiet for `stall`.
+///
+/// Silence is the only failure that looks like success: the request is open, the
+/// daemon is waiting, and nothing will arrive. [`CHAT_TIMEOUT`] would eventually
+/// fail it, but five minutes of spinner is indistinguishable from a hung daemon,
+/// and the record should say the stream stalled rather than that a request timed
+/// out. Returning drops the response body, which cancels the HTTP request.
+async fn stall_guard<T>(
+    next: impl std::future::Future<Output = Option<T>>,
+    provider: &str,
+    stall: Duration,
+) -> Result<Option<T>, AcpilotError> {
+    match tokio::time::timeout(stall, next).await {
+        Ok(next) => Ok(next),
+        Err(_) => Err(AcpilotError::ModelUnavailable {
+            provider: provider.to_owned(),
+            message: format!(
+                "the stream stalled: the provider sent nothing for {}s, so the request was cancelled",
+                stall.as_secs()
+            ),
+        }),
     }
 }
 
@@ -675,5 +712,30 @@ mod tests {
     fn an_unreported_context_window_is_unknown_not_a_default() {
         assert_eq!(source(None), MetadataSource::Unknown);
         assert_eq!(source(Some(4096)), MetadataSource::Server);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_quiet_stream_is_stalled_and_a_delivered_chunk_precedes_it() {
+        use futures::StreamExt as _;
+
+        let mut chunks = futures::stream::iter([1]).chain(futures::stream::pending::<i32>());
+        assert_eq!(
+            stall_guard(chunks.next(), "mock", Duration::from_secs(1))
+                .await
+                .expect("a ready chunk is not a stall"),
+            Some(1)
+        );
+        let error = stall_guard(chunks.next(), "mock", Duration::from_secs(1))
+            .await
+            .expect_err("silence is not an answer");
+        assert!(
+            matches!(error, AcpilotError::ModelUnavailable { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("stalled"), "{error}");
+        assert!(
+            error.to_string().contains("1s"),
+            "the failure says how long the silence was: {error}"
+        );
     }
 }

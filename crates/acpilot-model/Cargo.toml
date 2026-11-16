@@ -27,6 +27,10 @@ tracing.workspace = true
 axum.workspace = true
 futures.workspace = true
 insta.workspace = true
+# `test-util` pauses the clock, so the stall test proves a silent stream is
+# cancelled without spending a real minute and without a short timeout that only
+# exists for tests.
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 
 [lints]

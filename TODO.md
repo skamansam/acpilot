@@ -1544,7 +1544,10 @@ resolved.
   - **The DoD's automatable halves landed (2026-11-15).** `POST /v1/recipes/{id}/runs/{run}/replay`
     re-sends the stored prompt and selectors; `tests/recipes.rs` compares the two HTTP bodies
     byte for byte. `acpilot recipes run <id> "…"` streams a run to stdout (`--json` prints the
-    finished summary instead). `acpilot-agent-lm`'s stdio suite promotes a recipe, reads the
+    finished summary instead). The split is pinned through the process boundary
+    (`crates/acpilot-cli/tests/cli.rs`, 2026-11-16): a fake daemon serves the frames
+    `acpilotd` writes, and the test asserts thinking lands on stderr, a redirect of stdout
+    holds the answer alone, and `--json` puts one object on stdout with nothing on stderr. `acpilot-agent-lm`'s stdio suite promotes a recipe, reads the
     manifest entry promotion wrote and runs the command it names through the P2 session smoke
     (`initialize`, `session/new`, a prompt, `end_turn`). The TUI test draws the permission a
     paired driver causes, while `tests/acp_bridge.rs` proves the driver's stream never carries

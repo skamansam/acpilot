@@ -15,6 +15,12 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant 5 is maintained inside zbus 6; secret-service still pins zbus 5" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 is maintained inside zbus 6; secret-service still pins zbus 5" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 is maintained inside zbus 6; secret-service still pins zbus 5" },
+  # RUSTSEC-2026-0543 (2026-11-17) says every chrono version is unmaintained. It
+  # arrives through `trash`, which formats the deletion timestamp it hands the OS
+  # trash and offers no alternative; the code path here is a timestamp, not a parser
+  # of anything a user supplies. Revisit when `trash` moves off chrono — the same
+  # shape as the zbus entries above: an advisory about provenance, no safe upgrade.
+  { id = "RUSTSEC-2026-0543", reason = "trash 5 formats its deletion timestamps with chrono; revisit when trash drops it" },
 ]
 
 [licenses]

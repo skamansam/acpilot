@@ -10,19 +10,25 @@
 //! says so instead of writing over a file a package manager will put back on its next
 //! upgrade.
 //!
-//! # What `--from` is for
+//! # What updating means
 //!
-//! Fetching a release is somebody else's job for now: the download, the checksum and
-//! the archive extraction belong to the installer scripts a release publishes, and a
-//! client that reimplemented them would be a second answer to "which bytes are
-//! correct". What a client *must* own is the replacement itself — write beside the old
-//! binary, then rename over it — because that is the step that needs to know it may
-//! touch the file at all. So `acpilot update --from <path>` performs that step on a
-//! binary somebody else downloaded, and refuses when the copy is not the user's.
+//! For a copy nobody owns — a tarball, the installer script, an AppImage, `cargo
+//! install` — the update is four steps and every one of them is checked: name the
+//! release asset for this platform, download it, compare its sha256 with the one the
+//! release published ([`crate::release`]), and only then put the programs in place.
+//! The replacement writes beside the old binary and renames over it, so a failure
+//! halfway leaves a program that still runs rather than a half-written one.
+//!
+//! `--from` exists for the machines a release cannot serve: an air-gapped box, a
+//! build somebody made themselves, a platform the workflow does not package. It
+//! performs the same replacement on bytes that were brought some other way, and still
+//! refuses a copy that is not the user's.
 
 use std::path::{Path, PathBuf};
 
-use acpilot_host::install::{Install, Replaces, install_of};
+use acpilot_host::install::{Install, Replaces, install_at};
+
+use crate::release::{self, PROGRAMS};
 
 /// The binary running this command, and what installed it.
 #[derive(Debug, Clone)]
@@ -31,6 +37,8 @@ pub struct Plan {
     pub exe: PathBuf,
     /// The marker its installation left, when one was found.
     pub install: Option<Install>,
+    /// Where that marker is, so an update can record the version it installed.
+    pub marker: Option<PathBuf>,
 }
 
 impl Plan {
@@ -50,8 +58,18 @@ impl Plan {
     /// The same, for a binary known by path.
     #[must_use]
     pub fn at(exe: PathBuf) -> Self {
-        let install = install_of(&exe);
-        Self { exe, install }
+        match install_at(&exe) {
+            Some((marker, install)) => Self {
+                exe,
+                install: Some(install),
+                marker: Some(marker),
+            },
+            None => Self {
+                exe,
+                install: None,
+                marker: None,
+            },
+        }
     }
 
     /// Who may replace this copy.
@@ -100,7 +118,11 @@ impl Plan {
                             "this copy is yours to replace, because {} is not a package manager:",
                             install.method
                         ));
-                        lines.push("  acpilot update --from <the new acpilot binary>".to_owned());
+                        lines.push("  acpilot update".to_owned());
+                        lines.push(
+                            "  acpilot update --from <a new acpilot binary>, for a machine that cannot download"
+                                .to_owned(),
+                        );
                     }
                     Replaces::Nobody => {
                         lines.push(format!(
@@ -146,8 +168,150 @@ pub fn replace(exe: &Path, from: &Path) -> Result<(), String> {
     })
 }
 
-/// `acpilot update [--from PATH]`, as an exit status.
-pub fn run(from: Option<PathBuf>) -> u8 {
+/// Put the programs of an unpacked release in place of the ones beside `exe`.
+///
+/// A release carries `acpilot`, `acpilotd` and `acpilot-gui` in one directory, and one
+/// marker beside them describes all three (ADR 0010). Replacing only the program this
+/// process happens to be would leave a client and a daemon of two versions in one
+/// directory — the mismatch this command exists to end. A program that is not beside
+/// `exe` is not installed on this machine, so it is left absent rather than added: an
+/// update does not change which programs arrived.
+///
+/// # Errors
+///
+/// The first program that cannot be written, named, with the copies already replaced
+/// left as they are (each was replaced atomically, so each is a whole program).
+pub fn replace_programs(exe: &Path, unpacked: &[PathBuf]) -> Result<Vec<String>, String> {
+    let directory = exe
+        .parent()
+        .ok_or_else(|| format!("{} has no directory to replace into", exe.display()))?;
+    let mut replaced = Vec::new();
+    for program in PROGRAMS {
+        let Some(source) = unpacked
+            .iter()
+            .find(|path| path.file_stem().and_then(std::ffi::OsStr::to_str) == Some(program))
+        else {
+            continue;
+        };
+        let destination = if program == "acpilot" {
+            exe.to_path_buf()
+        } else {
+            let name = source
+                .file_name()
+                .ok_or_else(|| format!("{} has no name", source.display()))?;
+            directory.join(name)
+        };
+        if program != "acpilot" && !destination.exists() {
+            continue;
+        }
+        replace(&destination, source)?;
+        replaced.push(program.to_owned());
+    }
+    if !replaced.iter().any(|program| program == "acpilot") {
+        return Err(format!(
+            "the archive held no `acpilot` to write over {}",
+            exe.display()
+        ));
+    }
+    Ok(replaced)
+}
+
+/// Record the version an update installed, keeping the method that installed it.
+///
+/// The method does not change because the bytes did: a copy the shell installer made
+/// is still a `script` install after `acpilot update` replaced the program, and
+/// rewriting the marker to `tarball` (the archive's own word) would lose that. The
+/// version does change, and the marker is what a later command asks.
+fn record(plan: &Plan, version: &str) -> Result<(), String> {
+    let (Some(path), Some(install)) = (&plan.marker, &plan.install) else {
+        return Ok(());
+    };
+    let updated = Install {
+        method: install.method.clone(),
+        version: Some(version.to_owned()),
+    };
+    let body = serde_json::to_vec_pretty(&updated)
+        .map_err(|error| format!("the marker cannot be written: {error}"))?;
+    std::fs::write(path, body).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Download and verify one release, then put its programs in place.
+fn from_release(plan: &Plan, requested: Option<&str>) -> u8 {
+    let Some(target) = release::target() else {
+        eprintln!(
+            "acpilot update: no release is built for {} {}; pass --from with a binary built here",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        return acpilot_core::error::exit::FAILURE;
+    };
+    let tag = match requested {
+        Some(version) => release::tag_of(version),
+        None => match release::latest_tag() {
+            Ok(tag) => tag,
+            Err(message) => {
+                eprintln!("acpilot update: {message}");
+                return acpilot_core::error::exit::FAILURE;
+            }
+        },
+    };
+    let version = release::version_of(&tag).to_owned();
+    if version == acpilot_core::VERSION {
+        println!(
+            "acpilot {version} is already installed at {}",
+            plan.exe.display()
+        );
+        return acpilot_core::error::exit::SUCCESS;
+    }
+    let stage = std::env::temp_dir().join(format!("acpilot-update-{}", std::process::id()));
+    let outcome = install_release(plan, &tag, &version, target, &stage);
+    // Whatever happened, the unpacked copies go: they are a second installation of
+    // programs that are either already in place or untouched.
+    let _ = std::fs::remove_dir_all(&stage);
+    match outcome {
+        Ok(replaced) => {
+            println!(
+                "installed acpilot {version} from {tag}: replaced {} at {}",
+                replaced.join(", "),
+                plan.exe.display()
+            );
+            println!(
+                "a daemon that is already running keeps the older binary until it is restarted"
+            );
+            acpilot_core::error::exit::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("acpilot update: {message}");
+            acpilot_core::error::exit::FAILURE
+        }
+    }
+}
+
+/// The checked part of an update: download, verify, unpack, replace, record.
+fn install_release(
+    plan: &Plan,
+    tag: &str,
+    version: &str,
+    target: &str,
+    stage: &Path,
+) -> Result<Vec<String>, String> {
+    let asset = release::archive_name(version, target);
+    let url = release::asset_url(tag, &asset)?;
+    println!("downloading {url}");
+    let bytes = release::get(&url)?;
+    let published = release::get(&release::asset_url(tag, &format!("{asset}.sha256"))?)?;
+    let published = String::from_utf8(published)
+        .map_err(|error| format!("the checksum file is not text: {error}"))?;
+    let expected = release::parse_checksum(&published)?;
+    release::verify(&bytes, &expected)?;
+    let unpacked = release::unpack(&bytes, stage)?;
+    let replaced = replace_programs(&plan.exe, &unpacked.programs)?;
+    record(plan, version)?;
+    Ok(replaced)
+}
+
+/// `acpilot update [--from PATH] [--version TAG] [--check]`, as an exit status.
+pub fn run(from: Option<PathBuf>, version: Option<String>, check: bool) -> u8 {
     let plan = match Plan::here() {
         Ok(plan) => plan,
         Err(message) => {
@@ -155,18 +319,19 @@ pub fn run(from: Option<PathBuf>) -> u8 {
             return acpilot_core::error::exit::FAILURE;
         }
     };
-    let Some(from) = from else {
-        for line in plan.report() {
-            println!("{line}");
-        }
-        // A copy nobody may replace is not an update that succeeded; it is a machine
-        // that has to be fixed by hand, and the exit status says so to a script.
-        return match plan.replaces() {
+    for line in plan.report() {
+        println!("{line}");
+    }
+    let replaces = plan.replaces();
+    if check {
+        // A copy nobody may replace is not a healthy check: it is a machine that has
+        // to be fixed by hand, and the exit status says so to a script.
+        return match replaces {
             Replaces::Nobody => acpilot_core::error::exit::FAILURE,
             Replaces::PackageManager | Replaces::SelfOwned => acpilot_core::error::exit::SUCCESS,
         };
-    };
-    match plan.replaces() {
+    }
+    match replaces {
         Replaces::SelfOwned => {}
         Replaces::PackageManager => {
             let method = plan
@@ -174,30 +339,30 @@ pub fn run(from: Option<PathBuf>) -> u8 {
                 .as_ref()
                 .map_or("a package manager", |install| install.method.as_str());
             eprintln!(
-                "{method} owns this copy, so it is the one to upgrade it; upgrading it here would be undone by its next upgrade"
+                "acpilot update: {method} owns this copy, so nothing was replaced; upgrading it here would be undone by its next upgrade"
             );
-            if let Some(command) = plan.install.as_ref().and_then(Install::update_command) {
-                eprintln!("  {command}");
-            }
             return acpilot_core::error::exit::FAILURE;
         }
         Replaces::Nobody => {
             eprintln!(
-                "no installation marker says this copy may be replaced, so {} was not touched",
+                "acpilot update: no installation marker says this copy may be replaced, so {} was not touched",
                 plan.exe.display()
             );
             return acpilot_core::error::exit::FAILURE;
         }
     }
-    match replace(&plan.exe, &from) {
-        Ok(()) => {
-            println!("replaced {} with {}", plan.exe.display(), from.display());
-            acpilot_core::error::exit::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("{message}");
-            acpilot_core::error::exit::FAILURE
-        }
+    match from {
+        Some(from) => match replace(&plan.exe, &from) {
+            Ok(()) => {
+                println!("replaced {} with {}", plan.exe.display(), from.display());
+                acpilot_core::error::exit::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("acpilot update: {message}");
+                acpilot_core::error::exit::FAILURE
+            }
+        },
+        None => from_release(&plan, version.as_deref()),
     }
 }
 
@@ -207,7 +372,7 @@ mod tests {
 
     use acpilot_host::install::Replaces;
 
-    use super::{Plan, replace};
+    use super::{Plan, record, replace, replace_programs};
 
     fn marker(directory: &Path, body: &str) -> PathBuf {
         std::fs::write(directory.join("install.json"), body).expect("the marker");
@@ -235,16 +400,22 @@ mod tests {
             report.contains("sudo apt install --only-upgrade acpilot"),
             "{report}"
         );
-        assert!(!report.contains("--from"), "{report}");
+        assert!(!report.contains("acpilot update --from"), "{report}");
+        assert!(
+            !report.contains("  acpilot update\n"),
+            "a package-managed copy is not offered the verb: {report}"
+        );
     }
 
     #[test]
-    fn a_tarball_is_offered_the_replacement_verb() {
+    fn a_tarball_is_offered_the_update_verb() {
         let directory = tempfile::tempdir().expect("temp dir");
         marker(directory.path(), r#"{ "method": "tarball" }"#);
         let plan = Plan::at(directory.path().join("acpilot"));
         let report = plan.report().join("\n");
+        assert!(report.contains("  acpilot update\n"), "{report}");
         assert!(report.contains("acpilot update --from"), "{report}");
+        assert_eq!(plan.replaces(), Replaces::SelfOwned);
     }
 
     #[test]
@@ -261,5 +432,64 @@ mod tests {
             "the staged name is not left behind"
         );
         assert!(from.exists(), "the source is left where the caller put it");
+    }
+
+    #[test]
+    fn an_installation_is_replaced_where_it_is_not_added() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let exe = directory.path().join("acpilot");
+        std::fs::write(&exe, b"old acpilot").expect("the old client");
+        let daemon = directory.path().join("acpilotd");
+        std::fs::write(&daemon, b"old daemon").expect("the old daemon");
+        let unpacked = tempfile::tempdir().expect("temp dir");
+        for (name, body) in [
+            ("acpilot", &b"new acpilot"[..]),
+            ("acpilotd", &b"new daemon"[..]),
+            ("acpilot-gui", &b"new shell"[..]),
+        ] {
+            std::fs::write(unpacked.path().join(name), body).expect("an unpacked program");
+        }
+        let programs: Vec<PathBuf> = ["acpilotd", "acpilot-gui", "acpilot"]
+            .iter()
+            .map(|name| unpacked.path().join(name))
+            .collect();
+        let replaced =
+            replace_programs(&exe, &programs).expect("the installation is replaced in place");
+        assert_eq!(replaced, ["acpilotd", "acpilot"]);
+        assert_eq!(std::fs::read(&exe).expect("the client"), b"new acpilot");
+        assert_eq!(std::fs::read(&daemon).expect("the daemon"), b"new daemon");
+        assert!(
+            !directory.path().join("acpilot-gui").exists(),
+            "a program this machine did not have is not added by an update"
+        );
+    }
+
+    #[test]
+    fn the_marker_keeps_its_method_and_takes_the_new_version() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        marker(
+            directory.path(),
+            r#"{ "method": "script", "version": "0.1.0" }"#,
+        );
+        let plan = Plan::at(directory.path().join("acpilot"));
+        record(&plan, "0.2.0").expect("the marker is written");
+        let written = std::fs::read_to_string(directory.path().join("install.json"))
+            .expect("the marker is readable");
+        assert!(written.contains("\"script\""), "{written}");
+        assert!(written.contains("\"0.2.0\""), "{written}");
+        assert!(!written.contains("\"0.1.0\""), "{written}");
+        assert_eq!(
+            plan.replaces(),
+            Replaces::SelfOwned,
+            "the method still decides"
+        );
+    }
+
+    #[test]
+    fn a_copy_with_no_marker_records_nothing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let plan = Plan::at(directory.path().join("acpilot"));
+        record(&plan, "0.2.0").expect("nothing to write is not a failure");
+        assert!(!directory.path().join("install.json").exists());
     }
 }

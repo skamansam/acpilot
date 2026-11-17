@@ -40,6 +40,15 @@ acpilot-tui = { workspace = true }
 # `tui --demo`: the seeded world the design pass draws, which needs no daemon.
 acpilot-demo = { workspace = true }
 clap = { workspace = true }
+# `acpilot update` is the one command that fetches: the release asset for this
+# platform, over the same client the daemon's API client is built on. The checksum
+# beside it is checked before anything is written, so a truncated or substituted
+# download ends the update rather than becoming the new binary.
+reqwest = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+sha2 = { workspace = true }
 # `acpilot recipes run` prints the run's frames as they arrive, and polling a
 # `BoxStream` needs `StreamExt`; the workspace already pins futures for the
 # daemon's SSE, so this declares the half the CLI calls rather than a new crate.

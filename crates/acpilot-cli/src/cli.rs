@@ -65,13 +65,28 @@ pub enum Command {
     /// methods nobody owns are replaced here. A package-managed copy prints the command
     /// that upgrades it instead, because a binary written over files the package
     /// manager owns is a file that manager puts back on its next upgrade.
+    ///
+    /// An installation nobody owns is updated from the latest release: the asset for
+    /// this platform is downloaded, its sha256 is compared with the one the release
+    /// published, and only then are the programs written beside the old ones and
+    /// renamed over them, so a failure halfway leaves a program that still runs.
     Update {
-        /// A new `acpilot` binary to put in place of this one.
+        /// A new `acpilot` binary to put in place of this one, instead of downloading a
+        /// release. For a machine that cannot reach GitHub, or a build made here.
         ///
         /// Written beside the running binary and renamed over it, so a failure halfway
         /// is not a half-written program. Refused for a package-managed copy.
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", conflicts_with = "version")]
         from: Option<PathBuf>,
+        /// The release to install, for example `v0.2.0` or `0.2.0`.
+        ///
+        /// The default is the newest published release. A version already installed
+        /// is reported and nothing is downloaded.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
+        /// Only say how this copy was installed; download and replace nothing.
+        #[arg(long)]
+        check: bool,
     },
     /// Install, verify, and approve extensions.
     Ext {
@@ -679,7 +694,11 @@ pub fn run(cli: Cli) -> u8 {
             println!("api      {API_PREFIX}");
             exit::SUCCESS
         }
-        Some(Command::Update { from }) => crate::update::run(from),
+        Some(Command::Update {
+            from,
+            version,
+            check,
+        }) => crate::update::run(from, version, check),
         Some(Command::Ext { command }) => run_ext(command, profile.as_deref()),
         Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),

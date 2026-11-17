@@ -195,6 +195,15 @@ directories = "6"
 # rate limit of its own and the only defence is that guessing is hopeless.
 getrandom = "0.4"
 sha2 = "0.11"
+# `acpilot update` unpacks the archive it verified. The format is chosen from the
+# bytes (a gzip magic number or a zip one) rather than from this build's platform, so
+# a Windows archive is unpackable, and testable, on any machine.
+flate2 = "1"
+tar = "0.4"
+# 9, not 2: every 2.x release carries the 2026 symlink, SUID and AES advisories
+# (RUSTSEC-2026-0367, -0368, -0369, -0429, -0545), and this crate reads archives it
+# downloaded over the network. Only the deflate reader is linked.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # YAML frontmatter for SKILL.md. serde-saphyr is the maintained, panic-free

@@ -1036,8 +1036,121 @@ fn run_dist(targets: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    if !mark_homebrew_formulas() {
+        return ExitCode::FAILURE;
+    }
+
     report_dist_artifacts();
     ExitCode::SUCCESS
+}
+
+/// The line a formula needs so a Homebrew copy reports itself as `brew`.
+///
+/// dist generates the formula from the same archive the tarball users download, and
+/// that archive's `install.json` says `tarball` — which is true of the bytes and false
+/// of the installation. The formula is the package that put them in the Cellar, so it
+/// writes its own marker in the same directory as the binary, through `version`,
+/// which the formula already declares. Without it `acpilot update` would treat a
+/// `brew` copy as the user's own and write inside a keg that `brew upgrade` will
+/// discard.
+///
+/// The marker is JSON in a Ruby string: `\"` is how a double quote is written inside
+/// one, and `#{version}` is the formula's own version, so the two cannot drift.
+const BREW_MARKER: &str = "(bin/\"install.json\").write(\"{\\\"method\\\":\\\"brew\\\",\\\"version\\\":\\\"#{version}\\\"}\")";
+
+/// The fragment that says a formula has already been marked.
+const BREW_MARKED: &str = "\\\"method\\\":\\\"brew\\\"";
+
+/// Write the marker into every formula dist generated, in each `def install` block.
+///
+/// One per platform block rather than once per file: the formula has a separate
+/// `install` for each `on_macos`/`on_linux` branch, and whichever branch runs is the
+/// one whose binary answers `current_exe`. A formula with no `bin.install` line is a
+/// failure rather than a skip — the release would otherwise ship a formula whose
+/// installations claim to be tarballs, which is the bug this exists to prevent.
+fn mark_homebrew_formulas() -> bool {
+    let dir = dist_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{}: {error}", dir.display());
+            return false;
+        }
+    };
+    let mut formulas: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rb"))
+        .collect();
+    formulas.sort();
+    if formulas.is_empty() {
+        eprintln!(
+            "==> homebrew: dist wrote no formula and the config asks for one, so no \
+             installation can say `brew`"
+        );
+        return false;
+    }
+    for path in formulas {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let formula = match fs::read_to_string(&path) {
+            Ok(formula) => formula,
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return false;
+            }
+        };
+        let marked = match with_brew_marker(&formula) {
+            Ok(marked) => marked,
+            Err(why) => {
+                eprintln!("==> homebrew: {name}: {why}");
+                return false;
+            }
+        };
+        if marked == formula {
+            continue;
+        }
+        if let Err(error) = fs::write(&path, &marked) {
+            eprintln!("{}: {error}", path.display());
+            return false;
+        }
+        println!("    {name} says `brew` beside its binary");
+    }
+    true
+}
+
+/// Insert the marker after every `bin.install` line of one formula.
+///
+/// Indentation is copied from the line it follows, because the generated formula
+/// indents by platform nesting and a marker at the wrong depth is a syntax error in
+/// Ruby rather than a cosmetic difference. A formula that already says `brew` is left
+/// exactly as it is, so running the task twice is not two markers.
+fn with_brew_marker(formula: &str) -> Result<String, String> {
+    if formula.contains(BREW_MARKED) {
+        return Ok(formula.to_owned());
+    }
+    let mut marked = String::with_capacity(formula.len() + BREW_MARKER.len() * 4 + 64);
+    let mut inserted = 0;
+    for line in formula.lines() {
+        marked.push_str(line);
+        marked.push('\n');
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("bin.install") {
+            marked.push_str(&line[..line.len() - trimmed.len()]);
+            marked.push_str(BREW_MARKER);
+            marked.push('\n');
+            inserted += 1;
+        }
+    }
+    if inserted == 0 {
+        return Err(
+            "the formula has no `bin.install` line, so there is nowhere to write the marker"
+                .to_owned(),
+        );
+    }
+    Ok(marked)
 }
 
 /// Generate the SBOMs the config asks for, and put them where dist declares them.
@@ -1816,6 +1929,55 @@ mod tests {
             "the job that publishes `required checks` must be a pull request's; on a push \
              its entry is at best skipped, which is not success"
         );
+    }
+
+    #[test]
+    fn a_formula_says_brew_beside_the_binary_it_installs() {
+        let formula = r#"class Acpilot < Formula
+  version "0.2.0"
+  on_macos do
+    def install
+      bin.install "acpilot"
+    end
+  end
+
+  on_linux do
+    def install
+      bin.install "acpilot"
+    end
+  end
+end
+"#;
+        let marked = with_brew_marker(formula).expect("the formula is markable");
+        assert_eq!(
+            marked.matches(BREW_MARKED).count(),
+            2,
+            "both platform installs write the marker: {marked}"
+        );
+        assert!(
+            marked.contains(&format!("      {BREW_MARKER}")),
+            "the marker is indented like the line it follows: {marked}"
+        );
+        assert!(
+            marked.contains("(bin/\"install.json\").write(\"{"),
+            "the marker lands beside the binary, in the keg's bin: {marked}"
+        );
+        assert!(
+            marked.contains("#{version}"),
+            "the version is the formula's own, not a number written twice: {marked}"
+        );
+        assert_eq!(
+            with_brew_marker(&marked).expect("a marked formula stays valid"),
+            marked,
+            "marking twice is not two markers"
+        );
+    }
+
+    #[test]
+    fn a_formula_with_nothing_to_mark_is_a_failure_not_a_silent_skip() {
+        let refused = with_brew_marker("class Acpilot < Formula\nend\n")
+            .expect_err("there is no install line");
+        assert!(refused.contains("bin.install"), "{refused}");
     }
 
     #[test]

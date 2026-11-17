@@ -2440,12 +2440,26 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
   answers by owner — a package-managed copy prints its own upgrade command (`sudo apt
   install --only-upgrade acpilot`, `brew upgrade acpilot`, …) and refuses `--from`, a
   tarball or `cargo install` is replaced atomically (written beside the binary, executable
-  bit set, then renamed over it), and a copy with no marker is left alone. **Open:** the
-  generated Homebrew formula installs from the same archive, so a `brew` copy still reads
-  `tarball` and would be offered a self-replacement inside the Cellar — the formula needs
-  its own marker (`post_install` writing `{"method":"brew"}`); and the download,
-  checksum and extraction that would let `acpilot update` fetch a release itself instead of
-  taking `--from <path>`.
+  bit set, then renamed over it), and a copy with no marker is left alone.
+  - **Closed later on 2026-11-17:** the formula now says `brew`. `cargo xtask dist`
+    inserts `(bin/"install.json").write("{\"method\":\"brew\",\"version\":\"#{version}\"}")`
+    after every `bin.install` in each generated formula, and a formula with no install
+    line fails the build rather than shipping a Cellar copy that claims to be a tarball.
+    `acpilot update` also fetches now: `crates/acpilot-cli/src/release.rs` names the asset
+    for this platform (`acpilot-<version>-<target>.tar.gz|zip`), downloads it and the
+    `.sha256` beside it, compares digests, unpacks by the bytes' magic (tar.gz or zip,
+    never by the build's own platform) taking only entry *file names*, and replaces
+    `acpilotd`, `acpilot-gui` (where present) and then `acpilot`, recording the new
+    version in the marker while keeping its method. `--from` still exists for an
+    air-gapped machine, `--version` names a release, `--check` is the report alone.
+  - **Open:** no signature, only the published sha256 — both over the same TLS
+    connection, so the checksum catches a truncated or substituted download and not a
+    compromised release. A running daemon keeps the old binary until restarted; the
+    command says so rather than killing one that may be mid-turn. The download path has
+    not run against a release that contains this code: `v0.2.6` predates it, so the
+    first end-to-end update is the release after this one. `release.yml` still packages
+    by hand and so does not produce the formula at all; the marker lands when the
+    workflow moves onto `xtask dist` (P12-1's noted shape decision).
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
   - Wired: `dist-workspace.toml` pins cargo-dist 0.32.0 and declares those seven targets, the three installers, a sha256 checksum per archive and `cargo-cyclonedx`; `cargo xtask dist` builds the set for one machine and refuses a `dist` of another version, because the artifacts are that version's output.
     - Verified on linux x86_64 (2026-10-29): three archives with `.sha256` beside each, `sha256.sum`, the shell and PowerShell installers and the formula for every program, the source tarball, and three SBOMs — all in `target/distrib/`.

@@ -44,6 +44,24 @@ the profile directory's name, omitted when the daemon started without one. The
 web page writes that name into its `/p/:profile/...` addresses. A page that
 guessed would address a profile nobody started.
 
+When the daemon's own copy found an `install.json` marker (ADR 0010), the answer
+carries `install`: the method that put it there and the version it recorded.
+
+```json
+{ "ok": true, "service": "acpilotd", "version": "0.2.6", "api": "/v1",
+  "workspace": "app",
+  "install": { "method": "brew", "version": "0.2.6" } }
+```
+
+`method` is a closed set — `apt`, `dnf`, `pacman`, `brew`, `msi`, `script`,
+`tarball`, `appimage`, `cargo` — and it is what decides who may reconcile a
+version mismatch: a package manager owns its files, the other methods are the
+program's own. A client does not have to guess and does not get a second opinion
+from the filesystem; it reads the same table `acpilot update` acts on, which is
+documented under [Updating](/flight-deck/update/). The field is absent when no
+marker was found, and absent is treated as nobody's to replace — never as
+permission.
+
 `GET /v1/agents` answers from the profile the operator chose at daemon start.
 `acpilotd --profile <dir>` reads that directory's `agents.toml`. The route reports
 availability from a `PATH` lookup on the daemon's host. It starts no process, so

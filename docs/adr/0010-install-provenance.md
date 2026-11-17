@@ -35,6 +35,14 @@ A binary that guesses its own installation from `PATH` or from the directory it 
 in guesses wrong for exactly the installations that matter — the ones a package manager
 owns.
 
+A Homebrew formula is a package in this sense, and it installs from the same archive
+the tarball users download. The archive's marker therefore says `tarball`, which is
+true of the bytes and false of the installation, so the formula writes its own marker
+(`{"method":"brew","version":…}`) in the keg's `bin` during its install step. The
+`xtask` that builds the formula inserts that line; a formula without it is a build
+failure, because a `brew` copy would otherwise be treated as the user's own and
+updated inside a keg that `brew upgrade` discards.
+
 ### D2 — where the marker is looked for, in this order
 
 1. Beside the binary: `<dir of the running executable>/install.json`, which covers a

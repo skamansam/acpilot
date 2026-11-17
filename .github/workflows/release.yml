@@ -19,6 +19,12 @@ name: release
 # `--artifacts global` once for the installers, the formula and the SBOMs. Editing
 # an archive after dist made it would invalidate the checksum baked into the
 # installer built from it, so nothing here touches one.
+#
+# The formula is installed with Homebrew on a macOS runner before anything is
+# published (the `homebrew` job): it is the only way to know that the keg a
+# `brew install` makes answers `acpilot update --check` with `brew`, which is the
+# marker ADR 0010 reads. `publish` waits for it, so a formula nobody can install
+# stops the release instead of shipping.
 on:
   push:
     branches: [main]
@@ -239,9 +245,83 @@ jobs:
             target/distrib/sha256.sum
           if-no-files-found: error
 
+  homebrew:
+    name: homebrew (macos)
+    needs: [version, installers]
+    if: needs.version.outputs.publish == 'true'
+    # A formula is a claim about this release: that the archive it names is built,
+    # that its install block puts a marker beside the binary, and that the marker
+    # makes a keg report itself as `brew` rather than as the user's own copy. Only
+    # Homebrew on a mac can answer that, so this runs there, and before `publish`
+    # rather than after it: a release whose formula does not install is a release
+    # nobody can reach through the tap.
+    #
+    # `macos-latest` is the arm64 runner for the reason the archives matrix gives.
+    runs-on: macos-latest
+    steps:
+      # Every artifact of the run, merged: the generated formula and the archive
+      # for this runner's architecture, which is what the formula is checked
+      # against. The archives job already finished, because `installers` needs it.
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # dist names the release after the version in `Cargo.toml` (currently
+      # `0.1.0`), because the tag this release publishes under is decided after the
+      # artifacts exist. So the formula's downloads are served from this runner —
+      # same file names, same version segment, same install block — and the one
+      # thing left unchecked is whether a URL under a real GitHub release answers,
+      # which `publish` creates and no runner can know before it has.
+      - name: Install the formula Homebrew was given
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          set -euo pipefail
+          case "${RUNNER_ARCH}" in
+            ARM64) triple=aarch64-apple-darwin ;;
+            X64) triple=x86_64-apple-darwin ;;
+            *) echo "no mac archive for RUNNER_ARCH=${RUNNER_ARCH}"; exit 1 ;;
+          esac
+          version=$(sed -n 's/^  version "\(.*\)"$/\1/p' dist/acpilot-cli.rb)
+          test -n "$version" || { echo "the formula declares no version"; exit 1; }
+          mirror="$PWD/mirror/releases/download/v$version"
+          mkdir -p "$mirror"
+          cp "dist/acpilot-cli-$triple.tar.gz" "dist/acpilot-cli-$triple.tar.gz.sha256" "$mirror/"
+          python3 -m http.server 8788 --directory mirror &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          sleep 1
+          python3 -c 'import pathlib, sys; path = pathlib.Path(sys.argv[1]); path.write_text(path.read_text().replace("https://github.com/skamansam/acpilot", "http://127.0.0.1:8788"))' dist/acpilot-cli.rb
+          grep -c 'http://127.0.0.1:8788' dist/acpilot-cli.rb
+          brew install --formula "$PWD/dist/acpilot-cli.rb"
+
+      # The marker is the whole point: without it `acpilot update` treats a keg as
+      # the user's own and writes over a file `brew upgrade` will discard. `--check`
+      # is the report that says which, and a plain `update` must refuse.
+      - name: acpilot says the installation is Homebrew's
+        run: |
+          set -euo pipefail
+          marker="$(brew --prefix)/bin/install.json"
+          test -s "$marker" || { echo "no marker was linked beside the binary"; exit 1; }
+          cat "$marker"
+          grep -q '"method":"brew"' "$marker"
+          out=$(acpilot update --check)
+          echo "$out"
+          grep -q 'installed by brew' <<<"$out"
+          grep -q 'brew upgrade acpilot' <<<"$out"
+          set +e
+          refusal=$(acpilot update 2>&1)
+          status=$?
+          set -e
+          echo "$refusal"
+          test "$status" -ne 0
+          grep -q 'brew owns this copy' <<<"$refusal"
+
   publish:
     name: publish
-    needs: [version, archives, installers]
+    needs: [version, archives, installers, homebrew]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Publishing a release needs `contents: write`, which the workflow already

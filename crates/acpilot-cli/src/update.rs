@@ -237,7 +237,7 @@ fn record(plan: &Plan, version: &str) -> Result<(), String> {
 
 /// Download and verify one release, then put its programs in place.
 fn from_release(plan: &Plan, requested: Option<&str>) -> u8 {
-    let Some(target) = release::target() else {
+    let Some(target) = release::triple() else {
         eprintln!(
             "acpilot update: no release is built for {} {}; pass --from with a binary built here",
             std::env::consts::OS,
@@ -295,17 +295,29 @@ fn install_release(
     target: &str,
     stage: &Path,
 ) -> Result<Vec<String>, String> {
-    let asset = release::archive_name(version, target);
-    let url = release::asset_url(tag, &asset)?;
-    println!("downloading {url}");
-    let bytes = release::get(&url)?;
-    let published = release::get(&release::asset_url(tag, &format!("{asset}.sha256"))?)?;
-    let published = String::from_utf8(published)
-        .map_err(|error| format!("the checksum file is not text: {error}"))?;
-    let expected = release::parse_checksum(&published)?;
-    release::verify(&bytes, &expected)?;
-    let unpacked = release::unpack(&bytes, stage)?;
-    let replaced = replace_programs(&plan.exe, &unpacked.programs)?;
+    // One archive per program, so an update makes three round trips. Each is signed
+    // and checked on its own: a release that published one good archive and one
+    // substituted one must not install half a version.
+    let mut programs = Vec::new();
+    for asset in release::assets(target) {
+        let url = release::asset_url(tag, &asset)?;
+        println!("downloading {url}");
+        let bytes = release::get(&url)?;
+        let checksum_url = release::asset_url(tag, &format!("{asset}.sha256"))?;
+        let published = release::get(&checksum_url)?;
+        let signature = release::get(&release::asset_url(
+            tag,
+            &format!("{asset}.sha256{}", release::SIGNATURE_SUFFIX),
+        )?)?;
+        release::verify_signature(&published, &signature)?;
+        let published = std::str::from_utf8(&published)
+            .map_err(|error| format!("the checksum file is not text: {error}"))?;
+        let expected = release::parse_checksum(published)?;
+        release::verify(&bytes, &expected)?;
+        programs.extend(release::unpack(&bytes, stage)?.programs);
+    }
+    release::require_client(&programs)?;
+    let replaced = replace_programs(&plan.exe, &programs)?;
     record(plan, version)?;
     Ok(replaced)
 }

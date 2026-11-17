@@ -13,13 +13,22 @@
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-/// The programs a release archive carries in one directory, the one that replaces
-/// the installation last.
+/// The programs a release carries, the one that replaces the installation last.
 ///
 /// `acpilot` is last because it is the one this process is running: a failure before
 /// it leaves the copy a person can still start, reporting the version actually on
 /// disk, rather than a new client beside an old daemon with nothing to run.
 pub const PROGRAMS: [&str; 3] = ["acpilotd", "acpilot-gui", "acpilot"];
+
+/// The packages those programs arrive in, one archive each.
+///
+/// `cargo-dist` packages one *package* per archive, so an update fetches three files
+/// rather than one. The names are the packages', not the binaries': `acpilot-cli` is
+/// the package whose binary is `acpilot`.
+pub const PACKAGES: [&str; 3] = ["acpilotd", "acpilot-gui", "acpilot-cli"];
+
+/// The suffix of the detached signature beside a published checksum.
+pub const SIGNATURE_SUFFIX: &str = ".sig";
 
 /// Where releases are downloaded from, from the manifest that publishes them.
 ///
@@ -43,15 +52,17 @@ fn slug() -> Result<&'static str, String> {
 /// This machine's row in the release's asset table, or [`None`] when the release
 /// builds nothing for it.
 ///
-/// The names are `release.yml`'s, not cargo-dist's triples: the workflow packages
-/// three platforms under these labels, and a name this command invented would 404.
-pub fn target() -> Option<&'static str> {
+/// These are `dist-workspace.toml`'s `targets`, because cargo-dist names every
+/// archive after the target it was built for: a name this command invented would 404.
+/// The `gnu` flavour is the one chosen over `musl`, which is the same choice the
+/// hand-packaged tarball made — the machine running a release has a system libc.
+pub fn triple() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => Some("linux-x86_64"),
-        ("linux", "aarch64") => Some("linux-aarch64"),
-        ("macos", "aarch64") => Some("macos-aarch64"),
-        ("macos", "x86_64") => Some("macos-x86_64"),
-        ("windows", "x86_64") => Some("windows-x86_64"),
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
         _ => None,
     }
 }
@@ -60,20 +71,35 @@ pub fn target() -> Option<&'static str> {
 ///
 /// Decided by the target rather than by this build's own platform, because the
 /// unpacker recognises the format from the bytes anyway and a Windows archive has to
-/// be nameable on any machine that names one.
+/// be nameable on any machine that names one. `tar.gz` is what
+/// `dist-workspace.toml` sets `unix-archive` to, overriding dist's `tar.xz`.
 #[must_use]
-pub fn extension(target: &str) -> &'static str {
-    if target.starts_with("windows") {
+pub fn extension(triple: &str) -> &'static str {
+    if triple.contains("windows") {
         "zip"
     } else {
         "tar.gz"
     }
 }
 
-/// The archive's name in the release, as `release.yml` uploads it.
+/// One package's archive in the release.
+///
+/// The version is not in the name: cargo-dist names artifacts after the package and
+/// the target, and the tag they hang under is what says which version they are. Two
+/// releases therefore publish the same file names, which is what makes
+/// `releases/download/<tag>/<asset>` a stable address.
 #[must_use]
-pub fn archive_name(version: &str, target: &str) -> String {
-    format!("acpilot-{version}-{target}.{}", extension(target))
+pub fn asset_name(package: &str, triple: &str) -> String {
+    format!("{package}-{triple}.{}", extension(triple))
+}
+
+/// Every archive this platform's update fetches.
+#[must_use]
+pub fn assets(triple: &str) -> Vec<String> {
+    PACKAGES
+        .iter()
+        .map(|package| asset_name(package, triple))
+        .collect()
 }
 
 /// The version a tag names: `v0.2.0` is version `0.2.0`.
@@ -209,6 +235,93 @@ pub fn parse_checksum(text: &str) -> Result<String, String> {
     Ok(token.to_ascii_lowercase())
 }
 
+/// The key this build was given, or the reason it cannot check a signature.
+///
+/// The key is compiled in rather than read from the machine: a key file an attacker
+/// could write is a key an attacker could replace, and the whole point is deciding
+/// whether the bytes came from the release. A build without the variable has no way
+/// to answer that, so it refuses rather than trusting the checksum alone.
+fn release_key() -> Result<ed25519_dalek::VerifyingKey, String> {
+    // `option_env!` answers `Some("")` for a variable that exists and is empty, which
+    // is exactly what a workflow reads from a repository variable nobody filled in.
+    let Some(hex) = option_env!("ACPILOT_RELEASE_PUBKEY").filter(|hex| !hex.trim().is_empty())
+    else {
+        return Err(
+            "this build carries no release signing key, so it cannot tell a signed release from a \
+             tampered one; nothing was replaced. Build with ACPILOT_RELEASE_PUBKEY set to the \
+             release key's public half"
+                .to_owned(),
+        );
+    };
+    parse_public_key(hex)
+}
+
+/// A 32-byte ed25519 public key, written as 64 hex characters.
+///
+/// # Errors
+///
+/// The text is not 64 hex characters, or the points do not decode as a key (an
+/// all-zero or non-canonical key is refused by construction).
+pub fn parse_public_key(hex: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        return Err(format!(
+            "a release public key is 64 hex characters and this one is {}; \
+             the file publishes them in `docs/release-key.md`",
+            hex.len()
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    for (index, pair) in hex.as_bytes().chunks(2).enumerate() {
+        let pair = std::str::from_utf8(pair)
+            .map_err(|error| format!("the release public key is not hex: {error}"))?;
+        let byte = u8::from_str_radix(pair, 16)
+            .map_err(|error| format!("the release public key is not hex: {error}"))?;
+        bytes[index] = byte;
+    }
+    ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+        .map_err(|error| format!("the release public key is not an ed25519 key: {error}"))
+}
+
+/// Refuse a checksum file whose signature is not the release key's.
+///
+/// The signature is detached and covers the checksum file's bytes, so the pairing is:
+/// the signature says who wrote the digest, and the digest says which bytes were
+/// published. Verifying either alone proves nothing — a substituted archive comes
+/// with a matching digest, and a digest with no signature is a number in a text file.
+///
+/// # Errors
+///
+/// The signature is not 64 bytes, the key it names is not this build's, or the bytes
+/// it covers are not the checksum file's. Every one of them ends the update.
+pub fn verify_signature(checksum: &[u8], signature: &[u8]) -> Result<(), String> {
+    let key = release_key()?;
+    verify_with(&key, checksum, signature)
+}
+
+/// The same check against a key the caller has, which is what tests use.
+fn verify_with(
+    key: &ed25519_dalek::VerifyingKey,
+    checksum: &[u8],
+    signature: &[u8],
+) -> Result<(), String> {
+    use ed25519_dalek::Signature;
+
+    let signature: [u8; 64] = signature.try_into().map_err(|_| {
+        format!(
+            "the signature beside the checksum is {} bytes and an ed25519 signature is 64; \
+             nothing was replaced",
+            signature.len()
+        )
+    })?;
+    key.verify_strict(checksum, &Signature::from_bytes(&signature))
+        .map_err(|_| {
+            "the checksum file is not signed by the acpilot release key, so it did not come \
+             from a release; nothing was replaced"
+                .to_owned()
+        })
+}
+
 /// Refuse bytes that are not the ones the release published.
 ///
 /// # Errors
@@ -257,9 +370,6 @@ pub fn unpack(bytes: &[u8], directory: &Path) -> Result<Unpacked, String> {
     if names.is_empty() {
         return Err(format!("the archive holds none of {}", PROGRAMS.join(", ")));
     }
-    if !names.iter().any(|name| stem(name) == "acpilot") {
-        return Err("the archive has no `acpilot` to replace this program with".to_owned());
-    }
     Ok(Unpacked {
         programs: names.drain(..).map(|name| directory.join(name)).collect(),
     })
@@ -279,6 +389,25 @@ fn stem(name: &str) -> &str {
 fn wanted(name: &str) -> bool {
     let stem = stem(name);
     PROGRAMS.contains(&stem)
+}
+
+/// Refuse a set of unpacked archives with no `acpilot` among them.
+///
+/// Checked once over everything an update unpacked rather than per archive: a release
+/// ships one archive per program, so no single archive is supposed to hold the client.
+///
+/// # Errors
+///
+/// None of the unpacked files is the program this command replaces.
+pub fn require_client(programs: &[PathBuf]) -> Result<(), String> {
+    if programs
+        .iter()
+        .any(|path| path.file_stem().and_then(std::ffi::OsStr::to_str) == Some("acpilot"))
+    {
+        Ok(())
+    } else {
+        Err("the release holds no `acpilot` to replace this program with".to_owned())
+    }
 }
 
 /// Push a name onto the list, refusing a second copy of the same program.
@@ -362,26 +491,105 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        PROGRAMS, archive_name, asset_url, extension, latest_tag, parse_checksum, sha256, tag_of,
-        unpack, verify, version_of,
+        PACKAGES, PROGRAMS, asset_name, asset_url, assets, extension, latest_tag, parse_checksum,
+        parse_public_key, require_client, sha256, tag_of, unpack, verify, verify_with, version_of,
     };
 
     #[test]
-    fn a_platform_names_one_archive_and_the_release_ships_it() {
+    fn a_platform_names_the_archives_the_release_ships() {
         assert_eq!(
-            archive_name("0.2.0", "linux-x86_64"),
-            "acpilot-0.2.0-linux-x86_64.tar.gz"
+            asset_name("acpilot-cli", "x86_64-unknown-linux-gnu"),
+            "acpilot-cli-x86_64-unknown-linux-gnu.tar.gz"
         );
         assert_eq!(
-            archive_name("0.2.0", "macos-aarch64"),
-            "acpilot-0.2.0-macos-aarch64.tar.gz"
+            asset_name("acpilotd", "aarch64-apple-darwin"),
+            "acpilotd-aarch64-apple-darwin.tar.gz"
         );
         assert_eq!(
-            archive_name("0.2.0", "windows-x86_64"),
-            "acpilot-0.2.0-windows-x86_64.zip"
+            asset_name("acpilot-gui", "x86_64-pc-windows-msvc"),
+            "acpilot-gui-x86_64-pc-windows-msvc.zip"
         );
-        assert_eq!(extension("windows-x86_64"), "zip");
-        assert_eq!(extension("linux-aarch64"), "tar.gz");
+        assert_eq!(extension("x86_64-pc-windows-msvc"), "zip");
+        assert_eq!(extension("aarch64-unknown-linux-gnu"), "tar.gz");
+        let assets = assets("x86_64-unknown-linux-gnu");
+        assert_eq!(assets.len(), PACKAGES.len(), "one archive per program");
+        assert!(
+            assets
+                .iter()
+                .all(|asset| asset.contains("x86_64-unknown-linux-gnu"))
+                && assets.iter().any(|asset| asset.starts_with("acpilot-cli-")),
+            "each archive names its package and this target: {assets:?}"
+        );
+    }
+
+    /// A key pair with a constant seed, so a test signature is reproducible.
+    fn test_key(seed: u8) -> (ed25519_dalek::SigningKey, ed25519_dalek::VerifyingKey) {
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let verifying = signing.verifying_key();
+        (signing, verifying)
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        for byte in bytes {
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
+    }
+
+    #[test]
+    fn a_checksum_file_is_only_trusted_when_the_release_key_signed_it() {
+        use ed25519_dalek::Signer;
+
+        let (signing, verifying) = test_key(7);
+        let checksum = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  acpilot-cli-x86_64-unknown-linux-gnu.tar.gz\n";
+        let signature = signing.sign(checksum).to_bytes();
+        verify_with(&verifying, checksum, &signature).expect("the release key signed this file");
+
+        // The digest is replaced and the signature is the one that covered the old
+        // one: this is the attack a checksum alone cannot see.
+        let substituted = b"1111111111111111111111111111111111111111111111111111111111111111  acpilot-cli-x86_64-unknown-linux-gnu.tar.gz\n";
+        let refused = verify_with(&verifying, substituted, &signature)
+            .expect_err("a substituted checksum carries no signature for its bytes");
+        assert!(
+            refused.contains("not signed by the acpilot release key"),
+            "{refused}"
+        );
+        assert!(refused.contains("nothing was replaced"), "{refused}");
+
+        // The same signature against a different key is not this key's signature.
+        let (_, other) = test_key(9);
+        assert!(
+            verify_with(&other, checksum, &signature).is_err(),
+            "a signature only verifies under the key that made it"
+        );
+
+        // A truncated file is a sentence about its length, not a panic.
+        let refused = verify_with(&verifying, checksum, &signature[..10])
+            .expect_err("ten bytes are not a signature");
+        assert!(refused.contains("is 64"), "{refused}");
+    }
+
+    #[test]
+    fn a_public_key_is_64_hex_characters() {
+        let (_, verifying) = test_key(7);
+        let published = hex(verifying.as_bytes());
+        assert_eq!(published.len(), 64);
+        assert_eq!(
+            parse_public_key(&published).expect("the key parses"),
+            verifying
+        );
+        assert!(
+            parse_public_key(&published.to_uppercase()).is_ok(),
+            "upper-case hex is the same key"
+        );
+        assert!(parse_public_key("abc").is_err(), "too short");
+        assert!(
+            parse_public_key(&"z".repeat(64)).is_err(),
+            "hex has sixteen digits, not thirty-six"
+        );
     }
 
     #[test]
@@ -395,11 +603,11 @@ mod tests {
 
     #[test]
     fn an_asset_lives_in_the_release_download() {
-        let url = asset_url("v0.2.0", "acpilot-0.2.0-linux-x86_64.tar.gz")
+        let url = asset_url("v0.2.0", "acpilot-cli-x86_64-unknown-linux-gnu.tar.gz")
             .expect("the workspace names a GitHub repository");
         assert_eq!(
             url,
-            "https://github.com/skamansam/acpilot/releases/download/v0.2.0/acpilot-0.2.0-linux-x86_64.tar.gz"
+            "https://github.com/skamansam/acpilot/releases/download/v0.2.0/acpilot-cli-x86_64-unknown-linux-gnu.tar.gz"
         );
     }
 
@@ -584,13 +792,24 @@ mod tests {
     #[test]
     fn an_archive_without_the_program_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let prose = tarball(&[("acpilot-0.2.0-linux-x86_64/README.md", b"prose")]);
+        let prose = tarball(&[("acpilot-cli-x86_64-unknown-linux-gnu/README.md", b"prose")]);
         let refused = unpack(&prose, directory.path()).expect_err("nothing to install");
         assert!(refused.contains("holds none of"), "{refused}");
+    }
 
-        let no_client = tarball(&[("acpilot-0.2.0-linux-x86_64/acpilotd", b"daemon")]);
-        let refused = unpack(&no_client, directory.path()).expect_err("no acpilot");
+    #[test]
+    fn a_release_without_the_client_is_refused_after_every_archive_is_unpacked() {
+        // One archive per program means no single archive holds the client, so the
+        // check is over the union: a daemon archive on its own unpacks fine.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let daemon = tarball(&[("acpilotd-x86_64-unknown-linux-gnu/acpilotd", b"daemon")]);
+        let unpacked = unpack(&daemon, directory.path()).expect("a daemon archive unpacks");
+        let refused = require_client(&unpacked.programs).expect_err("no acpilot in it");
         assert!(refused.contains("no `acpilot`"), "{refused}");
+
+        let client = tarball(&[("acpilot-cli-x86_64-unknown-linux-gnu/acpilot", b"client")]);
+        let unpacked = unpack(&client, directory.path()).expect("a client archive unpacks");
+        require_client(&unpacked.programs).expect("the union holds acpilot");
     }
 
     #[test]
@@ -602,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn every_program_comes_from_one_archive() {
+    fn the_running_program_is_replaced_last() {
         assert_eq!(PROGRAMS.len(), 3);
         assert_eq!(
             PROGRAMS[2], "acpilot",

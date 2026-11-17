@@ -64,6 +64,7 @@ dependencies = [
  "acpilot-tui",
  "acpilotd",
  "clap",
+ "ed25519-dalek",
  "flate2",
  "futures",
  "insta",

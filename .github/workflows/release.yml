@@ -13,6 +13,12 @@ name: release
 # commit instead (`commits/<sha>/pulls`), which works for merge commits and
 # squash merges alike and needs no second trigger. Once main only takes PRs the
 # two events describe the same change.
+#
+# The artifacts are cargo-dist's (ADR 0011). `cargo xtask dist` is the only thing
+# that packages anything: `--artifacts local` on the runner for each target, and
+# `--artifacts global` once for the installers, the formula and the SBOMs. Editing
+# an archive after dist made it would invalidate the checksum baked into the
+# installer built from it, so nothing here touches one.
 on:
   push:
     branches: [main]
@@ -73,8 +79,8 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-  build:
-    name: build ${{ matrix.target }}
+  archives:
+    name: archives ${{ matrix.triple }}
     needs: version
     if: needs.version.outputs.publish == 'true'
     strategy:
@@ -82,20 +88,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: linux-x86_64
-            archive: tar.gz
+            triple: x86_64-unknown-linux-gnu
           # `macos-latest`, not `macos-14`: the pinned label asks this account for the
           # `macos-14-arm64-us-default` configuration, which it does not have, so the job
           # is cancelled before a runner is assigned
           # (`The configuration 'macos-14-arm64-us-default' is not supported`). The
           # floating label resolves to `macos-26-arm64`, which is the architecture named
-          # in `target` and the label CI has been running on.
+          # in `triple` and the label CI has been running on.
           - os: macos-latest
-            target: macos-aarch64
-            archive: tar.gz
+            triple: aarch64-apple-darwin
           - os: windows-latest
-            target: windows-x86_64
-            archive: zip
+            triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -146,66 +149,99 @@ jobs:
           cargo build --release --locked -p acpilotd-helper --target x86_64-unknown-linux-musl
           echo "ACPILOT_HELPER_BIN=$GITHUB_WORKSPACE/target/x86_64-unknown-linux-musl/release/acpilotd-helper" >> "$GITHUB_ENV"
 
-      # `acpilot` is the CLI and the TUI; `acpilotd` is the daemon; `acpilot-gui`
-      # is the desktop app, built with its feature on because off is the default
-      # (a `cargo test --workspace` should not compile a graphics stack). All
-      # three ship in one tarball per platform, so the desktop app is a launch
-      # away from the daemon it talks to rather than a second download.
-      - name: Build
-        env:
-          # Compiled in by `acpilot_core::VERSION`, so the binaries report the tag
-          # they are published as rather than the number in `Cargo.toml`.
-          ACPILOT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
-        run: cargo build --release --locked -p acpilot-cli -p acpilotd -p acpilot-gui --features acpilot-gui/gui
-
-      - name: Package (unix)
-        if: matrix.archive == 'tar.gz'
+      # The version is pinned in `dist-workspace.toml` and read back here, so a
+      # release and a local `cargo xtask dist` are the same tool's output. The task
+      # refuses a dist other than the pinned one, and prints this command when it is
+      # missing.
+      - name: The pinned cargo-dist and the SBOM tool
         shell: bash
         run: |
           set -euo pipefail
-          stage="acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
-          mkdir -p "$stage"
-          cp target/release/acpilot target/release/acpilotd target/release/acpilot-gui "$stage/"
-          cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
-          # The marker ADR 0010 reads: an archive is a copy nobody's package manager
-          # owns, so `acpilot update --from` may replace it. It says `tarball` rather than
-          # `script` because the same bytes are what the installer downloads — the
-          # install method is the *consumer's* fact, and this is the archive's.
-          cat > "$stage/install.json" <<JSON
-          { "method": "tarball", "version": "${{ needs.version.outputs.version }}" }
-          JSON
-          tar -czf "$stage.tar.gz" "$stage"
-          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+          pinned=$(sed -n 's/^cargo-dist-version = "\(.*\)"/\1/p' dist-workspace.toml)
+          test -n "$pinned" || { echo "dist-workspace.toml pins no cargo-dist version"; exit 1; }
+          command -v dist >/dev/null || cargo install cargo-dist --version "$pinned" --locked
+          dist --version
 
-      - name: Package (windows)
-        if: matrix.archive == 'zip'
-        shell: pwsh
+      # A binary published without the key cannot verify a release, so it refuses to
+      # update itself. That is the right failure, and it is the wrong release: fail
+      # here, where the message says which variable is missing.
+      - name: The key this build would verify with
+        shell: bash
+        env:
+          ACPILOT_RELEASE_PUBKEY: ${{ vars.ACPILOT_RELEASE_PUBKEY }}
         run: |
-          $stage = "acpilot-${{ needs.version.outputs.version }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item target/release/acpilot.exe, target/release/acpilotd.exe, target/release/acpilot-gui.exe $stage
-          Copy-Item README.md $stage
-          # The marker ADR 0010 reads. Written without a byte-order mark, which is what
-          # `-Encoding utf8` does only on PowerShell 7 and what a JSON parser refuses.
-          $marker = @{ method = 'tarball'; version = '${{ needs.version.outputs.version }}' } | ConvertTo-Json
-          [System.IO.File]::WriteAllText("$stage/install.json", $marker)
-          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
-          $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $stage.zip" | Out-File "$stage.zip.sha256" -Encoding ascii
+          set -euo pipefail
+          if [ -z "${ACPILOT_RELEASE_PUBKEY:-}" ]; then
+            echo "ACPILOT_RELEASE_PUBKEY is not set, so this build could not verify a" >&2
+            echo "release signature. Set the repository variable; docs/release-key.md" >&2
+            echo "has the key generation and the rotation window." >&2
+            exit 1
+          fi
+          echo "${#ACPILOT_RELEASE_PUBKEY} characters of public key"
+
+      - name: Build this target's archives
+        shell: bash
+        env:
+          # Compiled in by `acpilot_core::VERSION`, so the binaries report the tag they
+          # are published as rather than the number in `Cargo.toml`.
+          ACPILOT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          # The key `acpilot update` verifies a release signature against. Without it
+          # the binary refuses to replace itself, which is why the repository variable
+          # is required rather than optional.
+          ACPILOT_RELEASE_PUBKEY: ${{ vars.ACPILOT_RELEASE_PUBKEY }}
+        run: cargo xtask dist --artifacts local --target "${{ matrix.triple }}"
+
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.triple }}
           path: |
-            acpilot-*.tar.gz
-            acpilot-*.tar.gz.sha256
-            acpilot-*.zip
-            acpilot-*.zip.sha256
+            target/distrib/*.tar.gz
+            target/distrib/*.tar.gz.sha256
+            target/distrib/*.zip
+            target/distrib/*.zip.sha256
+          if-no-files-found: error
+
+  installers:
+    name: installers
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The pinned cargo-dist and the SBOM tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^cargo-dist-version = "\(.*\)"/\1/p' dist-workspace.toml)
+          test -n "$pinned" || { echo "dist-workspace.toml pins no cargo-dist version"; exit 1; }
+          command -v dist >/dev/null || cargo install cargo-dist --version "$pinned" --locked
+          command -v cargo-cyclonedx >/dev/null || cargo install cargo-cyclonedx --locked
+
+      # Global artifacts are made once for the release, not once per target: the shell
+      # and PowerShell installers, the Homebrew formula (with the marker ADR 0010
+      # reads), the SBOM per program and the combined checksum file.
+      - name: Build the installers, formula and SBOMs
+        shell: bash
+        run: cargo xtask dist --artifacts global
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: global
+          path: |
+            target/distrib/*.sh
+            target/distrib/*.ps1
+            target/distrib/*.rb
+            target/distrib/*.cdx.xml
+            target/distrib/source.tar.gz
+            target/distrib/source.tar.gz.sha256
+            target/distrib/sha256.sum
           if-no-files-found: error
 
   publish:
     name: publish
-    needs: [version, build]
+    needs: [version, archives, installers]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Publishing a release needs `contents: write`, which the workflow already
@@ -230,6 +266,34 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The signature is what makes the checksum mean something. Both files travel
+      # over the same connection, so an attacker who can replace the archive can
+      # replace its `.sha256`; only a signature by a key that never leaves this
+      # repository's secrets distinguishes a release from a substitution. Signing
+      # happens here rather than next to each build because it is one key and one
+      # step, and a failure is a release that does not happen.
+      - name: Sign every archive's checksum
+        env:
+          ACPILOT_SIGNING_KEY: ${{ secrets.ACPILOT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ACPILOT_SIGNING_KEY:-}" ]; then
+            echo "ACPILOT_SIGNING_KEY is not set, so this release has no signature." >&2
+            echo "Generate the key as docs/release-key.md describes and add the private" >&2
+            echo "half as a repository secret; publishing unsigned is not an option." >&2
+            exit 1
+          fi
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$ACPILOT_SIGNING_KEY" > "$key"
+          signed=0
+          for checksum in dist/*.sha256; do
+            openssl pkeyutl -sign -rawin -inkey "$key" -in "$checksum" -out "$checksum.sig"
+            signed=$((signed + 1))
+          done
+          test "$signed" -gt 0 || { echo "no checksum files were downloaded"; exit 1; }
+          echo "signed $signed checksums"
+
       - name: Release notes
         run: |
           set -euo pipefail
@@ -250,6 +314,9 @@ jobs:
           } > notes.md
           cat notes.md
 
+      # One archive per program, named after the package and the target; the tag says
+      # which version. Every `.sha256` has a `.sig` beside it, and `acpilot update`
+      # reads the signature before it reads the digest.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -258,7 +325,7 @@ jobs:
             --target "${{ github.sha }}" \
             --title "Acpilot ${{ needs.version.outputs.version }}" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/*.zip dist/*.sha256
+            dist/*
 
       # Nothing is committed back. The download page reads the releases API at
       # build time, so main stays a tree only pull requests change — a bot commit

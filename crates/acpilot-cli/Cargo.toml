@@ -49,6 +49,9 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 zip = { workspace = true }
 sha2 = { workspace = true }
+# The signature beside each published checksum: an encrypted hash only says the bytes
+# match what was published, and the signature is what says the release published it.
+ed25519-dalek = { workspace = true }
 # `acpilot recipes run` prints the run's frames as they arrive, and polling a
 # `BoxStream` needs `StreamExt`; the workspace already pins futures for the
 # daemon's SSE, so this declares the half the CLI calls rather than a new crate.

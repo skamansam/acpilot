@@ -529,8 +529,8 @@ mapping lives at the top of the script as data, so a new label is a line.
 A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and Windows
 x86_64. It publishes a GitHub release with checksums and rebuilds the docs site. The
 download page reads the releases API at build time, so nothing is committed back and
-`main` stays a tree only pull requests change. The `gui` feature ships in the same
-tarball as the CLI and the daemon, built with `--features acpilot-gui/gui`. The Linux
+`main` stays a tree only pull requests change. Each program ships in its own archive,
+the desktop app built with `--features acpilot-gui/gui`. The Linux
 runner installs the graphics stack it links against, and the Windows and macOS runners
 use their own system frameworks.
 
@@ -542,10 +542,12 @@ other than the one the config pins, so a local build and a released one are the 
 tool's output. It needs two things on `PATH`: `cargo-dist` at that pinned version and
 `cargo-cyclonedx`. It prints the install command for whichever is missing.
 
-The workflow above and `dist` do not package the same shape yet. The workflow puts all
-three programs in one tarball per platform. `cargo-dist` archives one package at a time,
-installed side by side in the same bin directory. Choosing one is P12-2's, and the
-first release is the deadline.
+The workflow and `dist` package one shape, and it is dist's: the workflow runs
+`cargo xtask dist --artifacts local` on a runner per target and `--artifacts global`
+once for the installers, the formula and the SBOMs. A release is therefore one archive
+per program, named after the package and the target, installed side by side in the same
+bin directory, with a signature over every published checksum (ADR 0011). Nothing in
+the workflow edits an archive after dist made it.
 
 ## Decisions
 

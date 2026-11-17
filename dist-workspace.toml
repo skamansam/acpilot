@@ -22,8 +22,21 @@ members = ["cargo:."]
 [dist]
 cargo-dist-version = "0.32.0"
 ci = "github"
+# `tar.gz` rather than dist's `tar.xz` default: `acpilot update` unpacks an archive by
+# its magic bytes and already reads gzip and zip, so the default format would buy a
+# second decoder and nothing else. Windows keeps dist's `zip`, which is the format a
+# Windows user's own tools open.
+unix-archive = ".tar.gz"
+# The marker ADR 0010 reads, packed into every archive as dist makes it. It has no
+# version: the file is one file for every release, the tag is the version, and
+# `acpilot update` writes the version it installed into the marker it finds. Editing
+# an archive after dist built it is not an option — the installers carry the checksum
+# of the archive they were generated from, which is why this is included rather than
+# added later.
+include = ["install.json"]
 # `release.yml` is not generated, so `dist generate --check` would call it stale
-# forever. The CI is ours; the artifacts are dist's.
+# forever. The CI is ours; the artifacts are dist's: the workflow runs
+# `cargo xtask dist`, which drives this file, rather than packaging anything by hand.
 allow-dirty = ["ci"]
 
 # Everything is a library or a fixture unless it says otherwise, and the three

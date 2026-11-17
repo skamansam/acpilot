@@ -87,23 +87,31 @@ installed by tarball, 0.2.5
 this copy is yours to replace, because tarball is not a package manager:
   acpilot update
   acpilot update --from <a new acpilot binary>, for a machine that cannot download
-downloading https://github.com/skamansam/acpilot/releases/download/v0.2.6/acpilot-0.2.6-linux-x86_64.tar.gz
+downloading https://github.com/skamansam/acpilot/releases/download/v0.2.6/acpilotd-x86_64-unknown-linux-gnu.tar.gz
+downloading https://github.com/skamansam/acpilot/releases/download/v0.2.6/acpilot-gui-x86_64-unknown-linux-gnu.tar.gz
+downloading https://github.com/skamansam/acpilot/releases/download/v0.2.6/acpilot-cli-x86_64-unknown-linux-gnu.tar.gz
 installed acpilot 0.2.6 from v0.2.6: replaced acpilotd, acpilot at /usr/local/bin/acpilot
 a daemon that is already running keeps the older binary until it is restarted
 ```
 
-That is four steps, and each one can stop the update:
+That is five steps, and each one can stop the update:
 
-1. **The asset for this platform** is named from the release (`linux-x86_64`,
-   `macos-aarch64`, `windows-x86_64`, …). A platform the release does not package
-   says so instead of downloading a 404 page.
-2. **The bytes are checked** against the `.sha256` the release published beside
-   the archive. A digest that differs ends the update and nothing is written.
-   There is no `curl | sh` and no unsigned artifact here.
-3. **The archive is unpacked** into a temporary directory, and only the program
+1. **The assets for this platform** are named from the release. A release is one
+   archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — named after the
+   package and the target triple, with the version in the tag rather than in the
+   file name. A platform the release does not build says so instead of fetching a
+   404 page.
+2. **The signature is checked before the digest.** Every archive publishes
+   `<asset>.sha256` and `<asset>.sha256.sig`: a detached ed25519 signature over the
+   checksum file's bytes, made by the release key. A checksum with no valid
+   signature ends the update, because the digest on its own proves the download
+   arrived intact and says nothing about who published it.
+3. **The bytes are checked** against that signed digest. A digest that differs ends
+   the update and nothing is written. There is no `curl | sh` here.
+4. **The archives are unpacked** into a temporary directory, and only the program
    names are read from it — never an entry's path, so an archive that contains
    `../../etc/passwd` has nothing this command wants.
-4. **The programs are replaced** one at a time, each written beside its
+5. **The programs are replaced** one at a time, each written beside its
    destination, made executable, and renamed over it. A failure halfway therefore
    leaves whole programs, not a half-written one. `acpilotd` and `acpilot-gui` are
    replaced only where they already exist: an update does not change which
@@ -112,6 +120,12 @@ That is four steps, and each one can stop the update:
 
 The marker is then rewritten with the version that is now on disk, keeping the
 method. The bytes changed; the way they arrived did not.
+
+The release public key is compiled in from `ACPILOT_RELEASE_PUBKEY`. A binary built
+without it cannot tell a release from a substitution, so it refuses to replace itself
+rather than falling back to the digest alone; the release workflow signs every
+checksum with `ACPILOT_SIGNING_KEY` and fails when that secret is missing. The
+repository's `docs/release-key.md` covers generating and rotating the pair.
 
 | Flag | What it does |
 | --- | --- |
@@ -128,9 +142,10 @@ says it may be replaced, or a download or write failed), `2` for a bad invocatio
 - **It does not restart a daemon.** A running `acpilotd` keeps the binary it
   started from until it is restarted; the command says so rather than killing a
   daemon that may be mid-turn.
-- **It does not verify a signature**, only the published sha256. Both travel over
-  the same TLS connection, so the checksum catches a truncated or substituted
-  download, not a compromised release.
+- **It does not check a signature for `--from`.** A downloaded release is verified:
+signature first, then the digest it covers. A binary carried to an air-gapped
+machine is the trust decision of the person carrying it, and there is no release
+to check.
 - **It does not update a copy with no marker.** Move the binary out of its
   installation and it becomes `unknown`, which is treated as not yours to replace.
   Reinstall with an installer, or write the marker yourself:

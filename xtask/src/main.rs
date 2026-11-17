@@ -153,6 +153,15 @@ enum Task {
         /// Target triples to build for; the host's own target when none are given.
         #[arg(long, value_name = "TRIPLE")]
         target: Vec<String>,
+        /// Which half of the release to build.
+        ///
+        /// `local` is the archives for the named targets, which is what a runner can
+        /// build for itself; `global` is the installers, the formula and the SBOMs,
+        /// which are made once for the whole release. The release workflow runs the
+        /// two halves on different machines, and running both on each of them would
+        /// upload the same installer three times.
+        #[arg(long, value_enum, default_value_t = DistArtifacts::All)]
+        artifacts: DistArtifacts,
     },
 }
 
@@ -214,7 +223,7 @@ fn main() -> ExitCode {
         Task::Schema => run_schema(),
         Task::Dev => run_dev(),
         Task::WebBuild => run_web_build(),
-        Task::Dist { target } => run_dist(&target),
+        Task::Dist { target, artifacts } => run_dist(&target, artifacts),
     }
 }
 
@@ -962,6 +971,29 @@ fn embedded_page_drift() -> Option<bool> {
     Some(String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
+/// Which half of a release [`run_dist`] builds.
+///
+/// The split is cargo-dist's own: archives (and the MSI/NSIS installers it makes per
+/// target) are `local`, made by a machine that can build for that target; the shell
+/// and PowerShell scripts, the Homebrew formula and the per-program SBOMs are
+/// `global`, made once. `all` is a developer's run, which wants everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DistArtifacts {
+    Local,
+    Global,
+    All,
+}
+
+impl DistArtifacts {
+    fn builds_local(self) -> bool {
+        matches!(self, Self::Local | Self::All)
+    }
+
+    fn builds_global(self) -> bool {
+        matches!(self, Self::Global | Self::All)
+    }
+}
+
 /// Build the artifacts a release uploads, with cargo-dist.
 ///
 /// Two prerequisites are checked rather than assumed, because both fail in a way
@@ -974,7 +1006,7 @@ fn embedded_page_drift() -> Option<bool> {
 /// installer scripts and manifests are the output of a specific dist, and "the
 /// release built on the runner" and "the release built here" have to be the same
 /// thing for `xtask dist` to mean anything.
-fn run_dist(targets: &[String]) -> ExitCode {
+fn run_dist(targets: &[String], artifacts: DistArtifacts) -> ExitCode {
     let Some(pinned) = configured_dist_version() else {
         eprintln!(
             "==> dist: dist-workspace.toml has no `cargo-dist-version`; the version is \
@@ -1017,27 +1049,34 @@ fn run_dist(targets: &[String]) -> ExitCode {
     // it, while the installer scripts, the formula and the checksum file are made
     // once per program. `host` mode alone builds only the installers for *this*
     // machine's OS, which would leave the PowerShell script out of a run on Linux.
-    let mut local = Command::new("dist");
-    local.arg("build");
-    for target in targets {
-        local.args(["--target", target]);
-    }
-    if !run_step("build (dist, archives)", local) {
-        return ExitCode::FAILURE;
-    }
-
-    let mut global = Command::new("dist");
-    global.args(["build", "--artifacts=global"]);
-    if !run_step("build (dist, installers)", global) {
-        return ExitCode::FAILURE;
-    }
-
-    if !build_sboms() {
-        return ExitCode::FAILURE;
+    if artifacts.builds_local() {
+        let mut local = Command::new("dist");
+        // `--artifacts=local` is not implied by `--target`: without it dist also
+        // writes the global installers and the formula, and a release that built
+        // those on three runners would upload three files with one name.
+        local.args(["build", "--artifacts=local"]);
+        for target in targets {
+            local.args(["--target", target]);
+        }
+        if !run_step("build (dist, archives)", local) {
+            return ExitCode::FAILURE;
+        }
     }
 
-    if !mark_homebrew_formulas() {
-        return ExitCode::FAILURE;
+    if artifacts.builds_global() {
+        let mut global = Command::new("dist");
+        global.args(["build", "--artifacts=global"]);
+        if !run_step("build (dist, installers)", global) {
+            return ExitCode::FAILURE;
+        }
+
+        if !build_sboms() {
+            return ExitCode::FAILURE;
+        }
+
+        if !mark_homebrew_formulas() {
+            return ExitCode::FAILURE;
+        }
     }
 
     report_dist_artifacts();

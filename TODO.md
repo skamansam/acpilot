@@ -2434,7 +2434,8 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
 
 - **Progress 2026-11-17:** a release archive now carries `install.json` beside the
   binaries (`{"method":"tarball","version":"<tag>"}`, written by both package steps in
-  `release.yml`), which is what makes ADR 0010's table real rather than tested: an
+  the then-hand-written `release.yml` — the shape ADR 0011 replaced, below), which is
+  what makes ADR 0010's table real rather than tested: an
   unpacked archive is a copy nobody's package manager owns, so `acpilot update --from`
   may replace it. `acpilot update` reads that marker through `acpilot_host::install` and
   answers by owner — a package-managed copy prints its own upgrade command (`sudo apt
@@ -2457,19 +2458,38 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
     `acpilotd`, `acpilot-gui` (where present) and then `acpilot`, recording the new
     version in the marker while keeping its method. `--from` still exists for an
     air-gapped machine, `--version` names a release, `--check` is the report alone.
-  - **Open:** no signature, only the published sha256 — both over the same TLS
-    connection, so the checksum catches a truncated or substituted download and not a
-    compromised release. A running daemon keeps the old binary until restarted; the
-    command says so rather than killing one that may be mid-turn. The download path has
-    not run against a release that contains this code: `v0.2.6` predates it, so the
-    first end-to-end update is the release after this one. `release.yml` still packages
-    by hand and so does not produce the formula at all; the marker lands when the
-    workflow moves onto `xtask dist` (P12-1's noted shape decision).
+  - **Closed later still on 2026-11-17 (ADR 0011):** the two gaps above. A release is
+    now cargo-dist's artifacts, and `release.yml` packages nothing: `cargo xtask dist
+    --artifacts local` runs on a runner per target and `--artifacts global` once for the
+    installers, the marked formula and the SBOMs. That fixes the shape — one archive per
+    program, `acpilot-cli-<triple>.tar.gz` (`zip` on Windows), the version in the tag —
+    so `release.rs` fetches three archives, unpacks each and installs the union. The
+    marker is a static `install.json` that dist *includes* in every archive: editing an
+    archive afterwards would invalidate the checksum baked into the installer built from
+    it. Its `tarball` has no version because one file serves every release.
+    A checksum is not a signature, so each `<asset>.sha256` now publishes a
+    `<asset>.sha256.sig`: a detached ed25519 signature that `update` checks *before* it
+    parses the digest, against the public half compiled in from
+    `ACPILOT_RELEASE_PUBKEY`. A build without that variable refuses to replace itself,
+    and `release.yml` fails rather than publishing unsigned when
+    `ACPILOT_SIGNING_KEY` is unset; `docs/release-key.md` has generation and rotation.
+    Verified here: `cargo xtask dist` produced the three archives with `install.json`
+    inside, and a signed local release served over HTTP was installed by a real
+    `acpilot update` (signature verified, digest verified, `acpilotd` and `acpilot`
+    replaced, marker rewritten), while a tampered checksum was refused.
+  - **Open:** a running daemon keeps the old binary until restarted; the command says so
+    rather than killing one that may be mid-turn. The download path has still not met a
+    real GitHub release that contains this code: `v0.2.6` predates it, so the first
+    end-to-end update is the release after this one. The Homebrew tap
+    (`skamansam/homebrew-tap`) does not exist, so the formula is generated, marked and
+    uploaded as an asset but never pushed; `brew install` has nothing to install from
+    yet. `acpilot update` maps a musl machine to the `gnu` archive; a musl host is an
+    installer's copy and updates through the installer.
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
   - Wired: `dist-workspace.toml` pins cargo-dist 0.32.0 and declares those seven targets, the three installers, a sha256 checksum per archive and `cargo-cyclonedx`; `cargo xtask dist` builds the set for one machine and refuses a `dist` of another version, because the artifacts are that version's output.
     - Verified on linux x86_64 (2026-10-29): three archives with `.sha256` beside each, `sha256.sum`, the shell and PowerShell installers and the formula for every program, the source tarball, and three SBOMs — all in `target/distrib/`.
   - Left: the tap repository (`skamansam/homebrew-tap`) and its `HOMEBREW_TAP_TOKEN` do not exist yet, so the formula is generated and not pushed.
-  - Left, and a decision rather than a chore: cargo-dist archives one *package* per platform, so a release is `acpilot`, `acpilotd` and `acpilot-gui` as three archives that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` still packages one tarball holding all three. Picking one shape belongs with P12-2's workflow work; until then `xtask dist` produces the cargo-dist shape and the workflow produces the other.
+  - **Decided 2026-11-17 (ADR 0011):** cargo-dist's shape wins. A release is one archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` now runs `cargo xtask dist --artifacts local` per target and `--artifacts global` once, so there is no second shape and nothing is packaged by hand.
   - Note: `cargo-dist` declares the `.cdx.xml` per program and generates it only in the CI job it writes, so `xtask dist` runs `cargo cyclonedx` itself and keeps the three declared SBOMs (`Cargo.toml`'s `[profile.dist]` is what `dist build` asks for).
 - **Progress 2026-11-04:** a version difference can now say how to fix it. ADR 0010 decides
   install provenance: every installation except a bare binary drop ships `install.json`

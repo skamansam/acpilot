@@ -58,7 +58,7 @@ carries `install`: the method that put it there and the version it recorded.
 version mismatch: a package manager owns its files, the other methods are the
 program's own. A client does not have to guess and does not get a second opinion
 from the filesystem; it reads the same table `acpilot update` acts on, which is
-documented under [Updating](/flight-deck/update/). The field is absent when no
+documented under [Updating](/acpilot/flight-deck/update/). The field is absent when no
 marker was found, and absent is treated as nobody's to replace — never as
 permission.
 

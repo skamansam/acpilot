@@ -1063,6 +1063,10 @@ const BREW_MARKED: &str = "\\\"method\\\":\\\"brew\\\"";
 
 /// Write the marker into every formula dist generated, in each `def install` block.
 ///
+/// The aliases dist writes (`bin.install_symlink`) are skipped: a symlink is not the
+/// copy that answers `current_exe`, and a formula whose only install line was an
+/// alias would otherwise get a marker in a keg that holds no binary of ours.
+///
 /// One per platform block rather than once per file: the formula has a separate
 /// `install` for each `on_macos`/`on_linux` branch, and whichever branch runs is the
 /// one whose binary answers `current_exe`. A formula with no `bin.install` line is a
@@ -1121,7 +1125,7 @@ fn mark_homebrew_formulas() -> bool {
     true
 }
 
-/// Insert the marker after every `bin.install` line of one formula.
+/// Insert the marker after every `bin.install` line of one formula, and only those.
 ///
 /// Indentation is copied from the line it follows, because the generated formula
 /// indents by platform nesting and a marker at the wrong depth is a syntax error in
@@ -1137,7 +1141,7 @@ fn with_brew_marker(formula: &str) -> Result<String, String> {
         marked.push_str(line);
         marked.push('\n');
         let trimmed = line.trim_start();
-        if trimmed.starts_with("bin.install") {
+        if installs_a_file(trimmed) {
             marked.push_str(&line[..line.len() - trimmed.len()]);
             marked.push_str(BREW_MARKER);
             marked.push('\n');
@@ -1151,6 +1155,16 @@ fn with_brew_marker(formula: &str) -> Result<String, String> {
         );
     }
     Ok(marked)
+}
+
+/// Whether a formula line installs a file, rather than a symlink to one.
+///
+/// `bin.install_symlink` shares the prefix, and dist writes it for every alias a
+/// package declares, so the two are one character apart in a file nobody reads
+/// closely.
+fn installs_a_file(line: &str) -> bool {
+    line.strip_prefix("bin.install")
+        .is_some_and(|rest| !rest.starts_with('_'))
 }
 
 /// Generate the SBOMs the config asks for, and put them where dist declares them.
@@ -1971,6 +1985,25 @@ end
             marked,
             "marking twice is not two markers"
         );
+    }
+
+    #[test]
+    fn an_alias_beside_the_binary_is_not_marked() {
+        let formula = "class AcpilotCli < Formula\n  def install_binary_aliases!\n    dests.each do |dest|\n      bin.install_symlink bin/source.to_s => dest\n    end\n  end\n\n  def install\n    bin.install \"acpilot\"\n  end\nend\n";
+        let marked = with_brew_marker(formula).expect("the real install is markable");
+        assert_eq!(
+            marked.matches(BREW_MARKED).count(),
+            1,
+            "one marker, for the file and not for the alias: {marked}"
+        );
+    }
+
+    #[test]
+    fn a_formula_that_only_makes_aliases_is_a_failure() {
+        let formula = "class AcpilotCli < Formula\n  def install_binary_aliases!\n    bin.install_symlink bin/source.to_s => \"acpilot-cli\"\n  end\nend\n";
+        let refused =
+            with_brew_marker(formula).expect_err("a symlink is not a copy of ours to mark");
+        assert!(refused.contains("bin.install"), "{refused}");
     }
 
     #[test]

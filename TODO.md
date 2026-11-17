@@ -2445,6 +2445,11 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
     inserts `(bin/"install.json").write("{\"method\":\"brew\",\"version\":\"#{version}\"}")`
     after every `bin.install` in each generated formula, and a formula with no install
     line fails the build rather than shipping a Cellar copy that claims to be a tarball.
+    A real `cargo xtask dist` run then found half of that match wrong: dist writes
+    `bin.install_symlink` for the aliases each formula declares, the shared prefix put a
+    marker inside the alias loop, and a formula installing only a symlink would have been
+    marked `brew` while holding no binary of ours. `installs_a_file` refuses the `_`
+    suffix, and both cases are tests.
     `acpilot update` also fetches now: `crates/acpilot-cli/src/release.rs` names the asset
     for this platform (`acpilot-<version>-<target>.tar.gz|zip`), downloads it and the
     `.sha256` beside it, compares digests, unpacks by the bytes' magic (tar.gz or zip,

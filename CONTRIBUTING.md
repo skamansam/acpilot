@@ -553,8 +553,19 @@ A formula nobody can install is caught before anything is published. The `homebr
 installs `acpilot-cli.rb` with Homebrew on a macOS runner and fails the release unless
 `acpilot update --check` reports `installed by brew` and a plain `acpilot update`
 refuses to write into the keg (ADR 0010), so the marker the formula writes is checked
-where Homebrew links it. The formula's downloads come from that runner, because dist
-names the release after `Cargo.toml`'s version rather than the tag the workflow picks.
+where Homebrew links it.
+
+The `tap` job publishes the same formulae to `skamansam/homebrew-tap` before the release
+is created, so the tap never advertises a version whose archives were not published. It
+needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with `contents: write` on that
+repository; `GITHUB_TOKEN` cannot write to it. Make one and store it with
+`gh secret set HOMEBREW_TAP_TOKEN` — a release without it fails rather than publishing
+half a release.
+
+`cargo xtask dist --release-version X.Y.Z` is what makes those files point at the
+release. dist names a release after `Cargo.toml` and refuses a `--tag` that disagrees
+with it, so the task rewrites the tag in the generated installers and formulae after
+dist has written them. No archive, checksum or signature is touched.
 
 ## Decisions
 

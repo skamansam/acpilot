@@ -25,6 +25,10 @@ name: release
 # `brew install` makes answers `acpilot update --check` with `brew`, which is the
 # marker ADR 0010 reads. `publish` waits for it, so a formula nobody can install
 # stops the release instead of shipping.
+#
+# The same formulae are published to `skamansam/homebrew-tap` by the `tap` job, after
+# Homebrew has installed one, and `publish` waits for that too: the tap is what a
+# `brew install` reads, so it must not name a version whose archives nobody published.
 on:
   push:
     branches: [main]
@@ -228,9 +232,14 @@ jobs:
       # Global artifacts are made once for the release, not once per target: the shell
       # and PowerShell installers, the Homebrew formula (with the marker ADR 0010
       # reads), the SBOM per program and the combined checksum file.
+      # The version this release publishes as comes from the merged pull request's
+      # labels, not from `Cargo.toml`, and dist refuses a `--tag` that disagrees with
+      # the manifest. The task therefore writes the release version into the
+      # installers and the formula after dist has generated them, so they name the
+      # tag `publish` is about to create.
       - name: Build the installers, formula and SBOMs
         shell: bash
-        run: cargo xtask dist --artifacts global
+        run: cargo xtask dist --artifacts global --release-version "${{ needs.version.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -267,12 +276,12 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # dist names the release after the version in `Cargo.toml` (currently
-      # `0.1.0`), because the tag this release publishes under is decided after the
-      # artifacts exist. So the formula's downloads are served from this runner —
-      # same file names, same version segment, same install block — and the one
-      # thing left unchecked is whether a URL under a real GitHub release answers,
-      # which `publish` creates and no runner can know before it has.
+      # The formula names the tag this release will publish under, and that release
+      # does not exist yet while this job runs — `publish` creates it after the
+      # formula has been checked. So the same formula's downloads are served from
+      # this runner (same file names, same version segment, same install block), and
+      # the one thing left unchecked is whether a URL under the real release answers,
+      # which no runner can know before `publish` has run.
       - name: Install the formula Homebrew was given
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -319,9 +328,66 @@ jobs:
           test "$status" -ne 0
           grep -q 'brew owns this copy' <<<"$refusal"
 
+  tap:
+    name: tap
+    needs: [version, installers, homebrew]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # The formula reaches the tap before the release exists, because the two are one
+    # promise: a tap advertising a version whose archives nobody published is worse
+    # than a release that did not happen. `publish` waits for this job, and this job
+    # waits for `homebrew`, so only a formula a keg has already answered `brew` for is
+    # published.
+    steps:
+      # `GITHUB_TOKEN` is scoped to this repository and cannot write to the tap, so
+      # the push uses a token of its own. Checked here rather than left to
+      # `checkout`, whose failure for a missing credential does not say which secret
+      # to add.
+      - name: The token the tap is pushed with
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set, so the formula has nowhere to go." >&2
+            echo "It is a token with contents: write on skamansam/homebrew-tap;" >&2
+            echo "CONTRIBUTING.md says how to make one." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: skamansam/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: global
+          path: dist
+
+      # The formulae are dist's, generated and marked by `cargo xtask dist`; this
+      # puts them where a tap expects them and nothing else. A release whose formula
+      # is already there is a no-op rather than an empty commit.
+      - name: Commit the formulae this release generated
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          cp dist/*.rb tap/Formula/
+          cd tap
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "the tap already carries these formulae"
+            exit 0
+          fi
+          git config user.name "acpilot release"
+          git config user.email "noreply@github.com"
+          git add Formula
+          git commit -m "acpilot ${{ needs.version.outputs.version }}"
+          git push
+
   publish:
     name: publish
-    needs: [version, archives, installers, homebrew]
+    needs: [version, archives, installers, homebrew, tap]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Publishing a release needs `contents: write`, which the workflow already

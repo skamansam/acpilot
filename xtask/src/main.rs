@@ -162,6 +162,16 @@ enum Task {
         /// upload the same installer three times.
         #[arg(long, value_enum, default_value_t = DistArtifacts::All)]
         artifacts: DistArtifacts,
+        /// The version this release is published as, when it differs from the one in
+        /// `Cargo.toml`.
+        ///
+        /// dist names a release after the workspace manifest and refuses a `--tag`
+        /// that disagrees with it, while this repository's version comes from the
+        /// merged pull request's labels (`.github/scripts/next_version.py`). The task
+        /// writes this version into the generated installers and formulae, so they
+        /// name the tag the release will actually create.
+        #[arg(long, value_name = "X.Y.Z")]
+        release_version: Option<String>,
     },
 }
 
@@ -223,7 +233,11 @@ fn main() -> ExitCode {
         Task::Schema => run_schema(),
         Task::Dev => run_dev(),
         Task::WebBuild => run_web_build(),
-        Task::Dist { target, artifacts } => run_dist(&target, artifacts),
+        Task::Dist {
+            target,
+            artifacts,
+            release_version,
+        } => run_dist(&target, artifacts, release_version.as_deref()),
     }
 }
 
@@ -1006,7 +1020,21 @@ impl DistArtifacts {
 /// installer scripts and manifests are the output of a specific dist, and "the
 /// release built on the runner" and "the release built here" have to be the same
 /// thing for `xtask dist` to mean anything.
-fn run_dist(targets: &[String], artifacts: DistArtifacts) -> ExitCode {
+fn run_dist(
+    targets: &[String],
+    artifacts: DistArtifacts,
+    release_version: Option<&str>,
+) -> ExitCode {
+    let release = match release_version {
+        Some(text) => match parse_release_version(text) {
+            Ok(version) => Some(version.to_owned()),
+            Err(why) => {
+                eprintln!("==> dist: {why}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     let Some(pinned) = configured_dist_version() else {
         eprintln!(
             "==> dist: dist-workspace.toml has no `cargo-dist-version`; the version is \
@@ -1071,6 +1099,15 @@ fn run_dist(targets: &[String], artifacts: DistArtifacts) -> ExitCode {
         }
 
         if !build_sboms() {
+            return ExitCode::FAILURE;
+        }
+
+        // After dist, because dist will not write another version: `--tag` is checked
+        // against the manifest rather than overriding it. Only text changes here — the
+        // archives, their checksums and the signature over them are what must not.
+        if let Some(version) = &release
+            && !retag_for_release(version)
+        {
             return ExitCode::FAILURE;
         }
 
@@ -1204,6 +1241,127 @@ fn with_brew_marker(formula: &str) -> Result<String, String> {
 fn installs_a_file(line: &str) -> bool {
     line.strip_prefix("bin.install")
         .is_some_and(|rest| !rest.starts_with('_'))
+}
+
+/// `X.Y.Z`, the form a release version takes, with or without the tag's `v`.
+fn parse_release_version(text: &str) -> Result<&str, String> {
+    let trimmed = text.trim();
+    let version = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let parts: Vec<&str> = version.split('.').collect();
+    let numeric = parts
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    if parts.len() != 3 || !numeric {
+        return Err(format!(
+            "`{text}` is not a release version; it is X.Y.Z, and the tag adds the `v`"
+        ));
+    }
+    Ok(version)
+}
+
+/// The same text with dist's version replaced, or [`None`] when it names none.
+///
+/// Split from the file walk so the substitution has a test without a dist run. Those
+/// files write the version three ways — `releases/download/v0.1.0`, `version "0.1.0"`
+/// and `"version":"0.1.0"` — which is why the bare number is what changes, bounded so
+/// that a longer version is left alone.
+fn retagged(text: &str, manifest: &str, version: &str) -> Option<String> {
+    let rewritten = replace_version(text, manifest, version);
+    (rewritten != text).then_some(rewritten)
+}
+
+/// Replace a bare version wherever it is a whole number of its own.
+///
+/// `0.1.0` becomes `0.2.7` inside a URL, a `version` line and a JSON field alike, while
+/// `10.1.0` and `0.1.0-rc1` are left as they are: a substring replacement would rewrite
+/// a different version, which is a bug that waits for the one release with a `10` in it.
+fn replace_version(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find(from) {
+        let (before, matched) = rest.split_at(index);
+        out.push_str(before);
+        let after = &matched[from.len()..];
+        let starts_here = before
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_ascii_digit() && character != '.');
+        let ends_here = after.chars().next().is_none_or(|character| {
+            !character.is_ascii_digit() && character != '.' && character != '-'
+        });
+        if starts_here && ends_here {
+            out.push_str(to);
+            rest = after;
+        } else {
+            // Not this version: keep it and look again one character later.
+            out.push_str(&matched[..1]);
+            rest = &matched[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Write the release tag into the installers and formulae dist just generated.
+///
+/// dist names a release after the workspace manifest, and `dist build --tag` is checked
+/// against that rather than overriding it, so a release whose version comes from a
+/// merged pull request's labels would otherwise ship a formula and two installers
+/// pointing at a tag nobody creates. The tag is text: no archive, checksum or signature
+/// is touched, which is why this can run after dist has packaged everything.
+///
+/// A file with nothing to rewrite is a failure rather than a skip — it would mean dist
+/// stopped writing the tag where this expects it, and the alternative is publishing an
+/// installer that downloads a 404.
+fn retag_for_release(version: &str) -> bool {
+    let manifest = env!("CARGO_PKG_VERSION");
+    if manifest == version {
+        return true;
+    }
+    let dir = dist_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{}: {error}", dir.display());
+            return false;
+        }
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "sh" || ext == "ps1" || ext == "rb")
+        })
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("==> dist: no installers or formula were written to retag");
+        return false;
+    }
+    for path in files {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return false;
+            }
+        };
+        let Some(rewritten) = retagged(&text, manifest, version) else {
+            eprintln!("==> dist: {name} names no `v{manifest}`, so it cannot be retagged");
+            return false;
+        };
+        if let Err(error) = fs::write(&path, rewritten) {
+            eprintln!("{}: {error}", path.display());
+            return false;
+        }
+        println!("    {name} points at v{version}");
+    }
+    true
 }
 
 /// Generate the SBOMs the config asks for, and put them where dist declares them.
@@ -2023,6 +2181,51 @@ end
             with_brew_marker(&marked).expect("a marked formula stays valid"),
             marked,
             "marking twice is not two markers"
+        );
+    }
+
+    #[test]
+    fn a_release_version_is_three_numbers_with_or_without_the_tag() {
+        assert_eq!(parse_release_version("9.9.9"), Ok("9.9.9"));
+        assert_eq!(parse_release_version("v0.2.7"), Ok("0.2.7"));
+        assert_eq!(parse_release_version(" 1.0.0 "), Ok("1.0.0"));
+        assert!(parse_release_version("").is_err(), "no version");
+        assert!(parse_release_version("1.2").is_err(), "two parts");
+        assert!(parse_release_version("1.2.3.4").is_err(), "four parts");
+        assert!(
+            parse_release_version("0.2.7-rc1").is_err(),
+            "a prerelease is not what a release tag labels"
+        );
+        assert!(parse_release_version("nightly").is_err(), "not a number");
+    }
+
+    #[test]
+    fn the_generated_installer_and_formula_are_retagged() {
+        let installer = "ARTIFACT_DOWNLOAD_URLS=\"https://github.com/skamansam/acpilot/releases/download/v0.1.0\"\n";
+        let rewritten = retagged(installer, "0.1.0", "0.2.7").expect("the tag is there");
+        assert!(rewritten.contains("download/v0.2.7\""), "{rewritten}");
+        assert!(!rewritten.contains("v0.1.0"), "{rewritten}");
+
+        let formula = "class AcpilotCli < Formula\n  version \"0.1.0\"\n      url \"https://github.com/skamansam/acpilot/releases/download/v0.1.0/acpilot-cli-aarch64-apple-darwin.tar.gz\"\nend\n";
+        let rewritten = retagged(formula, "0.1.0", "0.2.7").expect("it names the version");
+        assert!(rewritten.contains("version \"0.2.7\""), "{rewritten}");
+        assert!(rewritten.contains("download/v0.2.7/"), "{rewritten}");
+        assert!(!rewritten.contains("v0.1.0"), "{rewritten}");
+
+        assert_eq!(
+            retagged("nothing dist would write", "0.1.0", "0.2.7"),
+            None,
+            "a file with no version is a failure to report, not a silent pass"
+        );
+        assert_eq!(
+            retagged("10.1.0 and 0.1.0-rc1 stay", "0.1.0", "0.2.7"),
+            None,
+            "a longer version and a prerelease are not this one"
+        );
+        assert_eq!(
+            retagged("APP_VERSION=\"0.1.0\"", "0.1.0", "0.2.7").as_deref(),
+            Some("APP_VERSION=\"0.2.7\""),
+            "the installer's own version changes too"
         );
     }
 

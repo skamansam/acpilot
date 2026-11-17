@@ -2488,15 +2488,20 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
   - **Open:** a running daemon keeps the old binary until restarted; the command says so
     rather than killing one that may be mid-turn. The download path has still not met a
     real GitHub release that contains this code: `v0.2.6` predates it, so the first
-    end-to-end update is the release after this one. The Homebrew tap
-    (`skamansam/homebrew-tap`) does not exist, so the formula is generated, marked and
-    uploaded as an asset but never pushed; `brew install` has nothing to install from
-    yet. `acpilot update` maps a musl machine to the `gnu` archive; a musl host is an
-    installer's copy and updates through the installer.
+    end-to-end update is the release after this one. `acpilot update` maps a musl
+    machine to the `gnu` archive; a musl host is an installer's copy and updates
+    through the installer.
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
   - Wired: `dist-workspace.toml` pins cargo-dist 0.32.0 and declares those seven targets, the three installers, a sha256 checksum per archive and `cargo-cyclonedx`; `cargo xtask dist` builds the set for one machine and refuses a `dist` of another version, because the artifacts are that version's output.
     - Verified on linux x86_64 (2026-10-29): three archives with `.sha256` beside each, `sha256.sum`, the shell and PowerShell installers and the formula for every program, the source tarball, and three SBOMs — all in `target/distrib/`.
-  - Left: the tap repository (`skamansam/homebrew-tap`) and its `HOMEBREW_TAP_TOKEN` do not exist yet, so the formula is generated and not pushed.
+  - **Tap 2026-11-17:** `skamansam/homebrew-tap` exists and `release.yml` publishes the
+    generated formulae to it before the release is created, so a tap never advertises a
+    version whose archives were not published. The push uses the `HOMEBREW_TAP_TOKEN`
+    secret, which is not set yet, so the `tap` job fails until it is. `cargo xtask dist
+    --release-version` writes the release tag into the installers and formulae, because
+    dist names them after `Cargo.toml` (`0.1.0`) and refuses a `--tag` that disagrees.
+    No release has used either half yet, so no tap formula has been installed from a
+    real release.
   - **Decided 2026-11-17 (ADR 0011):** cargo-dist's shape wins. A release is one archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` now runs `cargo xtask dist --artifacts local` per target and `--artifacts global` once, so there is no second shape and nothing is packaged by hand.
   - **Checked 2026-11-17:** `release.yml` installs the generated formula with real
     Homebrew on a macOS runner, and `publish` waits for that job. It fails the release

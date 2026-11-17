@@ -2122,6 +2122,44 @@ what needs an editor shell waits for the editor shell.
     with `409` rather than re-found — reloading the pane is the recovery. An untracked path has no
     unstaged diff to split, so it is still staged as a whole. The browser has buttons rather than a
     keyboard route, as its panel has no global keymap.
+- [ ] **P6.5-10 · A document's history, played back** — a timeline above the editor whose stops
+  are the commits that changed the open file, and the file drawn as it was at the stop a person
+  drags to. One increment is one commit that touched this path; the working tree is the newest
+  stop, so an uncommitted edit is visible rather than hidden behind the last commit's date.
+  - **The history is the daemon's, like every other git fact.** `acpilot-git` grows
+    `history(path, limit)` — the commits that touch one path, following renames, in a stable order
+    a slider can index — and `file_at(path, rev)` for the blob at one of them, both by running the
+    user's `git` (`log --follow`, `show <rev>:<path>`), so filters, `.gitattributes` and a
+    configured diff driver mean the same thing here as on the command line.
+    `GET /v1/git/history?path=` and `GET /v1/git/file?path=&rev=` serve the two, with the
+    `404`/`502` meanings P6.5-2 gave the rest of `/v1/git`, so the TUI, the desktop window and the
+    page read one list and one blob instead of three guesses. A path outside the repository, a
+    revision that does not contain the file (added later, renamed, deleted), and bytes that are
+    not UTF-8 are refusals or a stop that says so, never a decode that silently replaces half a
+    file.
+  - **The timeline is the editor pane's.** A row above the buffer draws one tick per stop and the
+    current stop's short id and date; a drag on it (the press/drag/release P6-12 already owns) and
+    `[`/`]` step it, `Home`/`End` jump to the oldest stop and back to the working tree, and the
+    title says `replay · <short id>` while the pane is not live. In replay the buffer is
+    read-only, the caret and the undo history are untouched, and `End` or `Esc` puts the document
+    that was open back on screen — a history view that costs a person their unsaved edit is one
+    they will use once.
+  - **What a stop is, exactly:** every commit reachable from `HEAD` whose diff touches the path,
+    with rename history followed; a merge that introduces no change of its own to the path is not
+    a stop, because dragging through it would show the same bytes twice. The list is capped and
+    says when it is (500, the log route's cap), so a file with ten thousand commits scrubs its
+    recent history instead of freezing a client. Blobs are fetched the first time a stop is shown
+    and kept for as long as the file is open; nothing is prefetched for a stop nobody dragged to.
+  - **DoD:** open a file with at least three commits, drag the timeline through them, and see the
+    file at each; return to the end and type, and the document is the one that was open, undo and
+    caret included; a file added in the second commit starts at that commit rather than at an empty
+    first stop; a file renamed once reaches its older history through the rename.
+  - **Open:** replay shows the file at a stop, not an animated diff between stops — the gutter's
+    `LineChanges` would mark each stop against the one before it, and that is a follow-on. There
+    is no repository-wide timeline (a time view across every file) and no way to restore a stop; a
+    restore is a write and belongs with the confirmed checkout P6.5-8 already owns. The desktop
+    window (P10) and the page (P11) get the same strip over the same two routes; the TUI's is
+    first, because it is where the editor is.
 
 ---
 

@@ -2477,6 +2477,14 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
     inside, and a signed local release served over HTTP was installed by a real
     `acpilot update` (signature verified, digest verified, `acpilotd` and `acpilot`
     replaced, marker rewritten), while a tampered checksum was refused.
+  - **Keys 2026-11-17:** the pair exists on the repository, so the archives job stops
+    refusing for a missing key and the signing step stops failing. `ACPILOT_RELEASE_PUBKEY`
+    holds the public half, `ACPILOT_SIGNING_KEY` the private one. The pair was proved
+    against the code rather than the other way round: archives built with the variable,
+    their checksums signed with the secret's key the way `release.yml` signs them, and an
+    updater built with the variable installed them — and refused both a substituted
+    digest and a checksum re-signed by a second key. `release.yml` itself has not been
+    dispatched: running it publishes a tag and a release, which the next version is for.
   - **Open:** a running daemon keeps the old binary until restarted; the command says so
     rather than killing one that may be mid-turn. The download path has still not met a
     real GitHub release that contains this code: `v0.2.6` predates it, so the first

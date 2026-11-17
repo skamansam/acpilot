@@ -37,7 +37,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, ContentBlock, ContentChunk, CreateTerminalRequest, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, Notice,
     NoticeSeverity, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
@@ -46,7 +47,7 @@ use agent_client_protocol::schema::v1::{
     SetSessionModeResponse, StopReason, TextContent, ToolCallUpdate, ToolCallUpdateFields,
     WriteTextFileRequest,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio, on_receive_request};
+use agent_client_protocol::{Agent, Client, Stdio, on_receive_request};
 
 static SESSIONS: AtomicU32 = AtomicU32::new(0);
 
@@ -57,7 +58,7 @@ static WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
 #[tokio::main]
 async fn main() {
     let result = Agent
-        .builder()
+        .v1()
         .name("acpilot-mock-agent")
         .on_receive_request(
             async |request: InitializeRequest, responder, _cx| {
@@ -116,8 +117,10 @@ async fn main() {
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
                     Directive::Hang => {
-                        // Dropping the responder leaves the request pending,
-                        // which is what a hung agent looks like.
+                        // SDK 5 answers a request when its responder is dropped,
+                        // so a hung agent is one that keeps the responder alive
+                        // and never answers it.
+                        std::mem::forget(responder);
                         Ok(())
                     }
                     asked @ (Directive::Permission

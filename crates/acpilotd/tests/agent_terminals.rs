@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use acpilot_agent::terminal::TerminalHandle;
 use acpilotd::{AppState, Output, Terminal};
-use agent_client_protocol::schema::v1::{CreateTerminalRequest, SessionId as AgentSessionId};
+use agent_client_protocol::v1::schema::{CreateTerminalRequest, SessionId as AgentSessionId};
 
 /// Ask the agent side for a terminal the way an agent would, and hand back the
 /// view a pane gets: the open announcement, which is what the daemon mirrors.

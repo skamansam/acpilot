@@ -2577,8 +2577,8 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
 ```toml
 [workspace.dependencies]
 # protocol
-agent-client-protocol      = { version = "3.4", features = ["process", "stdio"] }
-agent-client-protocol-schema = "1.12"  # versioned separately from the 3.x runtime — do not assume the majors match
+agent-client-protocol      = { version = "5.3", features = ["process", "stdio"] }
+agent-client-protocol-schema = "1.18"  # versioned separately from the 5.x runtime — do not assume the majors match
 # runtime
 tokio                      = { version = "1.54", features = ["full"] }
 futures                    = "0.3"
@@ -2616,7 +2616,7 @@ gen-lsp-types              = { version = "0.11", features = ["url"] }
 async-lsp                  = "0.2"           # probe candidate only; see P7-2
 url                        = "2"
 # hosts
-russh                      = "0.64"
+russh                      = "0.65"
 russh-sftp                 = "3"
 ssh2-config                = "0.9"
 openssh                    = "0.11"          # optional fallback
@@ -2652,7 +2652,7 @@ features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threadi
 
 Every direct dependency above resolves from crates.io as written — verified on 2026-10-20 by
 extracting this block and running `cargo generate-lockfile`. That check is what caught three
-stale entries (`agent-client-protocol-schema` is **1.12**, not 3.x; `windows` is **0.62**, not
+stale entries (`agent-client-protocol-schema` is **1.18**, not 5.x; `windows` is **0.62**, not
 0.6; `argon2` is **0.6**) and reqwest's renamed TLS feature. Re-run it after any edit here;
 the block is a build input, not prose.
 

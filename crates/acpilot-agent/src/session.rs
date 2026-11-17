@@ -87,7 +87,8 @@ use acpilot_proto::permission::PermissionKind as RequestKind;
 use acpilot_proto::session::SessionId;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
     CompactionCapabilities, CompactionSummaryChunk, CompactionUpdate, ContentBlock, ContentChunk,
     CreateTerminalRequest, CurrentModeUpdate, FileSystemCapabilities, Implementation,
@@ -101,7 +102,7 @@ use agent_client_protocol::schema::v1::{
     ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
     WriteTextFileRequest, WriteTextFileResponse,
 };
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -391,7 +392,7 @@ impl Session {
         let client_name = options.client_name.clone();
         let task = tokio::spawn(async move {
             let result = Client
-                .builder()
+                .v1()
                 .name(client_name)
                 .on_receive_notification(
                     async move |notification: SessionNotification, _cx| {
@@ -705,7 +706,7 @@ impl Session {
     /// Ask the agent to stop the turn in flight.
     ///
     /// This is a notification, so it can be sent while a prompt is still
-    /// pending. The turn ends with [`StopReason::Cancelled`](agent_client_protocol::schema::v1::StopReason)
+    /// pending. The turn ends with [`StopReason::Cancelled`](agent_client_protocol::v1::schema::StopReason)
     /// and [`Session::prompt`] returns normally.
     pub fn cancel(&self) -> Result<(), SessionError> {
         let acp_id = self.acp_id.clone().ok_or(SessionError::NoSession)?;
@@ -841,7 +842,7 @@ fn record_warning(log: &Arc<Mutex<EventLog>>, title: &str, description: &str) {
 /// one rather than only that something was refused.
 fn not_served(method: &str) -> agent_client_protocol::Error {
     agent_client_protocol::Error::new(
-        i32::from(agent_client_protocol::schema::v1::ErrorCode::MethodNotFound),
+        i32::from(agent_client_protocol::v1::schema::ErrorCode::MethodNotFound),
         format!("acpilot does not implement `{method}` yet"),
     )
 }
@@ -1274,7 +1275,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use super::*;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol::v1::schema::{
         AvailableCommandsUpdate, CompactionStatus, PermissionOption, Plan, ToolCallLocation,
         ToolCallUpdateFields, ToolKind,
     };

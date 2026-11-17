@@ -2,7 +2,7 @@
 
 Measured 2026-10-21 on Linux (WSL2, x86_64). The instrument is
 [`probes/acp-handshake`](../../probes/acp-handshake/src/main.rs): one client, one
-code path, two agents. It is built on `agent-client-protocol` 3.4.0. It performs
+code path, two agents. It was built on `agent-client-protocol` 3.4.0 when these numbers were taken; the probe now tracks 5.3. It performs
 `initialize` → `session/new` → `session/prompt`, records every `session/update`,
 and answers `session/request_permission` by auto-deny. It then calls
 `session/load` and records the replay. Every frame on the agent's stdio is

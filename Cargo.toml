@@ -82,8 +82,8 @@ acpilot-web = { version = "0.1.0", path = "crates/acpilot-web" }
 acpilot-host = { version = "0.1.0", path = "crates/acpilot-host", default-features = false }
 
 # protocol
-agent-client-protocol = { version = "3.4", features = ["process", "stdio"] }
-agent-client-protocol-schema = "1.12" # versioned separately from the 3.x runtime
+agent-client-protocol = { version = "5.3", features = ["process", "stdio"] }
+agent-client-protocol-schema = "1.18" # versioned separately from the 5.x runtime
 
 # runtime
 tokio = { version = "1.54", features = ["full"] }
@@ -162,11 +162,10 @@ async-lsp = "0.2" # probe candidate only; see P7-2
 url = "2"
 
 # hosts
-# Default features minus `rsa`: russh's default graph pulls `rsa` 0.10.0-rc.18,
-# which carries RUSTSEC-2023-0071 (Marvin timing attack) with no fixed release,
-# and `cargo deny` fails on it. The cost is explicit: RSA host keys and RSA user
-# keys are not accepted yet, so a server offering only `ssh-rsa` is unreachable;
-# ed25519 and ECDSA are unaffected. P8-1 re-adds `rsa` with a written
+# Default features minus `rsa`: RSA host keys and RSA user keys are not accepted
+# yet, so a server offering only `ssh-rsa` is unreachable; ed25519 and ECDSA are
+# unaffected. Keeping `rsa` off also holds the crypto graph to aws-lc-rs instead
+# of adding a second primitive stack. P8-1 re-adds it with a written
 # justification when a host needs it. Feature selection lives here because cargo
 # forbids a member overriding `default-features` on an inherited dependency.
 russh = { version = "0.65", default-features = false, features = ["flate2", "aws-lc-rs"] }
@@ -176,7 +175,7 @@ openssh = "0.11" # optional fallback
 portable-pty = "0.9"
 
 # storage & config
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 rusqlite_migration = "2"
 # `profile rm` moves a profile to the platform's own trash (freedesktop on
 # Linux, Finder's Trash on macOS, the Recycle Bin on Windows). Hand-rolling that
@@ -202,7 +201,7 @@ serde-saphyr = { version = "2", default-features = false, features = ["deseriali
 schemars = "1"
 # The published manifest schema is checked against the presets in a test. Local
 # `$ref`s only, so the TLS and HTTP resolver features are off at the call site.
-jsonschema = { version = "0.60", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 toml = "1.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = "0.2"

@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acpilot_host::{ExecCommand, Host, HostError, Pty, Size};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     CreateTerminalRequest, CreateTerminalResponse, ErrorCode, KillTerminalRequest,
     KillTerminalResponse, ReleaseTerminalRequest, ReleaseTerminalResponse, SessionId,
     TerminalExitStatus, TerminalId, TerminalOutputRequest, TerminalOutputResponse,

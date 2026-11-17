@@ -360,7 +360,7 @@ of a library.
 
 | Need | Choice | Notes |
 | --- | --- | --- |
-| ACP client & agent runtime | **`agent-client-protocol` 3.4** | Official Rust SDK. Implements both `Client` and `Agent` traits, JSON-RPC envelopes, transports (`Lines`, `ByteStreams`, `Channel`), typed v1 sessions. Enable features `process` + `stdio`. Protocol v1 is stable. v2 is behind a draft feature: target v1 and design not to block v2. |
+| ACP client & agent runtime | **`agent-client-protocol` 5.3** | Official Rust SDK. Versioned entry points (`Client.v1()` / `Agent.v1()`) with messages under `v1::schema`, JSON-RPC envelopes, transports (`Lines`, `ByteStreams`, `Channel`), typed v1 sessions. Enable features `process` + `stdio`. Protocol v1 is stable; v2 is behind `unstable_protocol_v2`. |
 | Raw protocol types / schema | `agent-client-protocol-schema` | Same org. Use it when you need wire types without the runtime (e.g. a wasm web client). |
 | MCP bridge | `agent-client-protocol-rmcp` | Attaches MCP servers to sessions the way ACP `mcpServers` expects. |
 | Async runtime | `tokio` 1.54 | Multi-thread runtime for the daemon, current-thread for the CLI. |
@@ -468,7 +468,7 @@ over SSE events plus optimistic local edits.
 
 | Need | Choice | Notes |
 | --- | --- | --- |
-| SSH client | **`russh` 0.64** | Pure Rust, async, client *and* server, no C toolchain, no libssh2. Track advisories (it had a DoS, CVE-2026-73429, patched — pin and audit). |
+| SSH client | **`russh` 0.65** | Pure Rust, async, client *and* server, no C toolchain, no libssh2. Track advisories (it had a DoS, CVE-2026-73429, patched — pin and audit). |
 | SSH config parsing | `ssh2-config` 0.9 | Parses `~/.ssh/config` including `ProxyJump`/`Include`, then feeds the results into russh. |
 | SFTP | `russh-sftp` 3.0 | Remote file read/write and workspace browsing. |
 | Escalation path | `openssh` 0.11 | Shell out to the system `ssh` when a config uses FIDO keys / `Match` / ControlMaster and russh cannot express it. Feature-flagged "system ssh" mode. |

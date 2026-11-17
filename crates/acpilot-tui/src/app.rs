@@ -3503,11 +3503,14 @@ impl App {
                 recipes,
                 models,
                 problems,
+                skills,
             } => {
                 let mut lab = self.lab.take().unwrap_or_default();
                 lab.recipes = recipes;
                 lab.models = models;
                 lab.problems = problems;
+                lab.skills = skills;
+                lab.skill_selected = lab.skill_selected.min(lab.skills.len().saturating_sub(1));
                 lab.loading = false;
                 lab.selected = lab.selected.min(lab.recipes.len().saturating_sub(1));
                 if lab.recipes.is_empty() {
@@ -3529,6 +3532,22 @@ impl App {
                     lab.dirty = false;
                 }
                 self.status = "recipe saved".to_owned();
+            }
+            Update::LabSkillSaved(skill) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    if let Some(slot) = lab.skills.iter_mut().find(|row| row.name == skill.name) {
+                        *slot = skill.clone();
+                    } else {
+                        lab.skills.push(skill.clone());
+                    }
+                    lab.skill_selected = lab
+                        .skills
+                        .iter()
+                        .position(|row| row.name == skill.name)
+                        .unwrap_or(0);
+                    lab.skill_editor = None;
+                }
+                self.status = format!("skill {} saved", skill.name);
             }
             Update::LabRuns(runs) => {
                 if let Some(lab) = self.lab.as_mut() {
@@ -6805,7 +6824,37 @@ impl App {
         let mut request = None;
         let mut close = false;
 
-        if let Some(draft) = lab.draft.as_mut() {
+        if let Some(mut editor) = lab.skill_editor.take() {
+            let mut keep = true;
+            match key.code {
+                KeyCode::Esc => keep = false,
+                KeyCode::Tab => editor.field = (editor.field + 1) % 3,
+                KeyCode::BackTab => editor.field = (editor.field + 2) % 3,
+                KeyCode::Enter if editor.field == 2 => editor.value_mut().push('\n'),
+                KeyCode::Enter => editor.field = (editor.field + 1) % 3,
+                KeyCode::Backspace => {
+                    editor.value_mut().pop();
+                }
+                KeyCode::Char('s') if control => {
+                    request = Some(Request::LabSkillSave(Box::new(editor.draft())));
+                }
+                KeyCode::Char('d') if control => {
+                    editor.destination = match editor.destination {
+                        acpilot_proto::skills::SkillDestination::Workspace => {
+                            acpilot_proto::skills::SkillDestination::Profile
+                        }
+                        acpilot_proto::skills::SkillDestination::Profile => {
+                            acpilot_proto::skills::SkillDestination::Workspace
+                        }
+                    };
+                }
+                KeyCode::Char(character) if !control => editor.value_mut().push(character),
+                _ => {}
+            }
+            if keep {
+                lab.skill_editor = Some(editor);
+            }
+        } else if let Some(draft) = lab.draft.as_mut() {
             match key.code {
                 KeyCode::Esc => lab.draft = None,
                 KeyCode::Enter if draft.multiline() => {
@@ -6870,6 +6919,11 @@ impl App {
                         }
                     }
                     Pane::Corpus => lab.begin_selector(),
+                    Pane::Skills => {
+                        if let Some(skill) = lab.skills.get(lab.skill_selected) {
+                            lab.skill_editor = Some(crate::lab::SkillEditor::new(Some(skill)));
+                        }
+                    }
                     Pane::Output => {
                         if let (Some(recipe), Some(run)) = (lab.recipe(), lab.current_run()) {
                             request = Some(Request::LabRecord {
@@ -6887,6 +6941,27 @@ impl App {
                 KeyCode::Char('c') if !control => {
                     lab.compare = Some(lab.run_selected);
                     lab.status = Some(format!("comparing against run {}", lab.run_selected + 1));
+                }
+                KeyCode::Char('n') if !control && lab.pane == Pane::Skills => {
+                    lab.skill_editor = Some(crate::lab::SkillEditor::new(None));
+                }
+                KeyCode::Char(' ') if lab.pane == Pane::Skills => {
+                    let name = lab
+                        .skills
+                        .get(lab.skill_selected)
+                        .map(|skill| skill.name.clone());
+                    if let (Some(name), Some(recipe)) = (name, lab.recipe_mut()) {
+                        if let Some(position) =
+                            recipe.skills.iter().position(|selected| selected == &name)
+                        {
+                            recipe.skills.remove(position);
+                            lab.status = Some(format!("{name} removed from the recipe"));
+                        } else {
+                            recipe.skills.push(name.clone());
+                            lab.status = Some(format!("{name} added to the recipe"));
+                        }
+                        lab.dirty = true;
+                    }
                 }
                 KeyCode::Char('a') if !control && lab.pane == Pane::Corpus => lab.add_selector(),
                 KeyCode::Char('x') if !control && lab.pane == Pane::Corpus => lab.remove_selector(),
@@ -6959,6 +7034,13 @@ impl App {
                     (lab.field + 1).min(FIELDS.len().saturating_sub(1))
                 } else {
                     lab.field.saturating_sub(1)
+                };
+            }
+            Pane::Skills => {
+                lab.skill_selected = if forward {
+                    (lab.skill_selected + 1).min(lab.skills.len().saturating_sub(1))
+                } else {
+                    lab.skill_selected.saturating_sub(1)
                 };
             }
             Pane::Corpus => {
@@ -8239,6 +8321,7 @@ mod tests {
             agent_id: "mock".to_owned(),
             title: title.to_owned(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-10-24T00:00:00Z".to_owned(),
             updated_at: "2026-10-24T00:00:00Z".to_owned(),
         }

@@ -226,7 +226,9 @@ impl EffectiveRegistry {
                     Contribution::Agents(presets) => {
                         agent_groups.push((layer.clone(), presets.clone()));
                     }
-                    Contribution::Theme(_) | Contribution::Unloaded { .. } => {}
+                    Contribution::Theme(_)
+                    | Contribution::Skills { .. }
+                    | Contribution::Unloaded { .. } => {}
                 }
             }
         }

@@ -701,6 +701,58 @@ impl Client {
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger
     /// wants; a pane asks for the ones its session opened.
+    /// `GET /v1/skills`: what the workspace, profile and packs provide.
+    pub async fn skills(&self) -> Result<Vec<acpilot_proto::skills::SkillSummary>, ClientError> {
+        self.get("/v1/skills").await
+    }
+
+    /// `POST /v1/skills`: create or replace one skill.
+    pub async fn save_skill(
+        &self,
+        draft: &acpilot_proto::skills::SkillDraft,
+    ) -> Result<acpilot_proto::skills::SkillSummary, ClientError> {
+        let request = self.http.post(self.request_url("/v1/skills")).json(draft);
+        self.send(request, "/v1/skills").await
+    }
+
+    /// `POST /v1/acp/pairings`: mint a one-time code for a remote driver.
+    ///
+    /// `grant_answer_permissions` is the person's decision, not the driver's:
+    /// without it the driver's turns wait for a human at the machine.
+    pub async fn pair_driver(
+        &self,
+        grant_answer_permissions: bool,
+    ) -> Result<acpilot_proto::bridge::PairingCode, ClientError> {
+        let path = "/v1/acp/pairings";
+        let body = acpilot_proto::bridge::CreatePairingRequest {
+            grant_answer_permissions,
+        };
+        let request = self.http.post(self.request_url(path)).json(&body);
+        self.send(request, path).await
+    }
+
+    /// `GET /v1/acp/bridge`: whether the driver listener is on and who is paired.
+    pub async fn acp_bridge(&self) -> Result<acpilot_proto::bridge::AcpBridgeSummary, ClientError> {
+        self.get("/v1/acp/bridge").await
+    }
+
+    /// `GET /v1/acp/drivers`: every driver on record, revoked ones included.
+    pub async fn acp_drivers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::bridge::AcpDriverSummary>, ClientError> {
+        self.get("/v1/acp/drivers").await
+    }
+
+    /// `POST /v1/acp/drivers/{id}/revoke`: stop the next request with the old token.
+    pub async fn revoke_driver(
+        &self,
+        id: &str,
+    ) -> Result<acpilot_proto::bridge::AcpDriverSummary, ClientError> {
+        let path = format!("/v1/acp/drivers/{id}/revoke");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
+    }
+
     /// `GET /v1/providers`: the declarations, with their last probe answer.
     pub async fn providers(
         &self,

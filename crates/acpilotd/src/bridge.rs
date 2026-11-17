@@ -35,13 +35,14 @@ use std::sync::Arc;
 
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::session::{CreateSessionRequest, SessionSummary};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, ErrorCode, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, SessionId, SessionNotification, StopReason,
 };
 use agent_client_protocol::{
-    Agent, Client, ConnectionTo, Error, Stdio, on_receive_notification, on_receive_request,
+    Agent, Client, Error, Stdio, on_receive_notification, on_receive_request,
 };
 use tokio::sync::broadcast;
 
@@ -60,7 +61,7 @@ pub async fn serve_stdio(state: AppState) -> Result<(), Error> {
     let cancelling = state;
 
     Agent
-        .builder()
+        .v1()
         .name("acpilotd")
         .on_receive_request(
             async |request: InitializeRequest, responder, _cx| {
@@ -77,7 +78,7 @@ pub async fn serve_stdio(state: AppState) -> Result<(), Error> {
         )
         .on_receive_request(
             async move |request: NewSessionRequest, responder, _cx| {
-                match open_session(&sessions, &request).await {
+                match open_session(&sessions, &request, None).await {
                     Ok(summary) => {
                         let _ =
                             responder.respond(NewSessionResponse::new(SessionId::new(summary.id)));
@@ -141,6 +142,7 @@ pub async fn serve_stdio(state: AppState) -> Result<(), Error> {
 pub(crate) async fn open_session(
     state: &AppState,
     request: &NewSessionRequest,
+    driver: Option<&str>,
 ) -> Result<SessionSummary, Error> {
     let workspace = state
         .workspace()
@@ -171,6 +173,7 @@ pub(crate) async fn open_session(
             agent_id: choose_agent(state, request)?,
             title: None,
         },
+        driver,
     )
     .await
     .map_err(|error| Error::new(i32::from(ErrorCode::InternalError), error.error.to_string()))
@@ -355,7 +358,7 @@ fn failure(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use acpilot_agent::{MapResolver, Registry};
-    use agent_client_protocol::schema::v1::TextContent;
+    use agent_client_protocol::v1::schema::TextContent;
     use std::path::Path;
 
     fn manifest(agents: &str) -> (tempfile::TempDir, Registry) {
@@ -416,7 +419,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("a runtime")
-            .block_on(open_session(&state, &request(outside.path())))
+            .block_on(open_session(&state, &request(outside.path()), None))
             .expect_err("outside the workspace");
         assert!(
             error.to_string().contains("outside the workspace"),
@@ -426,7 +429,7 @@ mod tests {
 
     #[test]
     fn an_extension_agent_name_is_read_from_the_request_and_a_wrong_one_is_refused() {
-        use agent_client_protocol::schema::v1::ImageContent;
+        use agent_client_protocol::v1::schema::ImageContent;
 
         let (directory, registry) = manifest(&format!("{}{}", entry("one"), entry("two")));
         let state = state(registry, directory.path());
@@ -471,7 +474,7 @@ mod tests {
 
     #[test]
     fn a_prompt_is_the_text_blocks_and_not_an_image_rendered_as_words() {
-        use agent_client_protocol::schema::v1::ImageContent;
+        use agent_client_protocol::v1::schema::ImageContent;
 
         let request = PromptRequest::new(
             SessionId::new("s".to_owned()),

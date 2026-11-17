@@ -176,6 +176,8 @@ pub enum Request {
     },
     /// Write a recipe back, through the daemon's own validation.
     LabSave(Box<acpilot_proto::model::ModelRecipe>),
+    /// Create or replace a `SKILL.md`.
+    LabSkillSave(Box<acpilot_proto::skills::SkillDraft>),
     /// Run a recipe and stream its answer.
     LabRun {
         /// The recipe to run.
@@ -251,9 +253,13 @@ pub enum Update {
         models: Vec<acpilot_proto::model::DiscoveredModel>,
         /// Providers that did not answer the model list, and why.
         problems: Vec<acpilot_proto::model::ModelProblem>,
+        /// Every skill the workspace and profile provide.
+        skills: Vec<acpilot_proto::skills::SkillSummary>,
     },
     /// A recipe was written, and this is the daemon's version of it.
     LabSaved(acpilot_proto::model::ModelRecipe),
+    /// A skill was written, and this is the daemon's version of it.
+    LabSkillSaved(acpilot_proto::skills::SkillSummary),
     /// One recipe's runs, newest first.
     LabRuns(Vec<acpilot_proto::model::RunSummary>),
     /// One run's record.
@@ -787,15 +793,17 @@ async fn run(
                 Some(Request::LabLoad) => {
                     let recipes = client.recipes().await;
                     let models = client.models().await;
-                    match (recipes, models) {
-                        (Ok(recipes), Ok(catalogue)) => {
+                    let skills = client.skills().await;
+                    match (recipes, models, skills) {
+                        (Ok(recipes), Ok(catalogue), Ok(skills)) => {
                             let _ = updates.send(Update::LabLoaded {
                                 recipes,
                                 models: catalogue.models,
                                 problems: catalogue.problems,
+                                skills,
                             });
                         }
-                        (Err(error), _) | (_, Err(error)) => {
+                        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                             let _ = updates.send(Update::LabError(describe(&error)));
                         }
                     }
@@ -803,6 +811,14 @@ async fn run(
                 Some(Request::LabRuns(id)) => match client.runs(&id).await {
                     Ok(page) => {
                         let _ = updates.send(Update::LabRuns(page.runs));
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::LabError(describe(&error)));
+                    }
+                },
+                Some(Request::LabSkillSave(draft)) => match client.save_skill(&draft).await {
+                    Ok(skill) => {
+                        let _ = updates.send(Update::LabSkillSaved(skill));
                     }
                     Err(error) => {
                         let _ = updates.send(Update::LabError(describe(&error)));
@@ -830,6 +846,7 @@ async fn run(
                         sampling: Some(recipe.sampling.clone()),
                         context: Some(recipe.context.clone()),
                         tools: Some(recipe.tools.clone()),
+                        skills: Some(recipe.skills.clone()),
                         notes: recipe.notes.clone(),
                     };
                     match client.patch_recipe(&recipe.id, &patch).await {
@@ -1694,6 +1711,7 @@ async fn run_demo(
             | Request::LabRuns(_)
             | Request::LabRecord { .. }
             | Request::LabSave(_)
+            | Request::LabSkillSave(_)
             | Request::LabRun { .. } => {
                 let _ = updates.send(Update::Status(
                     "design pass · the model lab needs the daemon".to_owned(),

@@ -32,6 +32,8 @@ fn state() -> AppState {
             enabled: true,
             bind: Some("127.0.0.1:0".to_owned()),
             public_url: None,
+            require_token: None,
+            rate_limit: None,
         })
 }
 
@@ -120,6 +122,8 @@ async fn a_code_is_single_use_and_an_expired_one_is_refused() {
             enabled: true,
             bind: Some("127.0.0.1:0".to_owned()),
             public_url: None,
+            require_token: None,
+            rate_limit: None,
         });
     let stale = expired.drivers().issue(false, None);
     let (status, body) = claim(&acp_http::router(expired), &stale.code, &["observe"]).await;
@@ -293,6 +297,8 @@ async fn a_driver_opens_a_session_and_prompts_a_real_agent() {
             enabled: true,
             bind: Some("127.0.0.1:0".to_owned()),
             public_url: None,
+            require_token: None,
+            rate_limit: None,
         });
     let code = state.drivers().issue(false, None);
     let app = acp_http::router(state);
@@ -376,6 +382,8 @@ async fn a_scripted_driver_waits_while_the_cockpit_answers_the_permission() {
             enabled: true,
             bind: Some("127.0.0.1:0".to_owned()),
             public_url: None,
+            require_token: None,
+            rate_limit: None,
         });
     let code = state.drivers().issue(false, None);
     let mut driver_stream = state.drivers().subscribe();
@@ -512,6 +520,8 @@ async fn a_driver_reads_the_tool_calls_a_plan_and_a_mode_change() {
             enabled: true,
             bind: Some("127.0.0.1:0".to_owned()),
             public_url: None,
+            require_token: None,
+            rate_limit: None,
         });
     let code = state.drivers().issue(false, None);
     let mut stream = state.drivers().subscribe();

@@ -24,6 +24,7 @@ pub mod permission;
 pub mod profile;
 pub mod project;
 pub mod session;
+pub mod skills;
 pub mod stats;
 pub mod terminal;
 pub mod workspace;
@@ -171,7 +172,11 @@ pub const API_PREFIX: &str = "/v1";
         extension::ExtensionDetail,
         extension::InstallExtensionRequest,
         extension::ThemeAppearance,
-        extension::ThemeSummary
+        extension::ThemeSummary,
+        skills::SkillSummary,
+        skills::SkillDraft,
+        skills::SkillSource,
+        skills::SkillDestination
     )),
     modifiers(&BearerToken)
 )]

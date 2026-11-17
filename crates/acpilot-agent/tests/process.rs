@@ -23,7 +23,7 @@ use acpilot_agent::{
 use acpilot_host::LocalHost;
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::PermissionOption;
-use agent_client_protocol::schema::v1::StopReason;
+use agent_client_protocol::v1::schema::StopReason;
 use tokio::sync::broadcast::Receiver;
 // `sleep` is only used by the Linux-only test that watches a pid disappear, so
 // importing it everywhere is an unused import on macOS and Windows — which is

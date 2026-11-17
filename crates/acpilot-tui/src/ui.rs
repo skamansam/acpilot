@@ -3200,6 +3200,7 @@ mod tests {
             agent_id: "mock".to_owned(),
             title: "wire the tui".to_owned(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-10-24T00:00:00Z".to_owned(),
             updated_at: "2026-10-24T00:00:00Z".to_owned(),
         });

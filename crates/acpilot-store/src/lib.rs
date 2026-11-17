@@ -63,7 +63,7 @@ pub const RETENTION_DAYS: i64 = 30;
 /// Bumped with every entry in [`MIGRATIONS`]. A database written by a newer daemon
 /// is refused rather than read: the columns a newer build added are the ones this
 /// one would try to write past.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The schema, in order, as `(version, sql)`.
 ///
@@ -77,6 +77,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_agent_pins.sql")),
     (3, include_str!("../migrations/0003_session_profile.sql")),
+    (4, include_str!("../migrations/0004_driver_identity.sql")),
 ];
 
 /// A profile's conversations, sessions and decisions.
@@ -326,13 +327,15 @@ impl Store {
         )?;
         connection.execute(
             "INSERT INTO sessions
-                 (id, profile, workspace_id, agent_id, title, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 (id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                  driver_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (id) DO UPDATE SET
                  profile = excluded.profile,
                  title = excluded.title,
                  status = excluded.status,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at,
+                 driver_id = excluded.driver_id",
             params![
                 summary.id,
                 summary.profile,
@@ -342,6 +345,7 @@ impl Store {
                 status_text(&summary.status),
                 summary.created_at,
                 summary.updated_at,
+                summary.driver_id,
             ],
         )?;
         Ok(())
@@ -397,7 +401,8 @@ impl Store {
         let connection = self.lock();
         let row = connection
             .query_row(
-                "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
+                "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                        driver_id
                  FROM sessions WHERE id = ?1",
                 params![id],
                 |row| {
@@ -410,6 +415,7 @@ impl Store {
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -432,7 +438,8 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<SessionSummary>, StoreError> {
         let connection = self.lock();
         let mut statement = connection.prepare(
-            "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
+            "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                    driver_id
              FROM sessions ORDER BY rowid",
         )?;
         let rows = statement.query_map([], |row| {
@@ -445,6 +452,7 @@ impl Store {
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })?;
         let mut summaries = Vec::new();
@@ -551,8 +559,9 @@ impl Store {
     pub fn record_grant(&self, grant: &Grant) -> Result<(), StoreError> {
         let connection = self.lock();
         connection.execute(
-            "INSERT INTO grants (session_id, seq, at, at_unix_ms, tool, decision, decided_by)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO grants
+                 (session_id, seq, at, at_unix_ms, tool, decision, decided_by, driver_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (session_id, seq) DO NOTHING",
             params![
                 grant.session_id,
@@ -566,6 +575,7 @@ impl Store {
                 grant.tool,
                 grant.decision,
                 grant.decided_by,
+                grant.driver_id,
             ],
         )?;
         Ok(())
@@ -579,7 +589,7 @@ impl Store {
     pub fn grants(&self, session: &str) -> Result<Vec<Grant>, StoreError> {
         let connection = self.lock();
         let mut statement = connection.prepare(
-            "SELECT session_id, seq, at, tool, decision, decided_by
+            "SELECT session_id, seq, at, tool, decision, decided_by, driver_id
              FROM grants WHERE session_id = ?1 ORDER BY seq",
         )?;
         let rows = statement.query_map(params![session], |row| {
@@ -590,6 +600,7 @@ impl Store {
                 tool: row.get(3)?,
                 decision: row.get(4)?,
                 decided_by: row.get(5)?,
+                driver_id: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1059,10 +1070,12 @@ pub struct Grant {
     pub decision: String,
     /// Who decided: `policy:<rule>` or `client:<session>`.
     pub decided_by: String,
+    /// Driver whose turn asked, when it came through the bridge.
+    pub driver_id: Option<String>,
 }
 
 fn summary_from(
-    (id, profile, workspace_id, agent_id, title, status, created_at, updated_at): (
+    (id, profile, workspace_id, agent_id, title, status, created_at, updated_at, driver_id): (
         String,
         String,
         String,
@@ -1071,6 +1084,7 @@ fn summary_from(
         String,
         String,
         String,
+        Option<String>,
     ),
 ) -> SessionSummary {
     SessionSummary {
@@ -1080,6 +1094,7 @@ fn summary_from(
         agent_id,
         title,
         status: status_from(&status),
+        driver_id,
         created_at,
         updated_at,
     }
@@ -1178,6 +1193,7 @@ mod tests {
             agent_id: "mock".into(),
             title: "a conversation".into(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-11-03T10:00:00Z".into(),
             updated_at: "2026-11-03T10:00:00Z".into(),
         }
@@ -1366,6 +1382,7 @@ mod tests {
                 tool: "shell".into(),
                 decision: "allow-workspace".into(),
                 decided_by: "policy:allow-workspace".into(),
+                driver_id: None,
             })
             .expect("an old decision");
 
@@ -1584,6 +1601,7 @@ mod tests {
                 tool: "cargo test".into(),
                 decision: "allow-workspace".into(),
                 decided_by: "policy:allow-workspace".into(),
+                driver_id: None,
             })
             .expect("grant");
         let grants = store.grants("s1").expect("read");

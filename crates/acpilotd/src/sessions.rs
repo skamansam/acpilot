@@ -370,6 +370,8 @@ pub struct Record {
     profile: String,
     workspace_id: String,
     agent_id: String,
+    /// Driver that opened this session, when it came through the bridge.
+    driver_id: Option<String>,
     lifecycle: Mutex<Lifecycle>,
     log: Mutex<Log>,
     /// The turn in flight, so a cancel can say which one it stopped.
@@ -469,7 +471,7 @@ impl Record {
         store: Option<Arc<Store>>,
     ) -> (Arc<Self>, mpsc::Receiver<Command>) {
         Self::new_for(
-            String::new(),
+            (String::new(), None),
             id,
             workspace_id,
             agent_id,
@@ -484,7 +486,7 @@ impl Record {
     /// Kept apart so a unit test can build a record without inventing a profile;
     /// the create route is the only caller that has one.
     fn new_for(
-        profile: String,
+        (profile, driver_id): (String, Option<String>),
         id: SessionId,
         workspace_id: String,
         agent_id: String,
@@ -519,6 +521,7 @@ impl Record {
                 profile,
                 workspace_id,
                 agent_id,
+                driver_id,
                 lifecycle: Mutex::new(Lifecycle {
                     title: None,
                     status: SessionStatus::Idle,
@@ -578,6 +581,7 @@ impl Record {
             profile: self.profile.clone(),
             workspace_id: self.workspace_id.clone(),
             agent_id: self.agent_id.clone(),
+            driver_id: self.driver_id.clone(),
             title: state
                 .title
                 .clone()
@@ -715,6 +719,7 @@ impl Record {
                     tool: entry.tool.clone().unwrap_or_else(|| entry.title.clone()),
                     decision: option_text(&entry.option),
                     decided_by: entry.decided_by.to_string(),
+                    driver_id: self.driver_id.clone(),
                 };
                 if let Err(error) = store.record_grant(&grant)
                     && !self.store_warned.swap(true, Ordering::Relaxed)
@@ -723,7 +728,7 @@ impl Record {
                 }
             }
             if let Some(transcript) = &self.transcript
-                && let Err(error) = transcript.grant(entry)
+                && let Err(error) = transcript.grant_with_driver(entry, self.driver_id.as_deref())
                 && !self.transcript_warned.swap(true, Ordering::Relaxed)
             {
                 tracing::warn!(%error, session = %self.id, "a grant was not written to the transcript");
@@ -873,6 +878,7 @@ fn derive_title(prompt: &str) -> Option<String> {
 pub async fn create(
     state: &AppState,
     request: CreateSessionRequest,
+    driver: Option<&str>,
 ) -> Result<SessionSummary, ApiError> {
     let registry = state.registry().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
@@ -914,7 +920,10 @@ pub async fn create(
     let session = start(Arc::clone(&spec), options, workspace.root.as_path()).await?;
 
     let (record, mailbox) = Record::new_for(
-        state.profile_name().unwrap_or_default().to_owned(),
+        (
+            state.profile_name().unwrap_or_default().to_owned(),
+            driver.map(str::to_owned),
+        ),
         id.clone(),
         workspace.id.clone(),
         spec.id.clone(),
@@ -1278,7 +1287,7 @@ pub async fn create_route(
             "the body is not a session request: {rejection}"
         )))
     })?;
-    create(&state, request).await.map(Json)
+    create(&state, request, None).await.map(Json)
 }
 
 /// `POST /v1/sessions/{id}/prompt`.

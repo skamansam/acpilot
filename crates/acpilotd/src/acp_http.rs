@@ -46,7 +46,7 @@ use acpilot_proto::bridge::{
 };
 use acpilot_proto::event::SessionEvent;
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     CancelNotification, NewSessionRequest, Notice, NoticeSeverity, PromptRequest, SessionId,
     SessionNotification, SessionUpdate, StopReason,
 };
@@ -130,6 +130,7 @@ async fn bridge(State(state): State<AppState>) -> Json<AcpBridgeSummary> {
         settings.enabled,
         settings.bind.clone(),
         settings.public_url.clone(),
+        settings.token_required(),
     ))
 }
 
@@ -299,14 +300,33 @@ async fn authenticate(State(state): State<AppState>, mut request: Request, next:
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim());
-    let Some(driver) = presented.and_then(|token| state.drivers().authenticate(token)) else {
-        return refusal(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "the bridge requires a driver token; claim a pairing code first",
-        );
+    let settings = state.bridge();
+    let driver = match presented.and_then(|token| state.drivers().authenticate(token)) {
+        Some(driver) => driver,
+        // A loopback-only listener may skip the token, and the person at the
+        // machine then holds every scope: there is no remote driver to limit.
+        None if !settings.token_required() => Driver {
+            id: "loopback".to_owned(),
+            name: "loopback".to_owned(),
+            scopes: vec![
+                acpilot_proto::bridge::DriverScope::Observe,
+                acpilot_proto::bridge::DriverScope::Prompt,
+                acpilot_proto::bridge::DriverScope::Cancel,
+                acpilot_proto::bridge::DriverScope::AnswerPermissions,
+            ],
+        },
+        None => {
+            return refusal(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "the bridge requires a driver token; claim a pairing code first",
+            );
+        }
     };
-    if !state.drivers().rate_allows(&driver.id) {
+    if !state
+        .drivers()
+        .rate_allows(&driver.id, settings.rate_per_minute())
+    {
         return refusal(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -411,7 +431,7 @@ async fn dispatch(state: &AppState, driver: &Driver, request: &Rpc) -> Result<Va
             require(driver, acpilot_proto::bridge::DriverScope::Observe)?;
             let session: NewSessionRequest = serde_json::from_value(request.params.clone())
                 .map_err(|error| RpcError::invalid(format!("session/new: {error}")))?;
-            let summary = crate::bridge::open_session(state, &session)
+            let summary = crate::bridge::open_session(state, &session, Some(&driver.id))
                 .await
                 .map_err(|error| RpcError::invalid(error.to_string()))?;
             state.drivers().claim_session(&summary.id, &driver.id);

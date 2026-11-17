@@ -18,6 +18,7 @@ use acpilot_proto::model::{
     ContextStrategy, CorpusSelector, DiscoveredModel, ModelProblem, ModelRecipe, RunRecordView,
     RunStatus, RunSummary,
 };
+use acpilot_proto::skills::{SkillDestination, SkillDraft, SkillSummary};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -34,6 +35,8 @@ pub enum Pane {
     Recipe,
     /// The corpus selectors and the files the last run read.
     Corpus,
+    /// The skills the recipe can select.
+    Skills,
     /// The answer, the prompt and the run history.
     Output,
 }
@@ -45,6 +48,7 @@ impl Pane {
         match self {
             Self::Recipe => "recipe",
             Self::Corpus => "corpus",
+            Self::Skills => "skills",
             Self::Output => "output",
         }
     }
@@ -54,7 +58,8 @@ impl Pane {
     pub fn next(self) -> Self {
         match self {
             Self::Recipe => Self::Corpus,
-            Self::Corpus => Self::Output,
+            Self::Corpus => Self::Skills,
+            Self::Skills => Self::Output,
             Self::Output => Self::Recipe,
         }
     }
@@ -65,7 +70,8 @@ impl Pane {
         match self {
             Self::Recipe => Self::Output,
             Self::Corpus => Self::Recipe,
-            Self::Output => Self::Corpus,
+            Self::Skills => Self::Corpus,
+            Self::Output => Self::Skills,
         }
     }
 }
@@ -111,10 +117,12 @@ pub enum Field {
     RunCommands,
     /// Offer workspace search.
     Search,
+    /// Skills appended to the master prompt, by name.
+    Skills,
 }
 
 /// Every field, in the order the pane draws them.
-pub const FIELDS: [Field; 17] = [
+pub const FIELDS: [Field; 18] = [
     Field::Label,
     Field::Prompt,
     Field::Temperature,
@@ -132,6 +140,7 @@ pub const FIELDS: [Field; 17] = [
     Field::WriteFiles,
     Field::RunCommands,
     Field::Search,
+    Field::Skills,
 ];
 
 impl Field {
@@ -156,6 +165,7 @@ impl Field {
             Self::WriteFiles => "write files",
             Self::RunCommands => "run commands",
             Self::Search => "search",
+            Self::Skills => "skills",
         }
     }
 
@@ -175,7 +185,8 @@ impl Field {
             | Self::ReadFiles
             | Self::WriteFiles
             | Self::RunCommands
-            | Self::Search => "tools",
+            | Self::Search
+            | Self::Skills => "tools",
         }
     }
 
@@ -236,6 +247,7 @@ impl Field {
             Self::WriteFiles => on_off(recipe.tools.write_files),
             Self::RunCommands => on_off(recipe.tools.run_commands),
             Self::Search => on_off(recipe.tools.search),
+            Self::Skills => recipe.skills.join(", "),
         }
     }
 
@@ -307,6 +319,16 @@ impl Field {
                     return Err("max steps is between 1 and 50".to_owned());
                 }
                 recipe.tools.max_steps = value;
+            }
+            Self::Skills => {
+                let mut names: Vec<String> = text
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+                names.dedup();
+                recipe.skills = names;
             }
             Self::Strategy
             | Self::ReadFiles
@@ -445,6 +467,69 @@ pub struct Lab {
     pub status: Option<String>,
     /// Whether the recipe has been changed since it was read or saved.
     pub dirty: bool,
+    /// Every skill in the workspace and profile, in precedence order.
+    pub skills: Vec<SkillSummary>,
+    /// Which skill the skills pane is on.
+    pub skill_selected: usize,
+    /// The open skill editor, when one is.
+    pub skill_editor: Option<SkillEditor>,
+}
+
+/// A new or edited `SKILL.md`, drawn over the lab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillEditor {
+    /// The directory name and front-matter name.
+    pub name: String,
+    /// The one-line description that tells the model when to use it.
+    pub description: String,
+    /// The body: what to do, not what the skill is about.
+    pub instructions: String,
+    /// 0 name, 1 description, 2 instructions.
+    pub field: usize,
+    /// Workspace or profile.
+    pub destination: SkillDestination,
+    /// Whether the name may not be changed.
+    pub existing: bool,
+}
+
+impl SkillEditor {
+    /// Start a blank editor, or one loaded from an existing skill.
+    #[must_use]
+    pub fn new(skill: Option<&SkillSummary>) -> Self {
+        let existing = skill
+            .is_some_and(|skill| skill.source != acpilot_proto::skills::SkillSource::Extension);
+        Self {
+            name: skill.map_or_else(String::new, |skill| skill.name.clone()),
+            description: skill.map_or_else(String::new, |skill| skill.description.clone()),
+            instructions: skill.map_or_else(String::new, |skill| skill.instructions.clone()),
+            field: 0,
+            destination: skill.map_or(SkillDestination::Workspace, |skill| match skill.source {
+                acpilot_proto::skills::SkillSource::Workspace => SkillDestination::Workspace,
+                _ => SkillDestination::Profile,
+            }),
+            existing,
+        }
+    }
+
+    /// The field the keyboard is in, to append to and erase from.
+    pub fn value_mut(&mut self) -> &mut String {
+        match self.field {
+            0 => &mut self.name,
+            1 => &mut self.description,
+            _ => &mut self.instructions,
+        }
+    }
+
+    /// The wire draft this editor describes.
+    #[must_use]
+    pub fn draft(&self) -> SkillDraft {
+        SkillDraft {
+            name: self.name.trim().to_owned(),
+            description: self.description.trim().to_owned(),
+            instructions: self.instructions.trim().to_owned(),
+            destination: self.destination,
+        }
+    }
 }
 
 impl Lab {
@@ -860,24 +945,29 @@ pub fn draw(frame: &mut Frame, lab: &Lab, theme: &Theme, area: Rect) {
         return;
     }
     let [body, hint] = Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).areas(inner);
-    let [recipe, corpus, output] = Layout::horizontal([
-        Constraint::Percentage(38),
-        Constraint::Percentage(28),
-        Constraint::Min(30),
+    let [recipe, corpus, skills, output] = Layout::horizontal([
+        Constraint::Percentage(32),
+        Constraint::Percentage(22),
+        Constraint::Percentage(20),
+        Constraint::Min(28),
     ])
     .areas(body);
     draw_recipe(frame, lab, theme, recipe);
     draw_corpus(frame, lab, theme, corpus);
+    draw_skills(frame, lab, theme, skills);
     draw_output(frame, lab, theme, output);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " Tab panes · j/k move · Enter edit · Space toggle · ^R run · ^S save · v request · c compare · r reload · Esc close",
+            " Tab panes · j/k move · Enter edit · Space choose · n new skill · ^R run · ^S save · v request · c compare · r reload · Esc close",
             Style::default().fg(theme.text_muted()),
         ))),
         hint,
     );
     if lab.inspector {
         draw_inspector(frame, lab, theme, body);
+    }
+    if let Some(editor) = &lab.skill_editor {
+        draw_skill_editor(frame, editor, theme, area);
     }
 }
 
@@ -1039,6 +1129,106 @@ fn draw_corpus(frame: &mut Frame, lab: &Lab, theme: &Theme, area: Rect) {
     let first = rows.len().saturating_sub(height);
     let visible: Vec<Line> = rows.into_iter().skip(first).take(height).collect();
     frame.render_widget(Paragraph::new(visible), inner);
+}
+
+fn draw_skills(frame: &mut Frame, lab: &Lab, theme: &Theme, area: Rect) {
+    let active = lab.pane == Pane::Skills;
+    let mut block = panel("Skills", theme);
+    if active {
+        block = block.border_style(Style::default().fg(theme.accent()));
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut rows: Vec<Line> = Vec::new();
+    if lab.skills.is_empty() {
+        rows.push(Line::from(Span::styled(
+            " no skills · n writes one",
+            Style::default().fg(theme.text_muted()),
+        )));
+    }
+    for (index, skill) in lab.skills.iter().enumerate() {
+        let chosen = active && index == lab.skill_selected;
+        let selected = lab
+            .recipe()
+            .is_some_and(|recipe| recipe.skills.contains(&skill.name));
+        let style = if chosen {
+            Style::default()
+                .fg(theme.accent_high())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text())
+        };
+        let source = match skill.source {
+            acpilot_proto::skills::SkillSource::Workspace => "ws",
+            acpilot_proto::skills::SkillSource::Profile => "profile",
+            acpilot_proto::skills::SkillSource::Extension => "ext",
+        };
+        rows.push(Line::from(vec![
+            Span::styled(
+                format!(" {} {:<16}", if selected { "✓" } else { "·" }, skill.name),
+                style,
+            ),
+            Span::styled(source, Style::default().fg(theme.text_muted())),
+        ]));
+    }
+    if let Some(skill) = lab.skills.get(lab.skill_selected) {
+        rows.push(Line::from(""));
+        rows.push(Line::from(Span::styled(
+            format!(" {}", skill.description),
+            Style::default().fg(theme.text_muted()),
+        )));
+        rows.push(Line::from(Span::styled(
+            " Space adds it to the recipe · Enter edits",
+            Style::default().fg(theme.text_muted()),
+        )));
+    }
+    let height = usize::from(inner.height).max(1);
+    let visible: Vec<Line> = rows.into_iter().take(height).collect();
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+fn draw_skill_editor(frame: &mut Frame, editor: &SkillEditor, theme: &Theme, area: Rect) {
+    let width = area.width.saturating_mul(7) / 10;
+    let height = area.height.saturating_mul(6) / 10;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent()))
+        .title(format!(
+            " {} skill · {} ",
+            if editor.existing { "edit" } else { "new" },
+            match editor.destination {
+                SkillDestination::Workspace => "workspace",
+                SkillDestination::Profile => "profile",
+            }
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let marker = |field: usize| if editor.field == field { "▸" } else { " " };
+    let mut rows = vec![
+        Line::from(format!("{} name        {}", marker(0), editor.name)),
+        Line::from(format!("{} description {}", marker(1), editor.description)),
+        Line::from(format!("{} instructions", marker(2))),
+    ];
+    for line in editor.instructions.lines().take(8) {
+        rows.push(Line::from(format!("   {line}")));
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::from(Span::styled(
+        " Tab field · ^D workspace/profile · ^S save · Esc close",
+        Style::default().fg(theme.text_muted()),
+    )));
+    let take = usize::from(inner.height).max(1);
+    frame.render_widget(
+        Paragraph::new(rows.into_iter().take(take).collect::<Vec<_>>()),
+        inner,
+    );
 }
 
 fn draw_output(frame: &mut Frame, lab: &Lab, theme: &Theme, area: Rect) {
@@ -1289,6 +1479,7 @@ mod tests {
                 search: false,
                 max_steps: 8,
             },
+            skills: Vec::new(),
             notes: None,
             updated_at: "2026-11-12T10:00:00Z".to_owned(),
         }

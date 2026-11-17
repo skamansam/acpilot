@@ -75,6 +75,8 @@ struct Plan {
     backend: Backend,
     request: RunRequest,
     root: PathBuf,
+    /// The profile's skill root, where a recipe's selected skills may live.
+    profile_root: Option<PathBuf>,
     started_at: String,
     log: RunLog,
 }
@@ -261,9 +263,42 @@ fn prepare(
         backend,
         request,
         root,
+        profile_root: state.profile_root().map(PathBuf::from),
         started_at: jiff::Timestamp::now().to_string(),
         log: log.clone(),
     })
+}
+
+/// The recipe's master prompt with the skills it names appended.
+///
+/// A name the workspace and profile do not provide is a warning beside the run,
+/// not a refusal: the recipe is still answerable without it, and the person who
+/// selected it needs to know it was not sent.
+fn system_prompt(plan: &Plan) -> (String, Vec<String>) {
+    let mut prompt = plan.recipe.system_prompt.clone();
+    if plan.recipe.skills.is_empty() {
+        return (prompt, Vec::new());
+    }
+    let skills =
+        match acpilot_skills::discover_scoped(&plan.root, plan.profile_root.as_deref(), &[]) {
+            Ok(skills) => skills,
+            Err(error) => {
+                return (prompt, vec![format!("skills could not be read: {error}")]);
+            }
+        };
+    let mut warnings = Vec::new();
+    for name in &plan.recipe.skills {
+        match skills.iter().find(|skill| &skill.name == name) {
+            Some(skill) => prompt.push_str(&format!(
+                "\n\n## Skill: {}\n\n{}",
+                skill.name, skill.instructions
+            )),
+            None => warnings.push(format!(
+                "the recipe selects skill `{name}`, which this workspace and profile do not provide"
+            )),
+        }
+    }
+    (prompt, warnings)
 }
 
 /// Advance a run's stream by one frame.
@@ -319,9 +354,10 @@ async fn step(frames: &mut Frames) -> Option<Event> {
 async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<Chunk>) -> RunSummary {
     let plan = &plan;
     let clock = Instant::now();
+    let (system, skill_warnings) = system_prompt(plan);
     let assembly = assemble(
         &plan.root,
-        &plan.recipe.system_prompt,
+        &system,
         &plan.request.corpus,
         &plan.recipe.context,
         &[],
@@ -355,13 +391,14 @@ async fn run_once(plan: Plan, deltas: mpsc::UnboundedSender<Chunk>) -> RunSummar
 
     let stored = StoredRequest::capture(
         &plan.request.prompt,
-        Some(&plan.recipe.system_prompt),
+        Some(&system),
         &plan.request.corpus,
         files,
         plan.recipe.context.clone(),
     );
 
     let mut warnings = warnings;
+    warnings.extend(skill_warnings);
     let mut stop_reason = None;
     let mut usage = Usage::default();
     let mut message = None;

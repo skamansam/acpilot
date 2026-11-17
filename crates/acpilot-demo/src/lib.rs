@@ -181,6 +181,7 @@ fn summary(
         agent_id: agent.to_owned(),
         title: title.to_owned(),
         status,
+        driver_id: None,
         created_at: created.to_owned(),
         updated_at: created.to_owned(),
     }

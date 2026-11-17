@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use acpilot_host::{Host, HostError};
 use acpilot_proto::permission::PermissionKind;
-use agent_client_protocol::schema::v1::ErrorCode;
+use agent_client_protocol::v1::schema::ErrorCode;
 use thiserror::Error;
 
 use crate::permission::{Broker, Policy, Subject};

@@ -293,6 +293,12 @@ pub struct ModelRecipe {
     pub context: ContextBudget,
     /// Tool ceiling for the promoted agent.
     pub tools: ToolExposure,
+    /// Skills whose instructions are part of this recipe's system prompt.
+    ///
+    /// Empty means none. A name that is not present is reported when the run
+    /// starts rather than silently omitted.
+    #[serde(default)]
+    pub skills: Vec<String>,
     /// Free-text note: what this recipe is for, and what it is bad at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
@@ -414,6 +420,9 @@ pub struct CreateRecipeRequest {
     pub context: ContextBudget,
     /// Tool ceiling for the promoted agent.
     pub tools: ToolExposure,
+    /// Skills whose instructions are part of this recipe's system prompt.
+    #[serde(default)]
+    pub skills: Vec<String>,
     /// What this recipe is for, and what it is bad at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
@@ -447,6 +456,9 @@ pub struct RecipePatch {
     /// New tool ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolExposure>,
+    /// New skill selection. `Some(vec![])` clears it; `None` leaves it alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
     /// New note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,

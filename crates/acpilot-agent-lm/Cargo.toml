@@ -15,6 +15,7 @@ acpilot-agent.workspace = true
 acpilot-model.workspace = true
 acpilot-profile.workspace = true
 acpilot-proto.workspace = true
+acpilot-skills.workspace = true
 agent-client-protocol.workspace = true
 clap.workspace = true
 serde_json.workspace = true

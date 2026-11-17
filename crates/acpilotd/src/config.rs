@@ -76,6 +76,26 @@ pub struct BridgeSettings {
     /// Address a driver should use, when it differs from `bind` — a tunnel or a
     /// reverse proxy terminates TLS in front of the daemon (ADR 0004 §3).
     pub public_url: Option<String>,
+    /// Require a paired driver token. Defaults to true; a loopback-only bind may
+    /// set it false, and any other bind is refused (see [`resolve`]).
+    pub require_token: Option<bool>,
+    /// Requests one driver may make per minute. Defaults to 60; `0` disables the
+    /// limit for a trusted local driver.
+    pub rate_limit: Option<u32>,
+}
+
+impl BridgeSettings {
+    /// Whether a request without a driver token is accepted.
+    #[must_use]
+    pub fn token_required(&self) -> bool {
+        self.require_token.unwrap_or(true)
+    }
+
+    /// The per-driver request ceiling for one minute.
+    #[must_use]
+    pub fn rate_per_minute(&self) -> u32 {
+        self.rate_limit.unwrap_or(crate::drivers::RATE_PER_MINUTE)
+    }
 }
 
 /// What the command line asked for.
@@ -99,6 +119,18 @@ pub struct Flags {
     pub pidfile: Option<PathBuf>,
     /// `--foreground`.
     pub foreground: bool,
+}
+
+/// Whether `bind` names an address only this machine can reach.
+fn loopback_bind(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map_or(bind, |(host, _)| host)
+        .trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 /// The daemon, once every layer has had its say.
@@ -145,6 +177,13 @@ pub fn resolve(flags: Flags) -> Result<Config, ConfigError> {
         return Err(ConfigError::Endpoint(
             "`[acp.bridge] enabled = true` needs a `bind` address; nothing listens where it \
              was not told to"
+                .to_owned(),
+        ));
+    }
+    if bridge.require_token == Some(false) && !bridge.bind.as_deref().is_some_and(loopback_bind) {
+        return Err(ConfigError::Endpoint(
+            "`[acp.bridge] require_token = false` is only allowed on a loopback bind; a port \
+             another machine can reach needs the pairing token"
                 .to_owned(),
         ));
     }

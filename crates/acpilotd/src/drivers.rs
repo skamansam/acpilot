@@ -418,7 +418,10 @@ impl Drivers {
     /// A fixed window per driver: a minute is the unit the ticket asks for, and a
     /// fixed window is enough for its purpose — stopping a runaway driver from
     /// starving the daemon's own clients — without a second clock to keep.
-    pub fn rate_allows(&self, id: &str) -> bool {
+    pub fn rate_allows(&self, id: &str, limit: u32) -> bool {
+        if limit == 0 {
+            return true;
+        }
         let mut ledger = self.lock();
         let entry = ledger
             .windows
@@ -427,7 +430,7 @@ impl Drivers {
         if entry.0.elapsed() >= Duration::from_secs(60) {
             *entry = (Instant::now(), 0);
         }
-        if entry.1 >= RATE_PER_MINUTE {
+        if entry.1 >= limit {
             return false;
         }
         entry.1 += 1;
@@ -519,6 +522,7 @@ impl Drivers {
         enabled: bool,
         bind: Option<String>,
         public_url: Option<String>,
+        require_token: bool,
     ) -> AcpBridgeSummary {
         let ledger = self.lock();
         AcpBridgeSummary {
@@ -533,7 +537,7 @@ impl Drivers {
             // The HTTP transport always asks for a driver token: the code proves a
             // person showed it to the driver, and the token is what every later
             // request carries.
-            require_token: true,
+            require_token,
             connected: u32::try_from(
                 ledger
                     .drivers
@@ -744,9 +748,13 @@ mod tests {
         let drivers = Drivers::memory();
         let paired = claim(&drivers, &[], false).expect("paired");
         for _ in 0..RATE_PER_MINUTE {
-            assert!(drivers.rate_allows(&paired.driver.id));
+            assert!(drivers.rate_allows(&paired.driver.id, RATE_PER_MINUTE));
         }
-        assert!(!drivers.rate_allows(&paired.driver.id));
+        assert!(!drivers.rate_allows(&paired.driver.id, RATE_PER_MINUTE));
+        assert!(
+            drivers.rate_allows(&paired.driver.id, 0),
+            "zero disables the limit"
+        );
     }
 
     #[test]

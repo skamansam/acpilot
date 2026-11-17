@@ -160,6 +160,9 @@ pub struct RecipeFile {
     pub context: ContextBudget,
     /// Tool ceiling for the promoted agent.
     pub tools: ToolExposure,
+    /// Skills whose instructions are part of the system prompt.
+    #[serde(default)]
+    pub skills: Vec<String>,
     /// What this recipe is for, and what it is bad at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
@@ -179,6 +182,7 @@ impl RecipeFile {
             sampling: self.sampling,
             context: self.context,
             tools: self.tools,
+            skills: self.skills,
             notes: self.notes,
             updated_at,
         }

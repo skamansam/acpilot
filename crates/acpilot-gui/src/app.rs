@@ -1929,6 +1929,7 @@ mod drawn {
             agent_id: "mock".to_owned(),
             title: title.to_owned(),
             status: acpilot_proto::session::SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-11-07T12:00:00Z".to_owned(),
             updated_at: "2026-11-07T12:00:00Z".to_owned(),
         }

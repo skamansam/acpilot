@@ -31,7 +31,9 @@ use acpilot_profile::Profile;
 use acpilot_profile::providers::ProvidersFile;
 use acpilot_profile::recipes::Recipes;
 use acpilot_proto::model::ModelRecipe;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::Client;
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     CancelNotification, ContentBlock, ContentChunk, CreateTerminalRequest, ErrorCode,
     NewSessionRequest, Notice, NoticeSeverity, PermissionOption, PermissionOptionKind,
     PromptRequest, PromptResponse, ReadTextFileRequest, ReleaseTerminalRequest,
@@ -40,7 +42,6 @@ use agent_client_protocol::schema::v1::{
     ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, UsageUpdate,
     WaitForTerminalExitRequest, WriteTextFileRequest,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::Notify;
@@ -108,6 +109,8 @@ pub struct Loaded {
     pub recipe: ModelRecipe,
     /// The adapter for its provider.
     pub backend: Backend,
+    /// The profile directory, so skills can be discovered beside the recipe.
+    pub profile_root: PathBuf,
 }
 
 /// Resolve a profile, a recipe and the provider behind it.
@@ -179,7 +182,11 @@ pub fn load(profile_name: &str, recipe_id: &str) -> Result<Loaded, AgentError> {
         message: error.to_string(),
     })?;
 
-    Ok(Loaded { recipe, backend })
+    Ok(Loaded {
+        profile_root: profile.root().to_path_buf(),
+        recipe,
+        backend,
+    })
 }
 
 /// One session's state: where it starts, what was said, and whether it was
@@ -188,6 +195,8 @@ pub fn load(profile_name: &str, recipe_id: &str) -> Result<Loaded, AgentError> {
 pub struct SessionState {
     /// The workspace the client named at `session/new`.
     pub cwd: PathBuf,
+    /// Skills selected by the recipe, discovered in this session's workspace.
+    pub skills: Vec<acpilot_skills::Skill>,
     history: Mutex<Vec<ChatMessage>>,
     cancel: AtomicBool,
     wake: Notify,
@@ -199,10 +208,18 @@ impl SessionState {
     pub fn new(cwd: PathBuf) -> Self {
         Self {
             cwd,
+            skills: Vec::new(),
             history: Mutex::new(Vec::new()),
             cancel: AtomicBool::new(false),
             wake: Notify::new(),
         }
+    }
+
+    /// Attach the recipe's selected skills, resolved from this workspace.
+    #[must_use]
+    pub fn with_skills(mut self, skills: Vec<acpilot_skills::Skill>) -> Self {
+        self.skills = skills;
+        self
     }
 
     /// Ask the running turn to stop, and wake it if it is waiting on the model.
@@ -246,6 +263,21 @@ pub struct TurnResult {
     pub steps: u32,
     /// The last counts the provider reported.
     pub usage: Usage,
+}
+
+/// The master prompt with this session's selected skills appended.
+///
+/// Skills are instructions, not tools: the model reads them in the system
+/// prompt, which is the one delivery every OpenAI-shaped server understands.
+fn system_prompt(recipe: &ModelRecipe, skills: &[acpilot_skills::Skill]) -> String {
+    let mut prompt = recipe.system_prompt.clone();
+    for skill in skills {
+        prompt.push_str(&format!(
+            "\n\n## Skill: {}\n\n{}",
+            skill.name, skill.instructions
+        ));
+    }
+    prompt
 }
 
 /// Run one prompt to completion.
@@ -310,7 +342,7 @@ pub async fn turn(
 
         let request = ChatRequest {
             model: recipe.model_id.clone(),
-            system_prompt: Some(recipe.system_prompt.clone()),
+            system_prompt: Some(system_prompt(recipe, &session.skills)),
             messages: session.snapshot(),
             params: recipe.sampling.clone(),
             tools: tools::schema(&recipe.tools),

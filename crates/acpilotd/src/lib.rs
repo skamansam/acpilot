@@ -85,6 +85,7 @@ mod pty_remote;
 // request: `GET /v1/profiles` and `X-Acpilot-Profile` are its surface.
 pub mod profiles;
 mod sessions;
+mod skills;
 mod stats;
 mod terminals;
 // What a person approved: the fingerprint a `POST /v1/agents/{id}/trust` records and
@@ -2006,7 +2007,8 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(promote::operations())
         .chain(model_runs::operations())
         .chain(acp_http::operations())
-        .chain(stats::operations());
+        .chain(stats::operations())
+        .chain(skills::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
@@ -2408,6 +2410,7 @@ pub fn router_with(state: AppState) -> Router {
         .merge(acp_http::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
+        .merge(skills::routes())
         .merge(project::routes())
         .merge(terminals::routes())
         .merge(workspaces::routes())

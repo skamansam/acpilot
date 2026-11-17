@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex};
 use acpilot_agent_lm::{
     Loaded, SessionState, load, new_session, prompt_response, prompt_text, turn,
 };
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ErrorCode, Implementation, InitializeRequest,
     InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest, SessionId,
 };
 use agent_client_protocol::{
-    Agent, Client, ConnectionTo, Error, Stdio, on_receive_notification, on_receive_request,
+    Agent, Client, Error, Stdio, on_receive_notification, on_receive_request,
 };
 use clap::Parser;
 
@@ -77,12 +78,13 @@ async fn main() {
 
     let new_sessions = Arc::clone(&sessions);
     let new_counter = Arc::clone(&counter);
+    let new_loaded = Arc::clone(&loaded);
     let prompt_sessions = Arc::clone(&sessions);
     let prompt_loaded = Arc::clone(&loaded);
     let cancel_sessions = Arc::clone(&sessions);
 
     let result = Agent
-        .builder()
+        .v1()
         .name("acpilot-agent-lm")
         .on_receive_request(
             async |request: InitializeRequest, responder, _cx| {
@@ -103,6 +105,19 @@ async fn main() {
                 // unique within the conversation the client opened.
                 let sequence = new_counter.fetch_add(1, Ordering::Relaxed) + 1;
                 let (id, state) = new_session(&request, sequence);
+                // Skills are workspace facts, so they are resolved at session/new
+                // rather than at startup; a recipe names which ones it wants.
+                let wanted = &new_loaded.recipe.skills;
+                let skills = acpilot_skills::discover_scoped(
+                    &request.cwd,
+                    Some(&new_loaded.profile_root),
+                    &[],
+                )
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|skill| wanted.contains(&skill.name))
+                .collect();
+                let state = state.with_skills(skills);
                 new_sessions
                     .lock()
                     .expect("sessions lock")

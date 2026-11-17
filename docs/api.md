@@ -1126,6 +1126,15 @@ now would freeze transports that have not been measured.
 | `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, the budget it was assembled from, and the model's reasoning when the server reported any; `404` for a run the log does not hold, including another recipe's |
 | `POST /v1/recipes/{id}/runs/{run}/replay` | Re-send the stored prompt and selectors as a new run with its own record; `?root=` is required when the selectors are not empty, and `404` names a run the log does not hold. The corpus is read again, so the request is byte-identical while the workspace and recipe are unchanged |
 | `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent; `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
+| `GET /v1/skills` | Every visible Agent Skill, in precedence order, with its instructions and source (`workspace`, `profile` or `extension`) |
+| `POST /v1/skills` | Validate and write one `SKILL.md` into the workspace or profile; `400` for a draft the skill parser refuses, `409` when the chosen destination has no root |
+
+A recipe's `skills` array names Agent Skills; their instructions are appended to the
+system prompt, after the master prompt, in the order the names are written. A name that
+neither the workspace, the profile nor an activated extension provides is a warning
+beside the run, not a refusal. `POST /v1/skills` takes the same name, description,
+instructions and destination the lab's editor holds; the parser runs before the write,
+so the file on disk is always one the model agent would accept.
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 

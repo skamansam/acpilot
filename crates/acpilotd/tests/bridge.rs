@@ -12,11 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     ClientCapabilities, ContentBlock, Implementation, InitializeRequest, NewSessionRequest,
     PromptRequest, SessionNotification, TextContent,
 };
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo, on_receive_notification};
+use agent_client_protocol::{AcpAgent, Agent, Client, on_receive_notification};
 
 /// Long enough for a debug build of the daemon to start and one agent to answer.
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -80,7 +81,7 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
     let driven = tokio::time::timeout(
         PATIENCE,
         Client
-            .builder()
+            .v1()
             .on_receive_notification(
                 async move |notification: SessionNotification, _cx| {
                     // Read through JSON: the point is what a driver receives on the
@@ -138,7 +139,7 @@ async fn a_local_driver_prompts_a_session_and_reads_the_stream() {
 
                     let response = connection
                         .send_request(PromptRequest::new(
-                            agent_client_protocol::schema::v1::SessionId::new(session_id),
+                            agent_client_protocol::v1::schema::SessionId::new(session_id),
                             vec![ContentBlock::Text(TextContent::new("stream 2"))],
                         ))
                         .block_task()

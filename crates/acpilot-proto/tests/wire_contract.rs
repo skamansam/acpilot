@@ -509,6 +509,7 @@ fn model_documents() {
             "search": true,
             "max_steps": 8
         },
+        "skills": ["code-review"],
         "updated_at": "2026-10-21T09:31:12Z"
     }));
 
@@ -853,6 +854,7 @@ fn every_enum_has_one_stable_wire_spelling() {
         "language_servers"
     );
     assert_wire!(extension::ExtensionKind::Agents, "agents");
+    assert_wire!(extension::ExtensionKind::Skills, "skills");
     assert_wire!(extension::ExtensionKind::Grammars, "grammars");
     assert_wire!(extension::ExtensionKind::Snippets, "snippets");
     assert_wire!(extension::ExtensionKind::Keymap, "keymap");

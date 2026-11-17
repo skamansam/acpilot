@@ -36,6 +36,11 @@ pub enum Contribution {
     LanguageServers(Vec<LanguageServerPreset>),
     /// One or more agent presets.
     Agents(Vec<AgentPreset>),
+    /// A directory of `SKILL.md` folders, read by `acpilot-skills` at use time.
+    Skills {
+        /// Path relative to the extension root.
+        path: String,
+    },
     /// A kind the manifest may declare but this build cannot read yet.
     ///
     /// The path is still checked; the file is not parsed. Saying so out loud is
@@ -58,6 +63,7 @@ impl Contribution {
             Self::Theme(_) => ExtensionKind::Theme,
             Self::LanguageServers(_) => ExtensionKind::LanguageServers,
             Self::Agents(_) => ExtensionKind::Agents,
+            Self::Skills { .. } => ExtensionKind::Skills,
             Self::Unloaded { kind, .. } => *kind,
         }
     }
@@ -107,6 +113,13 @@ pub fn load(source: &dyn AssetSource) -> Result<LoadedExtension, ExtensionError>
                     &text,
                     &manifest.id,
                 )?));
+            }
+            ExtensionKind::Skills => {
+                // The directory is data; its `SKILL.md` files are parsed by the
+                // skills loader when a profile asks for them, not at install.
+                contributions.push(Contribution::Skills {
+                    path: entry.path.clone(),
+                });
             }
             kind @ (ExtensionKind::Grammars
             | ExtensionKind::Snippets

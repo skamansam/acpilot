@@ -35,6 +35,9 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# Skills are discovered and validated by the same parser the model agent uses, so
+# `GET /v1/skills` cannot accept a draft the agent would later refuse.
+acpilot-skills = { workspace = true }
 # The record a restart reads: sessions and their events outlive the process that
 # streamed them, and a conversation a client asks about by id has to be
 # answerable after the daemon that ran it is gone.

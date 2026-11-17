@@ -228,6 +228,16 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentsCommand,
     },
+    /// Pair a remote ACP driver, inspect the bridge, and revoke a driver.
+    ///
+    /// Pairing is the human act the remote bridge requires: the code is shown
+    /// here, typed into the driver, single-use and short-lived. The daemon's
+    /// HTTP routes are the contract; these verbs are the terminal's way to them.
+    Acp {
+        /// Which acp verb.
+        #[command(subcommand)]
+        command: AcpCommand,
+    },
     /// Run a recipe's prompt and stream the answer.
     ///
     /// This is the terminal's window onto `POST /v1/recipes/{id}/runs`: the same
@@ -252,6 +262,53 @@ pub enum ModelsCommand {
     Probe {
         /// Provider id from the profile's `providers.toml`.
         id: Option<String>,
+    },
+}
+
+/// The daemon endpoint flags shared by the ACP verbs.
+#[derive(Debug, clap::Args)]
+pub struct AcpEndpoint {
+    /// Endpoint of the daemon: a URL, or a unix socket path.
+    #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+    api_url: Option<String>,
+    /// Bearer token for a daemon on a TCP endpoint.
+    #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+    token: Option<String>,
+}
+
+/// Everything under `acpilot acp`.
+#[derive(Debug, Subcommand)]
+pub enum AcpCommand {
+    /// Issue a one-time code for a driver to claim.
+    Pair {
+        /// Let the driver answer permission requests for turns it starts.
+        #[arg(long)]
+        grant_answer_permissions: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// Print whether the bridge is listening and what it bound.
+    Bridge {
+        /// Print the summary as one JSON object.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// List every driver on record, including revoked ones.
+    Drivers {
+        /// Print the rows as one JSON array.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// Revoke a driver's token; its next request is refused.
+    Revoke {
+        /// Driver id, as `acpilot acp drivers` prints it.
+        id: String,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
     },
 }
 
@@ -644,6 +701,7 @@ pub fn run(cli: Cli) -> u8 {
         }),
         Some(Command::Models { command }) => run_models(command, profile.as_deref()),
         Some(Command::Agents { command }) => run_agents(command, profile.as_deref()),
+        Some(Command::Acp { command }) => run_acp(command, profile.as_deref()),
         Some(Command::Recipes { command }) => run_recipes(command, profile.as_deref()),
         Some(Command::Doctor {
             path,
@@ -1509,6 +1567,158 @@ fn run_agents(command: AgentsCommand, profile: Option<&str>) -> u8 {
             }
         }
     }
+}
+
+/// `acpilot acp ...`: pairing and revocation through the daemon's routes.
+fn run_acp(command: AcpCommand, profile: Option<&str>) -> u8 {
+    enum Action {
+        Pair(bool),
+        Bridge(bool),
+        Drivers(bool),
+        Revoke(String),
+    }
+
+    let (endpoint, action) = match command {
+        AcpCommand::Pair {
+            grant_answer_permissions,
+            endpoint,
+        } => (endpoint, Action::Pair(grant_answer_permissions)),
+        AcpCommand::Bridge { json, endpoint } => (endpoint, Action::Bridge(json)),
+        AcpCommand::Drivers { json, endpoint } => (endpoint, Action::Drivers(json)),
+        AcpCommand::Revoke { id, endpoint } => (endpoint, Action::Revoke(id)),
+    };
+
+    let mut daemon_args = Vec::new();
+    if let Some(name) = profile {
+        match acpilot_profile::Profile::named(name) {
+            Ok(profile) => {
+                daemon_args.push("--profile".to_owned());
+                daemon_args.push(profile.root().display().to_string());
+            }
+            Err(error) => {
+                eprintln!("acpilot acp: {error}");
+                return exit::NOT_FOUND;
+            }
+        }
+    }
+    let options = acpilot_client::daemon::Options {
+        endpoint: endpoint.api_url,
+        no_spawn: false,
+        token: endpoint.token.or_else(acpilot_host::token::local),
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot acp: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot acp: {error}");
+            return exit::FAILURE;
+        }
+    };
+
+    runtime.block_on(async move {
+        let client = running.client;
+        match action {
+            Action::Pair(grant) => match client.pair_driver(grant).await {
+                Ok(code) => {
+                    println!("code {}", code.code);
+                    println!("expires {}", code.expires_at);
+                    if let Some(url) = code.handshake_url {
+                        println!("connect {url}");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp pair: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Bridge(json) => match client.acp_bridge().await {
+                Ok(bridge) => {
+                    if json {
+                        match serde_json::to_string_pretty(&bridge) {
+                            Ok(text) => println!("{text}"),
+                            Err(error) => {
+                                eprintln!("acpilot acp bridge: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else if bridge.enabled {
+                        println!("enabled");
+                        if let Some(bind) = bridge.bind {
+                            println!("bind {bind}");
+                        }
+                        if let Some(url) = bridge.public_url {
+                            println!("public {url}");
+                        }
+                        println!("token required {}", bridge.require_token);
+                        println!(
+                            "drivers {} connected · {} known",
+                            bridge.connected, bridge.known_drivers
+                        );
+                    } else {
+                        println!("off");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp bridge: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Drivers(json) => match client.acp_drivers().await {
+                Ok(drivers) => {
+                    if json {
+                        match serde_json::to_string_pretty(&drivers) {
+                            Ok(text) => println!("{text}"),
+                            Err(error) => {
+                                eprintln!("acpilot acp drivers: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else if drivers.is_empty() {
+                        println!("no drivers paired");
+                    } else {
+                        for driver in drivers {
+                            println!(
+                                "{}\t{}\t{:?}\t{} sessions · {} turns\t{}",
+                                driver.id,
+                                driver.name,
+                                driver.status,
+                                driver.sessions,
+                                driver.prompt_turns,
+                                driver.peer
+                            );
+                        }
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp drivers: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Revoke(id) => match client.revoke_driver(&id).await {
+                Ok(driver) => {
+                    println!("revoked {}", driver.id);
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp revoke: {error}");
+                    exit::FAILURE
+                }
+            },
+        }
+    })
 }
 
 /// `acpilot recipes run <id> "…"`.

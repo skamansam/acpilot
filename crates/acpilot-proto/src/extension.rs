@@ -28,6 +28,8 @@ pub enum ExtensionKind {
     LanguageServers,
     /// Agent presets (ACP commands and their docs).
     Agents,
+    /// Agent Skills (`SKILL.md` directories) installed with the extension.
+    Skills,
     /// A prebuilt tree-sitter grammar plus its queries.
     Grammars,
     /// Per-language snippets.

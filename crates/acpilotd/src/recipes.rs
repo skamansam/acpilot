@@ -94,6 +94,7 @@ impl Recipes {
             sampling: request.sampling,
             context: request.context,
             tools: request.tools,
+            skills: request.skills,
             notes: request.notes,
         };
         self.write_new(&path, &file)?;
@@ -144,6 +145,9 @@ impl Recipes {
         }
         if let Some(tools) = patch.tools {
             file.tools = tools;
+        }
+        if let Some(skills) = patch.skills {
+            file.skills = skills;
         }
         if let Some(notes) = patch.notes {
             file.notes = Some(notes);
@@ -429,6 +433,7 @@ mod tests {
             provider_id: "lm".to_owned(),
             model_id: "m".to_owned(),
             system_prompt: "Be terse.".to_owned(),
+            skills: Vec::new(),
             sampling: SamplingParams::default(),
             context: ContextBudget {
                 window: 4096,

@@ -1446,7 +1446,7 @@ resolved.
   - `acpilot agents rm <id>` reverses it exactly; a promoted agent is a manifest line, not a
     migration.
 
-- [ ] **P4.5-10 · ACP bridge for remote drivers** (2d)
+- [x] **P4.5-10 · ACP bridge for remote drivers** (2d)
   - **Result so far (2026-11-13):** the local transport is served. `acpilotd --acp` answers
     ACP over stdin/stdout for the profile the daemon was started with, and it is the same
     state a request with that profile's header would reach — same workspace, agents and
@@ -1496,12 +1496,19 @@ resolved.
     payload shapes in `acp_update.rs`, and one in `tests/acp_bridge.rs` that prompts a
     real mock agent and reads the tool call, its completion, the plan and the mode
     change from a paired driver's stream.
-  - **Open:** the store's session and audit rows do not carry the driver id yet — the
-    ledger records ownership and counts, not the SQLite rows. The token is required even
-    on loopback: the ticket allowed skipping it, and this build does not offer that
-    half-decision. The rate limit is a fixed 60 a minute, not configurable. No
-    `acpilot acp ...` verbs exist; pairing and revocation are the HTTP routes, like the
-    rest of the cockpit.
+  - **Result (2026-11-16):** the remaining cockpit half landed. Migration 4 adds
+    `driver_id` to `sessions` and `grants`; `session/new` records the driver that opened
+    it, a grant carries the driver that answered it, and `SessionSummary` exposes it, so
+    the transcript answers "who asked for this?" without consulting the ledger. An
+    HTTP-started session records `Some(driver.id)`; stdio and pre-migration rows record
+    `None`. `[acp.bridge] require_token = false` skips the bearer check only when `bind`
+    is loopback (the daemon refuses the config otherwise) and gives that unauthenticated
+    loopback driver all four scopes; the default remains required. `[acp.bridge]
+    rate_limit` sets requests per minute per driver, `0` disables it, and the default is
+    still 60. `acpilot acp pair|bridge|drivers|revoke` are the CLI verbs, built on the
+    client's `pair_driver`, `acp_bridge`, `acp_drivers` and `revoke_driver`. **Open:**
+    driver id is not written to the generic event/audit table; the session and grant rows
+    are the ownership record.
   - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
     `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
     Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip
@@ -1652,17 +1659,23 @@ resolved.
   - One row per integration, including quiet ones, so the bar does not reflow when a provider
     stops answering; `updated_at` makes a stale reading visible.
 
-- [ ] **P4.5-13 · Skills** (2d) — `acpilot-skills` parses Agent Skills (`SKILL.md`: YAML
-  frontmatter plus instructions) and resolves workspace `.acpilot/skills/<name>/` over an
-  extension's `skills/<name>/`, with the name/directory/description limits enforced and 12
-  tests over temporary trees. Still open:
-  - a `skills` contribution kind in extension manifests and activation, so a pack can ship them
-    and a profile decides whether they exist;
-  - the creator/editor in the model lab: write `SKILL.md`, validate before saving, preview the
-    instructions, and choose workspace or profile as the destination;
-  - selection in a recipe/session, and how the instructions reach the agent — system prompt for
-    model-backed agents, an ACP attachment for external ones — without pretending every agent
-    has a native skill mechanism.
+- [x] **P4.5-13 · Skills** (2d) — `acpilot-skills` parses Agent Skills (`SKILL.md`: YAML
+  frontmatter plus instructions) and resolves workspace `.acpilot/skills/<name>/` over a
+  profile's `skills/<name>/` over an extension's `skills/<name>/`, with the
+  name/directory/description limits enforced and 12 tests over temporary trees.
+  - **Result (2026-11-16):** extensions can declare a `skills` contribution; the loader
+    resolves its directory and `discover_scoped` merges it below profile and workspace, so
+    a pack ships skills and activation decides whether they exist. `GET /v1/skills`
+    lists every visible skill with its instructions and source, and `POST /v1/skills`
+    validates a draft through the same parser before atomically writing `SKILL.md` into
+    the workspace or profile; a rejected edit leaves the previous file intact. The model
+    lab has a skills pane: `n` creates, `Enter` edits, `Space` adds the skill to the
+    recipe, and `^S` saves with `^D` choosing workspace or profile. A recipe carries
+    `skills: ["name"]`; `acpilot-agent-lm` appends those instructions to its system
+    prompt at `session/new`, and a lab run does the same before assembling the corpus,
+    warning beside the run when a named skill is missing. **Open:** external (non-model)
+    agents get no ACP attachment for skills; the recipe field is the contract, and an
+    external agent that has no native skill mechanism simply receives none.
 
 ---
 
@@ -2923,8 +2936,8 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
 ```toml
 [workspace.dependencies]
 # protocol
-agent-client-protocol      = { version = "3.4", features = ["process", "stdio"] }
-agent-client-protocol-schema = "1.12"  # versioned separately from the 3.x runtime — do not assume the majors match
+agent-client-protocol      = { version = "5.3", features = ["process", "stdio"] }
+agent-client-protocol-schema = "1.18"  # versioned separately from the 5.x runtime — do not assume the majors match
 # runtime
 tokio                      = { version = "1.54", features = ["full"] }
 futures                    = "0.3"
@@ -2962,7 +2975,7 @@ gen-lsp-types              = { version = "0.11", features = ["url"] }
 async-lsp                  = "0.2"           # probe candidate only; see P7-2
 url                        = "2"
 # hosts
-russh                      = "0.64"
+russh                      = "0.65"
 russh-sftp                 = "3"
 ssh2-config                = "0.9"
 openssh                    = "0.11"          # optional fallback
@@ -2998,7 +3011,7 @@ features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threadi
 
 Every direct dependency above resolves from crates.io as written — verified on 2026-10-20 by
 extracting this block and running `cargo generate-lockfile`. That check is what caught three
-stale entries (`agent-client-protocol-schema` is **1.12**, not 3.x; `windows` is **0.62**, not
+stale entries (`agent-client-protocol-schema` is **1.18**, not 5.x; `windows` is **0.62**, not
 0.6; `argon2` is **0.6**) and reqwest's renamed TLS feature. Re-run it after any edit here;
 the block is a build input, not prose.
 

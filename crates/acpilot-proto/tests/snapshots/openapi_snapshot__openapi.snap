@@ -532,6 +532,13 @@ expression: canonical(document)
             "minimum": 0,
             "type": "integer"
           },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "system_prompt": {
             "description": "The master prompt.",
             "type": "string"
@@ -958,6 +965,7 @@ expression: canonical(document)
           "theme",
           "language_servers",
           "agents",
+          "skills",
           "grammars",
           "snippets",
           "keymap",
@@ -2021,6 +2029,13 @@ expression: canonical(document)
             "minimum": 0,
             "type": "integer"
           },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.\n\nEmpty means none. A name that is not present is reported when the run\nstarts rather than silently omitted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "system_prompt": {
             "description": "The master prompt. The whole point of the lab is editing this and seeing\nwhat changes.",
             "type": "string"
@@ -2832,6 +2847,16 @@ expression: canonical(document)
               }
             ]
           },
+          "skills": {
+            "description": "New skill selection. `Some(vec![])` clears it; `None` leaves it alone.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "system_prompt": {
             "description": "New master prompt.",
             "type": [
@@ -3348,6 +3373,13 @@ expression: canonical(document)
             "description": "RFC 3339 timestamp of creation.",
             "type": "string"
           },
+          "driver_id": {
+            "description": "Driver that opened this session, when it came through the ACP bridge.\n\nAbsent for a session a person opened at the machine. The id is the one\n`GET /v1/acp/drivers` lists, so a transcript can answer who asked after\nthe connection ended.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Session identifier."
@@ -3395,6 +3427,85 @@ expression: canonical(document)
         },
         "required": [
           "mode"
+        ],
+        "type": "object"
+      },
+      "SkillDestination": {
+        "description": "Where a saved skill is written.",
+        "enum": [
+          "workspace",
+          "profile"
+        ],
+        "type": "string"
+      },
+      "SkillDraft": {
+        "additionalProperties": false,
+        "description": "A create-or-replace request from the lab.",
+        "properties": {
+          "description": {
+            "description": "One-line description, at most 1024 characters.",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/SkillDestination",
+            "description": "Workspace or profile."
+          },
+          "instructions": {
+            "description": "Instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "destination"
+        ],
+        "type": "object"
+      },
+      "SkillSource": {
+        "description": "Where a skill was found.",
+        "enum": [
+          "workspace",
+          "profile",
+          "extension"
+        ],
+        "type": "string"
+      },
+      "SkillSummary": {
+        "description": "One skill, including its instructions for preview.",
+        "properties": {
+          "description": {
+            "description": "One-line description used by the picker.",
+            "type": "string"
+          },
+          "instructions": {
+            "description": "The instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute directory containing `SKILL.md`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Which layer provided it."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "source",
+          "path"
         ],
         "type": "object"
       },

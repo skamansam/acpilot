@@ -11,7 +11,7 @@
 //! protocol's camelCase: this is where the spelling changes, in one place.
 
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     ContentBlock, ContentChunk, CurrentModeUpdate, Notice, NoticeSeverity, Plan, PlanEntry,
     SessionUpdate, TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus,
     ToolCallUpdate, ToolCallUpdateFields, ToolKind,

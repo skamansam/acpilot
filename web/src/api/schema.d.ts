@@ -966,6 +966,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the skills this workspace can see
+         * @description Workspace skills override profile skills, which override those an activated extension ships. Instructions are included for preview.
+         */
+        get: operations["list_skills"];
+        put?: never;
+        /**
+         * Create or replace a skill
+         * @description The draft is validated by the same parser that reads `SKILL.md`; a rejected draft leaves the previous file intact. `destination` chooses the workspace or the profile.
+         */
+        post: operations["save_skill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stats": {
         parameters: {
             query?: never;
@@ -1285,6 +1309,8 @@ export interface components {
              * @description Schema version; this build reads 1.
              */
             schema_version: number;
+            /** @description Skills whose instructions are part of this recipe's system prompt. */
+            skills?: string[];
             /** @description The master prompt. */
             system_prompt: string;
             /** @description Tool ceiling for the promoted agent. */
@@ -1516,7 +1542,7 @@ export interface components {
          *     on each contribution.
          * @enum {string}
          */
-        ExtensionKind: "theme" | "language_servers" | "agents" | "grammars" | "snippets" | "keymap" | "transcript_parser";
+        ExtensionKind: "theme" | "language_servers" | "agents" | "skills" | "grammars" | "snippets" | "keymap" | "transcript_parser";
         /**
          * @description How the extension got here.
          * @enum {string}
@@ -2044,6 +2070,13 @@ export interface components {
              */
             schema_version: number;
             /**
+             * @description Skills whose instructions are part of this recipe's system prompt.
+             *
+             *     Empty means none. A name that is not present is reported when the run
+             *     starts rather than silently omitted.
+             */
+            skills?: string[];
+            /**
              * @description The master prompt. The whole point of the lab is editing this and seeing
              *     what changes.
              */
@@ -2510,6 +2543,8 @@ export interface components {
             notes?: string | null;
             provider_id?: components["schemas"]["String"] | null;
             sampling?: components["schemas"]["SamplingParams"] | null;
+            /** @description New skill selection. `Some(vec![])` clears it; `None` leaves it alone. */
+            skills?: string[] | null;
             /** @description New master prompt. */
             system_prompt?: string | null;
             tools?: components["schemas"]["ToolExposure"] | null;
@@ -2791,6 +2826,14 @@ export interface components {
             agent_id: components["schemas"]["String"];
             /** @description RFC 3339 timestamp of creation. */
             created_at: string;
+            /**
+             * @description Driver that opened this session, when it came through the ACP bridge.
+             *
+             *     Absent for a session a person opened at the machine. The id is the one
+             *     `GET /v1/acp/drivers` lists, so a transcript can answer who asked after
+             *     the connection ended.
+             */
+            driver_id?: string | null;
             /** @description Session identifier. */
             id: components["schemas"]["String"];
             /**
@@ -2814,6 +2857,40 @@ export interface components {
         SetModeRequest: {
             /** @description The id of the mode to switch to, as the agent advertised it. */
             mode: string;
+        };
+        /**
+         * @description Where a saved skill is written.
+         * @enum {string}
+         */
+        SkillDestination: "workspace" | "profile";
+        /** @description A create-or-replace request from the lab. */
+        SkillDraft: {
+            /** @description One-line description, at most 1024 characters. */
+            description: string;
+            /** @description Workspace or profile. */
+            destination: components["schemas"]["SkillDestination"];
+            /** @description Instructions after the frontmatter. */
+            instructions: string;
+            /** @description Lowercase hyphenated name, also the directory name. */
+            name: string;
+        };
+        /**
+         * @description Where a skill was found.
+         * @enum {string}
+         */
+        SkillSource: "workspace" | "profile" | "extension";
+        /** @description One skill, including its instructions for preview. */
+        SkillSummary: {
+            /** @description One-line description used by the picker. */
+            description: string;
+            /** @description The instructions after the frontmatter. */
+            instructions: string;
+            /** @description Lowercase hyphenated name, also the directory name. */
+            name: string;
+            /** @description Absolute directory containing `SKILL.md`. */
+            path: string;
+            /** @description Which layer provided it. */
+            source: components["schemas"]["SkillSource"];
         };
         /**
          * @description Where one figure came from.
@@ -5572,6 +5649,68 @@ export interface operations {
                 };
             };
             /** @description A turn is already in flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_skills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSummary"][];
+                };
+            };
+        };
+    };
+    save_skill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillDraft"];
+            };
+        };
+        responses: {
+            /** @description The written skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSummary"];
+                };
+            };
+            /** @description The draft is not a valid skill */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace or profile to write into */
             409: {
                 headers: {
                     [name: string]: unknown;

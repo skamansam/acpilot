@@ -2432,6 +2432,20 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
 
 ## Release phase (P12) — Release v0.1 (≈6 days)
 
+- **Progress 2026-11-17:** a release archive now carries `install.json` beside the
+  binaries (`{"method":"tarball","version":"<tag>"}`, written by both package steps in
+  `release.yml`), which is what makes ADR 0010's table real rather than tested: an
+  unpacked archive is a copy nobody's package manager owns, so `acpilot update --from`
+  may replace it. `acpilot update` reads that marker through `acpilot_host::install` and
+  answers by owner — a package-managed copy prints its own upgrade command (`sudo apt
+  install --only-upgrade acpilot`, `brew upgrade acpilot`, …) and refuses `--from`, a
+  tarball or `cargo install` is replaced atomically (written beside the binary, executable
+  bit set, then renamed over it), and a copy with no marker is left alone. **Open:** the
+  generated Homebrew formula installs from the same archive, so a `brew` copy still reads
+  `tarball` and would be offered a self-replacement inside the Cellar — the formula needs
+  its own marker (`post_install` writing `{"method":"brew"}`); and the download,
+  checksum and extraction that would let `acpilot update` fetch a release itself instead of
+  taking `--from <path>`.
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
   - Wired: `dist-workspace.toml` pins cargo-dist 0.32.0 and declares those seven targets, the three installers, a sha256 checksum per archive and `cargo-cyclonedx`; `cargo xtask dist` builds the set for one machine and refuses a `dist` of another version, because the artifacts are that version's output.
     - Verified on linux x86_64 (2026-10-29): three archives with `.sha256` beside each, `sha256.sum`, the shell and PowerShell installers and the formula for every program, the source tarball, and three SBOMs — all in `target/distrib/`.

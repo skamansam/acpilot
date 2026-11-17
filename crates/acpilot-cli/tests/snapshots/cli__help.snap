@@ -8,6 +8,7 @@ Usage: acpilot [OPTIONS] [COMMAND]
 
 Commands:
   version    Print version and protocol information
+  update     Say how this copy was installed, and replace it when it is yours to replace
   ext        Install, verify, and approve extensions
   secret     Store, list, and remove credentials in the OS keyring
   token      Show and rotate the token a TCP daemon requires

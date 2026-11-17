@@ -80,6 +80,14 @@ pub(crate) fn default_shell() -> String {
 /// `-<user>` plus SDDL when the socket transport lands (ADR 0004 §3); a mode on a
 /// file is not how Windows expresses that, and setting one would be a no-op that
 /// reads like a guarantee.
+/// Windows executes by extension, so there is no bit on the file to set.
+///
+/// Nothing to change is not an error: the caller is replacing a program, and on this
+/// platform a moved file with the right name is one.
+pub fn make_executable(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 pub(crate) fn private_dir(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }

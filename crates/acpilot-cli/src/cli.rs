@@ -58,6 +58,21 @@ pub struct Cli {
 pub enum Command {
     /// Print version and protocol information.
     Version,
+    /// Say how this copy was installed, and replace it when it is yours to replace.
+    ///
+    /// The answer is the installation's, not this build's: `install.json` beside the
+    /// binary says `apt`, `brew`, `cargo`, `tarball`, … (ADR 0010), and only the
+    /// methods nobody owns are replaced here. A package-managed copy prints the command
+    /// that upgrades it instead, because a binary written over files the package
+    /// manager owns is a file that manager puts back on its next upgrade.
+    Update {
+        /// A new `acpilot` binary to put in place of this one.
+        ///
+        /// Written beside the running binary and renamed over it, so a failure halfway
+        /// is not a half-written program. Refused for a package-managed copy.
+        #[arg(long, value_name = "PATH")]
+        from: Option<PathBuf>,
+    },
     /// Install, verify, and approve extensions.
     Ext {
         /// Which ext verb.
@@ -664,6 +679,7 @@ pub fn run(cli: Cli) -> u8 {
             println!("api      {API_PREFIX}");
             exit::SUCCESS
         }
+        Some(Command::Update { from }) => crate::update::run(from),
         Some(Command::Ext { command }) => run_ext(command, profile.as_deref()),
         Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),

@@ -167,6 +167,13 @@ jobs:
           mkdir -p "$stage"
           cp target/release/acpilot target/release/acpilotd target/release/acpilot-gui "$stage/"
           cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
+          # The marker ADR 0010 reads: an archive is a copy nobody's package manager
+          # owns, so `acpilot update --from` may replace it. It says `tarball` rather than
+          # `script` because the same bytes are what the installer downloads — the
+          # install method is the *consumer's* fact, and this is the archive's.
+          cat > "$stage/install.json" <<JSON
+          { "method": "tarball", "version": "${{ needs.version.outputs.version }}" }
+          JSON
           tar -czf "$stage.tar.gz" "$stage"
           shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
 
@@ -178,6 +185,10 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item target/release/acpilot.exe, target/release/acpilotd.exe, target/release/acpilot-gui.exe $stage
           Copy-Item README.md $stage
+          # The marker ADR 0010 reads. Written without a byte-order mark, which is what
+          # `-Encoding utf8` does only on PowerShell 7 and what a JSON parser refuses.
+          $marker = @{ method = 'tarball'; version = '${{ needs.version.outputs.version }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText("$stage/install.json", $marker)
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
           $hash = (Get-FileHash "$stage.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $stage.zip" | Out-File "$stage.zip.sha256" -Encoding ascii

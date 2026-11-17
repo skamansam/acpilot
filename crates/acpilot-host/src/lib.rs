@@ -49,7 +49,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-pub use platform::CASE_INSENSITIVE_PATHS;
+pub use platform::{CASE_INSENSITIVE_PATHS, make_executable};
 pub use pty::Pty;
 #[cfg(feature = "ssh")]
 pub use ssh::{HostKeyPolicy, SshConfig, SshHost};

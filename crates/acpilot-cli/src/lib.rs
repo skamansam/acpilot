@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod export;
 pub mod ext;
 pub mod secret;
+pub mod update;
 
 pub use cli::{Cli, Command, ConfigCommand, ExtCommand, SecretCommand};
 

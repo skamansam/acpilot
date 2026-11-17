@@ -36,6 +36,18 @@ pub(crate) fn detach(command: &mut std::process::Command) {
 /// The daemon's runtime directory holds a socket, a token and a log. On POSIX the
 /// filesystem is the access control for all three, so the directory's mode is
 /// part of the security story rather than tidiness (ADR 0004 §3).
+/// Give a file the permission bits a program needs to be run.
+///
+/// Set rather than added (`+x`): a replacement that inherited whatever mode the
+/// download happened to have would carry a setuid bit into place if it ever had one,
+/// and a binary the user may run needs nothing else here.
+pub fn make_executable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions)
+}
+
 pub(crate) fn private_dir(path: &std::path::Path) -> std::io::Result<()> {
     set_mode(path, 0o700)
 }

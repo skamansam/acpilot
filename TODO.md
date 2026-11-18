@@ -1720,6 +1720,27 @@ v0.1 (D18).
     private one. Signature failure is a hard error with the key id named.
   - `acpilot ext search|add|update|remove|list|show`; `--from <dir>` installs a path link for
     development; `--index <url>` for a private registry. No fetch on startup, ever.
+  - **Progress 2026-11-18:** the signed index and the six verbs shipped. `marketplace/index.json`
+    plus `index.json.sig` is the reviewed list, verified with `index.rs` and compiled into the
+    binary, so `ext search` and `ext add` read this release's listings without a network call; a
+    private registry uses `--index <path|url>` and the signature beside it. `--index` still means
+    the listing file, not the archive's host. The maintainer key is `MAINTAINER_PUBLIC_KEY` (the
+    release key's public half), and `registry.trusted_keys` in the global `config.toml` adds keys;
+    a settings entry that tries to replace the maintainer id is refused, and every signature
+    failure names the key it saw. `Store::install_from_archive` checks the archive's size and
+    sha256 before unpacking, then requires the manifest to agree with the listing on id, version
+    and publisher before renaming into the store; `archive.rs` unpacks gzip tarballs and zips and
+    refuses absolute or climbing paths, symlinks, hard links and device nodes. `ext update`
+    installs the newest listed version beside the old one (prune removes it), `ext remove`
+    refuses while a profile activates the id, and `list`/`show` report store status beside the
+    index. Tests: index validation and signature cases (including the shipped signature), archive
+    shape and traversal, store installs from a real tarball, and six process-level CLI tests with
+    a local signed index and a one-shot HTTP archive server. **Open:** `--from` copies a directory
+    into the store rather than linking it, so a developer edits and re-adds under a new version;
+    `ext add` does not activate in the same command; `--json` and the daemon's `/v1/extensions`
+    surface are P4.6-10; nothing caps the unpacked size of a downloaded archive beyond the
+    archive's own declared size; and adding a listing means re-signing `index.json` with the
+    maintainer key, which is a release-time step rather than something CI can do.
 
 - [x] **P4.6-5 · Activation and precedence** (1d) — done: `activation.rs`, `effective.rs`, `ext why`; the daemon's `extension.changed` event waits for the mod-shop phase's task P4.6-10
   - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <

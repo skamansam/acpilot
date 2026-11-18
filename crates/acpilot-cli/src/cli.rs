@@ -24,6 +24,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::doctor;
 use crate::export;
 use crate::ext::{self, Paths};
+use crate::registry;
 use crate::secret;
 
 /// `acpilot` command line.
@@ -584,13 +585,74 @@ pub enum SecretCommand {
 /// Everything under `acpilot ext`.
 #[derive(Debug, Subcommand)]
 pub enum ExtCommand {
-    /// Install an extension from a local directory.
+    /// Install an extension from the signed index, or from a local directory.
     Add {
-        /// Extension directory containing `extension.toml`.
-        #[arg(long, value_name = "DIR")]
-        from: PathBuf,
+        /// Extension id from the index, for example `acpilot.night-flight`.
+        id: Option<String>,
+        /// Install a directory instead of an indexed archive, for development.
+        #[arg(long, value_name = "DIR", conflicts_with = "id")]
+        from: Option<PathBuf>,
+        /// Version to install. The newest the index lists when absent.
+        #[arg(long, value_name = "VERSION", requires = "id")]
+        version: Option<String>,
+        /// A different index: an https URL or a file. Defaults to the one this
+        /// build ships.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
         #[command(flatten)]
         store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// List the extensions a signed index offers.
+    Search {
+        /// Case-insensitive text matched against the id and the publisher.
+        query: Option<String>,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Install the newest listed version of what is already installed.
+    Update {
+        /// Only this extension. Every installed one when absent.
+        id: Option<String>,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Remove every installed version of an extension.
+    Remove {
+        /// Extension id, `publisher.name`.
+        id: String,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// List installed extensions, and whether the store would load each one.
+    List {
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Show what the index offers for one extension beside what is installed.
+    Show {
+        /// Extension id, `publisher.name`.
+        id: String,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
     },
     /// Import a TextMate `.tmTheme` as a theme extension and install it.
     ImportTheme {
@@ -2643,19 +2705,90 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
     // the same identity the launch resolution falls back to.
     let named = profile.unwrap_or(acpilot_profile::launch::DEFAULT_PROFILE);
     match command {
-        ExtCommand::Add { from, store } => {
-            let paths = match Paths::resolve(store.store, None) {
+        ExtCommand::Add {
+            id,
+            from,
+            version,
+            index,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            match ext::add(&paths, &from) {
-                Ok(line) => {
-                    println!("{line}");
-                    println!("approve it for a profile with `acpilot ext activate <id>`");
-                    exit::SUCCESS
+            match (from, id) {
+                (Some(from), _) => match ext::add(&paths, &from) {
+                    Ok(line) => {
+                        println!("{line}");
+                        println!("approve it for a profile with `acpilot ext activate <id>`");
+                        exit::SUCCESS
+                    }
+                    Err(error) => fail(&error),
+                },
+                (None, Some(id)) => ext_lines(registry::add(
+                    &paths,
+                    index.as_deref(),
+                    &id,
+                    version.as_deref(),
+                )),
+                (None, None) => {
+                    eprintln!(
+                        "acpilot ext add: name an extension id, or pass --from <DIR> for a local \
+                         checkout"
+                    );
+                    exit::USAGE
                 }
-                Err(error) => fail(&error),
             }
+        }
+        ExtCommand::Search {
+            query,
+            index,
+            config,
+        } => {
+            let paths = match Paths::resolve(None, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_lines(registry::search(&paths, index.as_deref(), query.as_deref()))
+        }
+        ExtCommand::Update {
+            id,
+            index,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_lines(registry::update(&paths, index.as_deref(), id.as_deref()))
+        }
+        ExtCommand::Remove { id, store, config } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_lines(registry::remove(&paths, &id))
+        }
+        ExtCommand::List { store, config } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_lines(registry::list(&paths))
+        }
+        ExtCommand::Show {
+            id,
+            index,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_lines(registry::show(&paths, index.as_deref(), &id))
         }
         ExtCommand::ImportTheme {
             from,
@@ -2930,6 +3063,26 @@ fn run_secret(command: SecretCommand, flag: Option<&str>) -> u8 {
                     exit::FAILURE
                 }
             }
+        }
+    }
+}
+
+/// Print a registry verb's lines, or its one error.
+///
+/// These verbs already say what to do next in the line itself, so the failure
+/// path is one sentence rather than a table; the exit status is what a script
+/// reads.
+fn ext_lines(result: Result<Vec<String>, String>) -> u8 {
+    match result {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            exit::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            exit::FAILURE
         }
     }
 }

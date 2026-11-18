@@ -89,8 +89,15 @@ done
 /// The three arguments before the command are `-o BatchMode=yes <address>`; the helper
 /// itself is one argument (`sh -s`, or `sh -c 'exec …'`), which is why joining with
 /// `$*` is right where `exec "$@"` would run `-o` as a program.
+///
+/// `PATH` is fixed rather than inherited: the last rung of the helper ladder runs
+/// `acpilotd-helper` from it, and a developer's `~/.local/bin` may hold a P0-5 spike
+/// under that name. The test means to exercise the install rung, and a machine's
+/// stale binary deciding which rung answered is not that.
 const SSH: &str = r#"#!/bin/sh
 shift 3
+PATH="/usr/bin:/bin"
+export PATH
 exec sh -c "$*"
 "#;
 

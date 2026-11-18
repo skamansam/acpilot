@@ -11,6 +11,7 @@ pub mod cli;
 pub mod doctor;
 pub mod export;
 pub mod ext;
+pub mod registry;
 pub mod release;
 pub mod secret;
 pub mod update;

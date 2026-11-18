@@ -202,4 +202,24 @@ pub enum ExtensionError {
         /// The blocked versions, by name, so the next command is obvious.
         blocked: String,
     },
+
+    /// The signed registry index is unreadable, invalid, or not signed by a key
+    /// this build trusts.
+    #[error("{path}: {message}")]
+    Index {
+        /// The file or URL the index came from.
+        path: String,
+        /// Why it cannot be used.
+        message: String,
+    },
+
+    /// An extension archive could not be read, or holds an entry that is not
+    /// safe to write.
+    #[error("{path}: {message}")]
+    Archive {
+        /// The archive's destination, or the offending entry.
+        path: String,
+        /// What is wrong with it.
+        message: String,
+    },
 }

@@ -269,6 +269,104 @@ impl Store {
         })
     }
 
+    /// Install an archive the signed index named.
+    ///
+    /// Two hashes are checked, and they answer different questions. The archive's
+    /// sha256 is compared with the listing's before anything is unpacked, so bytes
+    /// that are not the published archive never become files; then the unpacked
+    /// tree is hashed and recorded the way every store install is, so the store
+    /// can still refuse a directory somebody edited afterwards.
+    ///
+    /// The manifest is the authority on what was installed: an archive that
+    /// unpacks to a different id, version, or publisher than the listing named is
+    /// a mislabeled download, and nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// The archive's size or checksum differs from the index, it does not unpack,
+    /// holds no single extension or more than one, or its manifest disagrees with
+    /// the listing. The destination already existing is [`ExtensionError::AlreadyInstalled`].
+    pub fn install_from_archive(
+        &self,
+        bytes: &[u8],
+        entry: &crate::index::IndexEntry,
+    ) -> Result<StoredExtension, ExtensionError> {
+        let actual_size = bytes.len() as u64;
+        if actual_size != entry.size {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive is {actual_size} bytes and the index says {}; nothing was installed",
+                    entry.size
+                ),
+            });
+        }
+        let digest = sha256_hex(bytes);
+        if digest != entry.digest() {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive's sha256 is {digest} and the index says {}; nothing was installed",
+                    entry.digest()
+                ),
+            });
+        }
+
+        let destination = self.version_path(&entry.id, &entry.version);
+        if destination.exists() {
+            return Err(ExtensionError::AlreadyInstalled {
+                id: entry.id.clone(),
+                version: entry.version.clone(),
+            });
+        }
+
+        self.ensure_root()?;
+        let mut staging = Staging::create(self.staging_path())?;
+        crate::archive::unpack(bytes, staging.path())?;
+        let root = extension_root(staging.path())?;
+        let extension = load_dir(&root)?;
+        if extension.manifest.id != entry.id || extension.manifest.version != entry.version {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive holds {}@{}, not {}; nothing was installed",
+                    extension.manifest.id,
+                    extension.manifest.version,
+                    entry.label()
+                ),
+            });
+        }
+        if extension.manifest.publisher != entry.publisher {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "{} is published by {:?} and the index says {:?}; nothing was installed",
+                    entry.label(),
+                    extension.manifest.publisher,
+                    entry.publisher
+                ),
+            });
+        }
+
+        let checksum = hash_dir(&root)?;
+        let parent = destination
+            .parent()
+            .expect("a version path always has an id directory");
+        fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+        fs::rename(&root, &destination).map_err(|source| io_error(&root, source))?;
+        staging.disarm();
+        write_record(&self.record_path(&entry.id, &entry.version), &checksum)?;
+
+        Ok(StoredExtension {
+            id: entry.id.clone(),
+            version: entry.version.clone(),
+            path: destination,
+            recorded: Some(checksum.clone()),
+            computed: Some(checksum),
+            status: StoreStatus::Ready,
+        })
+    }
+
     /// Rehash one version and decide whether it is loadable.
     pub fn verify(&self, id: &str, version: &str) -> Result<StoredExtension, ExtensionError> {
         let path = self.version_path(id, version);
@@ -768,6 +866,49 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), ExtensionError> {
     Ok(())
 }
 
+/// The directory inside an unpacked archive that holds `extension.toml`.
+///
+/// Release archives are usually wrapped in one directory named after the project
+/// and its version, so both shapes are accepted: the manifest at the root, or one
+/// directory holding it. Two candidates are ambiguous, and picking one by sort
+/// order would make which extension you install depend on the alphabet.
+fn extension_root(staging: &Path) -> Result<PathBuf, ExtensionError> {
+    if staging.join(crate::manifest::MANIFEST_FILE).is_file() {
+        return Ok(staging.to_path_buf());
+    }
+    let mut candidates = Vec::new();
+    let entries = fs::read_dir(staging).map_err(|source| io_error(staging, source))?;
+    for entry in entries {
+        let entry = entry.map_err(|source| io_error(staging, source))?;
+        if entry.path().is_dir() && entry.path().join(crate::manifest::MANIFEST_FILE).is_file() {
+            candidates.push(entry.path());
+        }
+    }
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(ExtensionError::Archive {
+            path: staging.display().to_string(),
+            message: "the archive holds no extension.toml at its root or under one directory; \
+                      nothing was installed"
+                .to_owned(),
+        }),
+        _ => Err(ExtensionError::Archive {
+            path: staging.display().to_string(),
+            message: format!(
+                "the archive holds {} directories with an extension.toml; one archive is one \
+                 extension",
+                candidates.len()
+            ),
+        }),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex(&hasher.finalize())
+}
+
 fn write_record(path: &Path, checksum: &str) -> Result<(), ExtensionError> {
     let temporary = path.with_extension("sha256.tmp");
     fs::write(&temporary, format!("{checksum}\n"))
@@ -829,5 +970,143 @@ impl Drop for Staging {
         if self.armed {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::path::Path;
+
+    use super::*;
+    use crate::index::IndexEntry;
+
+    /// A real extension that ships with the workspace, so the archive holds a
+    /// manifest and an asset the loader already accepts.
+    fn fixture_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/acpilot.night-flight")
+    }
+
+    fn pack(directory: &Path, prefix: Option<&str>) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        append_tree(&mut builder, directory, directory, prefix);
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip")
+    }
+
+    fn append_tree<W: Write>(
+        builder: &mut tar::Builder<W>,
+        root: &Path,
+        directory: &Path,
+        prefix: Option<&str>,
+    ) {
+        let mut entries: Vec<_> = std::fs::read_dir(directory)
+            .expect("the fixture is readable")
+            .map(|entry| entry.expect("an entry"))
+            .collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).expect("inside the fixture");
+            let name = match prefix {
+                Some(prefix) => Path::new(prefix).join(relative),
+                None => relative.to_path_buf(),
+            };
+            if path.is_dir() {
+                append_tree(builder, root, &path, prefix);
+            } else {
+                builder
+                    .append_path_with_name(&path, name)
+                    .expect("the fixture file is appended");
+            }
+        }
+    }
+
+    fn entry_for(bytes: &[u8]) -> IndexEntry {
+        let extension = load_dir(fixture_dir()).expect("the fixture loads");
+        IndexEntry {
+            id: extension.manifest.id.clone(),
+            version: extension.manifest.version.clone(),
+            kind: acpilot_proto::extension::ExtensionKind::Theme,
+            publisher: extension.manifest.publisher.clone(),
+            checksum: format!("sha256:{}", sha256_hex(bytes)),
+            size: bytes.len() as u64,
+            min_acpilot: None,
+            download: "https://example.invalid/night-flight-1.0.0.tar.gz".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_archive_named_by_the_index_is_installed_and_ready() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let stored = store
+            .install_from_archive(&bytes, &entry_for(&bytes))
+            .expect("the archive installs");
+        assert!(stored.is_ready(), "{:?}", stored.status);
+        assert_eq!(stored.id, "acpilot.night-flight");
+        assert!(stored.recorded.unwrap().starts_with("sha256:"));
+        assert!(
+            store
+                .verify("acpilot.night-flight", "1.0.0")
+                .expect("verifies")
+                .is_ready()
+        );
+    }
+
+    #[test]
+    fn an_archive_wrapped_in_one_directory_installs() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), Some("night-flight-1.0.0"));
+        let stored = store
+            .install_from_archive(&bytes, &entry_for(&bytes))
+            .expect("the wrapped archive installs");
+        assert!(stored.is_ready(), "{:?}", stored.status);
+        assert!(store.version_path("acpilot.night-flight", "1.0.0").is_dir());
+    }
+
+    #[test]
+    fn bytes_that_are_not_the_published_archive_install_nothing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let entry = entry_for(&bytes);
+        let mut tampered = bytes.clone();
+        let middle = tampered.len() / 2;
+        tampered[middle] ^= 1;
+        let error = store
+            .install_from_archive(&tampered, &entry)
+            .expect_err("a substituted archive is refused");
+        assert!(
+            error.to_string().contains("nothing was installed"),
+            "{error}"
+        );
+        assert!(
+            store.scan().expect("scan").is_empty(),
+            "nothing was written"
+        );
+    }
+
+    #[test]
+    fn an_archive_of_another_extension_is_not_installed_under_a_listing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let mut entry = entry_for(&bytes);
+        entry.id = "acpilot.paper".to_owned();
+        let error = store
+            .install_from_archive(&bytes, &entry)
+            .expect_err("a mislabeled archive is refused");
+        assert!(
+            error.to_string().contains("acpilot.night-flight"),
+            "{error}"
+        );
+        assert!(!store.version_path("acpilot.paper", "1.0.0").exists());
     }
 }

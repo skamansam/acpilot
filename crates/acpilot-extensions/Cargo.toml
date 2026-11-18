@@ -17,6 +17,15 @@ acpilot-proto = { workspace = true }
 # of `Color` and one answer to "what does the terminal's own palette become?"
 acpilot-palette = { workspace = true }
 directories = { workspace = true }
+# A registry download is signed by an ed25519 key compiled into the binary. The
+# signature is what says the maintainer wrote the listing; a checksum alone only
+# says the index and the archive agree with each other.
+ed25519-dalek = { workspace = true }
+# Extension archives arrive as a gzip tarball or a zip, and the format is read
+# from the bytes rather than this build's platform.
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
 # The published `extension-v1.json` schema is generated from `Manifest`, the type
 # the loader parses, so an editor and a refusal cannot describe different files.
 schemars = { workspace = true }
@@ -31,6 +40,9 @@ toml = { workspace = true }
 # nothing here resolves a remote reference: the default features pull TLS and an
 # HTTP client for `$ref`s this schema does not have.
 jsonschema = { workspace = true, default-features = false }
+# A store install from an archive is exercised against a real temporary tree and
+# a real rename.
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -17,10 +17,12 @@
 //! terminal.
 
 pub mod activation;
+pub mod archive;
 pub mod builtin;
 pub mod docs;
 pub mod effective;
 pub mod error;
+pub mod index;
 pub mod loader;
 pub mod manifest;
 pub mod preset;
@@ -40,6 +42,7 @@ pub use acpilot_palette::{contrast, follow};
 pub use activation::{Activation, ProfileExtensions, Resolution};
 pub use effective::{EffectiveRegistry, Layer, ProfileLayer, Trace};
 pub use error::ExtensionError;
+pub use index::{Index, IndexEntry, TrustedKey};
 pub use loader::{Contribution, LoadedExtension, load, load_dir, load_embedded};
 pub use manifest::{MANIFEST_FILE, Manifest, SCHEMA_VERSION};
 pub use preset::{AgentPreset, LanguageServerPreset};

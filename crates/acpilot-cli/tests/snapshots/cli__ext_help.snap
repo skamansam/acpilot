@@ -7,7 +7,12 @@ Install, verify, and approve extensions
 Usage: acpilot ext [OPTIONS] <COMMAND>
 
 Commands:
-  add           Install an extension from a local directory
+  add           Install an extension from the signed index, or from a local directory
+  search        List the extensions a signed index offers
+  update        Install the newest listed version of what is already installed
+  remove        Remove every installed version of an extension
+  list          List installed extensions, and whether the store would load each one
+  show          Show what the index offers for one extension beside what is installed
   import-theme  Import a TextMate `.tmTheme` as a theme extension and install it
   verify        Rehash every installed version and report any that are blocked
   prune         Remove versions no profile activates

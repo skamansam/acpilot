@@ -145,6 +145,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/extensions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every installed extension version
+         * @description One row per installed version, with the profiles that activate it. A blocked version is listed with its reason rather than hidden: the refusal is a fact about the bytes.
+         */
+        get: operations["list_doc"];
+        put?: never;
+        /**
+         * Install an extension from the signed index or a directory
+         * @description An index install verifies the listing's signature, checks the archive's size and sha256, and refuses an archive whose manifest names a different id, version or publisher. A `path` install copies that directory through the same store checks.
+         */
+        post: operations["install_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One extension: installed versions, contributions and index listings */
+        get: operations["detail_doc"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove every installed version of one extension
+         * @description Refused while a profile activates the id; the error names the profiles to deactivate first.
+         */
+        delete: operations["remove_doc"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve an installed extension for one profile */
+        post: operations["activate_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw one profile's approval */
+        post: operations["deactivate_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rehash every installed version of one extension
+         * @description `ready` is false when any version's bytes no longer match the recorded checksum, or the manifest no longer loads.
+         */
+        post: operations["verify_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/files": {
         parameters: {
             query?: never;
@@ -1025,6 +1124,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every theme a profile can draw with, resolved
+         * @description Built-in themes plus those an activated extension provides, with inheritance applied and every token as `#rrggbb`. `selected` names the surfaces whose settings choose the theme, for the daemon's own profile.
+         */
+        get: operations["themes_doc"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1511,6 +1630,15 @@ export interface components {
             /** @description What is wrong with it. */
             message: string;
         };
+        /** @description What an activation request changed. */
+        ExtensionAction: {
+            /** @description `false` when the list already said what it was now asked to say. */
+            changed: boolean;
+            /** @description Namespaced identifier. */
+            id: components["schemas"]["String"];
+            /** @description Profile the approval was written to, or withdrawn from. */
+            profile: string;
+        };
         /** @description One thing an extension provides, named as the profile will see it. */
         ExtensionContribution: {
             /**
@@ -1529,10 +1657,14 @@ export interface components {
             active_profiles: string[];
             /** @description Everything it contributes, flattened. */
             contributions: components["schemas"]["ExtensionContribution"][];
+            /** @description Versions the signed index offers for this id. */
+            listed?: components["schemas"]["ExtensionListing"][];
             /** @description The manifest as written, for reviewing before enabling. */
             manifest: string;
             /** @description The same summary the list endpoint returns. */
             summary: components["schemas"]["ExtensionSummary"];
+            /** @description Every installed version, oldest first. The newest is [`Self::summary`]. */
+            versions?: components["schemas"]["ExtensionSummary"][];
         };
         /**
          * @description What an extension contributes.
@@ -1543,6 +1675,33 @@ export interface components {
          * @enum {string}
          */
         ExtensionKind: "theme" | "language_servers" | "agents" | "skills" | "grammars" | "snippets" | "keymap" | "transcript_parser";
+        /** @description One version a signed index offers, as shown beside what is installed. */
+        ExtensionListing: {
+            /** @description `sha256:<64 hex characters>` over the archive's bytes. */
+            checksum: string;
+            /** @description Where the archive is downloaded from. */
+            download: string;
+            /** @description The registry the listing is filed under. */
+            kind: components["schemas"]["ExtensionKind"];
+            /** @description Oldest acpilot that can load it. */
+            min_acpilot?: string | null;
+            /** @description Who published it. */
+            publisher: string;
+            /**
+             * Format: int64
+             * @description The archive's length in bytes.
+             */
+            size: number;
+            /** @description Semantic version. */
+            version: string;
+        };
+        /** @description What a removal deleted. */
+        ExtensionRemoval: {
+            /** @description Namespaced identifier. */
+            id: components["schemas"]["String"];
+            /** @description Versions removed, oldest first. */
+            versions: string[];
+        };
         /**
          * @description How the extension got here.
          * @enum {string}
@@ -1555,6 +1714,8 @@ export interface components {
         ExtensionStatus: "installed" | "active" | "disabled" | "blocked";
         /** @description An extension as returned by `GET /v1/extensions`. */
         ExtensionSummary: {
+            /** @description Profiles that activate this id. Empty when none does. */
+            active_profiles?: string[];
             /** @description SHA-256 of the installed directory, verified against the index. */
             checksum?: string | null;
             /** @description One sentence, shown in the list. */
@@ -1577,6 +1738,13 @@ export interface components {
             status: components["schemas"]["ExtensionStatus"];
             /** @description Semantic version from the manifest. */
             version: string;
+        };
+        /** @description The result of rehashing every installed version of one id. */
+        ExtensionVerify: {
+            /** @description The versions, with their verdicts. */
+            extensions: components["schemas"]["ExtensionSummary"][];
+            /** @description Whether every version still matches its recorded checksum. */
+            ready: boolean;
         };
         /**
          * @description What happened to a path since the last commit.
@@ -1898,10 +2066,15 @@ export interface components {
          *     `path` wins when both are present, because a developer typing a path means it.
          */
         InstallExtensionRequest: {
-            /** @description Activate it in the profile named by `X-Acpilot-Profile` after verifying. */
-            activate: boolean;
+            /** @description Activate it in the daemon's profile after verifying. */
+            activate?: boolean;
             /** @description Identifier from the index, or the manifest's id for a path install. */
             id: components["schemas"]["String"];
+            /**
+             * @description A different index: an https URL or a file. The one this build ships when
+             *     absent.
+             */
+            index?: string | null;
             /** @description Directory to link instead of downloading. */
             path?: string | null;
             /** @description Version to install. The index's latest when absent. */
@@ -2964,7 +3137,28 @@ export interface components {
             id: string;
             /** @description Display name. */
             name: string;
+            /** @description Surfaces whose settings name this theme right now. */
+            selected?: components["schemas"]["ThemeSurface"][];
+            /** @description Every syntax token, resolved, as `#rrggbb`. */
+            syntax?: {
+                [key: string]: string;
+            };
+            /** @description Every UI token, resolved, as `#rrggbb`. */
+            ui?: {
+                [key: string]: string;
+            };
         };
+        /**
+         * @description Which frontend is asking for a theme.
+         *
+         *     The theme is one setting per surface rather than one for all of them, because a
+         *     terminal is not a window: a person may want a light editor on the desktop and a
+         *     dark prompt in the terminal beside it. Every surface falls back to
+         *     [`Preferences::theme`] when its own key is unset, so the usual answer — one
+         *     theme, everywhere — stays one line of settings.
+         * @enum {string}
+         */
+        ThemeSurface: "tui" | "gui" | "web";
         /** @description Token counts for a run, and whether they are trustworthy. */
         TokenUsage: {
             /**
@@ -3243,12 +3437,323 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap */
+            /** @description text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every installed version, ordered by id and then version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSummary"][];
+                };
+            };
+            /** @description The store could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    install_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallExtensionRequest"];
+            };
+        };
+        responses: {
+            /** @description The installed version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSummary"];
+                };
+            };
+            /** @description The request names nothing installable, or the archive failed its checks */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The id or version is not in the index */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description That id and version are already installed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    detail_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The detail, newest version first in `versions` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionDetail"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No version of that id is installed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    remove_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The versions removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRemoval"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Nothing installed under that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A profile still activates it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    activate_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description What the approval list now says */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionAction"];
+                };
+            };
+            /** @description Not a namespaced id, or a blocked/absent extension */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No ready version of that id is installed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The daemon has no profile to write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deactivate_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description What the approval list now says; `changed` is false when it already did not list the id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionAction"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The daemon has no profile to write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    verify_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each version with its verdict */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionVerify"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Nothing installed under that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -5824,6 +6329,38 @@ export interface operations {
             };
             /** @description The host could not start the program on a PTY */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    themes_doc: {
+        parameters: {
+            query?: {
+                /** @description Profile id. The daemon's own profile when absent */
+                profile?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Themes ordered by id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeSummary"][];
+                };
+            };
+            /** @description No profile was named and the daemon has none */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

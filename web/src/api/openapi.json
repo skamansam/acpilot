@@ -898,6 +898,29 @@
         ],
         "type": "object"
       },
+      "ExtensionAction": {
+        "description": "What an activation request changed.",
+        "properties": {
+          "changed": {
+            "description": "`false` when the list already said what it was now asked to say.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "profile": {
+            "description": "Profile the approval was written to, or withdrawn from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "changed"
+        ],
+        "type": "object"
+      },
       "ExtensionContribution": {
         "description": "One thing an extension provides, named as the profile will see it.",
         "properties": {
@@ -938,6 +961,13 @@
             },
             "type": "array"
           },
+          "listed": {
+            "description": "Versions the signed index offers for this id.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionListing"
+            },
+            "type": "array"
+          },
           "manifest": {
             "description": "The manifest as written, for reviewing before enabling.",
             "type": "string"
@@ -945,6 +975,13 @@
           "summary": {
             "$ref": "#/components/schemas/ExtensionSummary",
             "description": "The same summary the list endpoint returns."
+          },
+          "versions": {
+            "description": "Every installed version, oldest first. The newest is [`Self::summary`].",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -969,6 +1006,74 @@
         ],
         "type": "string"
       },
+      "ExtensionListing": {
+        "description": "One version a signed index offers, as shown beside what is installed.",
+        "properties": {
+          "checksum": {
+            "description": "`sha256:<64 hex characters>` over the archive's bytes.",
+            "type": "string"
+          },
+          "download": {
+            "description": "Where the archive is downloaded from.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExtensionKind",
+            "description": "The registry the listing is filed under."
+          },
+          "min_acpilot": {
+            "description": "Oldest acpilot that can load it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publisher": {
+            "description": "Who published it.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The archive's length in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Semantic version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "kind",
+          "publisher",
+          "checksum",
+          "size",
+          "download"
+        ],
+        "type": "object"
+      },
+      "ExtensionRemoval": {
+        "description": "What a removal deleted.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "versions": {
+            "description": "Versions removed, oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "versions"
+        ],
+        "type": "object"
+      },
       "ExtensionSource": {
         "description": "How the extension got here.",
         "enum": [
@@ -990,6 +1095,13 @@
       "ExtensionSummary": {
         "description": "An extension as returned by `GET /v1/extensions`.",
         "properties": {
+          "active_profiles": {
+            "description": "Profiles that activate this id. Empty when none does.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "checksum": {
             "description": "SHA-256 of the installed directory, verified against the index.",
             "type": [
@@ -1056,6 +1168,27 @@
           "kinds",
           "status",
           "source"
+        ],
+        "type": "object"
+      },
+      "ExtensionVerify": {
+        "description": "The result of rehashing every installed version of one id.",
+        "properties": {
+          "extensions": {
+            "description": "The versions, with their verdicts.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "description": "Whether every version still matches its recorded checksum.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "extensions"
         ],
         "type": "object"
       },
@@ -1673,12 +1806,19 @@
         "description": "Request body for `POST /v1/extensions`.\n\nExactly one of `version` (registry) or `path` (local directory) is used;\n`path` wins when both are present, because a developer typing a path means it.",
         "properties": {
           "activate": {
-            "description": "Activate it in the profile named by `X-Acpilot-Profile` after verifying.",
+            "description": "Activate it in the daemon's profile after verifying.",
             "type": "boolean"
           },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Identifier from the index, or the manifest's id for a path install."
+          },
+          "index": {
+            "description": "A different index: an https URL or a file. The one this build ships when\nabsent.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "path": {
             "description": "Directory to link instead of downloading.",
@@ -1696,8 +1836,7 @@
           }
         },
         "required": [
-          "id",
-          "activate"
+          "id"
         ],
         "type": "object"
       },
@@ -3630,6 +3769,33 @@
           "name": {
             "description": "Display name.",
             "type": "string"
+          },
+          "selected": {
+            "description": "Surfaces whose settings name this theme right now.",
+            "items": {
+              "$ref": "#/components/schemas/ThemeSurface"
+            },
+            "type": "array"
+          },
+          "syntax": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every syntax token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "ui": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every UI token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "required": [
@@ -3639,6 +3805,15 @@
           "built_in"
         ],
         "type": "object"
+      },
+      "ThemeSurface": {
+        "description": "Which frontend is asking for a theme.\n\nThe theme is one setting per surface rather than one for all of them, because a\nterminal is not a window: a person may want a light editor on the desktop and a\ndark prompt in the terminal beside it. Every surface falls back to\n[`Preferences::theme`] when its own key is unset, so the usual answer — one\ntheme, everywhere — stays one line of settings.",
+        "enum": [
+          "tui",
+          "gui",
+          "web"
+        ],
+        "type": "string"
       },
       "TokenUsage": {
         "description": "Token counts for a run, and whether they are trustworthy.",
@@ -4017,10 +4192,380 @@
         "operationId": "events_doc",
         "responses": {
           "200": {
-            "description": "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
+            "description": "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap"
           }
         },
         "summary": "Follow permission requests, settings changes and problems a server found"
+      }
+    },
+    "/v1/extensions": {
+      "get": {
+        "description": "One row per installed version, with the profiles that activate it. A blocked version is listed with its reason rather than hidden: the refusal is a fact about the bytes.",
+        "operationId": "list_doc",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtensionSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every installed version, ordered by id and then version"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The store could not be read"
+          }
+        },
+        "summary": "List every installed extension version"
+      },
+      "post": {
+        "description": "An index install verifies the listing's signature, checks the archive's size and sha256, and refuses an archive whose manifest names a different id, version or publisher. A `path` install copies that directory through the same store checks.",
+        "operationId": "install_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallExtensionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionSummary"
+                }
+              }
+            },
+            "description": "The installed version"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request names nothing installable, or the archive failed its checks"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The id or version is not in the index"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "That id and version are already installed"
+          }
+        },
+        "summary": "Install an extension from the signed index or a directory"
+      }
+    },
+    "/v1/extensions/{id}": {
+      "delete": {
+        "description": "Refused while a profile activates the id; the error names the profiles to deactivate first.",
+        "operationId": "remove_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionRemoval"
+                }
+              }
+            },
+            "description": "The versions removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Nothing installed under that id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A profile still activates it"
+          }
+        },
+        "summary": "Remove every installed version of one extension"
+      },
+      "get": {
+        "operationId": "detail_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionDetail"
+                }
+              }
+            },
+            "description": "The detail, newest version first in `versions`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No version of that id is installed"
+          }
+        },
+        "summary": "One extension: installed versions, contributions and index listings"
+      }
+    },
+    "/v1/extensions/{id}/activate": {
+      "post": {
+        "operationId": "activate_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAction"
+                }
+              }
+            },
+            "description": "What the approval list now says"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced id, or a blocked/absent extension"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No ready version of that id is installed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The daemon has no profile to write"
+          }
+        },
+        "summary": "Approve an installed extension for one profile"
+      }
+    },
+    "/v1/extensions/{id}/deactivate": {
+      "post": {
+        "operationId": "deactivate_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAction"
+                }
+              }
+            },
+            "description": "What the approval list now says; `changed` is false when it already did not list the id"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The daemon has no profile to write"
+          }
+        },
+        "summary": "Withdraw one profile's approval"
+      }
+    },
+    "/v1/extensions/{id}/verify": {
+      "post": {
+        "description": "`ready` is false when any version's bytes no longer match the recorded checksum, or the manifest no longer loads.",
+        "operationId": "verify_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionVerify"
+                }
+              }
+            },
+            "description": "Each version with its verdict"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Nothing installed under that id"
+          }
+        },
+        "summary": "Rehash every installed version of one extension"
       }
     },
     "/v1/files": {
@@ -7114,6 +7659,49 @@
           }
         },
         "summary": "Start a terminal"
+      }
+    },
+    "/v1/themes": {
+      "get": {
+        "description": "Built-in themes plus those an activated extension provides, with inheritance applied and every token as `#rrggbb`. `selected` names the surfaces whose settings choose the theme, for the daemon's own profile.",
+        "operationId": "themes_doc",
+        "parameters": [
+          {
+            "description": "Profile id. The daemon's own profile when absent",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ThemeSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Themes ordered by id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile was named and the daemon has none"
+          }
+        },
+        "summary": "Every theme a profile can draw with, resolved"
       }
     }
   },

@@ -2541,15 +2541,16 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
     No release has used either half yet, so no tap formula has been installed from a
     real release.
   - **Decided 2026-11-17 (ADR 0011):** cargo-dist's shape wins. A release is one archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` now runs `cargo xtask dist --artifacts local` per target and `--artifacts global` once, so there is no second shape and nothing is packaged by hand.
-  - **Checked 2026-11-17:** `release.yml` installs the generated formula with real
+  - **Checked 2026-11-17:** `release.yml` installs the generated formulae with real
     Homebrew on a macOS runner, and `publish` waits for that job. It fails the release
     unless `acpilot update --check` says `installed by brew` and a plain `acpilot
     update` refuses to write into the keg. The formula's downloads are served from the
     runner, because dist names the release after `Cargo.toml`'s version (`0.1.0`) and
     the tag is decided afterwards: a URL under the real release is the one thing the
-    check cannot see before `publish`. Only the client's formula is installed — every
-    formula writes `bin/install.json`, so installing a second one asks Homebrew to
-    link one path out of two kegs.
+    check cannot see before `publish`. The client's and the daemon's formulae are
+    installed together, because they share one prefix: `bin/install.json` is one path,
+    so only the formula that installs `acpilot` writes it, and `acpilot-cli` beside
+    `acpilotd` is the pair that would have failed to link.
   - Note: `cargo-dist` declares the `.cdx.xml` per program and generates it only in the CI job it writes, so `xtask dist` runs `cargo cyclonedx` itself and keeps the three declared SBOMs (`Cargo.toml`'s `[profile.dist]` is what `dist build` asks for).
 - **Progress 2026-11-04:** a version difference can now say how to fix it. ADR 0010 decides
   install provenance: every installation except a bare binary drop ships `install.json`

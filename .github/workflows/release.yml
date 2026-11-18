@@ -20,11 +20,12 @@ name: release
 # an archive after dist made it would invalidate the checksum baked into the
 # installer built from it, so nothing here touches one.
 #
-# The formula is installed with Homebrew on a macOS runner before anything is
+# The formulae are installed with Homebrew on a macOS runner before anything is
 # published (the `homebrew` job): it is the only way to know that the keg a
 # `brew install` makes answers `acpilot update --check` with `brew`, which is the
-# marker ADR 0010 reads. `publish` waits for it, so a formula nobody can install
-# stops the release instead of shipping.
+# marker ADR 0010 reads, and that the client's keg and the daemon's can share one
+# prefix. `publish` waits for it, so a formula nobody can install stops the release
+# instead of shipping.
 #
 # The same formulae are published to `skamansam/homebrew-tap` by the `tap` job, after
 # Homebrew has installed one, and `publish` waits for that too: the tap is what a
@@ -259,11 +260,16 @@ jobs:
     needs: [version, installers]
     if: needs.version.outputs.publish == 'true'
     # A formula is a claim about this release: that the archive it names is built,
-    # that its install block puts a marker beside the binary, and that the marker
-    # makes a keg report itself as `brew` rather than as the user's own copy. Only
-    # Homebrew on a mac can answer that, so this runs there, and before `publish`
-    # rather than after it: a release whose formula does not install is a release
-    # nobody can reach through the tap.
+    # that the client's install block puts a marker beside the binary, and that the
+    # marker makes the keg report itself as `brew` rather than as the user's own
+    # copy. Only Homebrew on a mac can answer that, so this runs there, and before
+    # `publish` rather than after it: a release whose formula does not install is a
+    # release nobody can reach through the tap.
+    #
+    # The client's and the daemon's formulae are installed together, because they
+    # share one prefix: the marker is a path in `bin`, and two kegs writing it would
+    # be a link conflict rather than two answers. That is the pair the tap's
+    # instructions name, so it is the one checked.
     #
     # `macos-latest` is the arm64 runner for the reason the archives matrix gives.
     runs-on: macos-latest
@@ -276,13 +282,13 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # The formula names the tag this release will publish under, and that release
+      # Each formula names the tag this release will publish under, and that release
       # does not exist yet while this job runs — `publish` creates it after the
-      # formula has been checked. So the same formula's downloads are served from
+      # formulae have been checked. So the same formulae's downloads are served from
       # this runner (same file names, same version segment, same install block), and
       # the one thing left unchecked is whether a URL under the real release answers,
       # which no runner can know before `publish` has run.
-      - name: Install the formula Homebrew was given
+      - name: Install the formulae Homebrew was given
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -297,21 +303,29 @@ jobs:
           test -n "$version" || { echo "the formula declares no version"; exit 1; }
           mirror="$PWD/mirror/releases/download/v$version"
           mkdir -p "$mirror"
-          cp "dist/acpilot-cli-$triple.tar.gz" "dist/acpilot-cli-$triple.tar.gz.sha256" "$mirror/"
+          for program in acpilot-cli acpilotd; do
+            cp "dist/$program-$triple.tar.gz" "dist/$program-$triple.tar.gz.sha256" "$mirror/"
+          done
           python3 -m http.server 8788 --directory mirror &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
           sleep 1
-          python3 -c 'import pathlib, sys; path = pathlib.Path(sys.argv[1]); path.write_text(path.read_text().replace("https://github.com/skamansam/acpilot", "http://127.0.0.1:8788"))' dist/acpilot-cli.rb
-          grep -c 'http://127.0.0.1:8788' dist/acpilot-cli.rb
-          brew install --formula "$PWD/dist/acpilot-cli.rb"
+          for formula in dist/acpilot-cli.rb dist/acpilotd.rb; do
+            python3 -c 'import pathlib, sys; path = pathlib.Path(sys.argv[1]); path.write_text(path.read_text().replace("https://github.com/skamansam/acpilot", "http://127.0.0.1:8788"))' "$formula"
+            grep -c 'http://127.0.0.1:8788' "$formula"
+          done
+          brew install --formula "$PWD/dist/acpilot-cli.rb" "$PWD/dist/acpilotd.rb"
 
       # The marker is the whole point: without it `acpilot update` treats a keg as
       # the user's own and writes over a file `brew upgrade` will discard. `--check`
-      # is the report that says which, and a plain `update` must refuse.
+      # is the report that says which, and a plain `update` must refuse. Both kegs
+      # are present here, so this is the marker with the daemon's formula installed
+      # beside the client's, not the client's alone.
       - name: acpilot says the installation is Homebrew's
         run: |
           set -euo pipefail
+          brew list --formula | grep -qx acpilot-cli
+          brew list --formula | grep -qx acpilotd
           marker="$(brew --prefix)/bin/install.json"
           test -s "$marker" || { echo "no marker was linked beside the binary"; exit 1; }
           cat "$marker"

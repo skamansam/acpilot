@@ -1137,17 +1137,22 @@ const BREW_MARKER: &str = "(bin/\"install.json\").write(\"{\\\"method\\\":\\\"br
 /// The fragment that says a formula has already been marked.
 const BREW_MARKED: &str = "\\\"method\\\":\\\"brew\\\"";
 
-/// Write the marker into every formula dist generated, in each `def install` block.
+/// Write the marker into the formula that installs `acpilot`, in each `def install`
+/// block.
 ///
 /// The aliases dist writes (`bin.install_symlink`) are skipped: a symlink is not the
 /// copy that answers `current_exe`, and a formula whose only install line was an
 /// alias would otherwise get a marker in a keg that holds no binary of ours.
 ///
+/// Only the client's formula writes it: `bin/install.json` is one path in the prefix,
+/// so two formulae that both write it cannot be installed together — Homebrew refuses
+/// to link one path out of two kegs — and the daemon's formula has no question to
+/// answer that the client's marker does not. A run that finds no formula installing
+/// `acpilot` is a failure rather than a pass, because then nothing can say `brew`.
+///
 /// One per platform block rather than once per file: the formula has a separate
 /// `install` for each `on_macos`/`on_linux` branch, and whichever branch runs is the
-/// one whose binary answers `current_exe`. A formula with no `bin.install` line is a
-/// failure rather than a skip — the release would otherwise ship a formula whose
-/// installations claim to be tarballs, which is the bug this exists to prevent.
+/// one whose binary answers `current_exe`.
 fn mark_homebrew_formulas() -> bool {
     let dir = dist_dir();
     let entries = match fs::read_dir(&dir) {
@@ -1170,6 +1175,7 @@ fn mark_homebrew_formulas() -> bool {
         );
         return false;
     }
+    let mut marked_client = false;
     for path in formulas {
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
@@ -1182,6 +1188,10 @@ fn mark_homebrew_formulas() -> bool {
                 return false;
             }
         };
+        if !installs_program(&formula, CLIENT_PROGRAM) {
+            continue;
+        }
+        marked_client = true;
         let marked = match with_brew_marker(&formula) {
             Ok(marked) => marked,
             Err(why) => {
@@ -1197,6 +1207,13 @@ fn mark_homebrew_formulas() -> bool {
             return false;
         }
         println!("    {name} says `brew` beside its binary");
+    }
+    if !marked_client {
+        eprintln!(
+            "==> homebrew: no formula installs `{CLIENT_PROGRAM}`, so no installation can \
+             say `brew`"
+        );
+        return false;
     }
     true
 }
@@ -1241,6 +1258,23 @@ fn with_brew_marker(formula: &str) -> Result<String, String> {
 fn installs_a_file(line: &str) -> bool {
     line.strip_prefix("bin.install")
         .is_some_and(|rest| !rest.starts_with('_'))
+}
+
+/// The program whose formula writes the marker: `acpilot` is the copy that answers
+/// `acpilot update`.
+const CLIENT_PROGRAM: &str = "acpilot";
+
+/// Whether a formula's `install` puts the named program in the prefix.
+///
+/// The name is quoted, so `bin.install "acpilot"` matches while `"acpilotd"`,
+/// `"acpilot-gui"` and `bin.install_symlink` do not. dist writes one `bin.install`
+/// per file; a line that names more than one matches on its first name.
+fn installs_program(formula: &str, program: &str) -> bool {
+    let start = format!("bin.install \"{program}\"");
+    formula.lines().map(str::trim).any(|line| {
+        line.strip_prefix(start.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(','))
+    })
 }
 
 /// `X.Y.Z`, the form a release version takes, with or without the tag's `v`.
@@ -2181,6 +2215,45 @@ end
             with_brew_marker(&marked).expect("a marked formula stays valid"),
             marked,
             "marking twice is not two markers"
+        );
+    }
+
+    #[test]
+    fn the_marker_belongs_to_the_recipe_that_installs_the_client() {
+        let client =
+            "class AcpilotCli < Formula\n  def install\n    bin.install \"acpilot\"\n  end\nend\n";
+        let daemon =
+            "class Acpilotd < Formula\n  def install\n    bin.install \"acpilotd\"\n  end\nend\n";
+        let gui = "class AcpilotGui < Formula\n  def install\n    bin.install \"acpilot-gui\"\n  end\nend\n";
+        assert!(
+            installs_program(client, CLIENT_PROGRAM),
+            "the recipe that installs `acpilot` is the one that carries the marker"
+        );
+        assert!(
+            !installs_program(daemon, CLIENT_PROGRAM),
+            "`acpilotd` is not `acpilot`, or two kegs would write one path"
+        );
+        assert!(
+            !installs_program(gui, CLIENT_PROGRAM),
+            "`acpilot-gui` is neither"
+        );
+        assert!(
+            !installs_program(client, "acpilotd"),
+            "the check is the whole name, not a prefix"
+        );
+        assert!(
+            installs_program(
+                "    bin.install \"acpilot\", \"install.json\"\n",
+                CLIENT_PROGRAM
+            ),
+            "a line that puts two files in the prefix still installs the client"
+        );
+        assert!(
+            !installs_program(
+                "    bin.install_symlink bin/source.to_s => dest\n",
+                CLIENT_PROGRAM
+            ),
+            "an alias is not an install of the client"
         );
     }
 

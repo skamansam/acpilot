@@ -550,10 +550,12 @@ bin directory, with a signature over every published checksum (ADR 0011). Nothin
 the workflow edits an archive after dist made it.
 
 A formula nobody can install is caught before anything is published. The `homebrew` job
-installs `acpilot-cli.rb` with Homebrew on a macOS runner and fails the release unless
-`acpilot update --check` reports `installed by brew` and a plain `acpilot update`
-refuses to write into the keg (ADR 0010), so the marker the formula writes is checked
-where Homebrew links it.
+installs `acpilot-cli.rb` and `acpilotd.rb` with Homebrew on a macOS runner and fails
+the release unless `acpilot update --check` reports `installed by brew` and a plain
+`acpilot update` refuses to write into the keg (ADR 0010), so the marker the formula
+writes is checked where Homebrew links it. Only the client's formula writes
+`bin/install.json`: it is one path in the prefix, and two kegs that both write it
+cannot be installed together.
 
 The `tap` job publishes the same formulae to `skamansam/homebrew-tap` before the release
 is created, so the tap never advertises a version whose archives were not published. It

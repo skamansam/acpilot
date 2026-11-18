@@ -7,9 +7,13 @@
 //! a manifest that names a command still meets the trust pin and the broker when
 //! something finally runs it.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use crate::profile::ThemeSurface;
 
 /// Opaque extension identifier, namespaced `publisher.id`.
 pub type ExtensionId = String;
@@ -92,6 +96,9 @@ pub struct ExtensionSummary {
     /// Project page or repository, for a reader deciding whether to trust it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Profiles that activate this id. Empty when none does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_profiles: Vec<String>,
 }
 
 /// One thing an extension provides, named as the profile will see it.
@@ -117,6 +124,61 @@ pub struct ExtensionDetail {
     pub manifest: String,
     /// Profiles that have it activated.
     pub active_profiles: Vec<String>,
+    /// Every installed version, oldest first. The newest is [`Self::summary`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<ExtensionSummary>,
+    /// Versions the signed index offers for this id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listed: Vec<ExtensionListing>,
+}
+
+/// One version a signed index offers, as shown beside what is installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ExtensionListing {
+    /// Semantic version.
+    pub version: String,
+    /// The registry the listing is filed under.
+    pub kind: ExtensionKind,
+    /// Who published it.
+    pub publisher: String,
+    /// `sha256:<64 hex characters>` over the archive's bytes.
+    pub checksum: String,
+    /// The archive's length in bytes.
+    pub size: u64,
+    /// Where the archive is downloaded from.
+    pub download: String,
+    /// Oldest acpilot that can load it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_acpilot: Option<String>,
+}
+
+/// What an activation request changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ExtensionAction {
+    /// Namespaced identifier.
+    pub id: ExtensionId,
+    /// Profile the approval was written to, or withdrawn from.
+    pub profile: String,
+    /// `false` when the list already said what it was now asked to say.
+    pub changed: bool,
+}
+
+/// What a removal deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ExtensionRemoval {
+    /// Namespaced identifier.
+    pub id: ExtensionId,
+    /// Versions removed, oldest first.
+    pub versions: Vec<String>,
+}
+
+/// The result of rehashing every installed version of one id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ExtensionVerify {
+    /// Whether every version still matches its recorded checksum.
+    pub ready: bool,
+    /// The versions, with their verdicts.
+    pub extensions: Vec<ExtensionSummary>,
 }
 
 /// Request body for `POST /v1/extensions`.
@@ -133,7 +195,12 @@ pub struct InstallExtensionRequest {
     /// Directory to link instead of downloading.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// Activate it in the profile named by `X-Acpilot-Profile` after verifying.
+    /// A different index: an https URL or a file. The one this build ships when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<String>,
+    /// Activate it in the daemon's profile after verifying.
+    #[serde(default)]
     pub activate: bool,
 }
 
@@ -164,4 +231,13 @@ pub struct ThemeSummary {
     /// Extension that provided it, when it did not come from the binary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension_id: Option<ExtensionId>,
+    /// Surfaces whose settings name this theme right now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<ThemeSurface>,
+    /// Every UI token, resolved, as `#rrggbb`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ui: BTreeMap<String, String>,
+    /// Every syntax token, resolved, as `#rrggbb`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub syntax: BTreeMap<String, String>,
 }

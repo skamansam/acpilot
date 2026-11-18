@@ -154,6 +154,122 @@ impl StoredExtension {
             format!("{}@{}", self.id, self.version)
         }
     }
+
+    /// The wire summary of this version, as `GET /v1/extensions` and
+    /// `acpilot ext list --json` report it.
+    ///
+    /// Read from the version's own manifest, so the name and the contribution
+    /// list are what the loader will hand a session. A blocked version is still
+    /// described: the report that refuses it should still say which bytes were
+    /// refused.
+    #[must_use]
+    pub fn summary(
+        &self,
+        active_profiles: &[String],
+    ) -> acpilot_proto::extension::ExtensionSummary {
+        use acpilot_proto::extension::{ExtensionSource, ExtensionStatus, ExtensionSummary};
+
+        let loaded = load_dir(&self.path).ok();
+        let manifest = loaded.as_ref().map(|extension| &extension.manifest);
+        let mut kinds = Vec::new();
+        if let Some(extension) = &loaded {
+            for contribution in &extension.contributions {
+                let kind = contribution.kind();
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        ExtensionSummary {
+            id: self.id.clone(),
+            name: manifest.map_or_else(|| self.id.clone(), |manifest| manifest.name.clone()),
+            version: self.version.clone(),
+            publisher: manifest.map_or_else(String::new, |manifest| manifest.publisher.clone()),
+            description: manifest.map_or_else(String::new, |manifest| manifest.description.clone()),
+            kinds,
+            status: if self.is_blocked() {
+                ExtensionStatus::Blocked
+            } else if active_profiles.is_empty() {
+                ExtensionStatus::Installed
+            } else {
+                ExtensionStatus::Active
+            },
+            // A version the store installed has a record; one it did not (and
+            // therefore blocks) is a directory somebody pointed the store at.
+            source: if self.recorded.is_some() {
+                ExtensionSource::Registry
+            } else {
+                ExtensionSource::Path
+            },
+            checksum: self.recorded.clone(),
+            installed_at: None,
+            homepage: manifest.and_then(|manifest| manifest.homepage.clone()),
+            active_profiles: active_profiles.to_vec(),
+        }
+    }
+
+    /// Everything this version contributes, named as a profile will see it.
+    ///
+    /// Empty for a blocked version: a manifest that does not load has nothing a
+    /// reader can be shown, and inventing contribution names from paths would be
+    /// a second opinion about a file the loader refused.
+    #[must_use]
+    pub fn contributions(&self) -> Vec<acpilot_proto::extension::ExtensionContribution> {
+        use acpilot_proto::extension::{ExtensionContribution, ExtensionKind};
+
+        let Ok(extension) = load_dir(&self.path) else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for contribution in &extension.contributions {
+            match contribution {
+                crate::loader::Contribution::Theme(theme) => rows.push(ExtensionContribution {
+                    kind: ExtensionKind::Theme,
+                    id: theme.id.clone(),
+                    summary: theme.name.clone(),
+                }),
+                crate::loader::Contribution::LanguageServers(presets) => {
+                    for preset in presets {
+                        rows.push(ExtensionContribution {
+                            kind: ExtensionKind::LanguageServers,
+                            id: preset.id.clone(),
+                            summary: format!("{} ({})", preset.name, preset.command),
+                        });
+                    }
+                }
+                crate::loader::Contribution::Agents(presets) => {
+                    for preset in presets {
+                        rows.push(ExtensionContribution {
+                            kind: ExtensionKind::Agents,
+                            id: preset.id().to_owned(),
+                            summary: preset.name().to_owned(),
+                        });
+                    }
+                }
+                crate::loader::Contribution::Skills { path } => {
+                    rows.push(ExtensionContribution {
+                        kind: ExtensionKind::Skills,
+                        id: path.clone(),
+                        summary: "skills directory".to_owned(),
+                    });
+                }
+                crate::loader::Contribution::Unloaded { kind, path, reason } => {
+                    rows.push(ExtensionContribution {
+                        kind: *kind,
+                        id: path.clone(),
+                        summary: (*reason).to_owned(),
+                    });
+                }
+            }
+        }
+        rows
+    }
+
+    /// The manifest as written, for reviewing before activation.
+    #[must_use]
+    pub fn manifest_text(&self) -> Option<String> {
+        fs::read_to_string(self.path.join(crate::manifest::MANIFEST_FILE)).ok()
+    }
 }
 
 /// What activation got out of the store.

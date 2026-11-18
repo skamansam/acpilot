@@ -10,17 +10,37 @@
 //! file or URL for a private registry; it is verified against the maintainer's key
 //! plus `registry.trusted_keys`, which is read from the global config only — a
 //! workspace that could add a key could sign its own extensions.
+//!
+//! Every verb returns a [`Report`]: the lines a terminal prints and the document
+//! `--json` prints. One function builds both, so a script and a person cannot be
+//! told different things about the same store.
 
 use std::collections::BTreeMap;
 use std::fs;
 
 use acpilot_extensions::StoreStatus;
+use acpilot_extensions::ThemeRegistry;
 use acpilot_extensions::activation::{ACTIVATION_FILE, Activation};
 use acpilot_extensions::index::{self, Index, IndexEntry, TrustedKey};
 use acpilot_extensions::manifest::{validate_namespaced_id, version_tuple};
 use acpilot_extensions::store::StoredExtension;
+use acpilot_proto::extension::{ExtensionDetail, ExtensionListing, ExtensionSummary, ThemeSummary};
 
 use crate::ext::Paths;
+
+/// One verb's answer: what a terminal prints and what `--json` prints.
+pub struct Report {
+    /// Lines, in the order a person reads them.
+    pub lines: Vec<String>,
+    /// The same facts as one document.
+    pub json: serde_json::Value,
+}
+
+impl Report {
+    fn new(lines: Vec<String>, json: serde_json::Value) -> Self {
+        Self { lines, json }
+    }
+}
 
 /// The trust roots a command may verify an index against.
 fn trusted_keys(paths: &Paths) -> Result<Vec<TrustedKey>, String> {
@@ -114,18 +134,16 @@ fn install_entry(paths: &Paths, entry: &IndexEntry) -> Result<StoredExtension, S
 }
 
 /// `acpilot ext search [QUERY]`.
-pub fn search(
-    paths: &Paths,
-    source: Option<&str>,
-    query: Option<&str>,
-) -> Result<Vec<String>, String> {
+pub fn search(paths: &Paths, source: Option<&str>, query: Option<&str>) -> Result<Report, String> {
     let index = load_index(paths, source)?;
     let entries = index.search(query.unwrap_or_default());
+    let json = serde_json::json!({ "extensions": entries });
     if entries.is_empty() {
-        return Ok(vec![match query {
+        let line = match query {
             Some(query) => format!("no extension in this index matches {query:?}"),
             None => "this index lists no extensions".to_owned(),
-        }]);
+        };
+        return Ok(Report::new(vec![line], json));
     }
     let mut lines = Vec::new();
     for entry in entries {
@@ -137,7 +155,7 @@ pub fn search(
         ));
         lines.push(format!("  {}", entry.download));
     }
-    Ok(lines)
+    Ok(Report::new(lines, json))
 }
 
 /// `acpilot ext add <ID> [--version]`, or `--from <DIR>` for a checkout.
@@ -146,7 +164,7 @@ pub fn add(
     source: Option<&str>,
     id: &str,
     version: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Report, String> {
     validate_namespaced_id("extension id", id).map_err(|error| error.to_string())?;
     let index = load_index(paths, source)?;
     let entry = match version {
@@ -166,26 +184,28 @@ pub fn add(
         ));
     }
     let installed = install_entry(paths, entry)?;
-    Ok(vec![
+    let profiles = activating(paths, &entry.id)?;
+    let summary = installed.summary(&profiles);
+    let lines = vec![
         format!(
             "installed {} from {} (checksum {})",
             installed.label(),
             entry.download,
-            installed.recorded.unwrap_or_default()
+            installed.recorded.clone().unwrap_or_default()
         ),
         format!(
             "approve it for a profile with `acpilot ext activate {} --profile <name>`",
             entry.id
         ),
-    ])
+    ];
+    Ok(Report::new(
+        lines,
+        serde_json::json!({ "extension": summary }),
+    ))
 }
 
 /// `acpilot ext update [ID]`: install the newest listed version of what is here.
-pub fn update(
-    paths: &Paths,
-    source: Option<&str>,
-    only: Option<&str>,
-) -> Result<Vec<String>, String> {
+pub fn update(paths: &Paths, source: Option<&str>, only: Option<&str>) -> Result<Report, String> {
     let index = load_index(paths, source)?;
     let scan = paths.store().scan().map_err(|error| error.to_string())?;
     let mut installed: BTreeMap<String, String> = BTreeMap::new();
@@ -212,10 +232,14 @@ pub fn update(
         None => installed.keys().cloned().collect(),
     };
     if ids.is_empty() {
-        return Ok(vec!["no extensions installed".to_owned()]);
+        return Ok(Report::new(
+            vec!["no extensions installed".to_owned()],
+            serde_json::json!({ "extensions": [] }),
+        ));
     }
 
     let mut lines = Vec::new();
+    let mut changes = Vec::new();
     for id in ids {
         let current = installed
             .get(&id)
@@ -225,10 +249,22 @@ pub fn update(
             lines.push(format!(
                 "{id} {current} is installed but this index does not list it; leaving it alone"
             ));
+            changes.push(serde_json::json!({
+                "id": id,
+                "from": current,
+                "to": null,
+                "status": "not_listed",
+            }));
             continue;
         };
         if version_tuple(&entry.version) <= version_tuple(&current) {
             lines.push(format!("{id} {current} is up to date"));
+            changes.push(serde_json::json!({
+                "id": id,
+                "from": current,
+                "to": current,
+                "status": "up_to_date",
+            }));
             continue;
         }
         let stored = install_entry(paths, entry)?;
@@ -236,12 +272,21 @@ pub fn update(
             "updated {id} from {current} to {} (from {})",
             stored.version, entry.download
         ));
+        changes.push(serde_json::json!({
+            "id": id,
+            "from": current,
+            "to": stored.version,
+            "status": "updated",
+        }));
     }
-    Ok(lines)
+    Ok(Report::new(
+        lines,
+        serde_json::json!({ "extensions": changes }),
+    ))
 }
 
 /// `acpilot ext remove <ID>`: every installed version of one id.
-pub fn remove(paths: &Paths, id: &str) -> Result<Vec<String>, String> {
+pub fn remove(paths: &Paths, id: &str) -> Result<Report, String> {
     validate_namespaced_id("extension id", id).map_err(|error| error.to_string())?;
     let profiles = activating(paths, id)?;
     if !profiles.is_empty() {
@@ -263,21 +308,27 @@ pub fn remove(paths: &Paths, id: &str) -> Result<Vec<String>, String> {
         return Err(format!("{id} is not installed"));
     }
     let mut lines = Vec::new();
-    for version in versions {
+    for version in &versions {
         paths
             .store()
-            .remove(id, &version)
+            .remove(id, version)
             .map_err(|error| error.to_string())?;
         lines.push(format!("removed {id}@{version}"));
     }
-    Ok(lines)
+    Ok(Report::new(
+        lines,
+        serde_json::json!({ "id": id, "versions": versions }),
+    ))
 }
 
 /// `acpilot ext list`: what is on disk, and whether the store would load it.
-pub fn list(paths: &Paths) -> Result<Vec<String>, String> {
+pub fn list(paths: &Paths) -> Result<Report, String> {
     let scan = paths.store().scan().map_err(|error| error.to_string())?;
     if scan.is_empty() {
-        return Ok(vec!["no extensions installed".to_owned()]);
+        return Ok(Report::new(
+            vec!["no extensions installed".to_owned()],
+            serde_json::json!({ "extensions": [] }),
+        ));
     }
     let active = active_profiles(paths)?;
     let mut lines = Vec::new();
@@ -291,14 +342,34 @@ pub fn list(paths: &Paths) -> Result<Vec<String>, String> {
         }
         lines.push(line);
     }
-    Ok(lines)
+    let mut rows: Vec<ExtensionSummary> = scan
+        .iter()
+        .map(|stored| {
+            stored.summary(
+                active
+                    .get(&stored.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    rows.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(version_tuple(&left.version).cmp(&version_tuple(&right.version)))
+    });
+    Ok(Report::new(
+        lines,
+        serde_json::json!({ "extensions": rows }),
+    ))
 }
 
 /// `acpilot ext show <ID>`: what the index offers beside what is installed.
-pub fn show(paths: &Paths, source: Option<&str>, id: &str) -> Result<Vec<String>, String> {
+pub fn show(paths: &Paths, source: Option<&str>, id: &str) -> Result<Report, String> {
     validate_namespaced_id("extension id", id).map_err(|error| error.to_string())?;
     let index = load_index(paths, source)?;
     let mut lines = Vec::new();
+    let mut listed = Vec::new();
 
     let offered = index.versions(id);
     match offered.last() {
@@ -317,14 +388,27 @@ pub fn show(paths: &Paths, source: Option<&str>, id: &str) -> Result<Vec<String>
         }
         None => lines.push(format!("{id} is not in this index")),
     }
+    for entry in &offered {
+        listed.push(ExtensionListing {
+            version: entry.version.clone(),
+            kind: entry.kind,
+            publisher: entry.publisher.clone(),
+            checksum: entry.checksum.clone(),
+            size: entry.size,
+            download: entry.download.clone(),
+            min_acpilot: entry.min_acpilot.clone(),
+        });
+    }
 
     let scan = paths.store().scan().map_err(|error| error.to_string())?;
-    let installed: Vec<&StoredExtension> = scan.iter().filter(|stored| stored.id == id).collect();
+    let mut installed: Vec<&StoredExtension> =
+        scan.iter().filter(|stored| stored.id == id).collect();
+    installed.sort_by_key(|stored| version_tuple(&stored.version));
     if installed.is_empty() {
         lines.push("not installed".to_owned());
     } else {
         lines.push("installed:".to_owned());
-        for stored in installed {
+        for stored in &installed {
             match &stored.status {
                 StoreStatus::Ready => lines.push(format!("  {} ready", stored.version)),
                 StoreStatus::Blocked(reason) => {
@@ -338,7 +422,126 @@ pub fn show(paths: &Paths, source: Option<&str>, id: &str) -> Result<Vec<String>
     if !profiles.is_empty() {
         lines.push(format!("active in: {}", profiles.join(", ")));
     }
-    Ok(lines)
+
+    let json = match installed.last().copied() {
+        Some(newest) => serde_json::json!({
+            "extension": ExtensionDetail {
+                summary: newest.summary(&profiles),
+                contributions: newest.contributions(),
+                manifest: newest.manifest_text().unwrap_or_default(),
+                active_profiles: profiles.clone(),
+                versions: installed
+                    .iter()
+                    .map(|stored| stored.summary(&profiles))
+                    .collect(),
+                listed: listed.clone(),
+            }
+        }),
+        None => serde_json::json!({
+            "id": id,
+            "installed": [],
+            "listed": listed,
+            "active_profiles": profiles,
+        }),
+    };
+    Ok(Report::new(lines, json))
+}
+
+/// `acpilot ext themes`: every theme a profile can draw with, resolved.
+pub fn themes(paths: &Paths, profile: Option<&str>) -> Result<Report, String> {
+    let name = profile.unwrap_or(acpilot_profile::launch::DEFAULT_PROFILE);
+    let directory = paths.profile(name).map_err(|error| error.to_string())?;
+    let activation =
+        Activation::load(&directory.join(ACTIVATION_FILE)).map_err(|error| error.to_string())?;
+    let active = paths
+        .store()
+        .resolve_active(&activation.active)
+        .map_err(first_message)?;
+    let mut extensions = acpilot_extensions::builtin::load_all().map_err(first_message)?;
+    extensions.extend(active.extensions);
+
+    let preferences = acpilot_profile::project::Root::resolve(None)
+        .ok()
+        .and_then(|root| {
+            let profile = acpilot_profile::Profile::open(&directory).ok()?;
+            root.settings_with_profile(Some(&profile))
+                .ok()
+                .map(|settings| settings.preferences)
+        });
+
+    let registry = ThemeRegistry::new(&extensions);
+    let mut rows: Vec<ThemeSummary> = Vec::new();
+    for id in registry.ids() {
+        let Ok(resolved) = registry.resolve(id) else {
+            continue;
+        };
+        let selected = preferences
+            .as_ref()
+            .map(|preferences| {
+                [
+                    acpilot_proto::profile::ThemeSurface::Tui,
+                    acpilot_proto::profile::ThemeSurface::Gui,
+                    acpilot_proto::profile::ThemeSurface::Web,
+                ]
+                .into_iter()
+                .filter(|surface| preferences.theme_for(*surface) == resolved.id)
+                .collect()
+            })
+            .unwrap_or_default();
+        rows.push(ThemeSummary {
+            id: resolved.id.clone(),
+            name: resolved.name.clone(),
+            appearance: resolved.appearance,
+            built_in: resolved.built_in,
+            extension_id: (!resolved.built_in).then(|| resolved.extension_id.clone()),
+            selected,
+            ui: resolved
+                .palette
+                .ui
+                .iter()
+                .map(|(token, color)| (token.as_str().to_owned(), color.to_string()))
+                .collect(),
+            syntax: resolved
+                .palette
+                .syntax
+                .iter()
+                .map(|(token, color)| (token.as_str().to_owned(), color.to_string()))
+                .collect(),
+        });
+    }
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut lines = Vec::new();
+    if rows.is_empty() {
+        lines.push("this profile has no themes".to_owned());
+    }
+    for row in &rows {
+        let origin = row
+            .extension_id
+            .as_deref()
+            .map_or_else(|| "built-in".to_owned(), |id| format!("from {id}"));
+        let selected = if row.selected.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "  [selected: {}]",
+                row.selected
+                    .iter()
+                    .map(|surface| format!("{surface:?}").to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        lines.push(format!("{}  {} ({origin}){selected}", row.id, row.name));
+    }
+    Ok(Report::new(lines, serde_json::json!({ "themes": rows })))
+}
+
+fn first_message(errors: Vec<acpilot_extensions::ExtensionError>) -> String {
+    errors.into_iter().next().map_or_else(
+        || "the extension set does not load".to_owned(),
+        |error| error.to_string(),
+    )
 }
 
 /// Profiles that activate one id.

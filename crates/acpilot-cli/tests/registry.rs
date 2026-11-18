@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -412,4 +413,140 @@ fn remove_deletes_what_was_installed_from_a_directory() {
         "{}",
         stdout(&listed)
     );
+}
+
+#[test]
+fn json_verbs_print_the_document_they_promise() {
+    let directory = TempDir::new();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/acpilot.night-flight");
+    let store = directory.path().join("extensions");
+    let config = directory.path().join("config");
+    fs::create_dir_all(&config).expect("config dir");
+    let store_arg = store.to_str().expect("store path");
+    let config_arg = config.to_str().expect("config path");
+
+    let added = acpilot(&[
+        "ext",
+        "add",
+        "--from",
+        fixture.to_str().expect("fixture path"),
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+        "--json",
+    ]);
+    assert!(
+        added.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&added),
+        stderr(&added)
+    );
+    let added: Value = serde_json::from_str(&stdout(&added)).expect("add --json is one document");
+    assert_eq!(added["extension"]["id"], "acpilot.night-flight");
+    assert_eq!(added["extension"]["status"], "installed");
+    assert_eq!(added["extension"]["kinds"][0], "theme");
+
+    let listed = acpilot(&[
+        "ext", "list", "--json", "--store", store_arg, "--config", config_arg,
+    ]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let listed: Value = serde_json::from_str(&stdout(&listed)).expect("list --json");
+    assert_eq!(listed["extensions"][0]["id"], "acpilot.night-flight");
+    assert_eq!(listed["extensions"][0]["version"], "1.0.0");
+
+    let (key, public) = signing(15);
+    let bytes = b"not downloaded by show".to_vec();
+    let entry = format!(
+        r#"{{ "id": "acpilot.night-flight", "version": "1.0.0", "kind": "theme", "publisher": "acpilot", "checksum": "sha256:{}", "size": {}, "download": "https://example.invalid/night-flight.tar.gz" }}"#,
+        sha256_hex(&bytes),
+        bytes.len()
+    );
+    let index = write_index(directory.path(), &entry, &key, "test-key");
+    let trusted = config_trusting(directory.path(), "test-key", &public);
+
+    let shown = acpilot(&[
+        "ext",
+        "show",
+        "acpilot.night-flight",
+        "--json",
+        "--index",
+        index.to_str().expect("index path"),
+        "--store",
+        store_arg,
+        "--config",
+        trusted.to_str().expect("config path"),
+    ]);
+    assert!(
+        shown.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&shown),
+        stderr(&shown)
+    );
+    let shown: Value = serde_json::from_str(&stdout(&shown)).expect("show --json");
+    assert_eq!(shown["extension"]["versions"][0]["version"], "1.0.0");
+    assert_eq!(
+        shown["extension"]["listed"][0]["download"],
+        "https://example.invalid/night-flight.tar.gz"
+    );
+    assert!(
+        shown["extension"]["contributions"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "{shown}"
+    );
+
+    let activated = acpilot(&[
+        "ext",
+        "activate",
+        "acpilot.night-flight",
+        "--json",
+        "--store",
+        store_arg,
+        "--config",
+        trusted.to_str().expect("config path"),
+    ]);
+    assert!(activated.status.success(), "{}", stderr(&activated));
+    let activated: Value = serde_json::from_str(&stdout(&activated)).expect("activate --json");
+    assert_eq!(activated["changed"], true);
+    assert_eq!(activated["profile"], "default");
+
+    let deactivated = acpilot(&[
+        "ext",
+        "deactivate",
+        "acpilot.night-flight",
+        "--json",
+        "--store",
+        store_arg,
+        "--config",
+        trusted.to_str().expect("config path"),
+    ]);
+    assert!(deactivated.status.success(), "{}", stderr(&deactivated));
+    let deactivated: Value =
+        serde_json::from_str(&stdout(&deactivated)).expect("deactivate --json");
+    assert_eq!(deactivated["changed"], true);
+
+    let themes = acpilot(&[
+        "ext",
+        "themes",
+        "--json",
+        "--config",
+        trusted.to_str().expect("config path"),
+    ]);
+    assert!(
+        themes.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&themes),
+        stderr(&themes)
+    );
+    let themes: Value = serde_json::from_str(&stdout(&themes)).expect("themes --json");
+    let night = themes["themes"]
+        .as_array()
+        .expect("a theme list")
+        .iter()
+        .find(|theme| theme["id"] == "acpilot.night-flight")
+        .expect("the built-in theme is listed");
+    assert_eq!(night["ui"]["bg"], "#070d18");
+    assert_eq!(night["built_in"], true);
 }

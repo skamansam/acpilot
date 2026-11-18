@@ -68,6 +68,10 @@ acpilot-web = { workspace = true }
 # The web page is the third surface drawn from the same theme tokens: the daemon
 # resolves the palette once at startup rather than serving a page with its own.
 acpilot-extensions = { workspace = true }
+# An index install downloads an archive from the URL the signed listing names.
+# The client is the daemon's because a window asks the daemon to install, and the
+# daemon is the process that can verify the listing before it fetches anything.
+reqwest = { workspace = true }
 # The tree's letters are git's answer, asked once per listing on the host where
 # the files are. Shelling out keeps the daemon agreeing with the command line
 # about what is staged, and the crate's absence is a tree without letters.
@@ -134,7 +138,6 @@ tokio-tungstenite = { workspace = true }
 # reviewable diff rather than a string assertion somebody has to remember.
 insta = { workspace = true }
 http-body-util = { workspace = true }
-reqwest = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 

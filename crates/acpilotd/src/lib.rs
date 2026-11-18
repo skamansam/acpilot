@@ -75,6 +75,7 @@ pub mod runs;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
+pub mod extensions;
 mod lsp_remote;
 pub mod pidfile;
 mod platform;
@@ -346,6 +347,20 @@ pub struct AppState {
     /// prompt. A path in `GET /v1/health` would be a filesystem fact a browser has
     /// no business knowing, so the two are not the same field.
     profile_root: Option<std::path::PathBuf>,
+    /// Where installed extensions live, when the daemon was told.
+    ///
+    /// `None` is the platform data directory, which is where `acpilot ext add`
+    /// writes without `--store`. A test or an embedded daemon hands over a
+    /// directory it owns, because the routes install real files and a test should
+    /// not write into somebody's home directory.
+    extension_store: Option<std::path::PathBuf>,
+    /// Extra trust roots for a private index.
+    ///
+    /// Beside the maintainer's compiled-in key, never instead of it; the global
+    /// `config.toml` adds to this list through [`AppState::trusted_keys`].
+    trusted_keys: Vec<acpilot_extensions::index::TrustedKey>,
+    /// Extension changes, announced to every client on the profile-wide stream.
+    extension_changes: broadcast::Sender<extensions::Notice>,
     /// The cross-profile index, when the daemon opened one.
     ///
     /// The per-profile workspace registry cannot see another profile, so the
@@ -524,6 +539,9 @@ impl Default for AppState {
             store: StoreSlot::None,
             cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
+            extension_store: None,
+            trusted_keys: Vec::new(),
+            extension_changes: broadcast::channel(EVENT_BUFFER).0,
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             preference_errors: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
@@ -1013,6 +1031,68 @@ impl AppState {
         }
         self.store = StoreSlot::ready(store);
         self
+    }
+
+    /// Install extensions into this store rather than the platform default.
+    #[must_use]
+    pub fn with_extension_store(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.extension_store = Some(root.into());
+        self
+    }
+
+    /// The extension store this daemon installs into and lists from.
+    ///
+    /// # Errors
+    ///
+    /// The platform has no data directory, which a daemon without an explicit
+    /// store cannot guess.
+    pub fn extension_store(
+        &self,
+    ) -> Result<acpilot_extensions::Store, acpilot_extensions::ExtensionError> {
+        match &self.extension_store {
+            Some(root) => Ok(acpilot_extensions::Store::new(root.clone())),
+            None => acpilot_extensions::Store::open_default(),
+        }
+    }
+
+    /// Add trust roots for a private index, beside the maintainer's key.
+    #[must_use]
+    pub fn with_trusted_keys(mut self, keys: Vec<acpilot_extensions::index::TrustedKey>) -> Self {
+        self.trusted_keys = keys;
+        self
+    }
+
+    /// The keys an index may be signed by: the ones handed to this state, then the
+    /// global file's.
+    ///
+    /// The global file only, never a workspace's: a project that could add a key
+    /// could sign its own extensions. A file that does not parse contributes
+    /// nothing rather than failing every install: the maintainer's key is still
+    /// trusted, and the error belongs to whoever owns the file.
+    #[must_use]
+    pub fn trusted_keys(&self) -> Vec<acpilot_extensions::index::TrustedKey> {
+        let mut keys = self.trusted_keys.clone();
+        let file = acpilot_profile::user_config_path();
+        if let Ok(settings) = acpilot_profile::settings::Settings::load(Some(&file), None) {
+            keys.extend(settings.registry.trusted_keys.into_iter().map(|key| {
+                acpilot_extensions::index::TrustedKey {
+                    id: key.id,
+                    public_key: key.public_key,
+                }
+            }));
+        }
+        keys
+    }
+
+    /// Subscribe to extension changes, for the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_extensions(&self) -> broadcast::Receiver<extensions::Notice> {
+        self.extension_changes.subscribe()
+    }
+
+    /// Announce an extension change a route just made.
+    pub fn announce_extension(&self, notice: extensions::Notice) {
+        let _ = self.extension_changes.send(notice);
     }
 
     /// Open this profile's store through `stores` the first time a route asks.
@@ -1640,13 +1720,17 @@ async fn events(State(state): State<AppState>) -> Response {
         .as_ref()
         .map(|broker| broker.subscribe_resolved());
     let diagnostics = state.subscribe_diagnostics();
+    let extensions = state.subscribe_extensions();
     tokio::spawn(pump(
         state,
-        requests,
-        resolved,
-        preferences,
-        preference_errors,
-        diagnostics,
+        Feeds {
+            requests,
+            resolved,
+            preferences,
+            preference_errors,
+            diagnostics,
+            extensions,
+        },
         sender,
     ));
     Sse::new(futures::stream::unfold(
@@ -1703,6 +1787,22 @@ enum Step {
     PreferenceError(Result<String, broadcast::error::RecvError>),
     /// A language server published problems, or that subscription ended.
     Diagnostics(Result<acpilot_proto::file::DiagnosticsNotice, broadcast::error::RecvError>),
+    /// An extension was installed, removed, activated or deactivated.
+    Extensions(Result<extensions::Notice, broadcast::error::RecvError>),
+}
+
+/// The subscriptions the profile-wide stream reads.
+///
+/// One value rather than a parameter per feed: the list grows with each kind of
+/// announcement, and a new one should extend this struct rather than every call
+/// site's argument list.
+struct Feeds {
+    requests: Option<broadcast::Receiver<PermissionRequest>>,
+    resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
+    preferences: broadcast::Receiver<Preferences>,
+    preference_errors: broadcast::Receiver<String>,
+    diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
+    extensions: broadcast::Receiver<extensions::Notice>,
 }
 
 /// Turn announcements and a clock into SSE frames.
@@ -1713,15 +1813,7 @@ enum Step {
 /// advice names, forever, for a state the daemon could simply describe as quiet.
 /// Preferences are never optional — every daemon has settings — which is why they
 /// are the half that always has something to say.
-async fn pump(
-    state: AppState,
-    mut requests: Option<broadcast::Receiver<PermissionRequest>>,
-    mut resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
-    mut preferences: broadcast::Receiver<Preferences>,
-    mut preference_errors: broadcast::Receiver<String>,
-    mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
-    sender: mpsc::Sender<Event>,
-) {
+async fn pump(state: AppState, mut feeds: Feeds, sender: mpsc::Sender<Event>) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Announced frames only: the stream has no replay, so this number is the id of
@@ -1732,7 +1824,7 @@ async fn pump(
         // A daemon without a broker has nothing to poll, and `pending` keeps the
         // branch parked rather than busy.
         let announced = async {
-            match requests.as_mut() {
+            match feeds.requests.as_mut() {
                 Some(requests) => requests.recv().await,
                 None => {
                     std::future::pending::<Result<PermissionRequest, broadcast::error::RecvError>>()
@@ -1742,7 +1834,7 @@ async fn pump(
         };
 
         let answered = async {
-            match resolved.as_mut() {
+            match feeds.resolved.as_mut() {
                 Some(resolved) => resolved.recv().await,
                 None => {
                     std::future::pending::<
@@ -1755,11 +1847,12 @@ async fn pump(
 
         let step = tokio::select! {
             _ = beat.tick() => Step::Beat,
-            preferences = preferences.recv() => Step::Preferences(preferences),
-            error = preference_errors.recv() => Step::PreferenceError(error),
+            preferences = feeds.preferences.recv() => Step::Preferences(preferences),
+            error = feeds.preference_errors.recv() => Step::PreferenceError(error),
             requests = announced => Step::Permission(requests),
             answers = answered => Step::Resolved(answers),
-            published = diagnostics.recv() => Step::Diagnostics(published),
+            published = feeds.diagnostics.recv() => Step::Diagnostics(published),
+            changed = feeds.extensions.recv() => Step::Extensions(changed),
         };
 
         let frame = match step {
@@ -1810,6 +1903,18 @@ async fn pump(
                 seq += 1;
                 diagnostics_frame(Some(seq), &notice)
             }
+            // The frame names the verb as its event, so a client subscribes to
+            // `extension.*` rather than switching on a field inside one event.
+            Step::Extensions(Ok(notice)) => {
+                seq += 1;
+                Event::default()
+                    .event(notice.action.event_name())
+                    .id(seq.to_string())
+                    .data(serde_json::to_string(&notice).expect("an extension notice is JSON"))
+            }
+            Step::Extensions(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             // The client fell behind the announcement channel. It cannot catch up
             // from the stream, so it is told where it now is and refetches what is
             // state: the pending list, and — for preferences, which this daemon can
@@ -1840,7 +1945,8 @@ async fn pump(
             | Step::Resolved(Err(broadcast::error::RecvError::Closed))
             | Step::Preferences(Err(broadcast::error::RecvError::Closed))
             | Step::PreferenceError(Err(broadcast::error::RecvError::Closed))
-            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
+            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed))
+            | Step::Extensions(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -2008,7 +2114,8 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(model_runs::operations())
         .chain(acp_http::operations())
         .chain(stats::operations())
-        .chain(skills::operations());
+        .chain(skills::operations())
+        .chain(extensions::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
@@ -2049,7 +2156,7 @@ fn permissions_doc() {}
     summary = "Follow permission requests, settings changes and problems a server found",
     responses((
         status = 200,
-        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}
@@ -2390,6 +2497,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/lsp/servers", get(lsp_servers))
+        .merge(extensions::routes())
         .route("/v1/openapi.json", get(openapi))
         .route("/", get(web_app))
         .route("/app", get(web_app))

@@ -599,6 +599,9 @@ pub enum ExtCommand {
         /// build ships.
         #[arg(long, value_name = "URL|PATH")]
         index: Option<String>,
+        /// Print the installed version as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -611,6 +614,9 @@ pub enum ExtCommand {
         /// A different index: an https URL or a file.
         #[arg(long, value_name = "URL|PATH")]
         index: Option<String>,
+        /// Print the listings as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
     },
@@ -621,6 +627,9 @@ pub enum ExtCommand {
         /// A different index: an https URL or a file.
         #[arg(long, value_name = "URL|PATH")]
         index: Option<String>,
+        /// Print what changed as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -630,6 +639,9 @@ pub enum ExtCommand {
     Remove {
         /// Extension id, `publisher.name`.
         id: String,
+        /// Print what was removed as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -637,6 +649,9 @@ pub enum ExtCommand {
     },
     /// List installed extensions, and whether the store would load each one.
     List {
+        /// Print the rows as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -649,6 +664,9 @@ pub enum ExtCommand {
         /// A different index: an https URL or a file.
         #[arg(long, value_name = "URL|PATH")]
         index: Option<String>,
+        /// Print what the index offers beside what is installed as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -668,6 +686,9 @@ pub enum ExtCommand {
         /// Activate it in this profile after installing.
         #[arg(long, value_name = "PROFILE")]
         activate: Option<String>,
+        /// Print the result as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -678,6 +699,9 @@ pub enum ExtCommand {
         /// Verify everything. Required: a partial verify is not a safety check.
         #[arg(long)]
         all: bool,
+        /// Print the verdicts as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
     },
@@ -686,6 +710,9 @@ pub enum ExtCommand {
         /// Report what would be removed without deleting anything.
         #[arg(long)]
         dry_run: bool,
+        /// Print what would be or was removed as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -695,6 +722,9 @@ pub enum ExtCommand {
     Activate {
         /// Extension id, `publisher.name`.
         id: String,
+        /// Print what the approval list now says as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
@@ -704,6 +734,9 @@ pub enum ExtCommand {
     Deactivate {
         /// Extension id, `publisher.name`.
         id: String,
+        /// Print what the approval list now says as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
@@ -713,10 +746,21 @@ pub enum ExtCommand {
     Why {
         /// Preset or agent id, for example `rust-analyzer`.
         id: String,
+        /// Print the chain as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
         store: StoreArgs,
+    },
+    /// List every theme a profile can draw with, inheritance resolved.
+    Themes {
+        /// Print the themes as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        config: ConfigArgs,
     },
 }
 
@@ -2710,6 +2754,7 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             from,
             version,
             index,
+            json,
             store,
             config,
         } => {
@@ -2719,19 +2764,28 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             };
             match (from, id) {
                 (Some(from), _) => match ext::add(&paths, &from) {
-                    Ok(line) => {
-                        println!("{line}");
-                        println!("approve it for a profile with `acpilot ext activate <id>`");
+                    Ok(stored) => {
+                        if json {
+                            print_json(&serde_json::json!({
+                                "extension": stored.summary(&[])
+                            }));
+                        } else {
+                            println!(
+                                "installed {} ({}), checksum {}",
+                                stored.label(),
+                                stored.path.display(),
+                                stored.recorded.clone().unwrap_or_default()
+                            );
+                            println!("approve it for a profile with `acpilot ext activate <id>`");
+                        }
                         exit::SUCCESS
                     }
                     Err(error) => fail(&error),
                 },
-                (None, Some(id)) => ext_lines(registry::add(
-                    &paths,
-                    index.as_deref(),
-                    &id,
-                    version.as_deref(),
-                )),
+                (None, Some(id)) => ext_report(
+                    registry::add(&paths, index.as_deref(), &id, version.as_deref()),
+                    json,
+                ),
                 (None, None) => {
                     eprintln!(
                         "acpilot ext add: name an extension id, or pass --from <DIR> for a local \
@@ -2744,17 +2798,22 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
         ExtCommand::Search {
             query,
             index,
+            json,
             config,
         } => {
             let paths = match Paths::resolve(None, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            ext_lines(registry::search(&paths, index.as_deref(), query.as_deref()))
+            ext_report(
+                registry::search(&paths, index.as_deref(), query.as_deref()),
+                json,
+            )
         }
         ExtCommand::Update {
             id,
             index,
+            json,
             store,
             config,
         } => {
@@ -2762,25 +2821,38 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            ext_lines(registry::update(&paths, index.as_deref(), id.as_deref()))
+            ext_report(
+                registry::update(&paths, index.as_deref(), id.as_deref()),
+                json,
+            )
         }
-        ExtCommand::Remove { id, store, config } => {
+        ExtCommand::Remove {
+            id,
+            json,
+            store,
+            config,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            ext_lines(registry::remove(&paths, &id))
+            ext_report(registry::remove(&paths, &id), json)
         }
-        ExtCommand::List { store, config } => {
+        ExtCommand::List {
+            json,
+            store,
+            config,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            ext_lines(registry::list(&paths))
+            ext_report(registry::list(&paths), json)
         }
         ExtCommand::Show {
             id,
             index,
+            json,
             store,
             config,
         } => {
@@ -2788,13 +2860,14 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            ext_lines(registry::show(&paths, index.as_deref(), &id))
+            ext_report(registry::show(&paths, index.as_deref(), &id), json)
         }
         ExtCommand::ImportTheme {
             from,
             id,
             version,
             activate,
+            json,
             store,
             config,
         } => {
@@ -2804,15 +2877,19 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             };
             match ext::import_theme(&paths, &from, &id, &version, activate.as_deref()) {
                 Ok(lines) => {
-                    for line in lines {
-                        println!("{line}");
+                    if json {
+                        print_json(&serde_json::json!({ "id": id, "lines": lines }));
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
                     }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Verify { all, store } => {
+        ExtCommand::Verify { all, json, store } => {
             if !all {
                 eprintln!(
                     "acpilot ext verify: pass --all; verifying a subset is not a safety check"
@@ -2824,9 +2901,16 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Err(error) => return fail(&error),
             };
             match ext::verify_all(&paths) {
-                Ok((all_ready, lines)) => {
-                    for line in lines {
-                        println!("{line}");
+                Ok((all_ready, rows, lines)) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "ready": all_ready,
+                            "extensions": rows
+                        }));
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
                     }
                     if all_ready {
                         exit::SUCCESS
@@ -2839,6 +2923,7 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
         }
         ExtCommand::Prune {
             dry_run,
+            json,
             store,
             config,
         } => {
@@ -2847,53 +2932,121 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Err(error) => return fail(&error),
             };
             match ext::prune(&paths, dry_run) {
-                Ok(lines) => {
-                    for line in lines {
-                        println!("{line}");
+                Ok(removed) => {
+                    if json {
+                        let rows: Vec<serde_json::Value> = removed
+                            .iter()
+                            .map(
+                                |(id, version)| serde_json::json!({ "id": id, "version": version }),
+                            )
+                            .collect();
+                        print_json(&serde_json::json!({
+                            "dry_run": dry_run,
+                            "removed": rows
+                        }));
+                    } else if removed.is_empty() {
+                        println!("nothing to prune");
+                    } else {
+                        for (id, version) in &removed {
+                            println!(
+                                "{} {id}@{version}",
+                                if dry_run { "would remove" } else { "removed" }
+                            );
+                        }
                     }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Activate { id, config, store } => {
+        ExtCommand::Activate {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::activate(&paths, named, &id) {
-                Ok(line) => {
-                    println!("{line}");
+                Ok(changed) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "changed": changed
+                        }));
+                    } else if changed {
+                        println!("activated {id} in profile {named}");
+                    } else {
+                        println!("{id} was already active in profile {named}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Deactivate { id, config, store } => {
+        ExtCommand::Deactivate {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::deactivate(&paths, named, &id) {
-                Ok(line) => {
-                    println!("{line}");
+                Ok(changed) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "changed": changed
+                        }));
+                    } else if changed {
+                        println!("deactivated {id} in profile {named}");
+                    } else {
+                        println!("{id} was not active in profile {named}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Why { id, config, store } => {
+        ExtCommand::Why {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::why(&paths, named, &id) {
                 Ok(text) => {
-                    print!("{text}");
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "explanation": text
+                        }));
+                    } else {
+                        print!("{text}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
+        }
+        ExtCommand::Themes { json, config } => {
+            let paths = match Paths::resolve(None, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(registry::themes(&paths, Some(named)), json)
         }
     }
 }
@@ -3072,11 +3225,15 @@ fn run_secret(command: SecretCommand, flag: Option<&str>) -> u8 {
 /// These verbs already say what to do next in the line itself, so the failure
 /// path is one sentence rather than a table; the exit status is what a script
 /// reads.
-fn ext_lines(result: Result<Vec<String>, String>) -> u8 {
+fn ext_report(result: Result<registry::Report, String>, json: bool) -> u8 {
     match result {
-        Ok(lines) => {
-            for line in lines {
-                println!("{line}");
+        Ok(report) => {
+            if json {
+                print_json(&report.json);
+            } else {
+                for line in &report.lines {
+                    println!("{line}");
+                }
             }
             exit::SUCCESS
         }
@@ -3084,6 +3241,14 @@ fn ext_lines(result: Result<Vec<String>, String>) -> u8 {
             eprintln!("error: {message}");
             exit::FAILURE
         }
+    }
+}
+
+/// Print one JSON document, the shape `--json` promises.
+fn print_json(value: &serde_json::Value) {
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => println!("{text}"),
+        Err(error) => eprintln!("error: the answer is not JSON: {error}"),
     }
 }
 

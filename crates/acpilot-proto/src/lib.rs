@@ -170,6 +170,10 @@ pub const API_PREFIX: &str = "/v1";
         extension::ExtensionSummary,
         extension::ExtensionContribution,
         extension::ExtensionDetail,
+        extension::ExtensionListing,
+        extension::ExtensionAction,
+        extension::ExtensionRemoval,
+        extension::ExtensionVerify,
         extension::InstallExtensionRequest,
         extension::ThemeAppearance,
         extension::ThemeSummary,
@@ -277,6 +281,11 @@ mod tests {
             "AcpBridgeSummary",
             "AcpDriverSummary",
             "ExtensionSummary",
+            "ExtensionDetail",
+            "ExtensionListing",
+            "ExtensionAction",
+            "ExtensionRemoval",
+            "ExtensionVerify",
             "ThemeSummary",
         ] {
             assert!(schemas.contains_key(name), "{name} missing from components");

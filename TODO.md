@@ -1777,10 +1777,18 @@ v0.1 (D18).
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
     and below the user's own `keymap.toml`, with conflicts reported by `acpilot keys check`.
 
-- [ ] **P4.6-10 · API and CLI** (1d)
+- [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
+  `/v1/events`, and `--json` on every `acpilot ext` verb
   - `GET /v1/extensions`, `GET /v1/extensions/{id}`, `POST /v1/extensions`,
     `POST /v1/extensions/{id}/activate|deactivate|verify`, `DELETE /v1/extensions/{id}`,
     `GET /v1/themes`; SSE `extension.*`. CLI mirrors it, `--json` everywhere.
+  - Install verifies the index signature, the archive's size and sha256, and that the manifest
+    agrees on id, version and publisher; activation writes one profile's `extensions.toml` and
+    removal is refused while any profile activates the id. `GET /v1/themes` applies inheritance
+    and marks the surfaces whose settings select each theme.
+  - The CLI verbs read the local store rather than the daemon, as P4.6-4 established, so an
+    editor can be repaired when its daemon is the broken thing. Their `--json` documents are
+    built from the same rows the routes serve.
 
 - [ ] **P4.6-11 · Tests** (1d)
   - Manifest matrix (missing fields, unknown keys, path traversal, id collision); checksum mismatch

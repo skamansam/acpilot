@@ -353,8 +353,10 @@ mod tests {
         let error = unpack_within(&bytes, directory.path(), 1024).expect_err("refused");
         let message = error.to_string();
         assert!(message.contains("more than 1024 bytes"), "{message}");
+        // The file name, not the joined path: a refusal prints the path the platform
+        // joins, and this assertion is about the entry being named at all.
         assert!(
-            message.contains("pack/payload.bin"),
+            message.contains("payload.bin"),
             "the entry that crossed the cap is named: {message}"
         );
     }

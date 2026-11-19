@@ -1785,9 +1785,10 @@ v0.1 (D18).
     table read, so a preset replaces the build's row for its language in `GET /v1/lsp/servers`,
     references, diagnostics, and formatting, and deactivating the pack restores the built-in
     without a restart. A language only a pack names is listed after the build's four, and the row
-    carries the pack id internally (`ServerState.extension`).
-  - Open: no client draws the pin question yet, so the pack id is carried and not shown, and the
-    wire row (`LspServerSummary`) has no `extension` field; only the four languages
+    carries the pack id internally (`ServerState.extension`). The wire row carries it too
+    (`LspServerSummary.extension`), absent for the build's own rows, so the id a pin dialog needs
+    is not trapped inside the daemon.
+  - Open: no client draws the pin question yet, so the id arrives and nothing asks with it; only the four languages
     `acpilotd::lsp::language_of` maps a file extension to can actually be routed, so a preset for
     `go` is listed but unreachable until task P4.6-8 widens that map.
 

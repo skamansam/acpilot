@@ -2144,6 +2144,14 @@ export interface components {
             /** @description Command that was spawned. */
             command: string;
             encoding?: components["schemas"]["PositionEncoding"] | null;
+            /**
+             * @description The extension that introduced this row, absent for this build's own.
+             *
+             *     A client that asks the person to trust a command has to name where the
+             *     command came from, and "rust-analyzer from acpilot.rust-pack" is a question
+             *     about a pin, while a bare path is a question about nothing.
+             */
+            extension?: string | null;
             /** @description Server identifier. */
             id: components["schemas"]["String"];
             /** @description Language identifiers this server is attached to. */

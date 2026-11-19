@@ -207,6 +207,11 @@ async fn an_activated_server_replaces_the_built_in_row_and_goes_away_again() {
         .expect("the language only the pack names is listed");
     assert_eq!(zig["command"], "acpilot-no-such-zls");
     assert_eq!(zig["status"], "stopped", "nothing has asked it anything");
+    assert_eq!(
+        rust[0]["extension"], "acpilot.test-servers",
+        "the row names the pack a trust question would be about: {body}"
+    );
+    assert_eq!(zig["extension"], "acpilot.test-servers", "{body}");
 
     // Deactivating restores the build's row without a restart: the table is read
     // again by the route rather than built once at startup.
@@ -225,6 +230,10 @@ async fn an_activated_server_replaces_the_built_in_row_and_goes_away_again() {
         .find(|row| row["languages"][0] == "rust")
         .expect("a rust row");
     assert_eq!(rust["command"], "rust-analyzer", "the built-in is back");
+    assert!(
+        rust.get("extension").is_none(),
+        "a build-in row names no pack: {rust}"
+    );
     assert!(
         rows.iter().all(|row| row["languages"][0] != "zig"),
         "the pack's language left with it: {body}"

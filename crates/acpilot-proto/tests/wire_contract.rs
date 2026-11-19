@@ -379,10 +379,12 @@ fn lsp_documents() {
         "languages": ["rust"],
         "command": "rust-analyzer",
         "status": "ready",
-        "encoding": "utf8"
+        "encoding": "utf8",
+        "extension": "acpilot.rust-pack"
     }));
 
-    // Before `initialize` no encoding has been agreed.
+    // Before `initialize` no encoding has been agreed, and a build-in row names no
+    // extension, so both fields are absent rather than empty.
     round_trip::<acpilot_proto::lsp::LspServerSummary>(json!({
         "id": "pyright",
         "languages": ["python"],

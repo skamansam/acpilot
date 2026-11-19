@@ -1967,6 +1967,13 @@ expression: canonical(document)
               }
             ]
           },
+          "extension": {
+            "description": "The extension that introduced this row, absent for this build's own.\n\nA client that asks the person to trust a command has to name where the\ncommand came from, and \"rust-analyzer from acpilot.rust-pack\" is a question\nabout a pin, while a bare path is a question about nothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Server identifier."

@@ -2610,6 +2610,9 @@ async fn lsp_servers(
                     acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
                     acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
                 }),
+            // Which pack contributed the row, when one did: a trust question names
+            // the extension, so the id has to survive the trip to the client.
+            extension: server.extension.clone(),
             // Milliseconds, because a round trip is a number a person compares with
             // a keystroke and not with a clock.
             round_trip_ms: server

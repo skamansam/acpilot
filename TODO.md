@@ -1834,6 +1834,9 @@ v0.1 (D18).
     names the extension and the manifest version; a tampered extension is refused by name.
   - Status: manifest matrix, checksum/store, activation cycle, precedence, contrast, and the CLI
     verbs are covered; signature failure arrives with task P4.6-4, grammar degradation with task P4.6-8.
+    The stale-pidfile test names the discard port rather than a port it bound and dropped: a released
+    ephemeral port can be handed to a neighbouring test's listener, which made that test answer for a
+    daemon it had declared dead.
 
 - [ ] **P4.6-12 · Import from other editors** (future, not v0.1)
   - TextMate `.tmTheme` is done (`acpilot ext import-theme`). VS Code (JSON themes, node

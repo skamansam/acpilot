@@ -743,6 +743,13 @@ and deterministic.
     subscribed (`DecidedBy::Unattended`), so a request only becomes pending for a daemon
     with a client on `GET /v1/events` — the test subscribes before prompting, which is
     what a UI does, and that refusal is why a headless daemon cannot park a turn forever.
+    **Observed once (2026-11-19):** on a macOS runner `a_stream_replays_after_a_drop_with_no_gap`
+    and `a_conversation_is_still_there_after_the_daemon_that_ran_it` ran to nextest's 300 s
+    limit with no output while the rest of the suite passed, and a rerun of the same commit
+    was green. Both waits in the file are bounded at 20 s, so the stall was outside them (a
+    synchronous step holding the runtime, or a client call the file does not bound); it is
+    recorded as a runner stall rather than a product fault, and a second sighting should be
+    chased from those two tests instead of being rerun again.
     **Open:** the `insta` snapshots of every error body are still unwritten (each route's
     suite asserts its envelope's fields instead), and the `curl` script the DoD names is
     the test rather than a checked-in shell script, because the client speaks the same wire.

@@ -5,6 +5,8 @@
 //! extension, so an install here copies and hashes real bytes rather than a
 //! fixture that stands in for a store the routes never see.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -240,8 +242,9 @@ async fn activating_something_that_is_not_installed_is_a_404() {
 
 /// A source directory that contributes one agent pointing at `command`.
 ///
-/// The command is the test binary, so availability is a real `PATH` lookup rather
-/// than a host-dependent guess.
+/// The command is the shared mock agent rather than this test's own binary: trust
+/// fingerprints the program it names, and hashing a debug test executable would
+/// cost more than the rest of the suite put together.
 fn agent_extension(root: &Path, command: &str) -> PathBuf {
     let source = root.join("source");
     fs::create_dir_all(&source).expect("source dir");
@@ -269,7 +272,7 @@ fn agent_extension(root: &Path, command: &str) -> PathBuf {
 async fn an_activated_agent_preset_joins_the_roster_and_names_its_extension() {
     let directory = tempfile::tempdir().expect("temp dir");
     let (app, _) = daemon(directory.path());
-    let command = std::env::current_exe().expect("current exe");
+    let command = common::mock_agent();
     let source = agent_extension(directory.path(), &command.display().to_string());
 
     let (status, installed) = send(

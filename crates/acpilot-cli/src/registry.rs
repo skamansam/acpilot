@@ -337,6 +337,9 @@ pub fn list(paths: &Paths) -> Result<Report, String> {
             StoreStatus::Ready => format!("ok      {}", stored.label()),
             StoreStatus::Blocked(reason) => format!("blocked {}: {reason}", stored.label()),
         };
+        if stored.is_linked() {
+            line.push_str(" (linked)");
+        }
         if let Some(profiles) = active.get(&stored.id) {
             line.push_str(&format!("  [active: {}]", profiles.join(", ")));
         }
@@ -410,7 +413,11 @@ pub fn show(paths: &Paths, source: Option<&str>, id: &str) -> Result<Report, Str
         lines.push("installed:".to_owned());
         for stored in &installed {
             match &stored.status {
-                StoreStatus::Ready => lines.push(format!("  {} ready", stored.version)),
+                StoreStatus::Ready => lines.push(if stored.is_linked() {
+                    format!("  {} ready (linked)", stored.version)
+                } else {
+                    format!("  {} ready", stored.version)
+                }),
                 StoreStatus::Blocked(reason) => {
                     lines.push(format!("  {} blocked: {reason}", stored.version));
                 }

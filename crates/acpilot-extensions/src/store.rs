@@ -9,6 +9,11 @@
 //! place. A reader never sees a half-written extension, and an interrupted
 //! install leaves only a dot-directory that every scan ignores.
 //!
+//! A checkout can also be linked instead of copied: its record says `link <path>`
+//! and the version is served from that directory as it is now. A link is not
+//! hashed — the edit is the point — so it is reported as linked rather than
+//! pretending to have a checksum, and removing it never touches the checkout.
+//!
 //! Verification is the part that matters. The checksum covers a canonical byte
 //! stream — a version tag, then each file sorted by path with length-prefixed
 //! names and contents — so it cannot be confused by a file whose contents look
@@ -31,6 +36,9 @@ use crate::manifest::{is_version, validate_namespaced_id, version_tuple};
 
 /// Suffix of the checksum record that sits beside a version directory.
 pub const RECORD_SUFFIX: &str = ".sha256";
+
+/// What a linked version's record starts with, before the checkout's path.
+const LINK_PREFIX: &str = "link ";
 
 /// Domain separation for the hash. Changing this deliberately changes every
 /// checksum, which is exactly what should happen if the format ever moves.
@@ -70,6 +78,12 @@ pub enum BlockReason {
         /// Why it is refused.
         why: String,
     },
+    /// A linked checkout that is gone, changed its id or version, or no longer
+    /// loads.
+    Link {
+        /// What the link says and what was found.
+        message: String,
+    },
     /// The checksum matched but the manifest under it does not load.
     InvalidManifest {
         /// The loader's complaint.
@@ -99,6 +113,7 @@ impl std::fmt::Display for BlockReason {
             Self::BadRecord { message } => write!(f, "checksum record is unusable: {message}"),
             Self::Unreadable { message } => write!(f, "could not read the tree: {message}"),
             Self::UnsafeEntry { path, why } => write!(f, "{path}: {why}"),
+            Self::Link { message } => write!(f, "linked checkout: {message}"),
             Self::InvalidManifest { message } => write!(f, "manifest does not load: {message}"),
             Self::InvalidName { path, message } => write!(f, "{path}: {message}"),
         }
@@ -121,8 +136,10 @@ pub struct StoredExtension {
     pub id: String,
     /// Version, or empty when the directory name is not a version.
     pub version: String,
-    /// Where it lives on disk.
+    /// Where it lives on disk. A linked version's path is the checkout.
     pub path: PathBuf,
+    /// Whether this version is a link to a checkout rather than a copy.
+    pub linked: bool,
     /// Checksum from the record, when there is one.
     pub recorded: Option<String>,
     /// Checksum computed now, when hashing got far enough to produce one.
@@ -142,6 +159,13 @@ impl StoredExtension {
     #[must_use]
     pub fn is_blocked(&self) -> bool {
         !self.is_ready()
+    }
+
+    /// Whether this version is served from a checkout rather than from bytes the
+    /// store copied.
+    #[must_use]
+    pub fn is_linked(&self) -> bool {
+        self.linked
     }
 
     /// `id@version`, for reports. Falls back to the path when a directory name
@@ -194,8 +218,8 @@ impl StoredExtension {
             } else {
                 ExtensionStatus::Active
             },
-            // A version the store installed has a record; one it did not (and
-            // therefore blocks) is a directory somebody pointed the store at.
+            // A version the store installed has a checksum record; a linked
+            // checkout and a directory somebody pointed the store at do not.
             source: if self.recorded.is_some() {
                 ExtensionSource::Registry
             } else {
@@ -381,6 +405,60 @@ impl Store {
             path: destination,
             recorded: Some(checksum.clone()),
             computed: Some(checksum),
+            linked: false,
+            status: StoreStatus::Ready,
+        })
+    }
+
+    /// Link a checkout instead of copying it.
+    ///
+    /// The version's record names the checkout, and everything that reads the
+    /// extension — `ext list`, activation, the daemon's registries — loads that
+    /// directory as it is at that moment, so an edit is visible without re-adding.
+    ///
+    /// A link is deliberately not hashed: a checksum that changed under the store's
+    /// feet would block every edit, which is the opposite of what a link is for. It
+    /// is reported as a path source and never claims a checksum.
+    ///
+    /// # Errors
+    ///
+    /// The directory does not load, its path is not UTF-8, or that id and version
+    /// is already installed or linked.
+    pub fn link_from_dir(
+        &self,
+        source: impl AsRef<Path>,
+    ) -> Result<StoredExtension, ExtensionError> {
+        let source = source.as_ref();
+        let extension = load_dir(source)?;
+        let id = extension.manifest.id.clone();
+        let version = extension.manifest.version.clone();
+        let destination = self.version_path(&id, &version);
+        let record = self.record_path(&id, &version);
+        if destination.exists() || record.exists() {
+            return Err(ExtensionError::AlreadyInstalled { id, version });
+        }
+
+        let target = std::path::absolute(source).map_err(|error| io_error(source, error))?;
+        let target_text = target.to_str().ok_or_else(|| ExtensionError::UnsupportedEntry {
+            path: target.display().to_string(),
+            why: "a linked checkout's path must be valid UTF-8, so a link means the same thing on every host",
+        })?;
+
+        self.ensure_root()?;
+        let parent = destination
+            .parent()
+            .expect("a version path always has an id directory");
+        fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+        fs::create_dir_all(&destination).map_err(|source| io_error(&destination, source))?;
+        write_link_record(&record, target_text)?;
+
+        Ok(StoredExtension {
+            id,
+            version,
+            path: target,
+            recorded: None,
+            computed: None,
+            linked: true,
             status: StoreStatus::Ready,
         })
     }
@@ -479,6 +557,7 @@ impl Store {
             path: destination,
             recorded: Some(checksum.clone()),
             computed: Some(checksum),
+            linked: false,
             status: StoreStatus::Ready,
         })
     }
@@ -515,6 +594,7 @@ impl Store {
                         id: entry.file_name().to_string_lossy().into_owned(),
                         version: String::new(),
                         path: entry.path(),
+                        linked: false,
                         recorded: None,
                         computed: None,
                         status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -537,6 +617,7 @@ impl Store {
                     id: name,
                     version: String::new(),
                     path: id_path.clone(),
+                    linked: false,
                     recorded: None,
                     computed: None,
                     status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -562,6 +643,7 @@ impl Store {
                         id: name.clone(),
                         version: String::new(),
                         path: version.path(),
+                        linked: false,
                         recorded: None,
                         computed: None,
                         status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -713,19 +795,24 @@ impl Store {
         let record_path = self.record_path(id, version);
 
         let recorded = match fs::read_to_string(&record_path) {
-            Ok(text) => match parse_record(&text) {
-                Ok(checksum) => checksum,
-                Err(message) => {
-                    return blocked(
-                        id,
-                        version,
-                        path,
-                        None,
-                        None,
-                        BlockReason::BadRecord { message },
-                    );
+            Ok(text) => {
+                if let Some(target) = text.strip_prefix(LINK_PREFIX) {
+                    return self.inspect_link(id, version, path, &record_path, target.trim_end());
                 }
-            },
+                match parse_record(&text) {
+                    Ok(checksum) => checksum,
+                    Err(message) => {
+                        return blocked(
+                            id,
+                            version,
+                            path,
+                            None,
+                            None,
+                            BlockReason::BadRecord { message },
+                        );
+                    }
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return blocked(id, version, path, None, None, BlockReason::Unrecorded);
             }
@@ -799,6 +886,63 @@ impl Store {
             path: path.to_path_buf(),
             recorded: Some(recorded),
             computed: Some(computed),
+            linked: false,
+            status: StoreStatus::Ready,
+        }
+    }
+
+    /// Decide a linked version by reading the checkout its record names.
+    ///
+    /// There is no checksum to compare: the record *is* the claim that this
+    /// checkout is the extension, so the answer is whether the checkout is there
+    /// and still says the id and version the store filed it under.
+    fn inspect_link(
+        &self,
+        id: &str,
+        version: &str,
+        path: &Path,
+        record: &Path,
+        target: &str,
+    ) -> StoredExtension {
+        let refuse = |message: String| {
+            let mut stored = blocked(id, version, path, None, None, BlockReason::Link { message });
+            stored.linked = true;
+            stored
+        };
+        if target.is_empty() {
+            return refuse(format!("{} does not name a checkout", record.display()));
+        }
+        let checkout = PathBuf::from(target);
+        if !checkout.is_dir() {
+            return refuse(format!(
+                "the checkout {} is gone; add it again or remove this link",
+                checkout.display()
+            ));
+        }
+        match load_dir(&checkout) {
+            Ok(extension) => {
+                if extension.manifest.id != id || extension.manifest.version != version {
+                    return refuse(format!(
+                        "the checkout now says {}@{}, not {id}@{version}; remove this link and add \
+                         it again",
+                        extension.manifest.id, extension.manifest.version
+                    ));
+                }
+            }
+            Err(error) => {
+                return refuse(format!(
+                    "the checkout at {} does not load: {error}",
+                    checkout.display()
+                ));
+            }
+        }
+        StoredExtension {
+            id: id.to_owned(),
+            version: version.to_owned(),
+            path: checkout,
+            recorded: None,
+            computed: None,
+            linked: true,
             status: StoreStatus::Ready,
         }
     }
@@ -857,6 +1001,7 @@ fn blocked(
         id: id.to_owned(),
         version: version.to_owned(),
         path: path.to_path_buf(),
+        linked: false,
         recorded,
         computed,
         status: StoreStatus::Blocked(reason),
@@ -1023,6 +1168,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex(&hasher.finalize())
+}
+
+/// Record that a version is served from `target` instead of from copied bytes.
+fn write_link_record(path: &Path, target: &str) -> Result<(), ExtensionError> {
+    let temporary = path.with_extension("sha256.tmp");
+    fs::write(&temporary, format!("{LINK_PREFIX}{target}\n"))
+        .map_err(|source| io_error(&temporary, source))?;
+    fs::rename(&temporary, path).map_err(|source| io_error(&temporary, source))
 }
 
 fn write_record(path: &Path, checksum: &str) -> Result<(), ExtensionError> {

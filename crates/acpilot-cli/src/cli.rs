@@ -589,7 +589,8 @@ pub enum ExtCommand {
     Add {
         /// Extension id from the index, for example `acpilot.night-flight`.
         id: Option<String>,
-        /// Install a directory instead of an indexed archive, for development.
+        /// Link a directory checkout instead of copying it, so an edit applies
+        /// without adding it again.
         #[arg(long, value_name = "DIR", conflicts_with = "id")]
         from: Option<PathBuf>,
         /// Version to install. The newest the index lists when absent.
@@ -2770,12 +2771,8 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                                 "extension": stored.summary(&[])
                             }));
                         } else {
-                            println!(
-                                "installed {} ({}), checksum {}",
-                                stored.label(),
-                                stored.path.display(),
-                                stored.recorded.clone().unwrap_or_default()
-                            );
+                            println!("linked {} to {}", stored.label(), stored.path.display());
+                            println!("edits in the checkout apply without adding it again");
                             println!("approve it for a profile with `acpilot ext activate <id>`");
                         }
                         exit::SUCCESS

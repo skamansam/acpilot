@@ -103,11 +103,12 @@ fn add_verify_activate_why_deactivate_round_trip() {
         store_arg,
     ]);
     assert!(added.status.success(), "{}", text(&added));
-    assert!(text(&added).contains("installed acpilot.pack@1.0.0"));
+    assert!(text(&added).contains("linked acpilot.pack@1.0.0"));
 
     let verified = acpilot(&["ext", "verify", "--all", "--store", store_arg]);
     assert!(verified.status.success(), "{}", text(&verified));
     assert!(text(&verified).contains("ok      acpilot.pack@1.0.0"));
+    assert!(text(&verified).contains("(linked)"), "{}", text(&verified));
 
     let before = acpilot(&[
         "ext",
@@ -189,7 +190,68 @@ fn add_verify_activate_why_deactivate_round_trip() {
 }
 
 #[test]
-fn verify_fails_on_a_tampered_extension() {
+fn edits_in_a_linked_checkout_apply_without_adding_it_again() {
+    let store = TempDir::new();
+    let config = TempDir::new();
+    let source = TempDir::new();
+    install_server_pack(&source, "1.0.0", "rust-analyzer", "pack-analyzer");
+
+    let store_arg = store.path().to_str().unwrap();
+    let config_arg = config.path().to_str().unwrap();
+    let added = acpilot(&[
+        "ext",
+        "add",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--store",
+        store_arg,
+    ]);
+    assert!(added.status.success(), "{}", text(&added));
+    assert!(
+        text(&added).contains("linked acpilot.pack@1.0.0"),
+        "{}",
+        text(&added)
+    );
+
+    // A link, not a copy: the bytes stay in the checkout.
+    let version_dir = store.path().join("acpilot.pack/1.0.0");
+    assert!(version_dir.is_dir());
+    assert!(!version_dir.join("lsp.toml").exists());
+
+    let activated = acpilot(&[
+        "ext",
+        "activate",
+        "acpilot.pack",
+        "--profile",
+        "work",
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+    ]);
+    assert!(activated.status.success(), "{}", text(&activated));
+
+    let lsp = source.path().join("lsp.toml");
+    let before = fs::read_to_string(&lsp).unwrap();
+    fs::write(&lsp, before.replace("pack-analyzer", "edited-analyzer")).unwrap();
+
+    let why = acpilot(&[
+        "ext",
+        "why",
+        "rust-analyzer",
+        "--profile",
+        "work",
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+    ]);
+    assert!(why.status.success(), "{}", text(&why));
+    assert!(text(&why).contains("edited-analyzer"), "{}", text(&why));
+}
+
+#[test]
+fn verify_reports_a_link_whose_checkout_is_gone() {
     let store = TempDir::new();
     let source = TempDir::new();
     install_server_pack(&source, "1.0.0", "rust-analyzer", "pack-analyzer");
@@ -208,9 +270,7 @@ fn verify_fails_on_a_tampered_extension() {
         .success()
     );
 
-    let lsp = store.path().join("acpilot.pack/1.0.0/lsp.toml");
-    let original = fs::read_to_string(&lsp).unwrap();
-    fs::write(&lsp, original.replace("pack-analyzer", "evil-analyzer")).unwrap();
+    fs::remove_dir_all(source.path()).unwrap();
 
     let verified = acpilot(&["ext", "verify", "--all", "--store", store_arg]);
     assert_eq!(verified.status.code(), Some(1), "{}", text(&verified));
@@ -219,7 +279,7 @@ fn verify_fails_on_a_tampered_extension() {
         verified.contains("blocked acpilot.pack@1.0.0"),
         "{verified}"
     );
-    assert!(verified.contains("checksum mismatch"), "{verified}");
+    assert!(verified.contains("gone"), "{verified}");
 }
 
 #[test]
@@ -268,9 +328,7 @@ fn activating_a_blocked_extension_is_refused() {
         .success()
     );
 
-    let lsp = store.path().join("acpilot.pack/1.0.0/lsp.toml");
-    let original = fs::read_to_string(&lsp).unwrap();
-    fs::write(&lsp, original.replace("pack-analyzer", "other-analyzer")).unwrap();
+    fs::remove_dir_all(source.path()).unwrap();
 
     let output = acpilot(&[
         "ext",

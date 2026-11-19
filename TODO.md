@@ -1735,9 +1735,9 @@ v0.1 (D18).
     refuses while a profile activates the id, and `list`/`show` report store status beside the
     index. Tests: index validation and signature cases (including the shipped signature), archive
     shape and traversal, store installs from a real tarball, and six process-level CLI tests with
-    a local signed index and a one-shot HTTP archive server. **Open:** `--from` copies a directory
-    into the store rather than linking it, so a developer edits and re-adds under a new version;
-    `ext add` does not activate in the same command; `--json` and the daemon's `/v1/extensions`
+    a local signed index and a one-shot HTTP archive server. `ext add --from` links a checkout
+    rather than copying it, so an edit is what the next reader loads. **Open:** `ext add` does not
+    activate in the same command; `--json` and the daemon's `/v1/extensions`
     surface are P4.6-10; nothing caps the unpacked size of a downloaded archive beyond the
     archive's own declared size; and adding a listing means re-signing `index.json` with the
     maintainer key, which is a release-time step rather than something CI can do.

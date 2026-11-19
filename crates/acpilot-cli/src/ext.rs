@@ -61,9 +61,12 @@ impl Paths {
     }
 }
 
-/// Install a directory, returning what landed.
+/// Link a checkout, returning what landed.
+///
+/// The store names the checkout instead of copying it, so the next reader loads the
+/// checkout as the developer left it.
 pub fn add(paths: &Paths, from: &Path) -> Result<StoredExtension, ExtensionError> {
-    paths.store().install_from_dir(from)
+    paths.store().link_from_dir(from)
 }
 
 /// Rehash every installed version. Returns whether all of them are ready, the
@@ -88,7 +91,11 @@ pub fn verify_all(
     let mut blocked = 0;
     for stored in &scan {
         match &stored.status {
-            StoreStatus::Ready => lines.push(format!("ok      {}", stored.label())),
+            StoreStatus::Ready => lines.push(if stored.is_linked() {
+                format!("ok      {} (linked)", stored.label())
+            } else {
+                format!("ok      {}", stored.label())
+            }),
             StoreStatus::Blocked(reason) => {
                 all_ready = false;
                 blocked += 1;

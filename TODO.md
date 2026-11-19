@@ -1740,10 +1740,14 @@ v0.1 (D18).
     `ext add --activate <profile>` installs and approves in one command, for an index install and
     a `--from` link alike; the approval is written only after the store accepted the bytes, and
     `--json` reports it as `activated_in` beside the summary whose `active_profiles` names it.
-    **Open:** `--json` and the daemon's `/v1/extensions` surface are P4.6-10; nothing caps the
-    unpacked size of a downloaded archive beyond the archive's own declared size; and adding a
-    listing means re-signing `index.json` with the maintainer key, which is a release-time step
-    rather than something CI can do.
+    **Progress 2026-11-19:** the unpacked tree has its own bound. The listing's `size` is the
+    compressed download and says nothing about what a small gzip expands to, so `archive.rs`
+    spends a budget of `MAX_UNPACKED_BYTES` (64 MiB) from each entry's declared size as it
+    writes, naming the entry that crossed it; a download that passes the archive's own check but
+    would fill the disk is refused whole, and the store's staging directory means nothing half
+    unpacked survives. **Open:** `--json` and the daemon's `/v1/extensions` surface are P4.6-10,
+    and adding a listing means re-signing `index.json` with the maintainer key, which is a
+    release-time step rather than something CI can do.
 
 - [x] **P4.6-5 · Activation and precedence** (1d) — done: `activation.rs`, `effective.rs`, `ext why`; the daemon's `extension.changed` event waits for the mod-shop phase's task P4.6-10
   - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <

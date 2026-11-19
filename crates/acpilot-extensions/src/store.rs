@@ -480,6 +480,10 @@ impl Store {
     /// unpacks to a different id, version, or publisher than the listing named is
     /// a mislabeled download, and nothing is written.
     ///
+    /// The archive's size is the *compressed* bytes, so it cannot bound what they
+    /// expand to; the unpacked tree is capped at
+    /// [`crate::archive::MAX_UNPACKED_BYTES`] as it is written.
+    ///
     /// # Errors
     ///
     /// The archive's size or checksum differs from the index, it does not unpack,

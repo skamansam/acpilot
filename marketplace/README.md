@@ -34,7 +34,9 @@ acpilot ext add acpilot.rust-pack --activate work
 `ext add` checks the archive's size and sha256 against the signed listing before
 unpacking, requires the manifest inside to name the same id, version and publisher,
 then hashes the installed directory and records that checksum. `ext verify --all`
-checks it again, and either mismatch is `Blocked` rather than a warning.
+checks it again, and either mismatch is `Blocked` rather than a warning. The
+listing's size is the compressed download, so the unpacked tree has its own cap:
+an archive that would write more than 64 MiB is refused whole.
 
 A checkout is still installable for development:
 

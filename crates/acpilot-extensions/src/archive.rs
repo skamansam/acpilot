@@ -17,17 +17,36 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::ExtensionError;
 
+/// The most one archive may unpack to.
+///
+/// An extension is data: TOML presets, a theme, and later a few grammars. The
+/// index's `size` bounds the *download*, which is the compressed bytes and says
+/// nothing about what they expand to — a few hundred kilobytes of gzip can fill a
+/// disk. This is the bound the listing cannot give, checked as entries are written
+/// so a bomb stops at the limit rather than at whatever the filesystem does first.
+/// It is deliberately generous: several prebuilt grammars fit, and nothing a pack
+/// is allowed to carry needs more.
+pub const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Unpack an archive into a directory that must already exist.
+///
+/// The tree is capped at [`MAX_UNPACKED_BYTES`].
 ///
 /// # Errors
 ///
 /// The bytes are neither a gzip tarball nor a zip, an entry is not a regular file
-/// or directory, or an entry's path is absolute or climbs out of `destination`.
+/// or directory, an entry's path is absolute or climbs out of `destination`, or the
+/// entries add up to more than the cap.
 pub fn unpack(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
+    unpack_within(bytes, destination, MAX_UNPACKED_BYTES)
+}
+
+/// [`unpack`] with the cap named, so a test can make it small enough to cross.
+fn unpack_within(bytes: &[u8], destination: &Path, limit: u64) -> Result<(), ExtensionError> {
     if bytes.starts_with(&[0x1f, 0x8b]) {
-        unpack_tar_gz(bytes, destination)
+        unpack_tar_gz(bytes, destination, limit)
     } else if bytes.starts_with(b"PK\x03\x04") {
-        unpack_zip(bytes, destination)
+        unpack_zip(bytes, destination, limit)
     } else {
         Err(ExtensionError::Archive {
             path: destination.display().to_string(),
@@ -37,12 +56,13 @@ pub fn unpack(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
     }
 }
 
-fn unpack_tar_gz(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
+fn unpack_tar_gz(bytes: &[u8], destination: &Path, limit: u64) -> Result<(), ExtensionError> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
     let entries = archive
         .entries()
         .map_err(|error| ArchiveError::from(error, destination))?;
+    let mut written = 0_u64;
     for entry in entries {
         let mut entry = entry.map_err(|error| ArchiveError::from(error, destination))?;
         let kind = entry.header().entry_type();
@@ -74,6 +94,14 @@ fn unpack_tar_gz(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError>
                     .to_owned(),
             });
         }
+        // The header's size is exactly how much `unpack` writes for a regular
+        // file, so the budget is spent here rather than measured afterwards.
+        written = written
+            .checked_add(entry.size())
+            .ok_or_else(|| too_large(&relative, limit))?;
+        if written > limit {
+            return Err(too_large(&relative, limit));
+        }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| ArchiveError::from(error, destination))?;
@@ -85,9 +113,10 @@ fn unpack_tar_gz(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError>
     Ok(())
 }
 
-fn unpack_zip(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
+fn unpack_zip(bytes: &[u8], destination: &Path, limit: u64) -> Result<(), ExtensionError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| ArchiveError::from(error, destination))?;
+    let mut written = 0_u64;
     for index in 0..archive.len() {
         let mut file = archive
             .by_index(index)
@@ -119,6 +148,14 @@ fn unpack_zip(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
                     .to_owned(),
             });
         }
+        // The central directory's uncompressed size is what the reader yields, so
+        // it is the number the budget is charged, before any byte is written.
+        written = written
+            .checked_add(file.size())
+            .ok_or_else(|| too_large(&relative, limit))?;
+        if written > limit {
+            return Err(too_large(&relative, limit));
+        }
         let target = destination.join(&relative);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
@@ -130,6 +167,17 @@ fn unpack_zip(bytes: &[u8], destination: &Path) -> Result<(), ExtensionError> {
             .map_err(|error| ArchiveError::from(error, destination))?;
     }
     Ok(())
+}
+
+/// The refusal a download gets when its entries would exceed the cap.
+fn too_large(entry: &Path, limit: u64) -> ExtensionError {
+    ExtensionError::Archive {
+        path: entry.display().to_string(),
+        message: format!(
+            "the archive unpacks to more than {limit} bytes at this entry, and an extension is \
+             data; nothing was installed"
+        ),
+    }
 }
 
 /// A path relative to the unpack root, or the reason it is not.
@@ -272,6 +320,86 @@ mod tests {
         assert_eq!(
             std::fs::read(directory.path().join("pack/extension.toml")).expect("the file"),
             b"schema_version = 1\n"
+        );
+    }
+
+    /// Pack several files into a gzip tarball, in order.
+    fn tar_gz_files(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (path, contents) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, Cursor::new(*contents))
+                .expect("append");
+        }
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip")
+    }
+
+    #[test]
+    fn a_tarball_that_unpacks_past_the_limit_is_refused_whole() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let bytes = tar_gz_files(&[
+            ("pack/extension.toml", b"schema_version = 1\n"),
+            ("pack/payload.bin", &[0_u8; 4096]),
+        ]);
+        let error = unpack_within(&bytes, directory.path(), 1024).expect_err("refused");
+        let message = error.to_string();
+        assert!(message.contains("more than 1024 bytes"), "{message}");
+        assert!(
+            message.contains("pack/payload.bin"),
+            "the entry that crossed the cap is named: {message}"
+        );
+    }
+
+    #[test]
+    fn a_zip_that_unpacks_past_the_limit_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("pack/big.bin", zip::write::SimpleFileOptions::default())
+                .expect("start");
+            writer.write_all(&[0_u8; 4096]).expect("write");
+            writer.finish().expect("finish");
+        }
+        let bytes = buffer.into_inner();
+        let error = unpack_within(&bytes, directory.path(), 1024).expect_err("refused");
+        assert!(
+            error.to_string().contains("more than 1024 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_cap_leaves_room_for_what_a_pack_carries() {
+        // A whole built-in extension is far below the cap, so the shipped packs are
+        // never the thing a limit refuses.
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/acpilot.language-servers");
+        let mut total = 0_u64;
+        let mut stack = vec![fixture];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).expect("a readable fixture") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    total += std::fs::metadata(&path).expect("metadata").len();
+                }
+            }
+        }
+        assert!(
+            total < MAX_UNPACKED_BYTES / 16,
+            "the language-server pack is {total} bytes, and the cap is {MAX_UNPACKED_BYTES}"
         );
     }
 

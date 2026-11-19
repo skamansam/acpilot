@@ -159,11 +159,17 @@ pub fn search(paths: &Paths, source: Option<&str>, query: Option<&str>) -> Resul
 }
 
 /// `acpilot ext add <ID> [--version]`, or `--from <DIR>` for a checkout.
+///
+/// `activate` names the profile to approve the id for once the archive is in the
+/// store, so the install and the approval are one command. The activation is
+/// written after the store accepted the bytes: a profile never names something the
+/// store would refuse to load.
 pub fn add(
     paths: &Paths,
     source: Option<&str>,
     id: &str,
     version: Option<&str>,
+    activate: Option<&str>,
 ) -> Result<Report, String> {
     validate_namespaced_id("extension id", id).map_err(|error| error.to_string())?;
     let index = load_index(paths, source)?;
@@ -184,6 +190,9 @@ pub fn add(
         ));
     }
     let installed = install_entry(paths, entry)?;
+    if let Some(profile) = activate {
+        crate::ext::activate(paths, profile, &entry.id).map_err(|error| error.to_string())?;
+    }
     let profiles = activating(paths, &entry.id)?;
     let summary = installed.summary(&profiles);
     let lines = vec![
@@ -193,14 +202,17 @@ pub fn add(
             entry.download,
             installed.recorded.clone().unwrap_or_default()
         ),
-        format!(
-            "approve it for a profile with `acpilot ext activate {} --profile <name>`",
-            entry.id
-        ),
+        match activate {
+            Some(profile) => format!("activated {} in profile {profile}", entry.id),
+            None => format!(
+                "approve it for a profile with `acpilot ext activate {} --profile <name>`",
+                entry.id
+            ),
+        },
     ];
     Ok(Report::new(
         lines,
-        serde_json::json!({ "extension": summary }),
+        serde_json::json!({ "extension": summary, "activated_in": activate }),
     ))
 }
 

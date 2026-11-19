@@ -28,8 +28,7 @@ call for the listing itself:
 
 ```bash
 acpilot ext search rust
-acpilot ext add acpilot.rust-pack
-acpilot ext activate acpilot.rust-pack --profile work
+acpilot ext add acpilot.rust-pack --activate work
 ```
 
 `ext add` checks the archive's size and sha256 against the signed listing before

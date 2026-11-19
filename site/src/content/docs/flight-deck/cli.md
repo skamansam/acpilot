@@ -50,7 +50,8 @@ acpilot models probe <provider> | ls
 acpilot recipes run <id> "…" [--root <dir>] [--json]
 acpilot runs ls|show|replay|compare
 acpilot acp pair|token show|token rotate|drivers|revoke
-acpilot ext add --from <dir> | import-theme --from <file> --id <publisher.name>
+acpilot ext add (--from <dir> | <id>) [--activate <profile>]
+acpilot ext import-theme --from <file> --id <publisher.name> [--activate <profile>]
 acpilot ext verify --all | prune [--dry-run]
 acpilot [--profile <name|dir>] <command>
 acpilot ext activate|deactivate <id>

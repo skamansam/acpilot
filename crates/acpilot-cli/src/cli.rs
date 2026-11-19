@@ -606,6 +606,10 @@ pub enum ExtCommand {
         /// build ships.
         #[arg(long, value_name = "URL|PATH")]
         index: Option<String>,
+        /// Activate it in this profile once it is installed, so installing and
+        /// approving are one command.
+        #[arg(long, value_name = "PROFILE")]
+        activate: Option<String>,
         /// Print the installed version as one JSON document.
         #[arg(long)]
         json: bool,
@@ -2838,6 +2842,7 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             from,
             version,
             index,
+            activate,
             json,
             store,
             config,
@@ -2849,21 +2854,47 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             match (from, id) {
                 (Some(from), _) => match ext::add(&paths, &from) {
                     Ok(stored) => {
+                        let activated = match activate.as_deref() {
+                            Some(profile) => match ext::activate(&paths, profile, &stored.id) {
+                                Ok(_) => Some(profile),
+                                Err(error) => return fail(&error),
+                            },
+                            None => None,
+                        };
                         if json {
+                            let profiles: Vec<String> = activated
+                                .map(|profile| vec![profile.to_owned()])
+                                .unwrap_or_default();
                             print_json(&serde_json::json!({
-                                "extension": stored.summary(&[])
+                                "extension": stored.summary(&profiles),
+                                "activated_in": activated,
                             }));
                         } else {
                             println!("linked {} to {}", stored.label(), stored.path.display());
                             println!("edits in the checkout apply without adding it again");
-                            println!("approve it for a profile with `acpilot ext activate <id>`");
+                            match activated {
+                                Some(profile) => {
+                                    println!("activated {} in profile {profile}", stored.id);
+                                }
+                                None => println!(
+                                    "approve it for a profile with `acpilot ext activate {} \
+                                     --profile <name>`",
+                                    stored.id
+                                ),
+                            }
                         }
                         exit::SUCCESS
                     }
                     Err(error) => fail(&error),
                 },
                 (None, Some(id)) => ext_report(
-                    registry::add(&paths, index.as_deref(), &id, version.as_deref()),
+                    registry::add(
+                        &paths,
+                        index.as_deref(),
+                        &id,
+                        version.as_deref(),
+                        activate.as_deref(),
+                    ),
                     json,
                 ),
                 (None, None) => {

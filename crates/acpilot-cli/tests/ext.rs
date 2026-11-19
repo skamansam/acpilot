@@ -190,6 +190,75 @@ fn add_verify_activate_why_deactivate_round_trip() {
 }
 
 #[test]
+fn add_activates_in_the_same_command() {
+    let store = TempDir::new();
+    let config = TempDir::new();
+    let source = TempDir::new();
+    install_server_pack(&source, "1.0.0", "rust-analyzer", "pack-analyzer");
+    let store_arg = store.path().to_str().unwrap();
+    let config_arg = config.path().to_str().unwrap();
+    let json = acpilot(&[
+        "ext",
+        "add",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--activate",
+        "work",
+        "--json",
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+    ]);
+    assert!(json.status.success(), "{}", text(&json));
+    let out = String::from_utf8_lossy(&json.stdout).into_owned();
+    assert!(out.contains("\"activated_in\": \"work\""), "{out}");
+    assert!(out.contains("\"status\": \"active\""), "{out}");
+
+    // A second version, so the terminal lines are read on an install rather than
+    // on the refusal that adding 1.0.0 twice would be.
+    install_server_pack(&source, "1.1.0", "rust-analyzer", "pack-analyzer");
+    let added = acpilot(&[
+        "ext",
+        "add",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--activate",
+        "work",
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+    ]);
+    assert!(added.status.success(), "{}", text(&added));
+    let out = text(&added);
+    assert!(out.contains("linked acpilot.pack@1.1.0"), "{out}");
+    assert!(
+        out.contains("activated acpilot.pack in profile work"),
+        "{out}"
+    );
+    assert!(!out.contains("approve it for a profile"), "{out}");
+
+    let activation_file = config.path().join("profiles/work/extensions.toml");
+    let contents = fs::read_to_string(&activation_file).expect("activation written");
+    assert!(contents.contains("acpilot.pack"), "{contents}");
+
+    let why = acpilot(&[
+        "ext",
+        "why",
+        "rust-analyzer",
+        "--profile",
+        "work",
+        "--store",
+        store_arg,
+        "--config",
+        config_arg,
+    ]);
+    assert!(why.status.success(), "{}", text(&why));
+    assert!(text(&why).contains("pack-analyzer"), "{}", text(&why));
+}
+
+#[test]
 fn edits_in_a_linked_checkout_apply_without_adding_it_again() {
     let store = TempDir::new();
     let config = TempDir::new();

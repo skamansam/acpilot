@@ -1736,11 +1736,14 @@ v0.1 (D18).
     index. Tests: index validation and signature cases (including the shipped signature), archive
     shape and traversal, store installs from a real tarball, and six process-level CLI tests with
     a local signed index and a one-shot HTTP archive server. `ext add --from` links a checkout
-    rather than copying it, so an edit is what the next reader loads. **Open:** `ext add` does not
-    activate in the same command; `--json` and the daemon's `/v1/extensions`
-    surface are P4.6-10; nothing caps the unpacked size of a downloaded archive beyond the
-    archive's own declared size; and adding a listing means re-signing `index.json` with the
-    maintainer key, which is a release-time step rather than something CI can do.
+    rather than copying it, so an edit is what the next reader loads. **Progress 2026-11-19:**
+    `ext add --activate <profile>` installs and approves in one command, for an index install and
+    a `--from` link alike; the approval is written only after the store accepted the bytes, and
+    `--json` reports it as `activated_in` beside the summary whose `active_profiles` names it.
+    **Open:** `--json` and the daemon's `/v1/extensions` surface are P4.6-10; nothing caps the
+    unpacked size of a downloaded archive beyond the archive's own declared size; and adding a
+    listing means re-signing `index.json` with the maintainer key, which is a release-time step
+    rather than something CI can do.
 
 - [x] **P4.6-5 · Activation and precedence** (1d) — done: `activation.rs`, `effective.rs`, `ext why`; the daemon's `extension.changed` event waits for the mod-shop phase's task P4.6-10
   - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <

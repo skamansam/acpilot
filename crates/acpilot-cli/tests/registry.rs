@@ -215,7 +215,7 @@ impl Drop for OneFile {
 }
 
 #[test]
-fn add_downloads_checks_and_installs_an_indexed_archive() {
+fn add_downloads_checks_installs_and_activates_an_indexed_archive() {
     let directory = TempDir::new();
     let (key, public) = signing(11);
     let bytes = pack_fixture();
@@ -234,6 +234,8 @@ fn add_downloads_checks_and_installs_an_indexed_archive() {
         "ext",
         "add",
         "acpilot.night-flight",
+        "--activate",
+        "work",
         "--index",
         index.to_str().expect("index path"),
         "--store",
@@ -253,11 +255,18 @@ fn add_downloads_checks_and_installs_an_indexed_archive() {
         "{out}"
     );
     assert!(
+        out.contains("activated acpilot.night-flight in profile work"),
+        "{out}"
+    );
+    assert!(
         store
             .join("acpilot.night-flight/1.0.0/extension.toml")
             .is_file(),
         "the archive was unpacked into the store"
     );
+    let activation = fs::read_to_string(config.join("profiles/work/extensions.toml"))
+        .expect("the approval was written");
+    assert!(activation.contains("acpilot.night-flight"), "{activation}");
 }
 
 #[test]

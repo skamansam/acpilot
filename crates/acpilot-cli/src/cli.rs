@@ -125,6 +125,12 @@ pub enum Command {
         #[command(subcommand)]
         command: WorkspaceCommand,
     },
+    /// Print the key table in force, with the layers extensions contribute.
+    Keys {
+        /// Which keys verb.
+        #[command(subcommand)]
+        command: KeysCommand,
+    },
     /// Open the terminal UI against a running daemon, or run one here.
     ///
     /// The TUI is a client, not a second engine: it opens sessions, sends
@@ -792,6 +798,16 @@ pub struct SecretProfileArgs {
     pub config: ConfigArgs,
 }
 
+/// Keys verbs.
+#[derive(Debug, Subcommand)]
+pub enum KeysCommand {
+    /// Build the table `acpilot tui` would use and list it.
+    ///
+    /// A pack's layer that takes a key already in use is refused with both verbs
+    /// named and the pack that wrote it, rather than resolved by going unnoticed.
+    Check,
+}
+
 /// Run a parsed command and return the process exit code.
 pub fn run(cli: Cli) -> u8 {
     let Cli { profile, command } = cli;
@@ -807,6 +823,7 @@ pub fn run(cli: Cli) -> u8 {
             check,
         }) => crate::update::run(from, version, check),
         Some(Command::Ext { command }) => run_ext(command, profile.as_deref()),
+        Some(Command::Keys { command }) => run_keys(command, profile.as_deref()),
         Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Config { command }) => run_config(command, profile.as_deref()),
@@ -2449,6 +2466,72 @@ fn run_tui(flags: TuiFlags) -> u8 {
         Err(error) => {
             eprintln!("acpilot tui: {error}");
             exit::FAILURE
+        }
+    }
+}
+
+/// Build the key table a launch would use and print it.
+///
+/// It reads what the client reads — the profile's `keymap.toml`, under the layers
+/// its activated extensions contribute — so the check and the screen cannot
+/// disagree about which key means what.
+fn run_keys(command: KeysCommand, profile: Option<&str>) -> u8 {
+    match command {
+        KeysCommand::Check => {
+            let root = match Root::resolve(None) {
+                Ok(root) => root,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            let resolved = match ProfileResolver::new()
+                .flag(profile.map(Path::new))
+                .process_environment()
+                .resolve(&root)
+            {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return if error.is_missing() {
+                        exit::NOT_FOUND
+                    } else {
+                        exit::FAILURE
+                    };
+                }
+            };
+            let directory = resolved.profile().root().to_path_buf();
+            let layers = match acpilot_tui::extension_keymaps(Some(&directory)) {
+                Ok(layers) => layers,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            let path = directory.join("keymap.toml");
+            let path = if path.is_file() {
+                path
+            } else {
+                acpilot_profile::config_dir().join("keymap.toml")
+            };
+            let keymap = match acpilot_tui::keymap::Keymap::load_with(&path, &layers) {
+                Ok(keymap) => keymap,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            for layer in &layers {
+                println!("layer {} · {} keys", layer.extension, layer.keys.len());
+            }
+            println!("preset {}", keymap.preset_name());
+            for context in acpilot_tui::keymap::Context::ALL {
+                println!("[{}]", context.name());
+                for (keys, what) in keymap.rows(context) {
+                    println!("  {keys:<18} {what}");
+                }
+            }
+            exit::SUCCESS
         }
     }
 }

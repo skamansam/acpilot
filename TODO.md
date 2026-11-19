@@ -1799,6 +1799,17 @@ v0.1 (D18).
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
     and below the user's own `keymap.toml`, with conflicts reported by `acpilot keys check`.
+  - **Progress (2026-11-19):** keymap layers are read and applied. A `keymap` contribution is
+    parsed by the loader (`KeymapLayer`: a `[keys]` table, and no `preset` — a pack moves keys,
+    it does not choose the editing model). `acpilot-tui` applies the layers above the preset and
+    below the profile's `keymap.toml`, at launch and on every save of that file; the layers are
+    sorted by extension id, and each is checked as it lands, so a pack that takes a key already
+    in use is refused with both verbs and the pack's id named. `acpilot keys check` builds the
+    same table and prints it, so the command and the screen cannot disagree.
+  - **Open:** snippets are not implemented — the editor has no snippet engine to feed, so the
+    "existing JSON format" this task names does not exist yet, and that half needs its own task.
+    A deactivated pack's keys are reconciled on the next save of `keymap.toml` rather than the
+    moment activation changes, because the client watches that file and not `extensions.toml`.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

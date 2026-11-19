@@ -9,6 +9,7 @@
 use acpilot_proto::extension::ExtensionKind;
 
 use crate::error::ExtensionError;
+use crate::keymap::{KeymapLayer, parse_keymap_layer};
 use crate::manifest::{MANIFEST_FILE, Manifest, kind_name};
 use crate::preset::{AgentPreset, LanguageServerPreset, parse_agents, parse_language_servers};
 use crate::source::{AssetSource, DirSource, EmbeddedSource};
@@ -41,6 +42,8 @@ pub enum Contribution {
         /// Path relative to the extension root.
         path: String,
     },
+    /// Key overrides the client applies beneath the person's own `keymap.toml`.
+    Keymap(KeymapLayer),
     /// A kind the manifest may declare but this build cannot read yet.
     ///
     /// The path is still checked; the file is not parsed. Saying so out loud is
@@ -64,6 +67,7 @@ impl Contribution {
             Self::LanguageServers(_) => ExtensionKind::LanguageServers,
             Self::Agents(_) => ExtensionKind::Agents,
             Self::Skills { .. } => ExtensionKind::Skills,
+            Self::Keymap(_) => ExtensionKind::Keymap,
             Self::Unloaded { kind, .. } => *kind,
         }
     }
@@ -121,18 +125,23 @@ pub fn load(source: &dyn AssetSource) -> Result<LoadedExtension, ExtensionError>
                     path: entry.path.clone(),
                 });
             }
+            ExtensionKind::Keymap => {
+                let text = source.read_text(&entry.path)?;
+                contributions.push(Contribution::Keymap(parse_keymap_layer(
+                    &entry.path,
+                    &text,
+                    &manifest.id,
+                )?));
+            }
             kind @ (ExtensionKind::Grammars
             | ExtensionKind::Snippets
-            | ExtensionKind::Keymap
             | ExtensionKind::TranscriptParser) => {
                 let reason = match kind {
                     ExtensionKind::TranscriptParser => {
                         "transcript parsers are Tier 2 and not in v0.1 (decision D18)"
                     }
                     ExtensionKind::Grammars => "grammar loading arrives in P4.6-8",
-                    ExtensionKind::Snippets | ExtensionKind::Keymap => {
-                        "snippet and keymap loading arrives in P4.6-9"
-                    }
+                    ExtensionKind::Snippets => "snippet loading arrives in P4.6-9",
                     _ => unreachable!("the match arm only covers the deferred kinds"),
                 };
                 warnings.push(format!(

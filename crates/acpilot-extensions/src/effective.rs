@@ -228,6 +228,7 @@ impl EffectiveRegistry {
                     }
                     Contribution::Theme(_)
                     | Contribution::Skills { .. }
+                    | Contribution::Keymap(_)
                     | Contribution::Unloaded { .. } => {}
                 }
             }

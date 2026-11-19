@@ -6286,8 +6286,12 @@ impl App {
     /// start over a key file would be worse than starting on the keys it describes
     /// everywhere else. The caller says where the problem is, because the screen is
     /// not up yet when this runs.
-    pub fn remember_keymap(&mut self, path: std::path::PathBuf) -> Option<String> {
-        match Keymap::load(&path) {
+    pub fn remember_keymap(
+        &mut self,
+        path: std::path::PathBuf,
+        layers: &[acpilot_extensions::KeymapLayer],
+    ) -> Option<String> {
+        match Keymap::load_with(&path, layers) {
             Ok(keymap) => {
                 self.keymap = keymap;
                 self.apply_vim_mode();
@@ -10101,7 +10105,7 @@ mod tests {
 
         let mut app = App::new("daemon");
         let error = app
-            .remember_keymap(path)
+            .remember_keymap(path, &[])
             .expect("a sentence about the file");
         assert!(error.contains("flow-north"), "{error}");
         assert_eq!(

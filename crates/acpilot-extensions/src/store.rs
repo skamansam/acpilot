@@ -270,6 +270,11 @@ impl StoredExtension {
                         });
                     }
                 }
+                crate::loader::Contribution::Keymap(layer) => rows.push(ExtensionContribution {
+                    kind: ExtensionKind::Keymap,
+                    id: "keymap".to_owned(),
+                    summary: format!("{} keys", layer.keys.len()),
+                }),
                 crate::loader::Contribution::Skills { path } => {
                     rows.push(ExtensionContribution {
                         kind: ExtensionKind::Skills,

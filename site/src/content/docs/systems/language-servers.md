@@ -80,9 +80,12 @@ keeping a session as an optimisation and keeping it as a leak. Someone who walks
 away from the editor stops paying for an index nobody is reading.
 
 What that machinery is doing is a route rather than a rumour. `GET /v1/lsp/servers`
-answers one row per language this build can start. The row says running or
-stopped, the encoding it negotiated, and the last `textDocument/references` round
-trip in milliseconds. That is the answer, not the index. A language with no row
+answers one row per language this daemon can start: the four the build knows, and
+any an activated extension adds. A pack's preset for a language the build already
+knows replaces that row, because activation sits above the built-ins, and
+deactivating it puts the build's row back without a restart. The row says running
+or stopped, the encoding it negotiated, and the last `textDocument/references`
+round trip in milliseconds. That is the answer, not the index. A language with no row
 has no server here, which is what a references list answered by the parse tree
 already said. The TUI prints those rows on its status line from the palette's
 **LSP status** row. That frontend has no `:` command line yet, so the palette's

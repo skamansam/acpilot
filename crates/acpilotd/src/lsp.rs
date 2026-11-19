@@ -102,11 +102,47 @@ pub const SERVERS: &[(&str, &str, &[&str])] = &[
     ("javascript", "typescript-language-server", &["--stdio"]),
 ];
 
+/// One server this daemon may start: the build's, or an activated extension's.
+///
+/// Owned rather than `&'static str` because a preset arrives from disk: its command,
+/// arguments and languages are read from an `lsp.toml` in a pack, and a table that
+/// could only hold constants could not show what a profile activated.
+#[derive(Debug, Clone)]
+pub struct Entry {
+    /// The LSP language id, which is also the key a session is kept under.
+    pub language: String,
+    /// The program to spawn.
+    pub program: String,
+    /// Arguments, in order.
+    pub args: Vec<String>,
+    /// The extension that introduced the row, or `None` for this build's own.
+    pub extension: Option<String>,
+}
+
+impl Entry {
+    fn built_in(language: &str, program: &str, args: &[&str]) -> Self {
+        Self {
+            language: language.to_owned(),
+            program: program.to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            extension: None,
+        }
+    }
+}
+
+/// The build's row for `language`, when it has one.
+fn built_in_entry(language: &str) -> Option<Entry> {
+    SERVERS
+        .iter()
+        .find(|(id, _, _)| *id == language)
+        .map(|(id, program, args)| Entry::built_in(id, program, args))
+}
+
 /// What a server answered, and the encoding its columns are counted in.
 #[derive(Debug)]
 pub struct Answer {
     /// The command that answered, for a log line or a status line.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Answer::locations`] is counted in.
     pub encoding: PositionEncoding,
     /// Where the name is used, in the server's own spelling.
@@ -130,7 +166,7 @@ pub struct FormatOptions {
 #[derive(Debug)]
 pub struct Formatted {
     /// The command that answered.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every position in [`Formatted::edits`] is counted in.
     pub encoding: PositionEncoding,
     /// The edits, in the server's order.
@@ -141,7 +177,7 @@ pub struct Formatted {
 #[derive(Debug)]
 pub struct Problems {
     /// The command that answered, for a log line or a status line.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Problems::items`] is counted in.
     pub encoding: PositionEncoding,
     /// The problems themselves, in the server's order.
@@ -160,7 +196,7 @@ pub struct Pushed {
     /// The version the problems are about, when the server names one.
     pub version: Option<i64>,
     /// The command that published, for the frame's `server` field.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Pushed::items`] is counted in.
     pub encoding: PositionEncoding,
     /// The problems themselves, in the server's order.
@@ -204,7 +240,7 @@ impl Place {
     /// A local key is the language alone, so a daemon with no remote workspaces keeps
     /// the one-session-per-language behaviour it had; a remote key names the host and the
     /// root, because two workspaces on one host are two indexes.
-    fn key(&self, language: &'static str) -> String {
+    fn key(&self, language: &str) -> String {
         match &self.at {
             Where::Local => language.to_owned(),
             Where::Remote { host, .. } => {
@@ -217,6 +253,14 @@ impl Place {
 #[derive(Default)]
 pub struct Servers {
     sessions: Mutex<HashMap<String, Option<Running>>>,
+    /// Rows the profile's activated extensions contribute, by language.
+    ///
+    /// Kept apart from [`SERVERS`] rather than merged into it: the build's rows are
+    /// constants and a profile's are read from disk, and looking here first is what
+    /// makes an activated extension sit above a built-in without rewriting what the
+    /// binary shipped. Empty until [`Servers::register`] is called, so a daemon with
+    /// no activation behaves as it did.
+    activated: Mutex<Vec<Entry>>,
 }
 
 /// A started server and what the daemon knows about its use.
@@ -227,7 +271,7 @@ pub struct Servers {
 struct Running {
     session: Session,
     /// The command that runs, for a status line or a log.
-    program: &'static str,
+    program: String,
     /// The helper process, when this session runs on a host.
     ///
     /// Dropped with the session, which is what closes the far side and ends the
@@ -265,6 +309,27 @@ impl Servers {
         Self::default()
     }
 
+    /// Replace the rows the profile's activated extensions contribute.
+    ///
+    /// Replacement, not accumulation: this runs again after a save or a pack is
+    /// deactivated, and a row whose pack went away has to disappear as completely as
+    /// a newly activated one appears. Callers order the rows by preset id, so a
+    /// language two packs name keeps the first — two packs owning one language is a
+    /// manifest bug, and the answer must not depend on install order.
+    pub async fn register(&self, entries: Vec<Entry>) {
+        *self.activated.lock().await = entries;
+    }
+
+    /// The row for `language`: an activated extension's, else this build's.
+    async fn entry(&self, language: &str) -> Option<Entry> {
+        let activated = self.activated.lock().await;
+        if let Some(entry) = activated.iter().find(|entry| entry.language == language) {
+            return Some(entry.clone());
+        }
+        drop(activated);
+        built_in_entry(language)
+    }
+
     /// Ask the server for `language` where the name at `offset` in `text` is used.
     ///
     /// `None` means no server answered — none is installed, it would not start, or it
@@ -280,13 +345,12 @@ impl Servers {
         text: &str,
         offset: usize,
     ) -> Option<Answer> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let running = running(&mut sessions, &entry, place, connections).await?;
         // Marked used before the question rather than after the answer: the first
         // question is the index, and a sweep that stopped a server in the middle of
         // one would make the next keystroke pay for it a second time.
@@ -333,7 +397,7 @@ impl Servers {
                         running.round_trip = Some(asked.elapsed());
                         running.last_used = Instant::now();
                         return Some(Answer {
-                            program,
+                            program: program.clone(),
                             encoding,
                             locations,
                         });
@@ -366,13 +430,12 @@ impl Servers {
         path: &Path,
         text: &str,
     ) -> Option<Problems> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let running = running(&mut sessions, &entry, place, connections).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -414,13 +477,12 @@ impl Servers {
         text: &str,
         options: FormatOptions,
     ) -> Option<Formatted> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let running = running(&mut sessions, &entry, place, connections).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -472,13 +534,13 @@ impl Servers {
             let Some(running) = slot.as_mut() else {
                 continue;
             };
-            let program = running.program;
+            let program = running.program.clone();
             let encoding = running.session.encoding();
             for published in running.session.drain_published() {
                 pushed.push(Pushed {
                     path: published.path,
                     version: published.version,
-                    program,
+                    program: program.clone(),
                     encoding,
                     items: published.problems,
                 });
@@ -515,9 +577,8 @@ impl Servers {
             return;
         }
         futures::future::join_all(started.into_iter().map(|mut running| async move {
-            let server = running.program;
             running.session.shutdown().await;
-            tracing::debug!(server, "language server stopped");
+            tracing::debug!(server = %running.program, "language server stopped");
             drop(running);
         }))
         .await;
@@ -533,7 +594,7 @@ impl Servers {
     ///
     /// Returns what was stopped, in whatever order the map yielded it: a set, for a
     /// log line and for a test.
-    pub async fn stop_idle(&self, idle: Duration) -> Vec<&'static str> {
+    pub async fn stop_idle(&self, idle: Duration) -> Vec<String> {
         let now = Instant::now();
         let stopped: Vec<Running> = {
             let mut sessions = self.sessions.lock().await;
@@ -553,11 +614,13 @@ impl Servers {
         if stopped.is_empty() {
             return Vec::new();
         }
-        let languages: Vec<&'static str> = stopped.iter().map(|running| running.program).collect();
+        let languages: Vec<String> = stopped
+            .iter()
+            .map(|running| running.program.clone())
+            .collect();
         futures::future::join_all(stopped.into_iter().map(|mut running| async move {
-            let server = running.program;
             running.session.shutdown().await;
-            tracing::debug!(server, "idle language server stopped");
+            tracing::debug!(server = %running.program, "idle language server stopped");
             drop(running);
         }))
         .await;
@@ -572,28 +635,30 @@ impl Servers {
     /// `installed` is the one thing that tells the last of those apart.
     pub async fn status(&self) -> Vec<ServerState> {
         let now = Instant::now();
+        let activated = self.activated.lock().await;
         let sessions = self.sessions.lock().await;
-        SERVERS
+        let mut states: Vec<ServerState> = SERVERS
             .iter()
-            .map(|(language, program, _)| {
-                let running =
-                    sessions
-                        .get(*language)
-                        .and_then(|slot| slot.as_ref())
-                        .map(|running| RunningState {
-                            encoding: running.session.encoding(),
-                            idle: now.duration_since(running.last_used),
-                            round_trip: running.round_trip,
-                            requests: running.requests,
-                        });
-                ServerState {
-                    language,
-                    program,
-                    installed: installed(program),
-                    running,
-                }
+            .map(|(language, program, args)| {
+                activated
+                    .iter()
+                    .find(|entry| entry.language == *language)
+                    .cloned()
+                    .unwrap_or_else(|| Entry::built_in(language, program, args))
             })
-            .collect()
+            .map(|entry| state_of(&sessions, now, entry))
+            .collect();
+        // A language only an activated extension names: after the build's rows,
+        // because the list reads "what this build knows" and then "what the profile
+        // added", and a client that knew the first list still finds it at the head.
+        states.extend(
+            activated
+                .iter()
+                .filter(|entry| built_in_entry(&entry.language).is_none())
+                .cloned()
+                .map(|entry| state_of(&sessions, now, entry)),
+        );
+        states
     }
 }
 
@@ -605,14 +670,15 @@ impl Servers {
 /// see the module note).
 async fn running<'a>(
     sessions: &'a mut HashMap<String, Option<Running>>,
-    language: &'static str,
+    entry: &Entry,
     place: &Place,
     connections: &Arc<Connections>,
 ) -> Option<&'a mut Running> {
-    let (_, program, args) = SERVERS.iter().find(|(id, _, _)| *id == language)?;
+    let language = entry.language.as_str();
+    let program = entry.program.as_str();
     let key = place.key(language);
     if !sessions.contains_key(&key) {
-        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let args = entry.args.clone();
         // A local server is only offered when it is installed; a remote one is the
         // host's to have, and the refusal there names the program the host could not run.
         let started = match &place.at {
@@ -655,7 +721,7 @@ async fn running<'a>(
             key.clone(),
             started.map(|(session, remote)| Running {
                 session,
-                program,
+                program: entry.program.clone(),
                 _remote: remote,
                 last_used: Instant::now(),
                 round_trip: None,
@@ -669,14 +735,40 @@ async fn running<'a>(
 /// One language this build can start, as `GET /v1/lsp/servers` reports it.
 #[derive(Debug, Clone)]
 pub struct ServerState {
-    /// The LSP language id, which is also the key in [`SERVERS`].
-    pub language: &'static str,
+    /// The LSP language id, which is also the key a session is kept under.
+    pub language: String,
     /// The program that would be spawned.
-    pub program: &'static str,
+    pub program: String,
+    /// The extension that introduced the row, or `None` for this build's own.
+    pub extension: Option<String>,
     /// Whether that program is on this machine's `PATH`.
     pub installed: bool,
     /// The session, when one is running.
     pub running: Option<RunningState>,
+}
+
+/// One row of [`Servers::status`], with the session kept under its language.
+fn state_of(
+    sessions: &HashMap<String, Option<Running>>,
+    now: Instant,
+    entry: Entry,
+) -> ServerState {
+    let running = sessions
+        .get(entry.language.as_str())
+        .and_then(|slot| slot.as_ref())
+        .map(|running| RunningState {
+            encoding: running.session.encoding(),
+            idle: now.duration_since(running.last_used),
+            round_trip: running.round_trip,
+            requests: running.requests,
+        });
+    ServerState {
+        installed: installed(&entry.program),
+        language: entry.language,
+        program: entry.program,
+        extension: entry.extension,
+        running,
+    }
 }
 
 /// A running session, as reported.

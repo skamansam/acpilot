@@ -1779,9 +1779,17 @@ v0.1 (D18).
     names the pack and the trust route returns it, so a pin dialog can ask about
     `test-agent from acpilot.test-agents` rather than a bare path. The profile's `agents.toml` wins
     an id collision, and a broken activation list is logged without hiding the manifest's roster.
-  - Open: `language_servers` contributions still do not reach the daemon's server table, which
-    remains the hard-coded `SERVERS` list; no client draws the pin question yet, so `extension` is
-    carried and not yet shown.
+  - Progress (2026-11-19): an activated extension's `language_servers` presets now join the
+    daemon's table. `AppState::extension_language_servers` reads them from the same verified
+    activation list the roster uses, and `refresh_language_servers` registers them before every
+    table read, so a preset replaces the build's row for its language in `GET /v1/lsp/servers`,
+    references, diagnostics, and formatting, and deactivating the pack restores the built-in
+    without a restart. A language only a pack names is listed after the build's four, and the row
+    carries the pack id internally (`ServerState.extension`).
+  - Open: no client draws the pin question yet, so the pack id is carried and not shown, and the
+    wire row (`LspServerSummary`) has no `extension` field; only the four languages
+    `acpilotd::lsp::language_of` maps a file extension to can actually be routed, so a preset for
+    `go` is listed but unreachable until task P4.6-8 widens that map.
 
 - [ ] **P4.6-8 · Grammars** (2d)
   - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of

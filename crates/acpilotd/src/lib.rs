@@ -1055,6 +1055,96 @@ impl AppState {
         }
     }
 
+    /// The extensions this profile activates, verified by the store.
+    ///
+    /// One loader behind both preset registries: agents and language servers differ
+    /// in what they do with a manifest, not in which manifests count.
+    fn active_extensions(
+        &self,
+    ) -> Result<Vec<acpilot_extensions::loader::LoadedExtension>, String> {
+        let Some(directory) = self.profile_root() else {
+            return Ok(Vec::new());
+        };
+        let activation = acpilot_extensions::activation::Activation::load(
+            &directory.join(acpilot_extensions::activation::ACTIVATION_FILE),
+        )
+        .map_err(|error| error.to_string())?;
+        if activation.active.is_empty() {
+            return Ok(Vec::new());
+        }
+        let store = self.extension_store().map_err(|error| error.to_string())?;
+        store
+            .resolve_active(&activation.active)
+            .map(|active| active.extensions)
+            .map_err(|errors| {
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+    }
+
+    /// Language-server presets from the extensions this profile activates.
+    ///
+    /// Sorted by preset id, so two packs that name one language resolve the same way
+    /// on every daemon rather than in activation-file order.
+    ///
+    /// # Errors
+    ///
+    /// The activation file does not parse, or the store cannot resolve it. A caller
+    /// that wants the build's rows regardless logs this and carries on, which is what
+    /// [`AppState::refresh_language_servers`] does.
+    pub fn extension_language_servers(
+        &self,
+    ) -> Result<Vec<acpilot_extensions::LanguageServerPreset>, String> {
+        let mut presets = Vec::new();
+        for extension in self.active_extensions()? {
+            for contribution in &extension.contributions {
+                let acpilot_extensions::Contribution::LanguageServers(from_pack) = contribution
+                else {
+                    continue;
+                };
+                presets.extend(from_pack.iter().cloned());
+            }
+        }
+        presets.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(presets)
+    }
+
+    /// Make the activated extensions' language servers visible to the registry.
+    ///
+    /// Called from the routes rather than once at startup: deactivating a pack has to
+    /// restore the build's row without a restart, which is the same promise the agent
+    /// roster makes. A broken activation list is logged and the build's rows stay in
+    /// force, so a bad file cannot hide the servers that always worked.
+    pub async fn refresh_language_servers(&self) {
+        let presets = match self.extension_language_servers() {
+            Ok(presets) => presets,
+            Err(error) => {
+                tracing::warn!(%error, "the activated language servers could not be read");
+                return;
+            }
+        };
+        let mut rows: Vec<lsp::Entry> = Vec::new();
+        for preset in presets {
+            // A preset with no language cannot be asked for: there is no id a request
+            // could name, so it contributes a row nobody could reach.
+            for language in &preset.languages {
+                if rows.iter().any(|row| row.language == *language) {
+                    continue;
+                }
+                rows.push(lsp::Entry {
+                    language: language.clone(),
+                    program: preset.command.clone(),
+                    args: preset.args.clone(),
+                    extension: Some(preset.extension_id.clone()),
+                });
+            }
+        }
+        self.language_servers.register(rows).await;
+    }
+
     /// Agent presets from the extensions this profile activates.
     ///
     /// Only activated extensions, not installed ones and not built-ins: the roster
@@ -1069,27 +1159,9 @@ impl AppState {
     /// does not resolve. A caller that wants the manifest's agents regardless logs
     /// this and carries on, which is what [`agent_specs`] does.
     pub fn extension_agents(&self) -> Result<Vec<(AgentSpec, String)>, String> {
-        let Some(directory) = self.profile_root() else {
-            return Ok(Vec::new());
-        };
-        let activation = acpilot_extensions::activation::Activation::load(
-            &directory.join(acpilot_extensions::activation::ACTIVATION_FILE),
-        )
-        .map_err(|error| error.to_string())?;
-        if activation.active.is_empty() {
-            return Ok(Vec::new());
-        }
-        let store = self.extension_store().map_err(|error| error.to_string())?;
-        let active = store.resolve_active(&activation.active).map_err(|errors| {
-            errors
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        })?;
         let resolver = KeyringResolver::new(self.profile_name().unwrap_or_default());
         let mut agents = Vec::new();
-        for extension in active.extensions {
+        for extension in self.active_extensions()? {
             for contribution in &extension.contributions {
                 let acpilot_extensions::Contribution::Agents(presets) = contribution else {
                     continue;
@@ -2516,15 +2588,16 @@ async fn lsp_servers(
 ) -> Json<Vec<acpilot_proto::lsp::LspServerSummary>> {
     use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
 
+    state.refresh_language_servers().await;
     let rows = state
         .language_servers()
         .status()
         .await
         .into_iter()
         .map(|server| LspServerSummary {
-            id: server.program.to_owned(),
-            languages: vec![server.language.to_owned()],
-            command: server.program.to_owned(),
+            id: server.program.clone(),
+            languages: vec![server.language.clone()],
+            command: server.program.clone(),
             status: if server.running.is_some() {
                 LspServerStatus::Ready
             } else {

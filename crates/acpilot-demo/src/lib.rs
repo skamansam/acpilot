@@ -146,6 +146,7 @@ fn agents() -> Vec<AgentSummary> {
             transport: AgentTransport::AcpStdio,
             status: AgentStatus::Available,
             command: "target/debug/mock_agent".to_owned(),
+            extension: None,
             protocol_version: Some("1".to_owned()),
         },
         AgentSummary {
@@ -154,6 +155,7 @@ fn agents() -> Vec<AgentSummary> {
             transport: AgentTransport::AcpStdio,
             status: AgentStatus::Available,
             command: "claude-code-acp".to_owned(),
+            extension: None,
             protocol_version: Some("1".to_owned()),
         },
         AgentSummary {
@@ -162,6 +164,7 @@ fn agents() -> Vec<AgentSummary> {
             transport: AgentTransport::AcpStdio,
             status: AgentStatus::Missing,
             command: "codex-acp".to_owned(),
+            extension: None,
             protocol_version: None,
         },
     ]

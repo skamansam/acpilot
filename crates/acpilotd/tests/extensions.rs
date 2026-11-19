@@ -7,7 +7,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use acpilot_store::Store;
 use acpilotd::{AppState, router_with};
 use axum::Router;
 use axum::body::Body;
@@ -53,6 +55,7 @@ fn daemon(root: &Path) -> (Router, AppState) {
     let profile = root.join("config/profiles/work");
     let state = AppState::new()
         .with_extension_store(root.join("store"))
+        .with_store(Arc::new(Store::in_memory().expect("store")))
         .with_profile_name(Some("work".to_owned()))
         .with_profile_root(Some(profile));
     (router_with(state.clone()), state)
@@ -233,4 +236,71 @@ async fn activating_something_that_is_not_installed_is_a_404() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// A source directory that contributes one agent pointing at `command`.
+///
+/// The command is the test binary, so availability is a real `PATH` lookup rather
+/// than a host-dependent guess.
+fn agent_extension(root: &Path, command: &str) -> PathBuf {
+    let source = root.join("source");
+    fs::create_dir_all(&source).expect("source dir");
+    fs::write(
+        source.join("extension.toml"),
+        "schema_version = 1\nid = \"acpilot.test-agents\"\nname = \"Test agents\"\n\
+         version = \"1.0.0\"\npublisher = \"acpilot\"\n\
+         description = \"One agent, for the roster test.\"\n\
+         [[contributes]]\nkind = \"agents\"\npath = \"agents.toml\"\n",
+    )
+    .expect("extension.toml");
+    let command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    fs::write(
+        source.join("agents.toml"),
+        format!(
+            "schema_version = 1\n\n[[agents]]\nid = \"test-agent\"\nname = \"Test agent\"\n\
+             transport = \"acp-stdio\"\ncommand = \"{command}\"\n"
+        ),
+    )
+    .expect("agents.toml");
+    source
+}
+
+#[tokio::test]
+async fn an_activated_agent_preset_joins_the_roster_and_names_its_extension() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let (app, _) = daemon(directory.path());
+    let command = std::env::current_exe().expect("current exe");
+    let source = agent_extension(directory.path(), &command.display().to_string());
+
+    let (status, installed) = send(
+        &app,
+        "POST",
+        "/v1/extensions",
+        Some(json!({
+            "id": "acpilot.test-agents",
+            "path": source.display().to_string(),
+            "activate": true,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    assert_eq!(installed["kinds"][0], "agents");
+
+    let (status, agents) = send(&app, "GET", "/v1/agents", None).await;
+    assert_eq!(status, StatusCode::OK, "{agents}");
+    let agent = agents
+        .as_array()
+        .expect("a roster")
+        .iter()
+        .find(|agent| agent["id"] == "test-agent")
+        .expect("the activated preset is listed");
+    assert_eq!(agent["extension"], "acpilot.test-agents");
+    assert_eq!(agent["status"], "available");
+
+    // The pin question names the pack that introduced the program, and the answer
+    // carries the same provenance so a client does not have to join the two calls.
+    let (status, trusted) = send(&app, "POST", "/v1/agents/test-agent/trust", None).await;
+    assert_eq!(status, StatusCode::OK, "{trusted}");
+    assert_eq!(trusted["extension"], "acpilot.test-agents");
+    assert_eq!(trusted["status"], "available");
 }

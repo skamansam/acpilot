@@ -880,17 +880,21 @@ pub async fn create(
     request: CreateSessionRequest,
     driver: Option<&str>,
 ) -> Result<SessionSummary, ApiError> {
-    let registry = state.registry().ok_or_else(|| {
+    state.registry().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon has no profile, so it has no agents to start",
         ))
     })?;
-    let spec = registry.get(&request.agent_id).ok_or_else(|| {
-        ApiError::new(AcpilotError::not_found(format!(
-            "agent {} in this profile",
-            request.agent_id
-        )))
-    })?;
+    let spec = crate::agent_specs(state)
+        .into_iter()
+        .find(|(spec, _)| spec.id == request.agent_id)
+        .map(|(spec, _)| Arc::new(spec))
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::not_found(format!(
+                "agent {} in this profile",
+                request.agent_id
+            )))
+        })?;
     let workspace = state.workspace().ok_or_else(|| {
         ApiError::new(AcpilotError::invalid(
             "this daemon was started without a workspace, so a session has no root to open",

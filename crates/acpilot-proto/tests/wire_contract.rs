@@ -65,7 +65,8 @@ fn agent_documents() {
         "name": "Codex",
         "transport": "pty",
         "status": "untrusted",
-        "command": "codex"
+        "command": "codex",
+        "extension": "acpilot.agents"
     }));
 }
 

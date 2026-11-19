@@ -1236,6 +1236,14 @@ export interface components {
         AgentSummary: {
             /** @description Command that will be spawned, for display and debugging. */
             command: string;
+            /**
+             * @description Extension that provided this agent, when it came from one.
+             *
+             *     A client asking to trust the binary can name the pack — "trust
+             *     rust-analyzer from acpilot.rust-pack?" — instead of asking about a bare
+             *     path nobody recognizes.
+             */
+            extension?: string | null;
             /** @description Agent identifier. */
             id: components["schemas"]["String"];
             /** @description Human-readable name. */
@@ -3394,7 +3402,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every configured agent, with its availability on this host */
+            /** @description Every configured agent and every agent an activated extension provides, with its availability on this host */
             200: {
                 headers: {
                     [name: string]: unknown;

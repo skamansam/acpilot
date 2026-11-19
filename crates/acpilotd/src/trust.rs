@@ -82,7 +82,7 @@ pub fn status(spec: &AgentSpec, pin: Option<&str>) -> AgentStatus {
 
 /// One agent as the API reports it, with its pin applied.
 #[must_use]
-pub fn summary(spec: &AgentSpec, pin: Option<&str>) -> AgentSummary {
+pub fn summary(spec: &AgentSpec, pin: Option<&str>, extension: Option<&str>) -> AgentSummary {
     AgentSummary {
         id: spec.id.clone(),
         name: spec.name.clone(),
@@ -93,6 +93,7 @@ pub fn summary(spec: &AgentSpec, pin: Option<&str>) -> AgentSummary {
         command: spec
             .command()
             .map_or_else(String::new, CommandSpec::command_line),
+        extension: extension.map(str::to_owned),
         protocol_version: None,
     }
 }
@@ -126,16 +127,19 @@ async fn trust(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<AgentSummary>, ApiError> {
-    let registry = state.registry().ok_or_else(|| {
-        ApiError::new(AcpilotError::conflict(
+    if state.registry().is_none() && state.profile_root().is_none() {
+        return Err(ApiError::new(AcpilotError::conflict(
             "this daemon has no profile, so it has no agents to trust",
-        ))
-    })?;
-    let spec = registry.get(&id).ok_or_else(|| {
-        ApiError::new(AcpilotError::not_found(format!(
-            "agent {id} in this profile"
-        )))
-    })?;
+        )));
+    }
+    let (spec, extension) = crate::agent_specs(&state)
+        .into_iter()
+        .find(|(spec, _)| spec.id == id)
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::not_found(format!(
+                "agent {id} in this profile"
+            )))
+        })?;
     let store = state.store().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon has no store, so a pin recorded now would be forgotten",
@@ -151,7 +155,11 @@ async fn trust(
             "the pin could not be recorded: {error}"
         ))))
     })?;
-    Ok(Json(summary(&spec, Some(&fingerprint))))
+    Ok(Json(summary(
+        &spec,
+        Some(&fingerprint),
+        extension.as_deref(),
+    )))
 }
 
 /// OpenAPI registration for the route above.

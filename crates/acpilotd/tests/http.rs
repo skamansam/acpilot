@@ -256,7 +256,7 @@ async fn openapi_is_served_and_valid() {
     // implements itself. A client generated from this document must see it.
     assert_eq!(
         body["paths"]["/v1/agents"]["get"]["responses"]["200"]["description"],
-        "Every configured agent, with its availability on this host"
+        "Every configured agent and every agent an activated extension provides, with its availability on this host"
     );
 }
 

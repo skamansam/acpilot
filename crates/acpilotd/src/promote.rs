@@ -92,7 +92,7 @@ async fn promote(
     })?;
     let agent = registry
         .get(&entry.id)
-        .map(|spec| crate::trust::summary(&spec, None))
+        .map(|spec| crate::trust::summary(&spec, None, None))
         .ok_or_else(|| {
             ApiError::new(AcpilotError::invalid(format!(
                 "the entry was written but the registry does not list `{}`",

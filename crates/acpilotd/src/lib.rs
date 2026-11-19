@@ -1055,6 +1055,57 @@ impl AppState {
         }
     }
 
+    /// Agent presets from the extensions this profile activates.
+    ///
+    /// Only activated extensions, not installed ones and not built-ins: the roster
+    /// an extension widens is the one a person approved for this profile. An
+    /// extension's presets cannot name credentials (`parse_agents` refuses one), so
+    /// resolving them with the profile's keyring cannot read a secret the pack
+    /// chose.
+    ///
+    /// # Errors
+    ///
+    /// The activation file does not parse, the store cannot be read, or a preset
+    /// does not resolve. A caller that wants the manifest's agents regardless logs
+    /// this and carries on, which is what [`agent_specs`] does.
+    pub fn extension_agents(&self) -> Result<Vec<(AgentSpec, String)>, String> {
+        let Some(directory) = self.profile_root() else {
+            return Ok(Vec::new());
+        };
+        let activation = acpilot_extensions::activation::Activation::load(
+            &directory.join(acpilot_extensions::activation::ACTIVATION_FILE),
+        )
+        .map_err(|error| error.to_string())?;
+        if activation.active.is_empty() {
+            return Ok(Vec::new());
+        }
+        let store = self.extension_store().map_err(|error| error.to_string())?;
+        let active = store.resolve_active(&activation.active).map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+        let resolver = KeyringResolver::new(self.profile_name().unwrap_or_default());
+        let mut agents = Vec::new();
+        for extension in active.extensions {
+            for contribution in &extension.contributions {
+                let acpilot_extensions::Contribution::Agents(presets) = contribution else {
+                    continue;
+                };
+                for preset in presets {
+                    let spec = preset
+                        .definition
+                        .resolve(&resolver)
+                        .map_err(|error| error.to_string())?;
+                    agents.push((spec, extension.manifest.id.clone()));
+                }
+            }
+        }
+        Ok(agents)
+    }
+
     /// Add trust roots for a private index, beside the maintainer's key.
     #[must_use]
     pub fn with_trusted_keys(mut self, keys: Vec<acpilot_extensions::index::TrustedKey>) -> Self {
@@ -1607,23 +1658,59 @@ fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry
 /// person recorded decides whether a binary that changed is `untrusted` (see
 /// [`trust`]). Nothing is spawned, so listing agents cannot start one; a
 /// handshake-dependent status is reported by the session routes, not here.
-fn summarize(spec: &AgentSpec, pins: &HashMap<String, String>) -> AgentSummary {
-    trust::summary(spec, pins.get(&spec.id).map(String::as_str))
+fn summarize(
+    spec: &AgentSpec,
+    pins: &HashMap<String, String>,
+    extension: Option<&str>,
+) -> AgentSummary {
+    trust::summary(spec, pins.get(&spec.id).map(String::as_str), extension)
+}
+
+/// Every agent this profile can use: its own manifest first, then the ones an
+/// activated extension contributes.
+///
+/// The manifest wins a collision: a person who wrote an id in `agents.toml` means
+/// that entry, and an extension that ships the same id is not an override.
+pub(crate) fn agent_specs(state: &AppState) -> Vec<(AgentSpec, Option<String>)> {
+    let mut specs: Vec<(AgentSpec, Option<String>)> = state
+        .agents
+        .as_ref()
+        .map(|registry| {
+            registry
+                .agents()
+                .iter()
+                .map(|spec| ((**spec).clone(), None))
+                .collect()
+        })
+        .unwrap_or_default();
+    match state.extension_agents() {
+        Ok(extra) => {
+            for (spec, extension) in extra {
+                if !specs.iter().any(|(existing, _)| existing.id == spec.id) {
+                    specs.push((spec, Some(extension)));
+                }
+            }
+        }
+        Err(error) => {
+            // A broken activation list is not a reason to hide the agents the
+            // profile wrote: the roster keeps what it knows, and the reason is in
+            // the log.
+            tracing::warn!(%error, "activated extension agents are not listed");
+        }
+    }
+    specs
 }
 
 /// `GET /v1/agents`.
 ///
-/// An empty list means the daemon has no registry loaded; there is no profile to
-/// answer 404 for yet.
+/// An empty list means the daemon has no registry loaded and no activated
+/// extension contributes an agent; there is no profile to answer 404 for yet.
 async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
     let pins = trust::pins(&state);
-    let summaries = state.agents.as_ref().map_or_else(Vec::new, |registry| {
-        registry
-            .agents()
-            .iter()
-            .map(|spec| summarize(spec, &pins))
-            .collect()
-    });
+    let summaries = agent_specs(&state)
+        .iter()
+        .map(|(spec, extension)| summarize(spec, &pins, extension.as_deref()))
+        .collect();
     Json(summaries)
 }
 
@@ -1640,7 +1727,7 @@ async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
     summary = "List agents in the active profile",
     responses((
         status = 200,
-        description = "Every configured agent, with its availability on this host",
+        description = "Every configured agent and every agent an activated extension provides, with its availability on this host",
         body = Vec<AgentSummary>
     ))
 )]

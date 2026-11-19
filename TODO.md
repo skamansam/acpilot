@@ -1749,7 +1749,8 @@ v0.1 (D18).
   - Deactivating restores the previous answer without a restart; the daemon emits
     `extension.changed` and every attached UI re-reads the registries.
 
-- [ ] **P4.6-6 · Themes as data** (1.5d)
+- [x] **P4.6-6 · Themes as data** (1.5d) — done: one token schema, one resolver, and a live
+  switch on all three surfaces
   - Token schema (`bg`, `bg_panel`, `text`, `text_muted`, `accent`, `accent_high`, `border`,
     `success`, `warning`, `danger`, plus syntax classes), shared by TUI, GUI, and web; hot switch
     via `prefs.changed`.
@@ -1758,15 +1759,24 @@ v0.1 (D18).
     theme (17 foreground tokens x 2 surfaces), `built_in_themes_meet_wcag_aa`. **Consumers and settings done**:
     `theme` plus `theme_tui`/`theme_gui`/`theme_web` in the settings cascade, one shared
     `ThemeRegistry` resolver, the TUI drawing every pane from it, the desktop app and the daemon's
-    page reading the same palettes. **Hot switch done for the two surfaces that can re-read a
-    file**: the TUI watches the settings files and recolours on save, the web page is resolved per
-    request; `prefs.changed` and the desktop app's window remain.
+    page reading the same palettes. **Hot switch done on all three surfaces**: the TUI watches
+    the settings files and recolours on save, the web page is resolved per request, and every
+    desktop window follows the daemon's `prefs` frames (`acpilot-gui::daemon::follow` into
+    `recolour_on_settings`) — that frame is the `prefs.changed` announcement the stream carries.
 
 - [ ] **P4.6-7 · Presets that point at programs** (1d)
   - A `language_servers` or `agents` contribution merges into the typed registries; a command it
     introduces is trust-pinned on first run (P7-12) exactly like a hand-written one, and the pin
     UI names the extension so the question is "trust rust-analyzer from acpilot.rust-pack?" rather
     than a bare binary path.
+  - Progress: an activated extension's `agents` presets are resolved per request and merged into
+    `GET /v1/agents`, session start, and the ACP bridge's choice of agent. `AgentSummary.extension`
+    names the pack and the trust route returns it, so a pin dialog can ask about
+    `test-agent from acpilot.test-agents` rather than a bare path. The profile's `agents.toml` wins
+    an id collision, and a broken activation list is logged without hiding the manifest's roster.
+  - Open: `language_servers` contributions still do not reach the daemon's server table, which
+    remains the hard-coded `SERVERS` list; no client draws the pin question yet, so `extension` is
+    carried and not yet shown.
 
 - [ ] **P4.6-8 · Grammars** (2d)
   - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of

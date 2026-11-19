@@ -8195,6 +8195,7 @@ mod tests {
             transport: acpilot_proto::agent::AgentTransport::AcpStdio,
             status: acpilot_proto::agent::AgentStatus::Available,
             command: id.to_owned(),
+            extension: None,
             protocol_version: None,
         }
     }

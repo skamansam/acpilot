@@ -3171,6 +3171,7 @@ mod tests {
                 transport: AgentTransport::AcpStdio,
                 status: AgentStatus::Available,
                 command: "one".to_owned(),
+                extension: None,
                 protocol_version: None,
             },
             AgentSummary {
@@ -3179,6 +3180,7 @@ mod tests {
                 transport: AgentTransport::AcpStdio,
                 status: AgentStatus::Available,
                 command: "two".to_owned(),
+                extension: None,
                 protocol_version: None,
             },
         ];

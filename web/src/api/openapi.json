@@ -183,6 +183,13 @@
             "description": "Command that will be spawned, for display and debugging.",
             "type": "string"
           },
+          "extension": {
+            "description": "Extension that provided this agent, when it came from one.\n\nA client asking to trust the binary can name the pack — \"trust\nrust-analyzer from acpilot.rust-pack?\" — instead of asking about a bare\npath nobody recognizes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Agent identifier."
@@ -4151,7 +4158,7 @@
                 }
               }
             },
-            "description": "Every configured agent, with its availability on this host"
+            "description": "Every configured agent and every agent an activated extension provides, with its availability on this host"
           }
         },
         "summary": "List agents in the active profile"

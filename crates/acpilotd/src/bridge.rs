@@ -185,10 +185,13 @@ pub(crate) async fn open_session(
 /// `_meta.acpilot.agent`; a wrong name lists what is there rather than starting
 /// something else.
 fn choose_agent(state: &AppState, request: &NewSessionRequest) -> Result<String, Error> {
-    let registry = state.registry().ok_or_else(|| {
+    state.registry().ok_or_else(|| {
         failure("this daemon was started without a profile, so it has no agents to start")
     })?;
-    let agents = registry.agents();
+    let agents: Vec<Arc<acpilot_agent::AgentSpec>> = crate::agent_specs(state)
+        .into_iter()
+        .map(|(spec, _)| Arc::new(spec))
+        .collect();
     if agents.is_empty() {
         return Err(failure(
             "this profile declares no agents; promote a recipe or add one to agents.toml",

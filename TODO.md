@@ -1763,6 +1763,11 @@ v0.1 (D18).
     the settings files and recolours on save, the web page is resolved per request, and every
     desktop window follows the daemon's `prefs` frames (`acpilot-gui::daemon::follow` into
     `recolour_on_settings`) — that frame is the `prefs.changed` announcement the stream carries.
+    **Finished (2026-11-19):** the window resolves the theme from the daemon's `GET /v1/themes`
+    rows rather than only the binary's built-ins, so a theme an activated extension ships is
+    drawn too; an `extension.*` frame refetches that list and re-applies the current preferences
+    (an activation changes what a theme resolves to without changing the preferences), and a
+    window opened after a save reads the newest theme instead of the launch one.
 
 - [ ] **P4.6-7 · Presets that point at programs** (1d)
   - A `language_servers` or `agents` contribution merges into the typed registries; a command it

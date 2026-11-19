@@ -17,10 +17,12 @@
 //! and workspace it serves, which is P10-4's decision; until then a window with no
 //! daemon behind it simply keeps the theme it was launched with.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use acpilot_extensions::loader::LoadedExtension;
-use acpilot_extensions::theme::ThemeError;
+use acpilot_extensions::theme::{Color, Palette, ResolvedTheme, SyntaxToken, ThemeError, UiToken};
+use acpilot_proto::extension::ThemeSummary;
 use acpilot_proto::git::{CommitDraft, GitCommit, GitDiff, GitStatus};
 use acpilot_proto::profile::{Preferences, ThemeSurface};
 use acpilot_proto::session::SessionSummary;
@@ -285,6 +287,13 @@ pub fn follow_stats(
 /// while the daemon answers, and it gives up quietly when it does not — a window
 /// without a daemon is a window with the theme it was launched with, not an error
 /// to show someone who only wanted to look at a file.
+///
+/// The palette comes from the daemon too: `GET /v1/themes` resolves `extends`
+/// chains against the store and the profile's activation list, so a pack that
+/// ships a theme reaches a window that cannot read this machine's files. That list
+/// is fetched again after an `extension.*` frame — activating a pack while a
+/// window is open is a new theme, not a restart — and `extensions` is the local
+/// fallback for a daemon too old to serve the route.
 pub fn follow(
     endpoint: String,
     token: Option<String>,
@@ -303,10 +312,21 @@ pub fn follow(
 
             let client = client(&endpoint, token.as_deref());
             let mut frames = client.profile_events();
+            let mut themes: Option<Vec<ThemeSummary>> = client.themes().await.ok();
+            let mut preferences: Option<Preferences> = None;
             while let Some(frame) = frames.next().await {
                 match frame {
-                    Ok(acpilot_client::ProfileStream::Preferences(preferences)) => {
-                        match theme_for(&preferences, &extensions) {
+                    Ok(acpilot_client::ProfileStream::Preferences(next)) => {
+                        // The first fetch can lose a race with a daemon that is
+                        // still starting; a preferences frame is a good moment to
+                        // try again rather than stay on the built-ins for the life
+                        // of the window.
+                        if themes.is_none() {
+                            themes = client.themes().await.ok();
+                        }
+                        preferences = Some(next);
+                        let current = preferences.as_ref().expect("just set");
+                        match resolve_theme(current, themes.as_deref(), &extensions) {
                             Ok(theme) => sink(theme),
                             // A preferences frame naming a theme nobody provides is
                             // the daemon's business to report; the window keeps the
@@ -316,6 +336,21 @@ pub fn follow(
                     }
                     Ok(acpilot_client::ProfileStream::PreferencesError(message)) => {
                         eprintln!("acpilot-gui: settings not applied: {message}");
+                    }
+                    Ok(acpilot_client::ProfileStream::Other { event, .. })
+                        if event.starts_with("extension.") =>
+                    {
+                        // An activation can make the theme a preference already
+                        // names resolvable, or change what it resolves to, without
+                        // changing the preferences themselves.
+                        themes = client.themes().await.ok();
+                        let Some(current) = preferences.as_ref() else {
+                            continue;
+                        };
+                        match resolve_theme(current, themes.as_deref(), &extensions) {
+                            Ok(theme) => sink(theme),
+                            Err(error) => eprintln!("acpilot-gui: preferences: {error}"),
+                        }
                     }
                     // The stream is alive and has nothing new. Nothing to draw.
                     Ok(_) => {}
@@ -331,9 +366,70 @@ pub fn follow(
     });
 }
 
+/// The theme a preferences frame asks for, resolved the way this daemon can.
+///
+/// The daemon's list wins because it knows about activated extensions; the local
+/// built-ins are what remains when the route is not there to ask.
+fn resolve_theme(
+    preferences: &Preferences,
+    themes: Option<&[ThemeSummary]>,
+    fallback: &[LoadedExtension],
+) -> Result<GuiTheme, String> {
+    match themes {
+        Some(themes) => theme_from_summaries(themes, preferences.theme_for(ThemeSurface::Gui)),
+        None => theme_for(preferences, fallback).map_err(|error| error.to_string()),
+    }
+}
+
+/// Project one resolved `GET /v1/themes` row into the window's palette.
+///
+/// The daemon already walked `extends` and refused a theme with a hole, so this
+/// parses colours and checks every UI token is still present; it does not resolve
+/// anything a second time. A value that does not parse names the token, because a
+/// window that silently kept its old colour would look like a layout bug.
+fn theme_from_summaries(themes: &[ThemeSummary], id: &str) -> Result<GuiTheme, String> {
+    let summary = themes
+        .iter()
+        .find(|theme| theme.id == id)
+        .ok_or_else(|| ThemeError::Unknown { id: id.to_owned() }.to_string())?;
+
+    let mut ui = BTreeMap::new();
+    for token in UiToken::ALL {
+        let value = summary
+            .ui
+            .get(token.as_str())
+            .ok_or_else(|| format!("theme {id:?} does not set {}", token.as_str()))?;
+        let color = value.parse::<Color>().map_err(|error| {
+            format!("theme {id:?} sets {} to {value:?}: {error}", token.as_str())
+        })?;
+        ui.insert(token, color);
+    }
+
+    let mut syntax = BTreeMap::new();
+    for token in SyntaxToken::ALL {
+        if let Some(value) = summary.syntax.get(token.as_str()) {
+            let color = value.parse::<Color>().map_err(|error| {
+                format!("theme {id:?} sets {} to {value:?}: {error}", token.as_str())
+            })?;
+            syntax.insert(token, color);
+        }
+    }
+
+    let resolved = ResolvedTheme {
+        id: summary.id.clone(),
+        name: summary.name.clone(),
+        appearance: summary.appearance,
+        built_in: summary.built_in,
+        extension_id: summary.extension_id.clone().unwrap_or_default(),
+        palette: Palette { ui, syntax },
+    };
+    GuiTheme::new(&resolved).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use acpilot_extensions::builtin;
+    use acpilot_proto::extension::ThemeAppearance;
 
     use super::*;
 
@@ -380,6 +476,67 @@ mod tests {
             error.to_string().contains("acpilot.no-such-theme"),
             "{error}"
         );
+    }
+
+    /// A `GET /v1/themes` row with every UI token set, as the daemon sends it.
+    fn summary(id: &str, name: &str, appearance: ThemeAppearance) -> ThemeSummary {
+        let mut ui = BTreeMap::new();
+        for token in UiToken::ALL {
+            ui.insert(token.as_str().to_owned(), "#808080".to_owned());
+        }
+        let bg = match appearance {
+            ThemeAppearance::Dark => "#070d18",
+            ThemeAppearance::Light => "#fbfbfb",
+        };
+        ui.insert("bg".to_owned(), bg.to_owned());
+        ThemeSummary {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            appearance,
+            built_in: false,
+            extension_id: Some("acpilot.pack".to_owned()),
+            selected: Vec::new(),
+            ui,
+            syntax: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_theme_the_daemon_resolved_is_what_the_window_draws() {
+        let themes = vec![summary(
+            "acpilot.pack.paper",
+            "Pack paper",
+            ThemeAppearance::Light,
+        )];
+        let theme = resolve_theme(&preferences("acpilot.pack.paper", None), Some(&themes), &[])
+            .expect("the daemon's list is enough");
+        assert_eq!(theme.name(), "Pack paper");
+        assert!(theme.id() == "acpilot.pack.paper");
+        assert!(!theme.is_dark(), "the summary's palette, not a built-in");
+    }
+
+    #[test]
+    fn a_resolved_theme_with_a_missing_token_is_refused_by_name() {
+        let mut themes = vec![summary(
+            "acpilot.pack.dark",
+            "Pack dark",
+            ThemeAppearance::Dark,
+        )];
+        themes[0].ui.remove("accent");
+        let error = resolve_theme(&preferences("acpilot.pack.dark", None), Some(&themes), &[])
+            .expect_err("a hole is refused");
+        assert!(error.contains("accent"), "{error}");
+    }
+
+    #[test]
+    fn a_daemon_that_does_not_serve_themes_falls_back_to_the_built_ins() {
+        let theme = resolve_theme(
+            &preferences("acpilot.night-flight", None),
+            None,
+            &extensions(),
+        )
+        .expect("the local built-ins still draw");
+        assert_eq!(theme.name(), "Night flight");
     }
 
     #[test]

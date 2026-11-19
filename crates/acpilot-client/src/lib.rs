@@ -254,6 +254,15 @@ impl Client {
         self.get("/v1/agents").await
     }
 
+    /// `GET /v1/themes`: every theme a surface can draw with, resolved.
+    ///
+    /// Resolved by the daemon, not here: `extends` chains and the profile's
+    /// activation list are the daemon's answers, and a window that cannot read its
+    /// files still gets the palette an activated extension ships.
+    pub async fn themes(&self) -> Result<Vec<acpilot_proto::extension::ThemeSummary>, ClientError> {
+        self.get("/v1/themes").await
+    }
+
     /// `GET /v1/profiles`.
     pub async fn profiles(&self) -> Result<Vec<ProfileSummary>, ClientError> {
         self.get("/v1/profiles").await

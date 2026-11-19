@@ -1805,11 +1805,11 @@ v0.1 (D18).
     below the profile's `keymap.toml`, at launch and on every save of that file; the layers are
     sorted by extension id, and each is checked as it lands, so a pack that takes a key already
     in use is refused with both verbs and the pack's id named. `acpilot keys check` builds the
-    same table and prints it, so the command and the screen cannot disagree.
+    same table and prints it, so the command and the screen cannot disagree. The client watches
+    the profile's `extensions.toml` as well as `keymap.toml`, so activating or dropping a pack
+    changes the keys on that save rather than waiting for a keymap edit nobody made.
   - **Open:** snippets are not implemented — the editor has no snippet engine to feed, so the
     "existing JSON format" this task names does not exist yet, and that half needs its own task.
-    A deactivated pack's keys are reconciled on the next save of `keymap.toml` rather than the
-    moment activation changes, because the client watches that file and not `extensions.toml`.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

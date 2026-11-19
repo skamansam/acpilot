@@ -139,8 +139,9 @@ pub fn run(
         .filter(|path| path.is_file())
         .unwrap_or_else(|| acpilot_profile::config_dir().join(KEYMAP_FILE));
     // A pack's keys sit above the preset and below the person's own file. Read
-    // once at launch and again on every save of that file, so activation is
-    // visible without a restart just like a theme.
+    // once at launch and again on every save of that file or of the profile's
+    // activation list, so activating or dropping a pack is visible without a
+    // restart just like a theme.
     let keymap_layers = match extension_keymaps(files.profile.as_deref()) {
         Ok(layers) => layers,
         Err(error) => {
@@ -392,13 +393,15 @@ fn watch_keymap(
     profile: Option<std::path::PathBuf>,
     updates: tokio::sync::mpsc::UnboundedSender<Update>,
 ) {
-    let Some(changes) = acpilot_profile::watch::changes([path.clone()]) else {
+    let paths = keymap_watch_paths(path.clone(), profile.as_deref());
+    let Some(changes) = acpilot_profile::watch::changes(paths) else {
         return;
     };
     std::thread::spawn(move || {
         while changes.recv().is_ok() {
-            // Re-read the activation list too: a pack activated while the client
-            // is open contributes its keys on the next save, without a restart.
+            // Re-read the activation list too: a pack activated or deactivated
+            // while the client is open changes the keys without a restart, and
+            // the save that says so is a save of a file this thread watches.
             let layers = match extension_keymaps(profile.as_deref()) {
                 Ok(layers) => layers,
                 Err(error) => {
@@ -430,6 +433,24 @@ fn watch_keymap(
             }
         }
     });
+}
+
+/// The files whose saves change the key table.
+///
+/// The person's own `keymap.toml` is one; the profile's activation list is the
+/// other, because a pack's layer is part of the answer and activating or dropping
+/// one changes it. Both are named even when they do not exist yet: the watcher
+/// arms at the nearest directory that does and re-arms when the file appears, so
+/// the first activation is still a signal.
+fn keymap_watch_paths(
+    path: std::path::PathBuf,
+    profile: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = vec![path];
+    if let Some(directory) = profile {
+        paths.push(directory.join(acpilot_extensions::activation::ACTIVATION_FILE));
+    }
+    paths
 }
 
 /// Run the design pass: the seeded world from `acpilot-demo`, drawn by this UI.
@@ -775,6 +796,27 @@ mod tests {
             reload_theme(&files).expect("a theme").name(),
             "Paper",
             "the named theme, not the terminal's"
+        );
+    }
+
+    #[test]
+    fn saving_the_activation_list_changes_the_key_table() {
+        // Activating or dropping a pack changes which layers apply. Watching only
+        // `keymap.toml` made that wait for a save of a file nobody had touched.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let keymap = write(directory.path(), KEYMAP_FILE, "[keys]\n");
+        let changes =
+            acpilot_profile::watch::changes(keymap_watch_paths(keymap, Some(directory.path())))
+                .expect("the profile directory is watchable");
+
+        write(
+            directory.path(),
+            acpilot_extensions::activation::ACTIVATION_FILE,
+            "schema_version = 1\nactive = [\"acpilot.test-pack\"]\n",
+        );
+        assert!(
+            changes.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "a saved activation list is a key-table change"
         );
     }
 

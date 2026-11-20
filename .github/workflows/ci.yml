@@ -339,6 +339,29 @@ jobs:
       - name: Draw 200x60 frames and hold them to 16.7 ms
         run: cargo run --release --quiet -p acpilot-tui --example frame -- 200 60 300 --budget 16.7
 
+  # XT-4's gate. The budgets are the medians `cargo xtask resources` measured, and the
+  # job repeats the measurement three times and fails when one is past its budget plus a
+  # margin. Release, because a debug build is a different program, and no `--debug` here
+  # for the same reason: `--gate` refuses it rather than comparing it with release
+  # figures. The task is the gate: a hosted runner is noisier than the machine the
+  # budgets came from, so this job catches a regression and `docs/notes/resources.md`
+  # keeps the measured number and its hardware — neither is a claim about a user's box.
+  resources:
+    name: resources (median of three)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Measure the daemon and the CLI against their budgets
+        run: cargo xtask resources --gate
+
   deny:
     name: licences and advisories
     runs-on: ubuntu-latest
@@ -424,7 +447,7 @@ jobs:
   # jobs over one assertion.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history]
     # `always()` also fired inside a cancelled run, where every dependency reports
     # `cancelled`; `!cancelled()` runs the job after a dependency fails, which is the
     # case it exists for, and stays out of a cancelled run, where it has nothing to say.
@@ -440,6 +463,7 @@ jobs:
             gui=${{ needs.gui.result }}
             probes=${{ needs.probes.result }}
             frame-budget=${{ needs.frame-budget.result }}
+            resources=${{ needs.resources.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}
@@ -467,7 +491,7 @@ jobs:
   # same gate.
   required-branch:
     name: required checks (branch)
-    needs: [check, web, gui, probes, frame-budget, deny, docs, history]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history]
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -479,6 +503,7 @@ jobs:
             gui=${{ needs.gui.result }}
             probes=${{ needs.probes.result }}
             frame-budget=${{ needs.frame-budget.result }}
+            resources=${{ needs.resources.result }}
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}

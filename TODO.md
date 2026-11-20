@@ -3254,12 +3254,24 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     phase has not reached — TUI (a terminal's raw mode), GUI (P10), `serve` with a page
     (P11), language servers (P7's fixture) and `acpilotd-helper` (P9) — are named in the
     note and at the end of every run rather than skipped silently.
-  - Open: there is no CI job and no budget yet. The session-memory row needs a session, a
-    long-lived CLI row needs `acpilot serve` or a `prompt` turn with the mock agent, the
-    daemon's load is a repeated page request rather than a `/v1/events` subscriber, the
-    one-shot CLI row has memory and threads but no CPU (a 170 ms process gives `sysinfo`
-    too few intervals for a percentage), and every budget in the table is still unset
-    until the reference runner's variance is measured.
+  - Progress (2026-11-20): the budgets and the CI gate. `cargo xtask resources --gate`
+    repeats each row three times and compares the medians with a budget per row and metric,
+    failing when one is past its budget plus its margin — 50 % for peak RSS and threads,
+    100 % for mean CPU, because a shared runner's CPU time is the scheduler as much as the
+    work. Every comparison is printed, passing or not, so a log tells a figure that moved
+    from one that was never taken; a row measured without a budget, or a budget naming a
+    row the harness does not measure, fails too, so a row cannot leave the gate by being
+    renamed. `--gate` refuses `--debug` and fewer than three repeats: the budgets are
+    release figures, and one sample is not a median. CI's `resources` job is that one
+    command on `ubuntu-latest`, and it is in `required checks`.
+  - Open: the budgets are this machine's medians (32 MiB and 2 % of one core at the
+    daemon's idle load, 14 MiB for `acpilot doctor`), so a hosted runner that measures a
+    different figure needs its own budget rather than a wider margin around this one's. The
+    session-memory row needs a session, a long-lived CLI row needs `acpilot serve` or a
+    `prompt` turn with the mock agent, the daemon's load is a repeated page request rather
+    than a `/v1/events` subscriber, and the one-shot CLI row has memory and threads but no
+    CPU (a 170 ms process gives `sysinfo` too few intervals for a percentage, which is why
+    its CPU budget is `None` and not zero).
 
 ### Security
 

@@ -16,6 +16,12 @@
 //! this host until P9. The rows arrive with their phases; the harness is
 //! cross-cutting so the first regression is reported while there is still time to fix
 //! it.
+//!
+//! `--gate` is the version CI runs. It measures the same rows, prints every figure
+//! beside its budget and the limit the margin gives it, and exits non-zero when one is
+//! past that limit — or when a row is measured without a budget, because a row outside
+//! the list is a row the gate silently stopped checking. The budgets are release
+//! figures, so a debug build is refused rather than compared with them.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -51,10 +57,11 @@ struct Figure {
     threads: usize,
 }
 
-/// Measure every row this build can reach, three times each, and write the note.
-pub(crate) fn run(debug: bool, repeats: u32) -> bool {
-    match measure_all(debug, repeats) {
-        Ok(()) => true,
+/// Measure every row this build can reach, three times each, and write the note — or,
+/// with `gate`, hold the medians to the budgets instead of recording them.
+pub(crate) fn run(debug: bool, repeats: u32, gate: bool) -> bool {
+    match measure_all(debug, repeats, gate) {
+        Ok(passed) => passed,
         Err(error) => {
             eprintln!("==> resources: {error}");
             false
@@ -62,8 +69,20 @@ pub(crate) fn run(debug: bool, repeats: u32) -> bool {
     }
 }
 
-fn measure_all(debug: bool, repeats: u32) -> Result<(), String> {
+fn measure_all(debug: bool, repeats: u32, gate: bool) -> Result<bool, String> {
     let release = !debug;
+    if gate && debug {
+        return Err(
+            "the budgets are release figures; `--gate` refuses a debug build rather than \
+             comparing a slower program with them"
+                .to_owned(),
+        );
+    }
+    if gate && repeats < 3 {
+        return Err(format!(
+            "the gate compares a median of three runs, and {repeats} repeat(s) is not one"
+        ));
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     if !build(App::Tui, release) {
         return Err("the binaries this row measures could not be built".to_owned());
@@ -90,6 +109,10 @@ fn measure_all(debug: bool, repeats: u32) -> Result<(), String> {
     let _ = fs::remove_dir_all(&profile);
     let figures = measured?;
 
+    if gate {
+        return Ok(report(&figures, release, repeats));
+    }
+
     let note = render(&figures, release);
     let path = path_in_repo(NOTE);
     if let Some(parent) = path.parent()
@@ -114,7 +137,195 @@ fn measure_all(debug: bool, repeats: u32) -> Result<(), String> {
     for (row, reason) in SKIPPED {
         println!("      {row}: {reason}");
     }
-    Ok(())
+    Ok(true)
+}
+
+/// The budgets: the median a reference run measured, rounded up to a round number.
+///
+/// The budget is not the product's ceiling — the table in `TODO.md` names 60 MB for an
+/// idle daemon — but the figure this machine measured, so the gate reports a regression
+/// while it is still a regression rather than when it reaches a number somebody picked
+/// before there was anything to compare it with. A row that stops being measured is also
+/// a failure: a budget nobody checks is a promise nobody keeps.
+const BUDGETS: &[Budget] = &[
+    Budget {
+        row: "acpilotd",
+        rss_peak_mib: 32.0,
+        cpu_mean: Some(2.0),
+        threads: 32,
+    },
+    Budget {
+        row: "acpilot doctor",
+        rss_peak_mib: 14.0,
+        // A one-shot row ends before `sysinfo` can take a delta, so it reports no CPU
+        // and none is budgeted for it. The row has a budget for what it can measure.
+        cpu_mean: None,
+        threads: 2,
+    },
+];
+
+/// The fraction of a peak-RSS budget a median may exceed.
+///
+/// Half again, because a hosted runner allocates differently from this machine and the
+/// gate has to catch a doubled figure, not a different libc.
+const RSS_MARGIN: f64 = 0.5;
+/// Wider than memory: CPU time on a shared runner is the scheduler as much as the work.
+const CPU_MARGIN: f64 = 1.0;
+/// Threads are whole and small; half again is the leak this catches, one per request.
+const THREAD_MARGIN: f64 = 0.5;
+
+/// One row's budgets, each a median and each with the margin above.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    row: &'static str,
+    rss_peak_mib: f64,
+    cpu_mean: Option<f64>,
+    threads: u64,
+}
+
+/// How one figure and its limit are written.
+#[derive(Debug, Clone, Copy)]
+enum Unit {
+    Mib,
+    Percent,
+    Count,
+}
+
+impl Unit {
+    fn write(self, value: f64) -> String {
+        match self {
+            Unit::Mib => format!("{value:.1} MiB"),
+            Unit::Percent => format!("{value:.2} %"),
+            Unit::Count => format!("{value:.0}"),
+        }
+    }
+}
+
+/// One figure against its budget: printed whether it passed or not, because a log that
+/// shows only the failure cannot tell a figure that moved from one never taken.
+#[derive(Debug)]
+struct Verdict {
+    row: &'static str,
+    metric: &'static str,
+    measured: String,
+    limit: String,
+    over: bool,
+}
+
+fn verdict(
+    row: &'static str,
+    metric: &'static str,
+    value: f64,
+    budget: f64,
+    margin: f64,
+    unit: Unit,
+) -> Verdict {
+    let limit = budget * (1.0 + margin);
+    Verdict {
+        over: value > limit,
+        measured: unit.write(value),
+        limit: format!(
+            "{} (budget {} + {:.0} %)",
+            unit.write(limit),
+            unit.write(budget),
+            margin * 100.0
+        ),
+        row,
+        metric,
+    }
+}
+
+/// Every measured figure against its budget, in budget order, then every figure a
+/// budget does not name.
+fn compare(figures: &[Figure], budgets: &[Budget]) -> Vec<Verdict> {
+    let mut verdicts = Vec::new();
+    for budget in budgets {
+        let Some(figure) = figures.iter().find(|figure| figure.row == budget.row) else {
+            verdicts.push(Verdict {
+                row: budget.row,
+                metric: "row",
+                measured: "not measured".to_owned(),
+                limit: "a budget with no row is not gated".to_owned(),
+                over: true,
+            });
+            continue;
+        };
+        verdicts.push(verdict(
+            budget.row,
+            "peak RSS",
+            figure.rss_peak as f64 / (1024.0 * 1024.0),
+            budget.rss_peak_mib,
+            RSS_MARGIN,
+            Unit::Mib,
+        ));
+        if let Some(cpu_budget) = budget.cpu_mean {
+            match figure.cpu_mean {
+                Some(cpu_mean) => verdicts.push(verdict(
+                    budget.row,
+                    "mean CPU",
+                    f64::from(cpu_mean),
+                    cpu_budget,
+                    CPU_MARGIN,
+                    Unit::Percent,
+                )),
+                None => verdicts.push(Verdict {
+                    row: budget.row,
+                    metric: "mean CPU",
+                    measured: "no reading".to_owned(),
+                    limit: format!("{} is budgeted", Unit::Percent.write(cpu_budget)),
+                    over: true,
+                }),
+            }
+        }
+        verdicts.push(verdict(
+            budget.row,
+            "threads",
+            figure.threads as f64,
+            budget.threads as f64,
+            THREAD_MARGIN,
+            Unit::Count,
+        ));
+    }
+    for figure in figures {
+        if !budgets.iter().any(|budget| budget.row == figure.row) {
+            verdicts.push(Verdict {
+                row: figure.row,
+                metric: "row",
+                measured: "measured".to_owned(),
+                limit: "no budget, so the row is not gated".to_owned(),
+                over: true,
+            });
+        }
+    }
+    verdicts
+}
+
+/// Print every comparison and say whether the run passed.
+fn report(figures: &[Figure], release: bool, repeats: u32) -> bool {
+    println!(
+        "==> resources gate ({} profile, median of {}): budgets in this file",
+        if release { "release" } else { "debug" },
+        repeats.max(1)
+    );
+    let verdicts = compare(figures, BUDGETS);
+    for verdict in &verdicts {
+        println!(
+            "    {:>4}  {:<18} {:<9} {:>12}  limit {:>34}",
+            if verdict.over { "OVER" } else { "ok" },
+            verdict.row,
+            verdict.metric,
+            verdict.measured,
+            verdict.limit
+        );
+    }
+    let breaches = verdicts.iter().filter(|verdict| verdict.over).count();
+    if breaches == 0 {
+        println!("==> every figure is inside its budget");
+        true
+    } else {
+        eprintln!("==> {breaches} figure(s) past budget: a regression is a bug, not a budget");
+        false
+    }
 }
 
 /// The rows a phase has not given this harness yet.
@@ -476,6 +687,24 @@ fn cpu(value: Option<f32>) -> String {
     )
 }
 
+/// One budget as the note's table writes it.
+fn budget_row(
+    note: &mut String,
+    budget: &Budget,
+    metric: &str,
+    value: f64,
+    margin: f64,
+    unit: Unit,
+) {
+    note.push_str(&format!(
+        "| `{}` | {metric} | {} | {:.0} % | {} |\n",
+        budget.row,
+        unit.write(value),
+        margin * 100.0,
+        unit.write(value * (1.0 + margin))
+    ));
+}
+
 /// The note: the figures beside the window and the machine that produced them.
 fn render(figures: &[Figure], release: bool) -> String {
     let system = System::new_all();
@@ -529,18 +758,51 @@ fn render(figures: &[Figure], release: bool) -> String {
 
     note.push_str("## Budgets\n\n");
     note.push_str(
-        "The table in `TODO.md` names two memory budgets today: an idle daemon at 60 MB and\n\
-         an idle session at 15 MB. The daemon row above is the first measurement of the first\n\
-         one against a real process; the session row needs a session, and the CPU rows are\n\
-         still unset. Budgets are a median plus a margin rather than one sample, so they want\n\
-         the reference runner's variance before they are written down here as limits.\n\n",
+        "The first run set the budgets below and CI holds them: `cargo xtask resources --gate`\n\
+         repeats each row three times and fails when a median is past its budget plus the\n\
+         margin. A figure is written as a budget and a percentage rather than as one sample,\n\
+         because the same program on another machine is not the same number, and a gate that\n\
+         trips on a scheduling hitch is a gate somebody turns off. A row measured without a\n\
+         budget fails too: a row outside the list is one the gate quietly stopped checking.\n\n",
     );
+    note.push_str("| program | metric | budget | margin | fails above |\n");
+    note.push_str("| --- | --- | --- | --- | --- |\n");
+    for budget in BUDGETS {
+        budget_row(
+            &mut note,
+            budget,
+            "peak RSS",
+            budget.rss_peak_mib,
+            RSS_MARGIN,
+            Unit::Mib,
+        );
+        if let Some(cpu_mean) = budget.cpu_mean {
+            budget_row(
+                &mut note,
+                budget,
+                "mean CPU",
+                cpu_mean,
+                CPU_MARGIN,
+                Unit::Percent,
+            );
+        }
+        budget_row(
+            &mut note,
+            budget,
+            "threads",
+            budget.threads as f64,
+            THREAD_MARGIN,
+            Unit::Count,
+        );
+    }
+    note.push('\n');
     note.push_str(
-        "`cargo xtask resources` is not a CI job yet. The plan the task records: the first run\n\
-         sets the numbers, a job on the reference runner repeats the script, and a figure past\n\
-         its margin fails. A hosted runner is noisier than this machine, so the job is a\n\
-         regression gate and this note keeps the measured number and the hardware — neither is\n\
-         a claim about a user's machine.\n\n",
+        "The `acpilotd` budget is measured with the load named in its row, not at rest; the\n\
+         session row and the CPU budget of a one-shot CLI are still open, because a session\n\
+         is a row this harness cannot start yet and a 170 ms process gives `sysinfo` too few\n\
+         intervals for a percentage. The budgets are this machine's figures, so the gate is\n\
+         a regression check: this note keeps the measured number and the hardware, and\n\
+         neither is a claim about a user's machine.\n\n",
     );
 
     note.push_str("## What is not measured here, and why\n\n");
@@ -556,6 +818,11 @@ fn render(figures: &[Figure], release: bool) -> String {
     );
 
     note.push_str("## Limitations\n\n");
+    note.push_str(
+        "- The budgets came from one machine, not a reference runner; a hosted runner that\n\
+         measures a different figure needs its own budget, not a wider margin around this\n\
+         one's.\n",
+    );
     note.push_str(
         "- The daemon row asks for the page, not a subscriber on `/v1/events`; an events\n\
          subscriber is the load the task names and is the next row to add.\n\
@@ -603,6 +870,73 @@ mod tests {
     fn a_missing_cpu_reading_is_not_averaged_around() {
         let median = median(vec![figure(10, Some(1.0)), figure(20, None)]);
         assert_eq!(median.cpu_mean, None, "one hole is not zero percent");
+    }
+
+    /// `Figure::rss_peak` is bytes; a budget is MiB.
+    const MIB: u64 = 1024 * 1024;
+
+    fn budget(row: &'static str, rss: f64, cpu_mean: Option<f64>, threads: u64) -> Budget {
+        Budget {
+            row,
+            rss_peak_mib: rss,
+            cpu_mean,
+            threads,
+        }
+    }
+
+    fn named(row: &'static str, rss: u64) -> Figure {
+        Figure {
+            row,
+            ..figure(rss, None)
+        }
+    }
+
+    #[test]
+    fn a_median_inside_its_margin_passes() {
+        let verdicts = compare(
+            &[figure(20 * MIB, Some(1.0))],
+            &[budget("test", 16.0, Some(1.0), 4)],
+        );
+        assert!(verdicts.iter().all(|verdict| !verdict.over), "{verdicts:?}");
+    }
+
+    #[test]
+    fn a_median_past_its_margin_is_a_breach() {
+        // 20 MiB against a 16 MiB budget is 25 %, inside the 50 % RSS margin; 40 is not.
+        let inside = compare(
+            &[figure(20 * MIB, Some(1.0))],
+            &[budget("test", 16.0, Some(1.0), 4)],
+        );
+        assert!(!inside[0].over, "{inside:?}");
+        let past = compare(
+            &[figure(40 * MIB, Some(1.0))],
+            &[budget("test", 16.0, Some(1.0), 4)],
+        );
+        assert!(past[0].over, "{past:?}");
+    }
+
+    #[test]
+    fn a_budgeted_cpu_with_no_reading_is_a_breach() {
+        // A one-shot row that grows a CPU budget would pass on memory alone, and the
+        // missing percentage would read as a figure inside its limit.
+        let verdicts = compare(&[figure(10, None)], &[budget("test", 16.0, Some(2.0), 4)]);
+        assert!(
+            verdicts
+                .iter()
+                .any(|verdict| verdict.over && verdict.metric == "mean CPU"),
+            "{verdicts:?}"
+        );
+    }
+
+    #[test]
+    fn an_ungated_row_and_a_rowless_budget_are_both_breaches() {
+        let rowless = compare(&[], &[budget("absent", 16.0, None, 4)]);
+        assert_eq!(rowless.len(), 1, "{rowless:?}");
+        assert!(rowless[0].over, "{rowless:?}");
+
+        let ungated = compare(&[named("stray", 10 * MIB)], &[]);
+        assert_eq!(ungated.len(), 1, "{ungated:?}");
+        assert!(ungated[0].over, "{ungated:?}");
     }
 
     #[test]

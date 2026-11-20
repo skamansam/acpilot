@@ -194,6 +194,11 @@ enum Task {
         /// How many times each row is measured; the median is reported.
         #[arg(long, default_value_t = 3, value_name = "N")]
         repeats: u32,
+        /// Compare the medians with the budgets and exit non-zero when one is past
+        /// its margin, instead of writing the note. What CI runs: release only, and
+        /// never fewer than three runs.
+        #[arg(long)]
+        gate: bool,
     },
 }
 
@@ -260,8 +265,12 @@ fn main() -> ExitCode {
             artifacts,
             release_version,
         } => run_dist(&target, artifacts, release_version.as_deref()),
-        Task::Resources { debug, repeats } => {
-            if resources::run(debug, repeats) {
+        Task::Resources {
+            debug,
+            repeats,
+            gate,
+        } => {
+            if resources::run(debug, repeats, gate) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE

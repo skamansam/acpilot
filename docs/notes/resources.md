@@ -16,22 +16,32 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one page request every 100 ms (drawing and waiting) | 26.5 MiB | 1.15 % of one core | 4.57 % of one core | 30 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.1 MiB | — | — | 1 |
+| `acpilotd` | idle: one page request every 100 ms (drawing and waiting) | 25.4 MiB | 1.64 % of one core | 4.51 % of one core | 30 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.9 MiB | — | — | 1 |
 
 ## Budgets
 
-The table in `TODO.md` names two memory budgets today: an idle daemon at 60 MB and
-an idle session at 15 MB. The daemon row above is the first measurement of the first
-one against a real process; the session row needs a session, and the CPU rows are
-still unset. Budgets are a median plus a margin rather than one sample, so they want
-the reference runner's variance before they are written down here as limits.
+The first run set the budgets below and CI holds them: `cargo xtask resources --gate`
+repeats each row three times and fails when a median is past its budget plus the
+margin. A figure is written as a budget and a percentage rather than as one sample,
+because the same program on another machine is not the same number, and a gate that
+trips on a scheduling hitch is a gate somebody turns off. A row measured without a
+budget fails too: a row outside the list is one the gate quietly stopped checking.
 
-`cargo xtask resources` is not a CI job yet. The plan the task records: the first run
-sets the numbers, a job on the reference runner repeats the script, and a figure past
-its margin fails. A hosted runner is noisier than this machine, so the job is a
-regression gate and this note keeps the measured number and the hardware — neither is
-a claim about a user's machine.
+| program | metric | budget | margin | fails above |
+| --- | --- | --- | --- | --- |
+| `acpilotd` | peak RSS | 32.0 MiB | 50 % | 48.0 MiB |
+| `acpilotd` | mean CPU | 2.00 % | 100 % | 4.00 % |
+| `acpilotd` | threads | 32 | 50 % | 48 |
+| `acpilot doctor` | peak RSS | 14.0 MiB | 50 % | 21.0 MiB |
+| `acpilot doctor` | threads | 2 | 50 % | 3 |
+
+The `acpilotd` budget is measured with the load named in its row, not at rest; the
+session row and the CPU budget of a one-shot CLI are still open, because a session
+is a row this harness cannot start yet and a 170 ms process gives `sysinfo` too few
+intervals for a percentage. The budgets are this machine's figures, so the gate is
+a regression check: this note keeps the measured number and the hardware, and
+neither is a claim about a user's machine.
 
 ## What is not measured here, and why
 
@@ -49,6 +59,9 @@ attached workspace.
 
 ## Limitations
 
+- The budgets came from one machine, not a reference runner; a hosted runner that
+measures a different figure needs its own budget, not a wider margin around this
+one's.
 - The daemon row asks for the page, not a subscriber on `/v1/events`; an events
 subscriber is the load the task names and is the next row to add.
 - The daemon's window is three seconds, so a sweep that runs every thirty seconds is

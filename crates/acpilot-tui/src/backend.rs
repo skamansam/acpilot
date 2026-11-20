@@ -66,6 +66,14 @@ pub enum Request {
     New(String),
     /// End a session.
     Delete(String),
+    /// Record that the binary behind this agent is the one a person meant.
+    ///
+    /// The answer to the pin question, and the only thing that clears an
+    /// `untrusted` row: nothing else on this side writes a pin.
+    TrustAgent {
+        /// The agent whose question was answered.
+        id: String,
+    },
     /// List a directory of the workspace, by workspace-relative path.
     ///
     /// Empty is the root. The tree asks for a directory when it is opened rather
@@ -1185,7 +1193,43 @@ async fn run(
                         }
                     }
                 }
+                Some(Request::TrustAgent { id }) => match client.trust_agent(&id).await {
+                    Ok(agent) => {
+                        let _ = updates.send(Update::Status(approved(&agent)));
+                        refresh_agents(&client, &updates).await;
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::Status(describe(&error)));
+                    }
+                },
             }
+        }
+    }
+}
+
+/// The sentence a recorded pin leaves on the status line.
+///
+/// It names the pack when one contributed the agent, because that is the thing a
+/// person just decided about, and it says what to do next rather than claiming a
+/// session started: approving a binary is not starting one.
+fn approved(agent: &AgentSummary) -> String {
+    match &agent.extension {
+        Some(pack) => format!(
+            "approved {} from {pack} · pick it again to run it",
+            agent.name
+        ),
+        None => format!("approved {} · pick it again to run it", agent.name),
+    }
+}
+
+/// Re-read the roster, so a row that was just approved stops asking.
+async fn refresh_agents(client: &Client, updates: &UnboundedSender<Update>) {
+    match client.agents().await {
+        Ok(agents) => {
+            let _ = updates.send(Update::Agents(agents));
+        }
+        Err(error) => {
+            let _ = updates.send(Update::Status(describe(&error)));
         }
     }
 }
@@ -1778,6 +1822,11 @@ async fn run_demo(
             Request::New(_) | Request::Delete(_) | Request::Cancel => {
                 let _ = updates.send(Update::Status(
                     "design pass · there is no daemon to ask".to_owned(),
+                ));
+            }
+            Request::TrustAgent { .. } => {
+                let _ = updates.send(Update::Status(
+                    "design pass · no pin was written".to_owned(),
                 ));
             }
         }

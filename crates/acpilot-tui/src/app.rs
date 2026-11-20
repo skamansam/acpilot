@@ -6,7 +6,7 @@
 //! state be driven by a test with no daemon and no terminal.
 
 use acpilot_demo::{Command, CommandAction, Diff, FileNode, Run};
-use acpilot_proto::agent::AgentSummary;
+use acpilot_proto::agent::{AgentStatus, AgentSummary};
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::profile::Preferences;
@@ -1808,6 +1808,11 @@ pub struct App {
     pub agent_picker: bool,
     /// Which row of that picker `Enter` chooses.
     pub agent_selected: usize,
+    /// The agent whose pin question is up, if one is.
+    ///
+    /// An id rather than a row: the roster is re-read while the question is on
+    /// screen, and an index would answer about whatever moved into that place.
+    pub agent_pin: Option<String>,
     /// Whether the outline panel is on screen.
     ///
     /// Apart from the side it is on: a panel that is put away has not moved, and the
@@ -2708,6 +2713,7 @@ impl App {
             show_assistant: assistant,
             agent_picker: false,
             agent_selected: 0,
+            agent_pin: None,
             show_outline: false,
             outline: Vec::new(),
             outline_selected: 0,
@@ -3614,6 +3620,14 @@ impl App {
             }
             Update::Agents(agents) => {
                 self.agents = agents;
+                // A question about an agent the roster no longer has is a question
+                // nobody can answer, and leaving the card up would say otherwise.
+                if let Some(pinned) = &self.agent_pin
+                    && !self.agents.iter().any(|agent| &agent.id == pinned)
+                {
+                    self.agent_pin = None;
+                    self.status = "the roster changed · that agent is gone".to_owned();
+                }
                 // The roster can shrink under a picker that is already up, and a
                 // selection past the end would be an index nothing opens.
                 if self.agent_selected >= self.agents.len() {
@@ -4306,6 +4320,12 @@ impl App {
         // waiting would be a pane that traps the session.
         if self.action(Context::App, key) == Some(Action::Terminal) {
             return self.toggle_terminal();
+        }
+
+        // The pin question is about a command that will not run until it is
+        // answered, so it owns the keyboard before anything that starts one.
+        if self.agent_pin.is_some() {
+            return self.agent_pin_key(key);
         }
 
         // Choosing an agent is a question with a list of answers, and the panes it
@@ -7798,9 +7818,39 @@ impl App {
             KeyCode::Enter => {
                 if let Some(agent) = self.agents.get(self.agent_selected) {
                     let id = agent.id.clone();
+                    // A binary that changed under a name is a question before it is
+                    // a session: starting it would be the one thing a pin exists to
+                    // stop.
+                    if agent.status == AgentStatus::Untrusted {
+                        self.agent_picker = false;
+                        self.agent_pin = Some(id);
+                        self.status = "a command changed under this name".to_owned();
+                        return None;
+                    }
                     self.agent_picker = false;
                     return self.start_agent(&id);
                 }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The keys the pin question answers to.
+    ///
+    /// `y` is the only key that records anything: the question is about a program
+    /// whose bytes changed, so `y` and `n` have to be the difference between
+    /// writing a pin and leaving it unapproved.
+    fn agent_pin_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let id = self.agent_pin.take()?;
+                self.status = format!("approving {id}…");
+                return Some(Request::TrustAgent { id });
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+                self.agent_pin = None;
+                self.status = "not approved · that command will not run".to_owned();
             }
             _ => {}
         }
@@ -8202,6 +8252,40 @@ mod tests {
             extension: None,
             protocol_version: None,
         }
+    }
+
+    #[test]
+    fn an_agent_whose_binary_changed_asks_before_it_runs() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        let mut changed = agent("test-agent", "Test Agent");
+        changed.status = AgentStatus::Untrusted;
+        changed.extension = Some("acpilot.test-agents".to_owned());
+        app.apply(Update::Agents(vec![changed]));
+        app.agent_picker = true;
+
+        // `Enter` on an untrusted row is the question, not a session: nothing is
+        // started for a program whose bytes nobody approved.
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.agent_pin.as_deref(), Some("test-agent"));
+        assert!(!app.agent_picker, "the question replaces the list");
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::TrustAgent {
+                id: "test-agent".to_owned()
+            })
+        );
+        assert_eq!(app.agent_pin, None, "one answer per question");
+    }
+
+    #[test]
+    fn leaving_the_pin_question_writes_nothing() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.agent_pin = Some("test-agent".to_owned());
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('n'))), None);
+        assert_eq!(app.agent_pin, None, "the question is closed either way");
+        assert!(app.status.contains("will not run"), "{}", app.status);
     }
 
     #[test]

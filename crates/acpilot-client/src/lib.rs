@@ -254,6 +254,16 @@ impl Client {
         self.get("/v1/agents").await
     }
 
+    /// `POST /v1/agents/{id}/trust`: record the binary a person approved.
+    ///
+    /// The answer is the agent's own summary, so a caller that just cleared the
+    /// question reads the new state from the reply instead of listing again.
+    pub async fn trust_agent(&self, id: &str) -> Result<AgentSummary, ClientError> {
+        let path = format!("/v1/agents/{id}/trust");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
+    }
+
     /// `GET /v1/themes`: every theme a surface can draw with, resolved.
     ///
     /// Resolved by the daemon, not here: `extends` chains and the profile's

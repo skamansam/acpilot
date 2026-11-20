@@ -58,7 +58,10 @@ is an agent client. The session list, transcript and composer do not exist until
 that point the agent's newest conversation opens, or a new one starts, and the
 panel appears beside the editor. A profile with no `agents.toml` has no agents to
 list, so that row names `agents.toml` and `acpilot doctor` rather than opening an
-empty picker. **Session → Build an Agent in the Model Lab…** opens the lab page
+empty picker. A row whose program changed under its name says `not approved` and
+names the pack it came from, and `Enter` on it asks before it starts anything: the
+card names the agent, the pack and the exact command, `y` records the pin, and `n`
+writes nothing. **Session → Build an Agent in the Model Lab…** opens the lab page
 (P4.5-8): the recipe on the left, its corpus in the middle, and the answer and run
 history on the right. `Tab` moves between the three, `Enter` edits a field (or a
 run, which opens its record), `Space` flips a tool or the overflow strategy, `^S`

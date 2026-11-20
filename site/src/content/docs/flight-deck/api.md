@@ -66,7 +66,11 @@ permission.
 `acpilotd --profile <dir>` reads that directory's `agents.toml`. The route reports
 availability from a `PATH` lookup on the daemon's host. It starts no process, so
 listing agents cannot start one. With no profile loaded the list is empty.
-Handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
+Handshake status (`unhealthy`) comes from the session routes. Trust pinning is
+here: an agent whose program no longer matches the pin a person recorded reports
+`untrusted`, and `POST /v1/agents/{id}/trust` records the current binary as
+approved, answering with that agent's summary so a client does not have to list
+again.
 
 `GET /v1/events` makes a prompt immediate instead of polled. A request raised
 after the client connects arrives as a `permission` frame. That frame carries the

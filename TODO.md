@@ -1818,7 +1818,18 @@ v0.1 (D18).
     carries the pack id internally (`ServerState.extension`). The wire row carries it too
     (`LspServerSummary.extension`), absent for the build's own rows, so the id a pin dialog needs
     is not trapped inside the daemon.
-  - Open: no client draws the pin question yet, so the id arrives and nothing asks with it; only the four languages
+  - Progress (2026-11-20): the pin question is drawn. The TUI's agent picker marks an `untrusted`
+    row with `not approved` and the pack it came from; `Enter` on that row opens a card naming the
+    agent, the pack and the exact command instead of starting a session, and `y` records the pin
+    through `Client::trust_agent` (`POST /v1/agents/{id}/trust`) before the roster is re-read.
+    `n`/`Esc` writes nothing, and a roster that loses the agent closes the question rather than
+    leaving a card nobody can answer. The status line names the pack that was just approved and
+    says to pick the agent again: approving a binary is not starting it. Tests: the question
+    replaces the picker instead of starting a session, `y` answers once, `n` writes nothing, and
+    both the marked row and the card are asserted by their text.
+  - Open: the language-server half still has no question. `LspServerSummary.extension` names the
+    pack, but there is no pin route for a language server and no client surface that lists them,
+    so a preset from a pack starts without being asked about; only the four languages
     `acpilotd::lsp::language_of` maps a file extension to can actually be routed, so a preset for
     `go` is listed but unreachable until task P4.6-8 widens that map.
 

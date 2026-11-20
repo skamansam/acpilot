@@ -3129,6 +3129,60 @@ the app *starts* (pre-warmed process, restored window), not a number a framework
 reaches from a cold process. Numbers and method: `docs/notes/gui-bench.md`; the
 decision they settle is `docs/adr/0009-gui-framework.md`.
 
+- [ ] **XT-4** A number for every program's CPU and memory (3d)
+  - The table above names an idle daemon's RSS and a session's memory, and nothing in
+    the tree reports either; there is no CPU budget at all. `cargo xtask resources` is
+    the one harness: it starts a shipped binary against a temporary profile with the
+    mock agent (P2-9) or the mock server (P7-15), drives one scripted load, samples the
+    whole process tree every 100 ms for a named window, and reports peak RSS, mean and
+    peak CPU, and the thread count per process. The binaries are the ones the archives
+    carry: `acpilotd`, `acpilot` (one `doctor`, one `prompt` turn), `acpilot-tui` (a
+    file open, and a turn running), `acpilot-gui` (a window with one pane),
+    `acpilot serve` (idle, and one page connected), and the language servers a
+    workspace starts, measured as children of the daemon so one figure covers
+    initialization and another covers diagnostics after an edit in a 100k-line file.
+    `acpilotd-helper` joins the list when the Windows phase (P9) gives it a build. Every
+    run writes `docs/notes/resources.md` with the machine's state beside the figure,
+    because the design phase's P0-3 learned that a number without the cache state
+    measures the OS rather than the program.
+  - **Idle is a load, not the absence of one.** Each row names its window and what
+    happens inside it — a subscriber on `/v1/events`, the TUI's frame clock, a cursor
+    blink — so "idle" means drawing and waiting, which is where a poller that wakes
+    60 times a second shows up as CPU and nowhere else. CPU is reported as a fraction
+    of one core, per process and per tree, because a percentage of the machine hides
+    the second core a busy loop costs.
+  - **Budgets come from the first run, then CI holds them.** The first measurement
+    fills the table's CPU rows and re-checks the two memory rows against a real
+    process; after that a job on the reference runner repeats the script and fails when
+    a figure moves past the margin that run's own variance allows — three repeats, the
+    median reported, and a budget stated as a median plus a margin rather than as one
+    sample. A hosted runner is noisier than a developer's box, so the job is a
+    regression gate, the note keeps the measured number and the hardware, and neither
+    is a claim about a user's machine.
+  - **What it does not budget:** the agent's own consumption, which is third-party code
+    and is shown in the row only so a turn's total is visible beside the daemon's share
+    of it; the browser tab that `acpilot serve` hands a page to, whose memory is the
+    browser's to report; and video memory, which belongs to the desktop phase's P10-6.
+    A language server's memory is reported per root, because one server is shared by
+    every attached workspace and its cost belongs to the root rather than to whichever
+    editor asked last.
+  - **Lives in `xtask`, not in a shipping crate.** Sampling is per platform (`/proc` on
+    Linux, `ps` on macOS, `GetProcessMemoryInfo` on Windows), and OS code in a product
+    crate has to sit under `src/platform/` and ship — a harness that only runs in a
+    workflow should not add a syscall surface to the daemon. `sysinfo` is the proposal:
+    one dependency, no `unsafe` here, subject to the dependency budget (XT-3). If it
+    refuses a platform, `xtask` may `cfg` its own module, because the rule is about
+    what ships rather than about what measures.
+  - **Order:** the daemon, CLI and TUI rows can be measured today; the language-server
+    rows arrive with the language intelligence phase (P7), the window row with the
+    desktop phase (P10), the page row with the web phase (P11) and the helper with P9.
+    That is why this is cross-cutting rather than a phase: no phase owns all six
+    programs, and measuring at release (P12) would report a regression at the moment
+    there is no time left to fix it.
+  - **DoD:** every program in a release archive has a CPU and a memory figure with its
+    window and machine state in the note, every budget in the table is checkable by one
+    command, and CI fails when one regresses past its margin.
+
 ### Security
 
 - [ ] Every filesystem/terminal/permission path goes through the broker; no direct agent access to the OS outside policy.

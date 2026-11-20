@@ -358,6 +358,9 @@ async fn a_language_server_pin_is_a_question_about_the_program_a_pack_names() {
     // records is the bytes on disk. Nothing starts it here.
     let program = directory.path().join("fake-rust-analyzer");
     fs::write(&program, "one build").expect("a program");
+    // Escaped rather than pasted: a Windows path in a TOML string is `C:\\…` twice
+    // over, and the parse error names a column rather than the cause.
+    let command = program.display().to_string().replace('\\', "\\\\");
     let source = directory.path().join("source");
     fs::create_dir_all(&source).expect("source dir");
     fs::write(
@@ -372,8 +375,7 @@ async fn a_language_server_pin_is_a_question_about_the_program_a_pack_names() {
         source.join("lsp.toml"),
         format!(
             "schema_version = 1\n\n[[servers]]\nid = \"pack-rust\"\nname = \"Pack rust\"\n\
-             command = \"{}\"\nlanguages = [\"rust\"]\nroot_markers = [\"Cargo.toml\"]\n",
-            program.display()
+             command = \"{command}\"\nlanguages = [\"rust\"]\nroot_markers = [\"Cargo.toml\"]\n"
         ),
     )
     .expect("lsp.toml");

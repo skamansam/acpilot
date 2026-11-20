@@ -775,9 +775,15 @@ and deterministic.
     clock on every frame and the loop spun for the full 300 s with no output. Patience is a
     deadline for the whole wait now: the loop computes the time left against one `Instant` and
     panics with "the stream sent no event inside 20s", so a heartbeat skips the frame and never
-    the deadline. Three local runs of the three acceptance tests pass; what the next sighting
-    has to say, and could not before, is which read stalled — before the drop or in the replay
-    after the reconnect.
+    the deadline. Three local runs of the three acceptance tests pass.
+    **And the bound reported it:** the next run (`44795408939`) failed the same test in 21.0 s
+    with "the stream sent no event inside 20s" and 1728 of 1729 passing, so the stall is real
+    and is the *first* read of a session's stream on that runner rather than the replay after
+    the reconnect. The panic now names the read it gave up on (the test has five) and asks the
+    daemon what the session is doing at that moment — a turn that never ran is `idle` with no
+    events coming, a turn whose events exist but were not delivered is `busy` — because those
+    two look identical from the socket and lead to different code. Nine local runs of the
+    three tests pass since.
     **Open:** the `insta` snapshots of every error body are still unwritten (each route's
     suite asserts its envelope's fields instead), and the `curl` script the DoD names is
     the test rather than a checked-in shell script, because the client speaks the same wire.

@@ -750,6 +750,22 @@ and deterministic.
     synchronous step holding the runtime, or a client call the file does not bound); it is
     recorded as a runner stall rather than a product fault, and a second sighting should be
     chased from those two tests instead of being rerun again.
+    **Observed again (2026-11-19 → 20):** the second sighting arrived as a cancelled job
+    rather than a timeout. CI run `44632199623` sat on `check (macos-latest)` from 22:49 to
+    04:50 and was cancelled at the runner's six-hour limit with the test binary still alive;
+    the job log names the step exactly — under `cargo test -p acpilotd --features docs`, where
+    libtest has no per-test timeout at all, `a_stream_replays_after_a_drop_with_no_gap` and the
+    scripted session passed in milliseconds and `a_conversation_is_still_there_after_the_daemon_that_ran_it`
+    then said "has been running for over 60 seconds" and produced nothing for six hours. That
+    is the same test nextest failed at 300 s, so the reading stands and gets sharper: the file
+    had no bound that could fail, only waits that could hang. Every client call in
+    `crates/acpilotd/tests/acceptance.rs` now goes through `within`, which panics in 20 s naming
+    the call that did not answer, and the replay test stops its daemon the way the restart test
+    already did instead of returning with a live session for the runtime to tear down. No
+    assertion moved; the next sighting should name the wait instead of taking a runner with it.
+    Note that the local reproduction attempt was flat: forty runs of the same test binary on
+    Linux passed, so the stall needs the macOS runner and is not something this machine can
+    be asked to show.
     **Open:** the `insta` snapshots of every error body are still unwritten (each route's
     suite asserts its envelope's fields instead), and the `curl` script the DoD names is
     the test rather than a checked-in shell script, because the client speaks the same wire.

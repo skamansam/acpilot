@@ -4,6 +4,8 @@
 //! "works for me" means something. Commands that belong to phases which have not
 //! shipped yet fail loudly rather than pretending to succeed.
 
+mod resources;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
@@ -173,6 +175,26 @@ enum Task {
         #[arg(long, value_name = "X.Y.Z")]
         release_version: Option<String>,
     },
+    /// Measure the CPU and memory of the programs a release ships (XT-4).
+    ///
+    /// Starts a built binary against a temporary profile, drives one scripted load,
+    /// samples the whole process tree every 100 ms, and writes the figures beside the
+    /// window and the machine they came from to `docs/notes/resources.md`. A number
+    /// without its load and its hardware measures the machine.
+    ///
+    /// The rows a phase has not reached yet are named at the end of the run rather
+    /// than skipped silently: a language server needs one installed (P7), the window
+    /// needs a display (P10), the page needs a browser (P11), and `acpilotd-helper`
+    /// has no build until P9.
+    Resources {
+        /// Measure the debug build. Release is what an archive carries; this is only
+        /// for a fast loop, and the note records which profile it measured.
+        #[arg(long)]
+        debug: bool,
+        /// How many times each row is measured; the median is reported.
+        #[arg(long, default_value_t = 3, value_name = "N")]
+        repeats: u32,
+    },
 }
 
 fn main() -> ExitCode {
@@ -238,6 +260,13 @@ fn main() -> ExitCode {
             artifacts,
             release_version,
         } => run_dist(&target, artifacts, release_version.as_deref()),
+        Task::Resources { debug, repeats } => {
+            if resources::run(debug, repeats) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 

@@ -104,6 +104,14 @@ the status line rather than claiming the server started, because a pin that is
 recorded does not start a process. That question is why the row carries its pack id
 all the way to a client.
 
+An answer is enforced, not merely remembered. The daemon refuses to start a server
+whose bytes no longer hash to the pin it recorded, so references fall back to the
+parse tree, diagnostics report that nobody checked, and formatting returns the
+buffer unchanged — rather than running a binary that changed under the name
+somebody approved. The refusal is local: a remote server's bytes are the host's to
+hash (P7-11). A server nobody has pinned still starts; requiring an answer before
+first use is the part of P7-12 still open.
+
 The rest of the engine arrives in the language intelligence phase (P7). The
 design phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16
 conversion are in `acpilot-lsp`, tested over emoji, CJK, combining marks, and

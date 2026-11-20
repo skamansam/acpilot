@@ -261,6 +261,13 @@ pub struct Servers {
     /// binary shipped. Empty until [`Servers::register`] is called, so a daemon with
     /// no activation behaves as it did.
     activated: Mutex<Vec<Entry>>,
+    /// The pins a person recorded, by program.
+    ///
+    /// Carried beside the rows because the refusal happens where a server starts,
+    /// and a pin changes between two questions: approving one has to take effect on
+    /// the next request without a restart, and a file that changed under an approved
+    /// name has to stop starting one.
+    pins: Mutex<HashMap<String, String>>,
 }
 
 /// A started server and what the daemon knows about its use.
@@ -316,8 +323,13 @@ impl Servers {
     /// a newly activated one appears. Callers order the rows by preset id, so a
     /// language two packs name keeps the first — two packs owning one language is a
     /// manifest bug, and the answer must not depend on install order.
-    pub async fn register(&self, entries: Vec<Entry>) {
+    ///
+    /// The pins travel with the rows for the same reason: a row without its pin is a
+    /// file a person approved that the daemon would start anyway, and a pin without
+    /// its row is a hash with nothing to check.
+    pub async fn register(&self, entries: Vec<Entry>, pins: HashMap<String, String>) {
         *self.activated.lock().await = entries;
+        *self.pins.lock().await = pins;
     }
 
     /// The row for `language`: an activated extension's, else this build's.
@@ -350,7 +362,8 @@ impl Servers {
         let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, &entry, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         // Marked used before the question rather than after the answer: the first
         // question is the index, and a sweep that stopped a server in the middle of
         // one would make the next keystroke pay for it a second time.
@@ -435,7 +448,8 @@ impl Servers {
         let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, &entry, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -482,7 +496,8 @@ impl Servers {
         let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, &entry, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -665,19 +680,34 @@ impl Servers {
 /// The server behind `id`, started if it is not running.
 ///
 /// One place rather than one per question, because both questions pay the same index
-/// and both have to make the same three decisions: whether a server exists for the
-/// language, whether it is installed, and whether a failed one is retried (it is not —
-/// see the module note).
+/// and both have to make the same decisions: whether a server exists for the
+/// language, whether its bytes are still the ones a person approved, whether it is
+/// installed, and whether a failed one is retried (it is not — see the module note).
 async fn running<'a>(
     sessions: &'a mut HashMap<String, Option<Running>>,
     entry: &Entry,
     place: &Place,
     connections: &Arc<Connections>,
+    pins: &HashMap<String, String>,
 ) -> Option<&'a mut Running> {
     let language = entry.language.as_str();
     let program = entry.program.as_str();
     let key = place.key(language);
     if !sessions.contains_key(&key) {
+        // The pin is the gate, and it is checked here rather than at each question so
+        // no route can start a changed program by forgetting to ask. A remote server's
+        // bytes are the host's to hash, so the check is local-only.
+        let approved = match &place.at {
+            Where::Local => pin_allows(program, pins.get(program).map(String::as_str)),
+            Where::Remote { .. } => true,
+        };
+        if !approved {
+            tracing::warn!(
+                server = program,
+                "refusing to start a language server whose bytes changed since it was approved"
+            );
+            return None;
+        }
         let args = entry.args.clone();
         // A local server is only offered when it is installed; a remote one is the
         // host's to have, and the refusal there names the program the host could not run.
@@ -730,6 +760,21 @@ async fn running<'a>(
         );
     }
     sessions.get_mut(&key)?.as_mut()
+}
+
+/// Whether the bytes behind `program` are still the ones a person approved.
+///
+/// No pin is not a refusal: the build's own rows are the daemon's, and a pack's server
+/// is reported as `untrusted` before it starts (P4.6-7). A pin exists only after
+/// somebody answered that question, and then the file has to still hash to what they
+/// approved — otherwise replacing the binary under an approved name would be an
+/// upgrade nobody reviewed. The check lives here because all three questions
+/// (references, diagnostics, formatting) start a server through [`running`].
+fn pin_allows(program: &str, pin: Option<&str>) -> bool {
+    match pin {
+        None => true,
+        Some(pin) => crate::trust::program_fingerprint(program).as_deref() == Some(pin),
+    }
 }
 
 /// One language this build can start, as `GET /v1/lsp/servers` reports it.
@@ -794,20 +839,59 @@ fn byte_offset(text: &str, characters: usize) -> usize {
         .map_or(text.len(), |(byte, _)| byte)
 }
 
-/// The LSP language id for a path, when this build has a server for it.
+/// The extensions that name a language, by LSP language id.
 ///
-/// The id and the key in [`SERVERS`] are the same string, which is what lets the
-/// route name a language and the registry find a session with it.
+/// The map is the routing table rather than this build's roster: an activated pack
+/// may name a server for a language the binary has none for, and a `.go` file is only
+/// reachable if its extension is read here. A language with no row is not refused —
+/// the registry answers no server and the parse tree takes the question — so adding
+/// a row costs nothing until something can answer for it.
+///
+/// The ids are the protocol's own (`c`, `cpp`, `csharp`, `bash`), because a server
+/// matches them in `initialize`; an extension in two rows would be a document two
+/// servers could judge.
+pub const LANGUAGES: &[(&str, &[&str])] = &[
+    ("rust", &["rs"]),
+    ("python", &["py", "pyi"]),
+    ("typescript", &["ts", "tsx", "mts", "cts"]),
+    ("javascript", &["js", "jsx", "mjs", "cjs"]),
+    ("go", &["go"]),
+    ("c", &["c", "h"]),
+    ("cpp", &["cc", "cpp", "cxx", "hpp", "hh", "hxx"]),
+    ("java", &["java"]),
+    ("ruby", &["rb"]),
+    ("php", &["php"]),
+    ("csharp", &["cs"]),
+    ("lua", &["lua"]),
+    ("kotlin", &["kt", "kts"]),
+    ("swift", &["swift"]),
+    ("dart", &["dart"]),
+    ("zig", &["zig"]),
+    ("haskell", &["hs"]),
+    ("elixir", &["ex", "exs"]),
+    ("html", &["html", "htm"]),
+    ("css", &["css", "scss", "less"]),
+    ("json", &["json", "jsonc"]),
+    ("yaml", &["yaml", "yml"]),
+    ("toml", &["toml"]),
+    ("sql", &["sql"]),
+    ("bash", &["sh", "bash", "zsh"]),
+    ("markdown", &["md", "markdown"]),
+];
+
+/// The LSP language id for a path.
+///
+/// The id and the key in [`SERVERS`] are the same string where the build has a row,
+/// which is what lets the route name a language and the registry find a session with
+/// it; a pack's row is the same key without a built-in behind it. The last extension
+/// decides: `a.rs.bak` is no language, because a save file is not a Rust source.
 #[must_use]
 pub fn language_of(path: &str) -> Option<&'static str> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
-    match extension.as_str() {
-        "rs" => Some("rust"),
-        "py" => Some("python"),
-        "ts" | "tsx" => Some("typescript"),
-        "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
-        _ => None,
-    }
+    LANGUAGES
+        .iter()
+        .find(|(_, extensions)| extensions.contains(&extension.as_str()))
+        .map(|(language, _)| *language)
 }
 
 /// Whether `program` is on this machine's `PATH`.
@@ -851,9 +935,49 @@ mod tests {
         assert_eq!(language_of("tool.py"), Some("python"));
         assert_eq!(language_of("app.tsx"), Some("typescript"));
         assert_eq!(language_of("app.mjs"), Some("javascript"));
-        assert_eq!(language_of("README.md"), None);
+        assert_eq!(language_of("cmd/server.go"), Some("go"));
+        assert_eq!(language_of("src/lib.c"), Some("c"));
+        assert_eq!(language_of("include/widget.hpp"), Some("cpp"));
+        assert_eq!(language_of("Main.java"), Some("java"));
+        assert_eq!(language_of("script.tsx"), Some("typescript"));
+        assert_eq!(language_of("README.md"), Some("markdown"));
         assert_eq!(language_of("Makefile"), None);
         assert_eq!(language_of("a.rs.bak"), None, "the last extension decides");
+        assert_eq!(
+            language_of("Makefile.am"),
+            None,
+            "an unknown extension is no language"
+        );
+    }
+
+    #[test]
+    fn every_built_in_server_has_a_language_row() {
+        for (language, _, _) in SERVERS {
+            assert!(
+                LANGUAGES.iter().any(|(id, _)| id == language),
+                "{language} has a server and no extension a request could route"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pin_that_no_longer_matches_refuses_the_program() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        // A path with a directory in it is resolved where it points on every
+        // platform, so the fixture needs no name the OS adds a suffix to.
+        let program = directory.path().join("server");
+        std::fs::write(&program, b"the bytes that were approved").expect("write");
+        let program = program.to_str().expect("utf-8 path");
+        let approved = crate::trust::program_fingerprint(program).expect("the file hashes");
+
+        assert!(pin_allows(program, None), "no pin refuses nothing");
+        assert!(pin_allows(program, Some(&approved)));
+
+        std::fs::write(program, b"bytes nobody approved").expect("write");
+        assert!(
+            !pin_allows(program, Some(&approved)),
+            "a file that changed under an approved name is a different program"
+        );
     }
 
     #[test]

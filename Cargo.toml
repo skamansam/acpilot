@@ -139,6 +139,12 @@ vt100 = "0.18"
 gpui = "=0.2.2"
 # gui fallback (P0-3 veto): iced = "0.14"
 
+# measurement
+# `cargo xtask resources` samples the process tree for XT-4. Not a dependency of
+# any shipping crate: the harness lives in `xtask` so no product grows a syscall
+# surface for a figure only a workflow reads.
+sysinfo = "0.31"
+
 # editor
 ropey = "1.6"
 # Cells, not characters: the pane measures a tab and a wide glyph the way the

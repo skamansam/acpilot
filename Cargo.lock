@@ -11044,6 +11044,7 @@ dependencies = [
  "acpilotd",
  "clap",
  "serde_json",
+ "sysinfo",
 ]
 
 [[package]]

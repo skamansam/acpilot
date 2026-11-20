@@ -1142,7 +1142,12 @@ impl AppState {
                 });
             }
         }
-        self.language_servers.register(rows).await;
+        // The pins travel with the rows: a server a person approved that changed
+        // under the same name is refused where it would start (P7-12), and an
+        // approval recorded between two requests has to take effect on the next one.
+        self.language_servers
+            .register(rows, crate::trust::lsp_pins(self))
+            .await;
     }
 
     /// Agent presets from the extensions this profile activates.

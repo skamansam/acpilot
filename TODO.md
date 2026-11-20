@@ -1862,15 +1862,25 @@ v0.1 (D18).
     it (then reports it again after the file changes under the approved name), a language with no
     row is `404`, a daemon with no store is `409`, the route is in the served document, and the TUI
     asks, answers once, and writes nothing on `Esc`.
-  - Open: only the four languages `acpilotd::lsp::language_of` maps a file extension to can be
-    routed, so a preset for `go` is listed and can be approved but is unreachable until task
-    P4.6-8 widens that map. Nothing yet refuses to *start* a server whose pin does not match — the
-    listing reports the state and the TUI asks, which is this task's half; the refusal is P7-12's.
+  - Open: the routing map now covers the languages a pack can name (P4.6-8's routing half), so a
+    `go` preset is reachable from a `.go` file, and a pin that no longer matches is refused at
+    start rather than only reported (P7-12): references, diagnostics and formatting fall back
+    instead of spawning the changed binary. Grammar loading for the editor is still P4.6-8's.
 
 - [ ] **P4.6-8 · Grammars** (2d)
   - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of
     that language, with a parse-time budget and a visible "grammar missing" fallback rather than
     plain text and no explanation.
+  - Progress (2026-11-20): the routing half is in, because a grammar the editor can load is worth
+    nothing if a `.go` file cannot reach the server a pack declared for it.
+    `acpilotd::lsp::language_of` now reads an extension against `LANGUAGES`, a table of the
+    protocol's language ids and their extensions, instead of four hardcoded arms: `go`, `c`,
+    `cpp`, `java`, `ruby`, `php`, `csharp`, `lua`, `kotlin`, `swift`, `dart`, `zig`, `haskell`,
+    `elixir`, `html`, `css`, `json`, `yaml`, `toml`, `sql`, `bash` and `markdown` join the four
+    the build ships a server for. A language with no row still answers from the parse tree rather
+    than being refused here, so the table can grow ahead of the servers. A test pins that every
+    built-in `SERVERS` id has a routable extension. The grammars themselves — wasm, queries,
+    lazy load, the visible fallback — are the rest of this task.
 
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
@@ -2449,6 +2459,20 @@ untrusted binary with your repo and your network is exactly the hole worth closi
     `acpilot lsp status` shows the resolved binary path and hash.
   - Untrusted workspaces spawn no servers until approved. Generated code and `build.rs`-triggered
     execution are the exact threat this blocks.
+  - Progress (2026-11-20): the pin is enforced where a server starts. `Servers::register` carries
+    the recorded pins beside the rows, and `running` refuses a local server whose program no
+    longer hashes to the approved value — logging the program by name and answering `None`, so
+    references fall back to the parse tree, diagnostics report "nobody checked" and formatting
+    returns the buffer unchanged. All three questions start a server through that one function,
+    so no route can spawn a changed binary by forgetting to ask. A remote server's bytes are the
+    host's to hash, so the check is local-only (P7-11). A pin can only be recorded by a person
+    answering the question (P4.6-7), which is what makes the refusal mean "this changed after
+    you approved it" rather than "nobody has approved it". Test: a file whose bytes change
+    under an approved name is refused, a matching pin and no pin are allowed.
+  - Open: a server nobody has pinned still starts, because the build's own rows and a pack's
+    preset share one code path and only an answer creates a pin; requiring approval before first
+    use is the rest of this task. `policy.toml` pre-approval and `acpilot lsp status` are not
+    built, and so is the workspace-level "untrusted workspaces spawn nothing" rule.
 
 - [ ] **P7-13 · Agents can read diagnostics** (1d)
   - `acpilotd mcp` exposes `lsp_diagnostics`, `lsp_hover`, `lsp_definition` as MCP tools (via
@@ -3216,6 +3240,26 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
   - **DoD:** every program in a release archive has a CPU and a memory figure with its
     window and machine state in the note, every budget in the table is checkable by one
     command, and CI fails when one regresses past its margin.
+  - Progress (2026-11-20): the harness exists and two rows are measured. `cargo xtask
+    resources [--debug] [--repeats N]` builds the binaries the archives carry, starts one
+    against a temporary profile, drives one scripted load, samples the whole process tree
+    every 100 ms with `sysinfo`, and writes `docs/notes/resources.md` with peak RSS, mean
+    and peak CPU as a fraction of one core, and the thread count — beside the OS, kernel,
+    CPU, memory and build profile the figures came from, because a number without its
+    machine measures the machine. Each row is measured three times and the median is
+    reported. Threads are counted from `tasks`, not from the process table: on Linux a
+    thread appears there carrying its process's memory, and counting both made the first
+    run report 1.5 GiB for a debug daemon. Rows today: `acpilotd` with a page request every
+    100 ms as its idle load, and `acpilot doctor` as the CLI's startup cost. The rows a
+    phase has not reached — TUI (a terminal's raw mode), GUI (P10), `serve` with a page
+    (P11), language servers (P7's fixture) and `acpilotd-helper` (P9) — are named in the
+    note and at the end of every run rather than skipped silently.
+  - Open: there is no CI job and no budget yet. The session-memory row needs a session, a
+    long-lived CLI row needs `acpilot serve` or a `prompt` turn with the mock agent, the
+    daemon's load is a repeated page request rather than a `/v1/events` subscriber, the
+    one-shot CLI row has memory and threads but no CPU (a 170 ms process gives `sysinfo`
+    too few intervals for a percentage), and every budget in the table is still unset
+    until the reference runner's variance is measured.
 
 ### Security
 

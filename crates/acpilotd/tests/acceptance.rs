@@ -180,12 +180,20 @@ async fn next_event(
     // A heartbeat names the last sequence rather than adding one, so it is the
     // stream saying it is alive while the event is still on its way. The server sends
     // one every 15 s and a loaded runner can meet it before the event it is waiting
-    // for; failing there would blame the keep-alive for the wait. The event is still
-    // required inside the window, so this skips the frame, not the assertion.
+    // for; failing there would blame the keep-alive for the wait.
+    //
+    // Patience is a deadline for the whole wait, not a budget per read, and the
+    // difference is the third sighting (2026-11-20): with a timeout around each
+    // `next()` a stream that never produced the event but kept sending heartbeats
+    // reset the clock every 15 s, so the loop spun for the 300 s nextest allows and
+    // failed with no line naming the wait at all. A heartbeat skips the frame, never
+    // the deadline.
+    let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        let frame = tokio::time::timeout(PATIENCE, stream.next())
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = tokio::time::timeout(left, stream.next())
             .await
-            .expect("an event inside the patience window")
+            .unwrap_or_else(|_| panic!("the stream sent no event inside {PATIENCE:?}"))
             .expect("the stream is still open")
             .expect("a frame");
         match frame {

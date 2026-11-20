@@ -766,6 +766,18 @@ and deterministic.
     Note that the local reproduction attempt was flat: forty runs of the same test binary on
     Linux passed, so the stall needs the macOS runner and is not something this machine can
     be asked to show.
+    **A third sighting, and the bound was the hole (2026-11-20):** CI run `44792451842` failed
+    `check (macos-latest)` honestly this time — nextest's own `TIMEOUT [300.017s]` on
+    `a_stream_replays_after_a_drop_with_no_gap`, with 1728 of 1729 tests passing. The file did
+    bound every read, which is why nothing could name the wait: `next_event` wrapped each
+    `stream.next()` in the 20 s patience and skipped heartbeat frames, so a stream that never
+    produced the event it was waiting for but kept sending a heartbeat every 15 s reset the
+    clock on every frame and the loop spun for the full 300 s with no output. Patience is a
+    deadline for the whole wait now: the loop computes the time left against one `Instant` and
+    panics with "the stream sent no event inside 20s", so a heartbeat skips the frame and never
+    the deadline. Three local runs of the three acceptance tests pass; what the next sighting
+    has to say, and could not before, is which read stalled — before the drop or in the replay
+    after the reconnect.
     **Open:** the `insta` snapshots of every error body are still unwritten (each route's
     suite asserts its envelope's fields instead), and the `curl` script the DoD names is
     the test rather than a checked-in shell script, because the client speaks the same wire.

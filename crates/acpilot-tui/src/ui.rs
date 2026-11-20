@@ -86,6 +86,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     } else if app.agent_picker {
         draw_agent_picker(frame, app, body);
     }
+    if app.lsp_pin.is_some() {
+        draw_lsp_pin(frame, app, body);
+    }
     if app.terminal_picker {
         draw_terminal_picker(frame, app, body);
     }
@@ -3072,6 +3075,64 @@ fn draw_agent_pin(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
+/// The same question about a language server: a program a pack introduced, whose
+/// bytes changed since somebody approved it.
+///
+/// A card for the reason the agent's is: the answer decides which program a caret's
+/// questions go to, and a decision taken from a status line is one nobody read.
+fn draw_lsp_pin(frame: &mut Frame, app: &App, area: Rect) {
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let Some(language) = app.lsp_pin.as_deref() else {
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    let row = app.lsp_servers.iter().find(|server| {
+        server
+            .languages
+            .first()
+            .is_some_and(|first| first == language)
+    });
+    match row {
+        Some(server) => {
+            lines.push(Line::from(Span::styled(
+                match &server.extension {
+                    Some(pack) => format!("Trust {} from {pack}?", server.command),
+                    None => format!("Trust {}?", server.command),
+                },
+                Style::default()
+                    .fg(app.theme.text())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "its program changed since it was approved",
+                Style::default().fg(app.theme.text_muted()),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("for {language}"),
+                Style::default().fg(app.theme.accent_high()),
+            )));
+        }
+        // The list moved under the question; naming the gap is better than a card
+        // whose `y` would approve a row that is not listed any more.
+        None => lines.push(Line::from(Span::styled(
+            format!("no language server is listed for {language} any more"),
+            Style::default().fg(app.theme.danger()),
+        ))),
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y approves · n leaves it unapproved",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Approve a language server ")
+        .border_style(Style::default().fg(app.theme.warning()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
 /// The middle of the screen, two thirds across and half as tall.
 fn centred(area: Rect) -> Rect {
     middle(area, 70, 50)
@@ -3271,6 +3332,28 @@ mod tests {
             text.contains("not approved"),
             "and the one state that changes what Enter does: {text}"
         );
+    }
+
+    #[test]
+    fn the_language_server_question_names_the_pack_the_program_and_the_language() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.lsp_servers = vec![acpilot_proto::lsp::LspServerSummary {
+            id: "rust-analyzer".to_owned(),
+            languages: vec!["rust".to_owned()],
+            command: "rust-analyzer".to_owned(),
+            status: acpilot_proto::lsp::LspServerStatus::Untrusted,
+            encoding: None,
+            extension: Some("acpilot.rust-pack".to_owned()),
+            round_trip_ms: None,
+        }];
+        app.lsp_pin = Some("rust".to_owned());
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("Trust rust-analyzer from acpilot.rust-pack?"),
+            "the question names the pack: {text}"
+        );
+        assert!(text.contains("for rust"), "and the language: {text}");
     }
 
     #[test]

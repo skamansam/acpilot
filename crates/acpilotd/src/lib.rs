@@ -2586,42 +2586,63 @@ async fn docs() -> Html<&'static str> {
 async fn lsp_servers(
     State(state): State<AppState>,
 ) -> Json<Vec<acpilot_proto::lsp::LspServerSummary>> {
-    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
-
     state.refresh_language_servers().await;
+    let pins = crate::trust::lsp_pins(&state);
     let rows = state
         .language_servers()
         .status()
         .await
         .into_iter()
-        .map(|server| LspServerSummary {
-            id: server.program.clone(),
-            languages: vec![server.language.clone()],
-            command: server.program.clone(),
-            status: if server.running.is_some() {
-                LspServerStatus::Ready
-            } else {
-                LspServerStatus::Stopped
-            },
-            encoding: server
-                .running
-                .as_ref()
-                .map(|running| match running.encoding {
-                    acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
-                    acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
-                }),
-            // Which pack contributed the row, when one did: a trust question names
-            // the extension, so the id has to survive the trip to the client.
-            extension: server.extension.clone(),
-            // Milliseconds, because a round trip is a number a person compares with
-            // a keystroke and not with a clock.
-            round_trip_ms: server
-                .running
-                .and_then(|running| running.round_trip)
-                .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
-        })
+        .map(|server| lsp_summary(&server, pins.get(&server.program).map(String::as_str)))
         .collect();
     Json(rows)
+}
+
+/// One language this build can start, as the API reports it.
+///
+/// The pin decides one state and the process decides the rest, in that order: a
+/// program whose bytes changed since somebody approved it is `untrusted` whether or not
+/// a session happens to be running, because the question a client asks of that row is
+/// about the program and not about the process.
+pub(crate) fn lsp_summary(
+    server: &lsp::ServerState,
+    pin: Option<&str>,
+) -> acpilot_proto::lsp::LspServerSummary {
+    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
+
+    let changed = pin.is_some_and(|pin| {
+        crate::trust::program_fingerprint(&server.program).as_deref() != Some(pin)
+    });
+    let status = if changed {
+        LspServerStatus::Untrusted
+    } else if server.running.is_some() {
+        LspServerStatus::Ready
+    } else {
+        LspServerStatus::Stopped
+    };
+    LspServerSummary {
+        id: server.program.clone(),
+        languages: vec![server.language.clone()],
+        command: server.program.clone(),
+        status,
+        encoding: server
+            .running
+            .as_ref()
+            .map(|running| match running.encoding {
+                acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
+                acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
+            }),
+        // Which pack contributed the row, when one did: a trust question names the
+        // extension, so the id has to survive the trip to the client.
+        extension: server.extension.clone(),
+        // Milliseconds, because a round trip is a number a person compares with a
+        // keystroke and not with a clock.
+        round_trip_ms: server
+            .running
+            .as_ref()
+            .and_then(|running| running.round_trip)
+            .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
+    }
 }
 
 /// The `GET /v1/lsp/servers` operation, for the OpenAPI document.
@@ -2660,6 +2681,7 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/lsp/servers", get(lsp_servers))
+        .merge(trust::lsp_routes())
         .merge(extensions::routes())
         .route("/v1/openapi.json", get(openapi))
         .route("/", get(web_app))

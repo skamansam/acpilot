@@ -604,6 +604,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/lsp/servers/{language}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record that a language server's program is approved */
+        post: operations["trust_language_server_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models": {
         parameters: {
             query?: never;
@@ -2138,7 +2155,7 @@ export interface components {
          * @description Lifecycle state of a language server.
          * @enum {string}
          */
-        LspServerStatus: "starting" | "ready" | "indexing" | "crashed" | "stopped";
+        LspServerStatus: "starting" | "ready" | "indexing" | "crashed" | "stopped" | "untrusted";
         /** @description A language server as returned by `GET /v1/lsp/servers`. */
         LspServerSummary: {
             /** @description Command that was spawned. */
@@ -4971,6 +4988,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LspServerSummary"][];
+                };
+            };
+        };
+    };
+    trust_language_server_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LSP language id */
+                language: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The row, now approved, with the pin that made it so */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LspServerSummary"];
                 };
             };
         };

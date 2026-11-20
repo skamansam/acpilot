@@ -1945,7 +1945,8 @@ expression: canonical(document)
           "ready",
           "indexing",
           "crashed",
-          "stopped"
+          "stopped",
+          "untrusted"
         ],
         "type": "string"
       },

@@ -1941,7 +1941,8 @@
           "ready",
           "indexing",
           "crashed",
-          "stopped"
+          "stopped",
+          "untrusted"
         ],
         "type": "string"
       },
@@ -6026,6 +6027,35 @@
           }
         },
         "summary": "What the language servers are doing"
+      }
+    },
+    "/v1/lsp/servers/{language}/trust": {
+      "post": {
+        "operationId": "trust_language_server_doc",
+        "parameters": [
+          {
+            "description": "LSP language id",
+            "in": "path",
+            "name": "language",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LspServerSummary"
+                }
+              }
+            },
+            "description": "The row, now approved, with the pin that made it so"
+          }
+        },
+        "summary": "Record that a language server's program is approved"
       }
     },
     "/v1/models": {

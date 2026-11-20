@@ -112,7 +112,7 @@ shell an agent started without a second process behind it.
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
 
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
-| LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
+| LSP | `GET /v1/lsp/servers`, `POST /v1/lsp/servers/{language}/trust`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
 | Models (started) | `GET/POST /v1/providers` are live; `POST /v1/providers/{id}/probe` and `GET /v1/models` are planned |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
 

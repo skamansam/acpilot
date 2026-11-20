@@ -1845,11 +1845,27 @@ v0.1 (D18).
     says to pick the agent again: approving a binary is not starting it. Tests: the question
     replaces the picker instead of starting a session, `y` answers once, `n` writes nothing, and
     both the marked row and the card are asserted by their text.
-  - Open: the language-server half still has no question. `LspServerSummary.extension` names the
-    pack, but there is no pin route for a language server and no client surface that lists them,
-    so a preset from a pack starts without being asked about; only the four languages
-    `acpilotd::lsp::language_of` maps a file extension to can actually be routed, so a preset for
-    `go` is listed but unreachable until task P4.6-8 widens that map.
+  - Progress (2026-11-20): the language-server half has its question. A pin for a server's program
+    lives in `lsp_server_pins` (schema 5, `migrations/0005_lsp_server_pins.sql`) and is written by
+    `POST /v1/lsp/servers/{language}/trust`: the route takes a language so the URL is one a client
+    can build, resolves that row's program, and stores the SHA-256 of the bytes under the
+    *program*, because `typescript-language-server` answers for two languages and one approval has
+    to cover both. `GET /v1/lsp/servers` reports `untrusted` for a row whose pin no longer matches
+    the file, in place of its lifecycle state — the same shape `AgentStatus::Untrusted` has — and
+    the row still carries the pack id, so the question names it. The TUI's palette **LSP status**
+    row sends the list instead of a line when a row is waiting for an answer, draws a card naming
+    the program, the language and the pack, and `y` records the pin through
+    `Client::trust_language_server`; `n`/`Esc` writes nothing and the status line says the server
+    will not start. Approving is not starting: the card leaves "approved rust · rust-analyzer from
+    acpilot.rust-pack", and the line still reports the row as stopped. Tests: the store replaces a
+    program's pin rather than accumulating one, the daemon reports a stale pin and the route clears
+    it (then reports it again after the file changes under the approved name), a language with no
+    row is `404`, a daemon with no store is `409`, the route is in the served document, and the TUI
+    asks, answers once, and writes nothing on `Esc`.
+  - Open: only the four languages `acpilotd::lsp::language_of` maps a file extension to can be
+    routed, so a preset for `go` is listed and can be approved but is unreachable until task
+    P4.6-8 widens that map. Nothing yet refuses to *start* a server whose pin does not match — the
+    listing reports the state and the TUI asks, which is this task's half; the refusal is P7-12's.
 
 - [ ] **P4.6-8 · Grammars** (2d)
   - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of

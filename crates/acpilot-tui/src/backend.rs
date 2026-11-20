@@ -169,6 +169,15 @@ pub enum Request {
     /// and a window that reported its own guess would be a second opinion about which
     /// servers exist.
     LspStatus,
+    /// Record that a language server's program is the one a person approved.
+    ///
+    /// The language, not the program: the row the question is about is keyed by
+    /// language, and the daemon resolves the program so a client cannot name a path
+    /// the row does not have.
+    TrustLanguageServer {
+        /// The LSP language id of the row.
+        language: String,
+    },
     /// Read the project map the agent wrote under `.acpilot/`.
     ProjectMap,
     /// Read the profile's recipes and the model catalogue for the lab.
@@ -287,6 +296,11 @@ pub enum Update {
     LabError(String),
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
+    /// The language servers, when one of them is waiting for an answer.
+    ///
+    /// A list rather than the usual status line, because a row whose program nobody
+    /// approved is a question and a sentence cannot be answered with a key.
+    LspServers(Vec<acpilot_proto::lsp::LspServerSummary>),
     /// The workspace root the daemon serves, for the tree's title.
     Workspace(String),
     /// One directory, as the daemon listed it.
@@ -1049,12 +1063,34 @@ async fn run(
                 }
                 Some(Request::LspStatus) => match client.lsp_servers().await {
                     Ok(servers) => {
-                        let _ = updates.send(Update::Status(language_servers_line(&servers)));
+                        // A row nobody approved is the one answer that is not a status
+                        // line: it has to be answered, so the list travels and the UI
+                        // asks. Everything else is the glance this command is for.
+                        if servers
+                            .iter()
+                            .any(|server| {
+                                server.status == acpilot_proto::lsp::LspServerStatus::Untrusted
+                            })
+                        {
+                            let _ = updates.send(Update::LspServers(servers));
+                        } else {
+                            let _ = updates.send(Update::Status(language_servers_line(&servers)));
+                        }
                     }
                     Err(error) => {
                         let _ = updates.send(Update::Status(describe(&error)));
                     }
                 },
+                Some(Request::TrustLanguageServer { language }) => {
+                    match client.trust_language_server(&language).await {
+                        Ok(server) => {
+                            let _ = updates.send(Update::Status(approved_server(&server)));
+                        }
+                        Err(error) => {
+                            let _ = updates.send(Update::Status(describe(&error)));
+                        }
+                    }
+                }
                 Some(Request::ProjectMap) => {
                     match client.project_map().await {
                         Ok(map) => {
@@ -1219,6 +1255,22 @@ fn approved(agent: &AgentSummary) -> String {
             agent.name
         ),
         None => format!("approved {} · pick it again to run it", agent.name),
+    }
+}
+
+/// The sentence approving a language server leaves on the status line.
+///
+/// It names the pack and the program, because that pair is what a person just decided
+/// about, and it does not claim the server is running: approving a command is not
+/// starting one.
+fn approved_server(server: &acpilot_proto::lsp::LspServerSummary) -> String {
+    let language = server
+        .languages
+        .first()
+        .map_or(server.id.as_str(), String::as_str);
+    match &server.extension {
+        Some(pack) => format!("approved {language} · {} from {pack}", server.command),
+        None => format!("approved {language} · {}", server.command),
     }
 }
 
@@ -1693,6 +1745,12 @@ async fn run_demo(
                     "design pass · there is no daemon to ask".to_owned(),
                 ));
             }
+            Request::TrustLanguageServer { .. } => {
+                // A pin is a promise the daemon keeps, and this pass has no daemon.
+                let _ = updates.send(Update::Status(
+                    "design pass · there is no daemon to record a pin".to_owned(),
+                ));
+            }
             Request::ProjectMap => {
                 // The design pass has no workspace, so it has no map: the panel is
                 // drawn from its empty state, which is a state worth reviewing.
@@ -1866,6 +1924,7 @@ fn language_servers_line(servers: &[acpilot_proto::lsp::LspServerSummary]) -> St
                 LspServerStatus::Indexing => "indexing",
                 LspServerStatus::Crashed => "crashed",
                 LspServerStatus::Stopped => "stopped",
+                LspServerStatus::Untrusted => "not approved",
             };
             let encoding = match server.encoding {
                 Some(PositionEncoding::Utf8) => " utf-8",

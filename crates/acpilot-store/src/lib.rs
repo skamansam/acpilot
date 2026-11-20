@@ -63,7 +63,7 @@ pub const RETENTION_DAYS: i64 = 30;
 /// Bumped with every entry in [`MIGRATIONS`]. A database written by a newer daemon
 /// is refused rather than read: the columns a newer build added are the ones this
 /// one would try to write past.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The schema, in order, as `(version, sql)`.
 ///
@@ -78,6 +78,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (2, include_str!("../migrations/0002_agent_pins.sql")),
     (3, include_str!("../migrations/0003_session_profile.sql")),
     (4, include_str!("../migrations/0004_driver_identity.sql")),
+    (5, include_str!("../migrations/0005_lsp_server_pins.sql")),
 ];
 
 /// A profile's conversations, sessions and decisions.
@@ -296,6 +297,52 @@ impl Store {
         let rows = statement.query_map([], |row| {
             Ok(AgentPin {
                 agent_id: row.get(0)?,
+                fingerprint: row.get(1)?,
+            })
+        })?;
+        let mut pins = Vec::new();
+        for row in rows {
+            pins.push(row?);
+        }
+        Ok(pins)
+    }
+
+    /// Record that a person approved this language-server program.
+    ///
+    /// Keyed by the program, not the language: one `typescript-language-server`
+    /// answers for two languages, and a second approval would be an answer to a
+    /// question nobody asked twice. A pin is replaced rather than accumulated, for
+    /// the reason [`Store::save_agent_pin`] gives.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn save_lsp_server_pin(&self, program: &str, fingerprint: &str) -> Result<(), StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "INSERT INTO lsp_server_pins (program, fingerprint, trusted_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (program) DO UPDATE SET fingerprint = excluded.fingerprint,
+             trusted_at = excluded.trusted_at",
+            params![program, fingerprint, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Every language-server pin a person has recorded, oldest first.
+    ///
+    /// Ordered by `rowid` for the reason [`Store::agent_pins`] documents; a
+    /// re-approved program keeps its place while `trusted_at` moves.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn lsp_server_pins(&self) -> Result<Vec<LspServerPin>, StoreError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT program, fingerprint FROM lsp_server_pins ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| {
+            Ok(LspServerPin {
+                program: row.get(0)?,
                 fingerprint: row.get(1)?,
             })
         })?;
@@ -1055,6 +1102,15 @@ pub struct AgentPin {
     pub fingerprint: String,
 }
 
+/// A language-server program a person approved, as the database keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspServerPin {
+    /// The program the approval belongs to, as the preset spells it.
+    pub program: String,
+    /// SHA-256 of the program's bytes when it was approved.
+    pub fingerprint: String,
+}
+
 /// One permission decision, as the database keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -1587,6 +1643,35 @@ mod tests {
             ["zzz", "aaa"]
         );
         assert_eq!(pins[0].fingerprint, "ccc");
+    }
+
+    #[test]
+    fn a_language_server_pin_belongs_to_the_program_not_the_language() {
+        let store = Store::in_memory().expect("open");
+        store
+            .save_lsp_server_pin("typescript-language-server", "aaa")
+            .expect("first");
+        // Approving the same program again is one approval, moved to the new bytes.
+        store
+            .save_lsp_server_pin("typescript-language-server", "bbb")
+            .expect("second");
+        let pins = store.lsp_server_pins().expect("read");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].program, "typescript-language-server");
+        assert_eq!(pins[0].fingerprint, "bbb");
+
+        // A second program is a second row, in the order it was approved.
+        store
+            .save_lsp_server_pin("rust-analyzer", "ccc")
+            .expect("third");
+        let pins = store.lsp_server_pins().expect("read");
+        assert_eq!(
+            pins.iter()
+                .map(|pin| pin.program.as_str())
+                .collect::<Vec<_>>(),
+            ["typescript-language-server", "rust-analyzer"],
+            "first recorded first"
+        );
     }
 
     #[test]

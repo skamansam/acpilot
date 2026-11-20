@@ -451,6 +451,20 @@ impl Client {
         self.get("/v1/lsp/servers").await
     }
 
+    /// `POST /v1/lsp/servers/{language}/trust`: record the program a person approved.
+    ///
+    /// Keyed by language, because a language is what a client lists; the daemon stores
+    /// the pin against the program, so approving `typescript` also approves
+    /// `javascript` when one server answers for both.
+    pub async fn trust_language_server(
+        &self,
+        language: &str,
+    ) -> Result<acpilot_proto::lsp::LspServerSummary, ClientError> {
+        let path = format!("/v1/lsp/servers/{language}/trust");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
+    }
+
     /// Where the name is used in code.
     ///
     /// With a caret — the file, the byte `offset` and the buffer's own `text` — this is

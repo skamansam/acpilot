@@ -117,6 +117,7 @@ POST   /v1/profiles/{id}/export
 GET    /v1/providers                      POST   /v1/providers
 
 GET    /v1/lsp/servers                    POST   /v1/lsp/servers/{id}/restart
+                                          POST   /v1/lsp/servers/{language}/trust
 GET    /v1/lsp/servers/{id}/logs
 GET    /v1/lsp/diagnostics                POST   /v1/lsp/request
 

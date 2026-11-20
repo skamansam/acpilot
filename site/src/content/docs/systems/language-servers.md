@@ -91,6 +91,19 @@ already said. The TUI prints those rows on its status line from the palette's
 **LSP status** row. That frontend has no `:` command line yet, so the palette's
 own query is where `lsp status` sits.
 
+A row that came from a pack can also be a question. The daemon pins a language
+server the way it pins an agent: `POST /v1/lsp/servers/{language}/trust` records the
+SHA-256 of that program's bytes, and the listing reports `untrusted` once the file
+no longer hashes to what was approved. It is keyed by language because a language is
+what a client lists and what a URL can hold, but the pin is stored against the
+program: `typescript-language-server` answers for both `typescript` and `javascript`,
+and one approval covers both. The TUI asks on the palette's **LSP status** row when
+the list contains such a row, naming the program, the language and the pack —
+"trust rust-analyzer from acpilot.rust-pack?" — and approving leaves a sentence on
+the status line rather than claiming the server started, because a pin that is
+recorded does not start a process. That question is why the row carries its pack id
+all the way to a client.
+
 The rest of the engine arrives in the language intelligence phase (P7). The
 design phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16
 conversion are in `acpilot-lsp`, tested over emoji, CJK, combining marks, and

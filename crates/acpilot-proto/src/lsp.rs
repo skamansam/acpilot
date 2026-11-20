@@ -36,6 +36,14 @@ pub enum LspServerStatus {
     Crashed,
     /// Shut down because no open document needs it.
     Stopped,
+    /// Approved once, but the program's bytes changed since.
+    ///
+    /// The one state here that is not about the process, and the one a client acts on
+    /// differently: a row can be stopped and approved, or running a binary nobody
+    /// approved after an upgrade replaced it. Reported in place of the lifecycle state
+    /// because the question — "is this the program you approved?" — outranks "is it
+    /// running", exactly as `AgentStatus::Untrusted` does for agents.
+    Untrusted,
 }
 
 /// A language server as returned by `GET /v1/lsp/servers`.

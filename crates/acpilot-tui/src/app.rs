@@ -1813,6 +1813,13 @@ pub struct App {
     /// An id rather than a row: the roster is re-read while the question is on
     /// screen, and an index would answer about whatever moved into that place.
     pub agent_pin: Option<String>,
+    /// The language servers the daemon listed, when one of them needs an answer.
+    pub lsp_servers: Vec<acpilot_proto::lsp::LspServerSummary>,
+    /// The language whose server's program changed, while that question is up.
+    ///
+    /// A language id rather than a row: the question has to survive the list being
+    /// read again, and an index would answer about whatever moved into that place.
+    pub lsp_pin: Option<String>,
     /// Whether the outline panel is on screen.
     ///
     /// Apart from the side it is on: a panel that is put away has not moved, and the
@@ -2714,6 +2721,8 @@ impl App {
             agent_picker: false,
             agent_selected: 0,
             agent_pin: None,
+            lsp_servers: Vec::new(),
+            lsp_pin: None,
             show_outline: false,
             outline: Vec::new(),
             outline_selected: 0,
@@ -4064,6 +4073,25 @@ impl App {
                     self.ask_about_problems();
                 }
             }
+            Update::LspServers(servers) => {
+                // Only one reading of this list arrives: the daemon sends it when a row
+                // is waiting for an answer, because every other list is a status line.
+                let untrusted = servers
+                    .iter()
+                    .find(|server| server.status == acpilot_proto::lsp::LspServerStatus::Untrusted)
+                    .and_then(|server| server.languages.first().cloned());
+                self.lsp_servers = servers;
+                match untrusted {
+                    Some(language) => {
+                        self.lsp_pin = Some(language);
+                        self.status =
+                            "a language server's program changed under its name".to_owned();
+                    }
+                    None => {
+                        self.status = "every language server here is approved".to_owned();
+                    }
+                }
+            }
             Update::Status(message) => self.status = message,
             Update::Preferences(preferences) => {
                 self.preferences = preferences;
@@ -4326,6 +4354,12 @@ impl App {
         // answered, so it owns the keyboard before anything that starts one.
         if self.agent_pin.is_some() {
             return self.agent_pin_key(key);
+        }
+
+        // The same question about a server: a program whose bytes nobody approved is
+        // not going to start, so the answer owns the keyboard first.
+        if self.lsp_pin.is_some() {
+            return self.lsp_pin_key(key);
         }
 
         // Choosing an agent is a question with a list of answers, and the panes it
@@ -7857,6 +7891,26 @@ impl App {
         None
     }
 
+    /// The keys the language-server pin question answers to.
+    ///
+    /// `y` is the only key that writes, for the reason the agent question gives: the
+    /// difference between the two answers has to be a pin or no pin.
+    fn lsp_pin_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let language = self.lsp_pin.take()?;
+                self.status = format!("approving the {language} server…");
+                return Some(Request::TrustLanguageServer { language });
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+                self.lsp_pin = None;
+                self.status = "not approved · that server will not start".to_owned();
+            }
+            _ => {}
+        }
+        None
+    }
+
     /// The keys the terminal picker answers to.
     ///
     /// `j`/`k` as well as the arrows, because the picker is a list and the TUI's
@@ -8276,6 +8330,43 @@ mod tests {
             })
         );
         assert_eq!(app.agent_pin, None, "one answer per question");
+    }
+
+    #[test]
+    fn a_language_server_whose_program_changed_asks_before_it_starts() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::LspServers(vec![
+            acpilot_proto::lsp::LspServerSummary {
+                id: "rust-analyzer".to_owned(),
+                languages: vec!["rust".to_owned()],
+                command: "rust-analyzer".to_owned(),
+                status: acpilot_proto::lsp::LspServerStatus::Untrusted,
+                encoding: None,
+                extension: Some("acpilot.rust-pack".to_owned()),
+                round_trip_ms: None,
+            },
+        ]));
+
+        // The list is a question rather than a line, and the row that made it one is
+        // the row the answer is about.
+        assert_eq!(app.lsp_pin.as_deref(), Some("rust"));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::TrustLanguageServer {
+                language: "rust".to_owned()
+            })
+        );
+        assert_eq!(app.lsp_pin, None, "one answer per question");
+    }
+
+    #[test]
+    fn leaving_the_server_pin_question_writes_nothing() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.lsp_pin = Some("rust".to_owned());
+
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
+        assert_eq!(app.lsp_pin, None, "the question is closed either way");
+        assert!(app.status.contains("will not start"), "{}", app.status);
     }
 
     #[test]

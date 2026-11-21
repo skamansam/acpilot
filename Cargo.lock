@@ -11043,6 +11043,7 @@ dependencies = [
  "acpilot-showcase",
  "acpilotd",
  "clap",
+ "portable-pty",
  "serde_json",
  "sysinfo",
 ]

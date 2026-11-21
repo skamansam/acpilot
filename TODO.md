@@ -3305,12 +3305,23 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     now has a source column — a median the runner took, the per-CPU thread counts, or the
     table's own 15 MB session ceiling — so a regression check and a stated promise are not
     printed as though they were the same kind of number.
+  - Progress (2026-11-21): the TUI row. `acpilot tui --demo` runs under a 120x40
+    pseudo-terminal that the harness opens with `portable-pty`, because a client that
+    cannot put its terminal into raw mode refuses to launch, and a row that measured the
+    refusal would measure the launcher. The design pass contacts no daemon and reads no
+    project, so the figure is the frame clock itself: this machine measured 14.7 MiB,
+    0.39 % mean CPU (4.59 % peak while drawing) and one thread. The master is drained by
+    its own thread, because a full-screen frame is several kilobytes and an undrained pty
+    blocks the client mid-draw; the row waits for the first byte before it starts
+    sampling, so a client that never drew is an error rather than a figure.
   - Open: a turn is measured on the daemon because the CLI has no `prompt` verb (a CLI
     figure would need one; `acpilot recipes` exercises a model server, not an agent turn);
     `acpilot doctor` has memory and threads but no CPU (a 170 ms process gives `sysinfo`
     too few intervals for a percentage, which is why its CPU budget is `None` and not
-    zero); and the session row's agent is the repository's fixture, so a real agent's
-    memory is still unmeasured.
+    zero); the session row's agent is the repository's fixture, so a real agent's memory
+    is still unmeasured; and the TUI row is the design pass under a fixed 120x40 pty — no
+    daemon, no agent and no keystrokes, so a real session's traffic is not in it, and the
+    desktop window still waits for P10.
 
 ### Security
 

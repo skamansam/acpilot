@@ -12,7 +12,11 @@
 //! daemon with one session created over the API and its mock agent running, read on
 //! the daemon's own process — the agent is a separate program, and its memory is not
 //! the session's to budget. CPU is a fraction of *one core*, summed over the tree,
-//! because a percentage of the machine hides the second core a busy loop costs.
+//! because a percentage of the machine hides the second core a busy loop costs. The
+//! TUI row runs the design pass under a real pseudo-terminal, because a client that
+//! cannot put its terminal into raw mode refuses to launch; the demo reads no project
+//! and contacts no daemon, so the figure is the frame clock rather than a session's
+//! traffic.
 //!
 //! What is not measured yet, and why, is printed at the end of a run and written into
 //! the note: the desktop shell needs a window (P10), the page needs a browser (P11), a
@@ -37,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, sleep};
 use std::time::{Duration, Instant};
 
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::{App, build, path_in_repo};
@@ -64,6 +69,10 @@ const SESSION_ROW: &str = "acpilotd + 1 session";
 /// start a turn are the TUI and anything speaking the API. What the turn costs the
 /// process that serves it is this row's figure.
 const TURN_ROW: &str = "acpilotd + 1 turn";
+/// The terminal UI drawing its seeded world: the client's frame clock.
+const TUI_ROW: &str = "acpilot tui";
+/// The TUI's window: long enough for several hundred frames at its clock.
+const TUI_WINDOW: Duration = Duration::from_secs(5);
 /// `acpilot serve` with one page attached: the CLI's long-lived row.
 const SERVE_ROW: &str = "acpilot serve";
 /// The table's budget for one idle session: what a session may add to the daemon.
@@ -158,8 +167,9 @@ command = "acpilot-mock-agent"
         let serve = repeat(repeats, || {
             serve_row(&target.join(exe("acpilot")), &profile, &workspace)
         })?;
+        let tui = repeat(repeats, || tui_row(&target.join(exe("acpilot")), &profile))?;
         let doctor = repeat(repeats, || doctor(&target.join(exe("acpilot")), &workspace))?;
-        Ok(vec![daemon, session, turn, serve, doctor])
+        Ok(vec![daemon, session, turn, serve, tui, doctor])
     })();
     let _ = fs::remove_dir_all(&profile);
     let figures = measured?;
@@ -244,6 +254,17 @@ const BUDGETS: &[Budget] = &[
         threads: Threads {
             base: 4,
             per_core: 1,
+        },
+    },
+    Budget {
+        row: TUI_ROW,
+        // Provisional until a runner run reports the row; this machine measured
+        // 14.7 MiB, 0.39 % mean CPU and one thread drawing the design pass.
+        rss_peak_mib: 16.0,
+        cpu_mean: Some(4.0),
+        threads: Threads {
+            base: 1,
+            per_core: 0,
         },
     },
     Budget {
@@ -488,10 +509,6 @@ fn report(figures: &[Figure], release: bool, repeats: u32) -> bool {
 /// The rows a phase has not given this harness yet.
 const SKIPPED: &[(&str, &str)] = &[
     (
-        "acpilot-tui",
-        "needs a terminal it is allowed to put into raw mode (a window is P6's frame clock)",
-    ),
-    (
         "acpilot-gui",
         "needs a display and the shell's `gui` feature (P10)",
     ),
@@ -648,6 +665,118 @@ fn daemon(binary: &Path, profile: &Path, workspace: &Path, load: Load) -> Result
         figure
     });
     stop(&mut child);
+    measured
+}
+
+/// `acpilot tui --demo` under a pseudo-terminal: the client's frame clock.
+///
+/// A terminal UI needs a terminal: without one it cannot put stdin into raw mode, and
+/// a row that measured the refusal would measure the launcher. The design pass is the
+/// one launch that contacts no daemon and reads no project, so the figure is the
+/// client's own — the frame clock, the editor and the panes over the seeded world —
+/// with none of a session's traffic in it. The pty is 120x40 for every run: a taller
+/// terminal paints more cells, and a budget for one screen is not a budget for another.
+fn tui_row(binary: &Path, profile: &Path) -> Result<Figure, String> {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| format!("the TUI row has no pseudo-terminal: {error}"))?;
+    let mut command = CommandBuilder::new(binary);
+    command.arg("tui");
+    command.arg("--demo");
+    // A terminal that names itself, or the client draws its dumb fallback and the row
+    // measures a program nobody runs.
+    command.env("TERM", "xterm-256color");
+    // The design pass reads no project, but it does read the settings cascade: the
+    // machine's real theme is not this row's to load.
+    command.env("XDG_CONFIG_HOME", profile);
+    command.env("ACPILOT_HOME", profile);
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("cannot start acpilot tui: {error}"))?;
+    // The parent's copy of the slave, or the master never sees the child exit.
+    drop(pair.slave);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| format!("cannot read the TUI's terminal: {error}"))?;
+    // A full-screen frame is several kilobytes and nobody else reads the master: a pty
+    // whose output is not drained blocks the program mid-draw, which would turn this
+    // row into a measurement of the harness. The first byte is also how the row knows
+    // it is sampling a program that drew rather than one that sat in raw mode.
+    let (painted, first_frame) = std::sync::mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let running = Arc::clone(&stop);
+    let draining = thread::spawn(move || {
+        let mut announced = false;
+        let mut chunk = [0u8; 8192];
+        while !running.load(Ordering::Relaxed) {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if !announced {
+                        announced = true;
+                        let _ = painted.send(());
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    });
+    let measured = (|| -> Result<Figure, String> {
+        let pid = child
+            .process_id()
+            .ok_or_else(|| "the TUI row has no process to sample".to_owned())?;
+        let deadline = Instant::now() + STARTUP;
+        loop {
+            match first_frame.recv_timeout(Duration::from_millis(50)) {
+                Ok(()) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if let Some(status) = child
+                        .try_wait()
+                        .map_err(|error| format!("{TUI_ROW}: {error}"))?
+                    {
+                        return Err(format!("acpilot tui exited before it drew ({status})"));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!(
+                            "acpilot tui drew no frame inside {}s",
+                            STARTUP.as_secs()
+                        ));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("acpilot tui stopped before it drew a frame".to_owned());
+                }
+            }
+        }
+        sample(
+            Pid::from_u32(pid),
+            TUI_ROW,
+            "one design pass: `acpilot tui --demo` at its frame clock under a 120x40 \
+             pseudo-terminal; no daemon and no session traffic",
+            TUI_WINDOW,
+            false,
+            true,
+            || {
+                child
+                    .try_wait()
+                    .map(|status| status.map(|status| status.to_string()))
+                    .map_err(|error| format!("{TUI_ROW}: {error}"))
+            },
+        )
+    })();
+    stop.store(true, Ordering::Relaxed);
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(pair.master);
+    let _ = draining.join();
     measured
 }
 
@@ -971,6 +1100,26 @@ fn measure(
     whole_tree: bool,
 ) -> Result<Figure, String> {
     let root = Pid::from_u32(child.id());
+    sample(root, row, window, duration, one_shot, whole_tree, || {
+        child
+            .try_wait()
+            .map(|status| status.map(|status| status.to_string()))
+            .map_err(|error| format!("{row}: {error}"))
+    })
+}
+
+/// The sampling loop, for a row whose program is not a [`Child`] of this process: a
+/// program started on a pseudo-terminal is the terminal's child, and only its pid and
+/// a way to ask whether it is still running are available here.
+fn sample(
+    root: Pid,
+    row: &'static str,
+    window: &'static str,
+    duration: Duration,
+    one_shot: bool,
+    whole_tree: bool,
+    mut exited: impl FnMut() -> Result<Option<String>, String>,
+) -> Result<Figure, String> {
     // A one-shot row is sampled from the moment it exists, at 2 ms, because a CLI
     // that finishes in fifty milliseconds has no 100 ms window to stand in. Its
     // tree is one process, so refreshing only that pid is also the cheaper read.
@@ -990,7 +1139,7 @@ fn measure(
     let mut cpu_peak = 0.0f32;
     let mut cpu_sum = 0.0f32;
     let mut threads = 0usize;
-    let mut exited = None;
+    let mut stopped = None;
     loop {
         // Sampled before the sleep, because a one-shot row can be over by the time an
         // interval elapses: a `doctor` run on a hosted runner exited inside 40 ms and
@@ -1011,11 +1160,8 @@ fn measure(
                 cpu_sum += cpu;
             }
         }
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("{row}: {error}"))?
-        {
-            exited = Some(status);
+        if let Some(status) = exited()? {
+            stopped = Some(status);
             break;
         }
         if started.elapsed() >= duration {
@@ -1024,7 +1170,7 @@ fn measure(
         sleep(interval);
     }
 
-    if let Some(status) = exited
+    if let Some(status) = stopped
         && !one_shot
     {
         return Err(format!("{row}: exited during its window ({status})"));
@@ -1356,9 +1502,11 @@ fn render(figures: &[Figure], release: bool) -> String {
         "The `acpilotd` rows are measured with the load named in theirs rather than at rest:\n\
          one `/v1/events` subscriber open for the window, and the same daemon with one idle\n\
          session, read on its own process because the mock agent it starts is a separate\n\
-         program. The session's added memory is checked on its own, with no margin. The\n\
-         one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo` too\n\
-         few intervals for a percentage — so its CPU budget is `None` rather than zero. The\n\
+         program. The session's added memory is checked on its own, with no margin. The TUI\n\
+         row is the client drawing its design pass under a 120x40 pseudo-terminal, the one\n\
+         launch that needs no daemon: the frame clock's cost, not a session's. The one-shot\n\
+         CLI row is memory and threads only — a 170 ms process gives `sysinfo` too few\n\
+         intervals for a percentage — so its CPU budget is `None` rather than zero. The\n\
          budgets below are the medians a run on GitHub's `ubuntu-latest` measured, not this\n\
          machine's: the table above is this machine, and the gate compares the runner with\n\
          the runner. A thread budget is a fixed cost plus one per logical CPU rather than\n\
@@ -1399,7 +1547,10 @@ fn render(figures: &[Figure], release: bool) -> String {
          delta between two refreshes, and the CLI finishes in 170 ms. A percentage from that\n\
          many intervals is a number about the sampler, not about the program.\n\
          - A language server the daemon starts is sampled as part of the daemon's tree, but no\n\
-         row starts one until P7's mock server is the fixture.\n",
+         row starts one until P7's mock server is the fixture.\n\
+         - The TUI row draws the design pass under a just-opened 120x40 pseudo-terminal: no\n\
+         daemon, no agent and no keystrokes. A real session's traffic and another terminal's\n\
+         size move the figure, and its budget is a median of exactly this screen.\n",
     );
     note
 }

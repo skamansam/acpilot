@@ -16,13 +16,14 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.0 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.4 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.6 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 21.8 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
 | `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.7 MiB | — | — | 1 |
+| `acpilot tui` | one design pass: `acpilot tui --demo` at its frame clock under a 120x40 pseudo-terminal; no daemon and no session traffic | 14.8 MiB | 0.29 % of one core | 4.73 % of one core | 1 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.8 MiB | — | — | 1 |
 
-One idle session adds **3.6 MiB** to the daemon's own process — the session row's
+One idle session adds **3.2 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -53,6 +54,9 @@ regression check is only meaningful against the first.
 | `acpilot serve` | peak RSS | 22.0 MiB | 50 % | 33.0 MiB | the runner's median |
 | `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
 | `acpilot serve` | threads | 28 (4 + 1/core) | 50 % | 42 | the runner's count, one per CPU |
+| `acpilot tui` | peak RSS | 16.0 MiB | 50 % | 24.0 MiB | the runner's median |
+| `acpilot tui` | mean CPU | 4.00 % | 100 % | 8.00 % | the runner's median |
+| `acpilot tui` | threads | 1 (1) | 50 % | 2 | the runner's count |
 | `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB | the runner's median |
 | `acpilot doctor` | threads | 2 (2) | 50 % | 3 | the runner's count |
 | `acpilotd + 1 session` | added RSS | 15.0 MiB | 0 % | 15.0 MiB | the table's 15 MB ceiling |
@@ -60,9 +64,11 @@ regression check is only meaningful against the first.
 The `acpilotd` rows are measured with the load named in theirs rather than at rest:
 one `/v1/events` subscriber open for the window, and the same daemon with one idle
 session, read on its own process because the mock agent it starts is a separate
-program. The session's added memory is checked on its own, with no margin. The
-one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo` too
-few intervals for a percentage — so its CPU budget is `None` rather than zero. The
+program. The session's added memory is checked on its own, with no margin. The TUI
+row is the client drawing its design pass under a 120x40 pseudo-terminal, the one
+launch that needs no daemon: the frame clock's cost, not a session's. The one-shot
+CLI row is memory and threads only — a 170 ms process gives `sysinfo` too few
+intervals for a percentage — so its CPU budget is `None` rather than zero. The
 budgets below are the medians a run on GitHub's `ubuntu-latest` measured, not this
 machine's: the table above is this machine, and the gate compares the runner with
 the runner. A thread budget is a fixed cost plus one per logical CPU rather than
@@ -71,7 +77,6 @@ figure would be a budget for the machine it was measured on.
 
 ## What is not measured here, and why
 
-- `acpilot-tui` — needs a terminal it is allowed to put into raw mode (a window is P6's frame clock).
 - `acpilot-gui` — needs a display and the shell's `gui` feature (P10).
 - `language servers` — needs one installed; measured as the daemon's children once P7's mock server is the fixture.
 - `acpilotd-helper` — has no build on this host until P9.
@@ -102,3 +107,6 @@ delta between two refreshes, and the CLI finishes in 170 ms. A percentage from t
 many intervals is a number about the sampler, not about the program.
 - A language server the daemon starts is sampled as part of the daemon's tree, but no
 row starts one until P7's mock server is the fixture.
+- The TUI row draws the design pass under a just-opened 120x40 pseudo-terminal: no
+daemon, no agent and no keystrokes. A real session's traffic and another terminal's
+size move the figure, and its budget is a median of exactly this screen.

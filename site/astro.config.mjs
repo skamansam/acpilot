@@ -51,6 +51,7 @@ export default defineConfig({
             { label: 'Flight status', link: '/status/' },
             { label: 'Installation', link: '/ground-school/installation/' },
             { label: 'First flight', link: '/ground-school/first-flight/' },
+            { label: 'Design principles', link: '/ground-school/design/' },
           ],
         },
         {
@@ -67,6 +68,8 @@ export default defineConfig({
         {
           label: 'Systems',
           items: [
+            { label: 'Architecture', link: '/systems/architecture/' },
+            { label: 'Sessions', link: '/systems/sessions/' },
             { label: 'Agents and ACP', link: '/systems/agents/' },
             { label: 'Programs as agents', link: '/systems/program-as-agent/' },
             { label: 'Profiles', link: '/systems/profiles/' },

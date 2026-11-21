@@ -16,12 +16,12 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 21.9 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.8 MiB | — | — | 1 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.7 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.2 MiB | — | — | 1 |
 
-One idle session adds **3.5 MiB** to the daemon's own process — the session row's
+One idle session adds **2.9 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -43,9 +43,9 @@ budget fails too: a row outside the list is one the gate quietly stopped checkin
 | `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB |
 | `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % |
 | `acpilotd + 1 session` | threads | 32 (8 + 1/core) | 50 % | 48 |
-| `acpilot serve` | peak RSS | 30.0 MiB | 50 % | 45.0 MiB |
+| `acpilot serve` | peak RSS | 22.0 MiB | 50 % | 33.0 MiB |
 | `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilot serve` | threads | 30 (6 + 1/core) | 50 % | 45 |
+| `acpilot serve` | threads | 28 (4 + 1/core) | 50 % | 42 |
 | `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB |
 | `acpilot doctor` | threads | 2 (2) | 50 % | 3 |
 

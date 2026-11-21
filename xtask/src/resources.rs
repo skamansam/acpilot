@@ -217,12 +217,12 @@ const BUDGETS: &[Budget] = &[
     },
     Budget {
         row: SERVE_ROW,
-        // Provisional until a runner run reports the row; the constants take its median
-        // rather than this machine's, like every other memory budget here.
-        rss_peak_mib: 30.0,
+        // The runner measured 20.8 MiB and 8 threads on 4 logical CPUs; this machine
+        // 28 threads on 24, so the pool is four plus the core count here too.
+        rss_peak_mib: 22.0,
         cpu_mean: Some(0.5),
         threads: Threads {
-            base: 6,
+            base: 4,
             per_core: 1,
         },
     },

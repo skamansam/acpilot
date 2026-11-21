@@ -8,6 +8,13 @@ use std::net::TcpStream;
 /// reset can discard the answer that was just written — that is the shape of the
 /// macOS 404 one CLI test produced. A daemon reads what the client sent anyway.
 pub fn read_request(stream: &mut TcpStream) -> Option<String> {
+    // macOS and Windows hand out accepted sockets that inherit the listener's
+    // non-blocking flag, and a read of a body that has not arrived yet would then
+    // look like a broken request — so the fake would answer before the body, the
+    // very race this reader exists to close.
+    if stream.set_nonblocking(false).is_err() {
+        return None;
+    }
     let mut request = Vec::new();
     let mut buffer = [0u8; 1024];
     let head_end = loop {

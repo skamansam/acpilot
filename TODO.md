@@ -1692,7 +1692,11 @@ resolved.
     sweep found one other hand-written HTTP server, `OneFile` in
     `crates/acpilot-cli/tests/registry.rs`, which now shares `read_request` in
     `tests/support/http.rs`; it serves a single GET of a `.tar.gz`, so no body was ever at
-    risk. Every other
+    risk. The drain probe also caught a real cross-platform bug on its first CI run: macOS
+    and Windows hand out accepted sockets that inherit the listener's non-blocking flag,
+    so the body read returned `WouldBlock` at once and the fake answered before the body;
+    `read_request` now makes the socket blocking first. Linux does not inherit the flag,
+    which is why local runs were green. Every other
     loopback server in `tests/` is axum, which reads the body before the handler runs, and
     the `read_until` hits are the LSP stdio protocol and a pty harness, not HTTP.
   - **DoD:** `acpilot recipes run <id> "…"` streams from a real LM Studio on port 1234, the run

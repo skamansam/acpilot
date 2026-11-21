@@ -3264,14 +3264,24 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     renamed. `--gate` refuses `--debug` and fewer than three repeats: the budgets are
     release figures, and one sample is not a median. CI's `resources` job is that one
     command on `ubuntu-latest`, and it is in `required checks`.
-  - Open: the budgets are this machine's medians (32 MiB and 2 % of one core at the
-    daemon's idle load, 14 MiB for `acpilot doctor`), so a hosted runner that measures a
-    different figure needs its own budget rather than a wider margin around this one's. The
-    session-memory row needs a session, a long-lived CLI row needs `acpilot serve` or a
-    `prompt` turn with the mock agent, the daemon's load is a repeated page request rather
-    than a `/v1/events` subscriber, and the one-shot CLI row has memory and threads but no
-    CPU (a 170 ms process gives `sysinfo` too few intervals for a percentage, which is why
-    its CPU budget is `None` and not zero).
+  - Progress (2026-11-20): the session row and the real stream. The daemon's idle load is
+    one `/v1/events` subscriber held open for the whole window rather than a page request
+    every 100 ms, and a second row creates one idle session over the API and measures the
+    daemon beside its fixture agent — the daemon's own process, because the agent is a
+    separate program and its memory is not the session's to budget. The row also makes the
+    table's 15 MB session budget checkable: the gate compares the session row's peak with
+    the idle row's and fails when the difference is past 15 MB with no margin, because that
+    number is a stated ceiling rather than a median this harness discovered. To get there
+    the harness builds `acpilot-agent`'s fixture binary and puts its directory first on the
+    daemon's `PATH`, and gives each run its own `XDG_RUNTIME_DIR`, `ACPILOT_HOME` and token
+    under the temporary profile so a session row cannot touch the machine's real state.
+  - Open: the budgets are still this machine's medians; deriving them from the hosted
+    runner is the next step, so a calibration run prints the runner's figures and the
+    constants take those numbers rather than a wider margin. A long-lived CLI row needs
+    `acpilot serve` or a `prompt` turn with the mock agent, `acpilot doctor` has memory and
+    threads but no CPU (a 170 ms process gives `sysinfo` too few intervals for a
+    percentage, which is why its CPU budget is `None` and not zero), and the session row's
+    agent is the repository's fixture, so a real agent's memory is still unmeasured.
 
 ### Security
 

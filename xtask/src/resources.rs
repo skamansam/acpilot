@@ -5,10 +5,14 @@
 //! the hardware. The harness lives here rather than in a shipping crate: sampling a
 //! process tree is a syscall surface, and a workflow is the only caller.
 //!
-//! Idle is a load, not the absence of one. The daemon's row keeps a client asking
-//! `/v1/health` once per sample, because a poller that wakes sixty times a second
-//! shows up as CPU and nowhere else. CPU is a fraction of *one core*, summed over the
-//! tree, because a percentage of the machine hides the second core a busy loop costs.
+//! Idle is a load, not the absence of one. The daemon's idle row holds one
+//! `/v1/events` subscriber open for the whole window, because the profile-wide stream
+//! is what a connected client costs when nobody is typing: a pump that wakes sixty
+//! times a second shows up as CPU and nowhere else. The session row is the same
+//! daemon with one session created over the API and its mock agent running, read on
+//! the daemon's own process — the agent is a separate program, and its memory is not
+//! the session's to budget. CPU is a fraction of *one core*, summed over the tree,
+//! because a percentage of the machine hides the second core a busy loop costs.
 //!
 //! What is not measured yet, and why, is printed at the end of a run and written into
 //! the note: the desktop shell needs a window (P10), the page needs a browser (P11), a
@@ -25,10 +29,12 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread::sleep;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle, sleep};
 use std::time::{Duration, Instant};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -45,6 +51,19 @@ const STARTUP: Duration = Duration::from_secs(15);
 const ONE_SHOT_WINDOW: Duration = Duration::from_secs(30);
 /// Where the numbers and the machine they came from are written.
 const NOTE: &str = "docs/notes/resources.md";
+/// The daemon alone, with one subscriber: the row a session is measured against.
+const IDLE_ROW: &str = "acpilotd";
+/// The daemon plus one idle session, as the session row is named.
+///
+/// Not `acpilotd` again: the gate keys a figure by its row, and two rows under one
+/// name would let one of them stand in for the other.
+const SESSION_ROW: &str = "acpilotd + 1 session";
+/// The table's budget for one idle session: what a session may add to the daemon.
+///
+/// A hard limit rather than a measured median, because it is a number the product
+/// states rather than one this harness discovered — so it has no margin. The row's
+/// own memory budget is measured like every other row's.
+const SESSION_MIB: f64 = 15.0;
 
 /// One measured row, after the repeats have been reduced to a median.
 #[derive(Debug, Clone)]
@@ -87,6 +106,9 @@ fn measure_all(debug: bool, repeats: u32, gate: bool) -> Result<bool, String> {
     if !build(App::Tui, release) {
         return Err("the binaries this row measures could not be built".to_owned());
     }
+    if !build_mock_agent(release) {
+        return Err("the fixture agent a session row starts could not be built".to_owned());
+    }
 
     let target = target_dir(&root, release);
     let profile = std::env::temp_dir().join(format!("acpilot-resources-{}", std::process::id()));
@@ -98,13 +120,32 @@ fn measure_all(debug: bool, repeats: u32, gate: bool) -> Result<bool, String> {
     // without it, and an empty file is a profile with every default.
     fs::write(profile.join("config.toml"), "")
         .map_err(|error| format!("{}: {error}", profile.join("config.toml").display()))?;
+    // One agent, so the session row has something to start. The command is the
+    // fixture binary `cargo build -p acpilot-agent` writes beside the daemon, which
+    // is why the row puts that directory first on the daemon's `PATH`.
+    fs::write(
+        profile.join("agents.toml"),
+        r#"schema_version = 1
+
+[[agents]]
+id = "mock"
+name = "Mock"
+description = "The fixture agent a session row starts."
+transport = "acp-stdio"
+command = "acpilot-mock-agent"
+"#,
+    )
+    .map_err(|error| format!("{}: {error}", profile.join("agents.toml").display()))?;
 
     let measured: Result<Vec<Figure>, String> = (|| {
         let daemon = repeat(repeats, || {
-            daemon_idle(&target.join(exe("acpilotd")), &profile)
+            daemon_idle(&target.join(exe("acpilotd")), &profile, &workspace)
+        })?;
+        let session = repeat(repeats, || {
+            daemon_with_session(&target.join(exe("acpilotd")), &profile, &workspace)
         })?;
         let doctor = repeat(repeats, || doctor(&target.join(exe("acpilot")), &workspace))?;
-        Ok(vec![daemon, doctor])
+        Ok(vec![daemon, session, doctor])
     })();
     let _ = fs::remove_dir_all(&profile);
     let figures = measured?;
@@ -150,6 +191,12 @@ fn measure_all(debug: bool, repeats: u32, gate: bool) -> Result<bool, String> {
 const BUDGETS: &[Budget] = &[
     Budget {
         row: "acpilotd",
+        rss_peak_mib: 32.0,
+        cpu_mean: Some(2.0),
+        threads: 32,
+    },
+    Budget {
+        row: SESSION_ROW,
         rss_peak_mib: 32.0,
         cpu_mean: Some(2.0),
         threads: 32,
@@ -297,6 +344,25 @@ fn compare(figures: &[Figure], budgets: &[Budget]) -> Vec<Verdict> {
             });
         }
     }
+    // The session row's own budget is the daemon with a session in it; the table's
+    // budget is what the session *added*, which is the figure a leak moves. Measured
+    // as one peak minus the other, so a daemon that grew for an unrelated reason is
+    // charged to its own row and not to the session.
+    if budgets.iter().any(|budget| budget.row == SESSION_ROW) {
+        let idle = figures.iter().find(|figure| figure.row == IDLE_ROW);
+        let session = figures.iter().find(|figure| figure.row == SESSION_ROW);
+        if let (Some(idle), Some(session)) = (idle, session) {
+            let added = session.rss_peak.saturating_sub(idle.rss_peak);
+            verdicts.push(verdict(
+                SESSION_ROW,
+                "added RSS",
+                added as f64 / (1024.0 * 1024.0),
+                SESSION_MIB,
+                0.0,
+                Unit::Mib,
+            ));
+        }
+    }
     verdicts
 }
 
@@ -398,29 +464,250 @@ fn median_cpu(figures: &[Figure], field: impl Fn(&Figure) -> Option<f32>) -> Opt
     Some(values[values.len() / 2])
 }
 
-/// `acpilotd` with a temporary profile, one health request per sample.
-fn daemon_idle(binary: &Path, profile: &Path) -> Result<Figure, String> {
+/// `acpilotd` with a temporary profile and one `/v1/events` subscriber.
+fn daemon_idle(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
+    daemon(binary, profile, workspace, None)
+}
+
+/// The same daemon with one idle session in it.
+fn daemon_with_session(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
+    daemon(binary, profile, workspace, Some("mock"))
+}
+
+/// A daemon, its subscriber, and — when `agent` is named — one session.
+///
+/// The subscriber opens before the session, so the window measures a daemon that is
+/// already serving the stream: a connection arriving in the middle of a measurement
+/// is the setup's cost, not the load's.
+fn daemon(
+    binary: &Path,
+    profile: &Path,
+    workspace: &Path,
+    agent: Option<&str>,
+) -> Result<Figure, String> {
     let port = free_port()?;
     let mut child = spawn(
         Command::new(binary)
             .arg("--profile")
             .arg(profile)
+            .arg("--workspace")
+            .arg(workspace)
             .arg("--addr")
-            .arg(format!("127.0.0.1:{port}")),
+            .arg(format!("127.0.0.1:{port}"))
+            // The token, the database and the discovered profiles are state, and a
+            // row that wrote the machine's real ones would measure somebody's
+            // history rather than this window. The daemon writes its own under the
+            // temporary profile instead.
+            .env("XDG_RUNTIME_DIR", profile)
+            .env("ACPILOT_HOME", profile)
+            .env("PATH", search_path(binary)),
         binary,
     )?;
     let measured = wait_until_healthy(port, &mut child).and_then(|()| {
-        measure(
-            &mut child,
-            "acpilotd",
-            "idle: one page request every 100 ms (drawing and waiting)",
-            IDLE_WINDOW,
-            Some(port),
-            false,
-        )
+        let token = wait_for_token(profile)?;
+        let subscriber = Subscriber::open(port, &token)?;
+        let figure = match agent {
+            Some(agent) => create_session(port, &token, agent).and_then(|()| {
+                measure(
+                    &mut child,
+                    SESSION_ROW,
+                    "one idle session: created over the API, its mock agent running; the \
+                     daemon's own process",
+                    IDLE_WINDOW,
+                    false,
+                    false,
+                )
+            }),
+            None => measure(
+                &mut child,
+                IDLE_ROW,
+                "idle: one `/v1/events` subscriber open for the window (drawing and waiting)",
+                IDLE_WINDOW,
+                false,
+                true,
+            ),
+        };
+        subscriber.finish();
+        figure
     });
     stop(&mut child);
     measured
+}
+
+/// The fixture agent the session row starts: `cargo build -p acpilot-agent` writes it
+/// beside the daemon, because no release archive carries it.
+fn build_mock_agent(release: bool) -> bool {
+    let mut command = Command::new(env!("CARGO"));
+    command.args(["build", "-p", "acpilot-agent"]);
+    if release {
+        command.arg("--release");
+    }
+    crate::run_step("build (mock agent)", command)
+}
+
+/// `PATH` with the daemon's own directory first, so the fixture agent it spawns is
+/// the one this build wrote rather than one a developer happens to have installed.
+fn search_path(binary: &Path) -> String {
+    let mut paths = vec![binary.parent().unwrap_or(Path::new(".")).to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths)
+        .map(|paths| paths.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The token the daemon wrote under the profile, once it is there.
+fn wait_for_token(profile: &Path) -> Result<String, String> {
+    let path = profile.join("acpilot").join("token");
+    let deadline = Instant::now() + STARTUP;
+    while Instant::now() < deadline {
+        match fs::read_to_string(&path) {
+            Ok(text) if !text.trim().is_empty() => return Ok(text.trim().to_owned()),
+            _ => sleep(Duration::from_millis(20)),
+        }
+    }
+    Err(format!(
+        "the daemon wrote no token at {} inside {}s",
+        path.display(),
+        STARTUP.as_secs()
+    ))
+}
+
+/// `POST /v1/sessions` with the fixture agent, and an error that names what the
+/// daemon said when it refused.
+fn create_session(port: u16, token: &str, agent: &str) -> Result<(), String> {
+    let body = format!(r#"{{"workspace_id":"","agent_id":"{agent}"}}"#);
+    let request = format!(
+        "POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
+         {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: \
+         close\r\n\r\n{body}",
+        body.len()
+    );
+    let response = request_once(port, &request, Duration::from_secs(10))?;
+    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 201") {
+        Ok(())
+    } else {
+        Err(format!(
+            "the session was refused: {}",
+            first_line(&response)
+        ))
+    }
+}
+
+/// One request, its whole answer, and a cap: an error page is not a transcript.
+fn request_once(port: u16, request: &str, timeout: Duration) -> Result<String, String> {
+    let mut stream = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)
+        .map_err(|error| format!("cannot reach the daemon: {error}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| format!("cannot set a read timeout: {error}"))?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("cannot send the request: {error}"))?;
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&chunk[..read]);
+                if response.len() >= 8 * 1024 {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => return Err(format!("cannot read the answer: {error}")),
+        }
+    }
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+fn first_line(response: &str) -> String {
+    response.lines().next().unwrap_or("no answer").to_owned()
+}
+
+/// One subscriber on `/v1/events`, drained by its own thread for the window.
+///
+/// The daemon writes a frame only when there is news, so the thread is mostly
+/// blocked in `read`: what the row measures is the connection being there, which is
+/// what a client costs while a person is reading rather than typing.
+struct Subscriber {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Subscriber {
+    fn open(port: u16, token: &str) -> Result<Self, String> {
+        let mut stream = TcpStream::connect_timeout(
+            &SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(5),
+        )
+        .map_err(|error| format!("cannot open the events stream: {error}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|error| format!("cannot set a read timeout: {error}"))?;
+        // A stream is a request like any other, so it carries the token: the page is
+        // the only route that answers without one.
+        let request = format!(
+            "GET /v1/events HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
+             {token}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|error| format!("cannot send the events request: {error}"))?;
+        let mut head = [0u8; 64];
+        let read = stream
+            .read(&mut head)
+            .map_err(|error| format!("cannot read the events answer: {error}"))?;
+        if read == 0 || !head[..read].starts_with(b"HTTP/1.1 200") {
+            return Err(format!(
+                "the events stream answered {}",
+                String::from_utf8_lossy(&head[..read]).trim()
+            ));
+        }
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .map_err(|error| format!("cannot set a read timeout: {error}"))?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                let mut chunk = [0u8; 1024];
+                while !stop.load(Ordering::Relaxed) {
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+                let _ = stream.shutdown(Shutdown::Both);
+            })
+        };
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    fn finish(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// `acpilot doctor` against the temporary workspace: the CLI's startup cost.
@@ -443,7 +730,7 @@ fn doctor(binary: &Path, workspace: &Path) -> Result<Figure, String> {
         "acpilot doctor",
         "one-shot: reads PATH, the profile and the workspace; starts no daemon",
         ONE_SHOT_WINDOW,
-        None,
+        true,
         true,
     );
     if measured.is_err() {
@@ -467,8 +754,8 @@ fn measure(
     row: &'static str,
     window: &'static str,
     duration: Duration,
-    port: Option<u16>,
     one_shot: bool,
+    whole_tree: bool,
 ) -> Result<Figure, String> {
     let root = Pid::from_u32(child.id());
     // A one-shot row is sampled from the moment it exists, at 2 ms, because a CLI
@@ -492,11 +779,8 @@ fn measure(
     let mut threads = 0usize;
     let mut exited = None;
     while started.elapsed() < duration {
-        if let Some(port) = port {
-            let _ = health(port);
-        }
         sleep(interval);
-        let (rss, cpu, count) = sample_tree(&mut system, root, one_shot);
+        let (rss, cpu, count) = sample_tree(&mut system, root, one_shot, whole_tree);
         if count > 0 {
             samples += 1;
             rss_peak = rss_peak.max(rss);
@@ -543,7 +827,12 @@ fn measure(
 }
 
 /// Memory, CPU and thread count summed over the tree rooted at `root`.
-fn sample_tree(system: &mut System, root: Pid, one_shot: bool) -> (u64, f32, usize) {
+fn sample_tree(
+    system: &mut System,
+    root: Pid,
+    one_shot: bool,
+    whole_tree: bool,
+) -> (u64, f32, usize) {
     refresh_for(system, root, one_shot);
     let mut rss = 0u64;
     let mut cpu = 0.0f32;
@@ -555,7 +844,13 @@ fn sample_tree(system: &mut System, root: Pid, one_shot: bool) -> (u64, f32, usi
         if process.thread_kind().is_some() {
             continue;
         }
-        if !descends_from(system, *pid, root) {
+        // A session row reads the daemon alone: the agent it starts is a separate
+        // program, and its memory is not the session's to budget.
+        if !whole_tree {
+            if *pid != root {
+                continue;
+            }
+        } else if !descends_from(system, *pid, root) {
             continue;
         }
         rss += process.memory();
@@ -755,6 +1050,19 @@ fn render(figures: &[Figure], release: bool) -> String {
         ));
     }
     note.push('\n');
+    if let (Some(idle), Some(session)) = (
+        figures.iter().find(|figure| figure.row == IDLE_ROW),
+        figures.iter().find(|figure| figure.row == SESSION_ROW),
+    ) {
+        note.push_str(&format!(
+            "One idle session adds **{}** to the daemon's own process — the session row's\n\
+             peak less the idle row's — against the table's {:.0} MB budget, which has no\n\
+             margin because it is a stated ceiling rather than a figure this harness\n\
+             discovered.\n\n",
+            mib(session.rss_peak.saturating_sub(idle.rss_peak)),
+            SESSION_MIB
+        ));
+    }
 
     note.push_str("## Budgets\n\n");
     note.push_str(
@@ -797,12 +1105,15 @@ fn render(figures: &[Figure], release: bool) -> String {
     }
     note.push('\n');
     note.push_str(
-        "The `acpilotd` budget is measured with the load named in its row, not at rest; the\n\
-         session row and the CPU budget of a one-shot CLI are still open, because a session\n\
-         is a row this harness cannot start yet and a 170 ms process gives `sysinfo` too few\n\
-         intervals for a percentage. The budgets are this machine's figures, so the gate is\n\
-         a regression check: this note keeps the measured number and the hardware, and\n\
-         neither is a claim about a user's machine.\n\n",
+        "The `acpilotd` rows are measured with the load named in theirs rather than at rest:\n\
+         one `/v1/events` subscriber open for the window, and the same daemon with one idle\n\
+         session, read on its own process because the mock agent it starts is a separate\n\
+         program. The session's added memory is checked on its own, with no margin. The\n\
+         one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo` too\n\
+         few intervals for a percentage — so its CPU budget is `None` rather than zero. The\n\
+         budgets are this machine's figures, so the gate is a regression check: this note\n\
+         keeps the measured number and the hardware, and neither is a claim about a user's\n\
+         machine.\n\n",
     );
 
     note.push_str("## What is not measured here, and why\n\n");
@@ -824,8 +1135,9 @@ fn render(figures: &[Figure], release: bool) -> String {
          one's.\n",
     );
     note.push_str(
-        "- The daemon row asks for the page, not a subscriber on `/v1/events`; an events\n\
-         subscriber is the load the task names and is the next row to add.\n\
+        "- The session row's agent is this repository's fixture, not a real agent, and the row\n\
+         reads the daemon alone: a real agent's memory is its own program's, and the harness\n\
+         budgets the daemon's share of a session.\n\
          - The daemon's window is three seconds, so a sweep that runs every thirty seconds is\n\
          not in it. A regression in a periodic task needs a window that contains one.\n\
          - The free port is bound and released before the daemon binds it; a port taken in\n\
@@ -937,6 +1249,29 @@ mod tests {
         let ungated = compare(&[named("stray", 10 * MIB)], &[]);
         assert_eq!(ungated.len(), 1, "{ungated:?}");
         assert!(ungated[0].over, "{ungated:?}");
+    }
+
+    #[test]
+    fn a_session_that_adds_more_than_the_table_allows_is_a_breach() {
+        let budgets = [
+            budget(IDLE_ROW, 32.0, None, 32),
+            budget(SESSION_ROW, 32.0, None, 32),
+        ];
+        let figures = vec![named(IDLE_ROW, 25 * MIB), named(SESSION_ROW, 30 * MIB)];
+        let inside = compare(&figures, &budgets);
+        assert!(
+            inside
+                .iter()
+                .any(|verdict| verdict.metric == "added RSS" && !verdict.over),
+            "{inside:?}"
+        );
+        let leaked = vec![named(IDLE_ROW, 25 * MIB), named(SESSION_ROW, 45 * MIB)];
+        let past = compare(&leaked, &budgets);
+        assert!(
+            past.iter()
+                .any(|verdict| verdict.metric == "added RSS" && verdict.over),
+            "{past:?}"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ CPU and the thread count. Each row is measured three times and the median is
 reported here; the window each figure was taken in is in the table, because a
 memory number without one measures the absence of a load.
 
-Measured on this machine: **Linux 24.04 Ubuntu**, kernel `6.18.58.1-microsoft-standard-WSL2`, `x86_64` target, 24 logical
+Measured on this machine: **Linux 24.04 Ubuntu**, kernel `6.18.54.1-microsoft-standard-WSL2`, `x86_64` target, 24 logical
 CPU(s) — Intel(R) Core(TM) Ultra 9 275HX — and 31809.0 MiB of memory. The build is the **release** profile.
 
 CPU is a fraction of **one core**, summed over the tree: a percentage of the
@@ -16,8 +16,14 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one page request every 100 ms (drawing and waiting) | 25.4 MiB | 1.64 % of one core | 4.51 % of one core | 30 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.9 MiB | — | — | 1 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.5 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.3 MiB | — | — | 1 |
+
+One idle session adds **3.2 MiB** to the daemon's own process — the session row's
+peak less the idle row's — against the table's 15 MB budget, which has no
+margin because it is a stated ceiling rather than a figure this harness
+discovered.
 
 ## Budgets
 
@@ -33,15 +39,21 @@ budget fails too: a row outside the list is one the gate quietly stopped checkin
 | `acpilotd` | peak RSS | 32.0 MiB | 50 % | 48.0 MiB |
 | `acpilotd` | mean CPU | 2.00 % | 100 % | 4.00 % |
 | `acpilotd` | threads | 32 | 50 % | 48 |
+| `acpilotd + 1 session` | peak RSS | 32.0 MiB | 50 % | 48.0 MiB |
+| `acpilotd + 1 session` | mean CPU | 2.00 % | 100 % | 4.00 % |
+| `acpilotd + 1 session` | threads | 32 | 50 % | 48 |
 | `acpilot doctor` | peak RSS | 14.0 MiB | 50 % | 21.0 MiB |
 | `acpilot doctor` | threads | 2 | 50 % | 3 |
 
-The `acpilotd` budget is measured with the load named in its row, not at rest; the
-session row and the CPU budget of a one-shot CLI are still open, because a session
-is a row this harness cannot start yet and a 170 ms process gives `sysinfo` too few
-intervals for a percentage. The budgets are this machine's figures, so the gate is
-a regression check: this note keeps the measured number and the hardware, and
-neither is a claim about a user's machine.
+The `acpilotd` rows are measured with the load named in theirs rather than at rest:
+one `/v1/events` subscriber open for the window, and the same daemon with one idle
+session, read on its own process because the mock agent it starts is a separate
+program. The session's added memory is checked on its own, with no margin. The
+one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo` too
+few intervals for a percentage — so its CPU budget is `None` rather than zero. The
+budgets are this machine's figures, so the gate is a regression check: this note
+keeps the measured number and the hardware, and neither is a claim about a user's
+machine.
 
 ## What is not measured here, and why
 
@@ -62,8 +74,9 @@ attached workspace.
 - The budgets came from one machine, not a reference runner; a hosted runner that
 measures a different figure needs its own budget, not a wider margin around this
 one's.
-- The daemon row asks for the page, not a subscriber on `/v1/events`; an events
-subscriber is the load the task names and is the next row to add.
+- The session row's agent is this repository's fixture, not a real agent, and the row
+reads the daemon alone: a real agent's memory is its own program's, and the harness
+budgets the daemon's share of a session.
 - The daemon's window is three seconds, so a sweep that runs every thirty seconds is
 not in it. A regression in a periodic task needs a window that contains one.
 - The free port is bound and released before the daemon binds it; a port taken in

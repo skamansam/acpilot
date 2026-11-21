@@ -343,8 +343,8 @@ accessibility. It talks to the daemon exactly as the TUI does.
 `acpilot serve` starts the daemon on a free loopback port and prints the page URL with the
 token in one startup panel. `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a
 compiled SPA (CodeMirror 6 + xterm.js) plus the API. Same daemon, same sessions, so a
-browser tab can watch an agent run on the office workstation. Token auth, optional TLS
-termination, no cloud dependency. `--token <token>` picks the secret instead of generating
+browser tab can watch an agent run on the office workstation. Token auth in v0.1 (ADR
+0013 adds local-account and OIDC login), optional TLS termination, no cloud dependency. `--token <token>` picks the secret instead of generating
 one, and it lives in a `0600` file either way.
 
 ### API — HTTP + SSE + WS
@@ -818,7 +818,8 @@ The daemon is the deployment. It binds a unix socket by default
 (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `$TMPDIR` on macOS), with the directory `0700`
 and the socket `0600`. `--addr 127.0.0.1:7777` adds the opt-in TCP listener: every request
 there needs a bearer token, which the daemon writes to
-`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. `acpilot token rotate` replaces it
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. That is the v0.1 story; ADR 0013
+replaces it with a session JWT once the first account exists. `acpilot token rotate` replaces it
 without a restart, because the daemon reads the file per request.
 
 `acpilot serve` starts the daemon on a free loopback port and prints the page URL with

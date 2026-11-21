@@ -99,8 +99,10 @@ for a server running on the SSH host.
 
 The unix socket needs no token. Its access control is the filesystem. Anything on
 TCP, loopback included, needs a bearer token: a random value in a `0600` file
-beside the socket, compared in constant time. There is no user database, so there
-is no password hash to store. The file is the only place the secret lives. TLS
+beside the socket, compared in constant time. There is no user database in v0.1,
+so there is no password hash to store. ADR 0013 decides the local-account and
+OIDC model for when login lands; until then the file is the only place the
+secret lives. TLS
 termination is the deployment's job. The daemon does not pretend to be a web
 server fleet.
 

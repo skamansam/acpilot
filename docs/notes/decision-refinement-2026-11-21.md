@@ -74,11 +74,14 @@ Proposed shape, for the ADR:
 - **Audit.** Login, refresh, revocation and failed attempts are audit rows;
   request logs carry the token id, never the token.
 
-What is not decided, and blocks the ADR: **is the daemon still one per person,
-with login for remote access, or a shared team daemon with per-user profiles?**
-That single answer decides the users table, profile ownership, session
-visibility and whether "one daemon per user" in ADR 0004 is superseded. Writing
-the schema before answering it is how the rework happens.
+**Resolved by [ADR 0013](adr/0013-authentication-one-daemon-per-person.md):** the
+daemon stays one per person. Login exists for the listeners that do not inherit
+the socket's filesystem boundary (TCP and the browser); the socket stays
+credential-free. Accounts, profile grants and refresh tokens live in a
+daemon-level `users.sqlite` so a future shared daemon is a policy change rather
+than a migration, but v0.1 refuses a second user. First-account creation and
+password reset are local-only. The static TCP token survives only until the
+first account exists.
 
 ## D7 — one command, one binary
 
@@ -125,10 +128,14 @@ that survives is **no silent install**:
 - Remote hosts: first cut refuses to download on the host and prints the install
   command; a helper-driven download is a later, separately audited step.
 
-Open for the ADR: **v0.1 or v0.2?** The v0.1 definition of done still says "the
-language servers you already use". The downloader is a new supply chain and a
-catalog-review process; proposing v0.2 keeps v0.1 honest. Until then P7-3 ships
-detection and says the direction is managed installs.
+**Resolved by [ADR 0014](adr/0014-language-server-catalog.md):** v0.2. The
+catalog is generated from reviewed per-server TOML, signed with its own ed25519
+key, and only entries whose licence permits redistribution carry a download URL;
+the rest stay known and detection-only. An install is explicit, verified before
+extraction, and records the executable hash, so the install itself answers P7-12's
+pin rather than adding a second prompt. Resolution is explicit command > pinned
+managed version > newest managed install > `PATH`, and a yanked or untrusted
+managed binary starts nothing rather than falling through to another program.
 
 ## D16 — token counts start as a guess and become a measurement
 
@@ -165,13 +172,17 @@ feature flag. The useful reading of the answer:
 - The host's daemon remains the only writer, so ETag last-write-wins still
   covers the host's own windows and no CRDT is needed. Presence is not
   co-editing, and the v0.1 non-goal stays true.
-- Transport: one more stream on the daemon (`/v1/presence`), not a peer-to-peer
-  mesh. A direct connection is a later optimisation; the event shapes must not
-  assume it.
+- Transport: one workspace-scoped stream on the daemon
+  (`/v1/workspaces/{id}/presence` plus `/stream`), not a peer-to-peer mesh. A
+direct connection is a later optimisation; the event shapes must not assume it.
 
-Open: same-daemon only, or cross-daemon through a relay? The answer's
-peer-to-peer suggestion and the chat relay (D22) are the same question asked
-twice. Settle D5 first, then decide whether presence rides the chat plane.
+**Designed in [`presence-follow-2026-11-21.md`](presence-follow-2026-11-21.md).**
+ADR 0013's one-daemon-per-person answer splits D2 in two: presence between one
+person's own clients (TUI, GUI, browser) needs no new trust boundary and is what
+the first version ships; presence across daemons needs the D22 relay, a
+server-asserted or signed roster, and group membership. The frames are
+transport-neutral so the second half is a carrier, not a rewrite. A follow is
+read-only: coordinates and viewports, never text or keystrokes.
 
 ## D21 and D22 — chat is a separate, federated subsystem
 
@@ -234,14 +245,16 @@ studio actions exist.
 
 ## Order of work
 
-1. **D5 ADR** — blocks D2 and D22, and changes web auth. Answer the
-   single-person-versus-team question first.
-2. **D12 ADR** — independent; then the catalog and downloader task, and the
-   ~30-language research.
-3. **D7 ADR** — independent; lands with P12 packaging and the spawn-path
+1. **D5 ADR** — done, [ADR 0013](adr/0013-authentication-one-daemon-per-person.md).
+   The auth schema and the web login can be built; the static token is a
+   bootstrap mode, not a second auth story.
+2. **D12 ADR** — done, [ADR 0014](adr/0014-language-server-catalog.md). The
+   catalog review and ~30-language licence research are the v0.2 task.
+3. **D7 ADR** — still open; lands with P12 packaging and the spawn-path
    change.
-4. **D2 presence design** — after D5; decides whether presence rides the chat
-   plane.
+4. **D2 presence design** — done,
+   [`presence-follow-2026-11-21.md`](presence-follow-2026-11-21.md). The
+   same-daemon version can follow ADR 0013; the cross-daemon one waits for D22.
 5. **D22 chat design** — after D5 and the trust-model answer; do not start P13
    before it.
 6. **D16 calibration** — when run records next change.
@@ -264,8 +277,11 @@ studio actions exist.
 
 ## Still open
 
-- D5: one person per daemon or a team daemon?
-- D12: v0.1 or v0.2, and may the catalog redistribute every server?
-- D22: server-trusted or end-to-end encrypted, and who is a member?
-- D2: same-daemon presence or cross-daemon, and may a follower take the
-  keyboard?
+- D7: whether `acpilotd` remains a shipped compatibility name, and when the
+  subcommand packaging lands.
+- D22: server-trusted or end-to-end encrypted, and who is a member? This also
+  decides the cross-daemon half of presence.
+- D21: one chat database per group per profile, once D22 says what a message
+  is.
+- D2: whether the first UI shows same-user clients as presence or only in a
+  windows menu. The protocol does not decide the presentation.

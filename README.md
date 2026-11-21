@@ -343,8 +343,10 @@ accessibility. It talks to the daemon exactly as the TUI does.
 `acpilot serve` starts the daemon on a free loopback port and prints the page URL with the
 token in one startup panel. `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a
 compiled SPA (CodeMirror 6 + xterm.js) plus the API. Same daemon, same sessions, so a
-browser tab can watch an agent run on the office workstation. Token auth in v0.1 (ADR
-0013 adds local-account and OIDC login), optional TLS termination, no cloud dependency. `--token <token>` picks the secret instead of generating
+browser tab can watch an agent run on the office workstation. A local account (ADR 0013)
+exchanges its password for a 15-minute JWT; until `acpilot auth init` the printed token is
+the bootstrap credential. OIDC and a browser login page are not built yet. Optional TLS
+termination, no cloud dependency. `--token <token>` picks the secret instead of generating
 one, and it lives in a `0600` file either way.
 
 ### API — HTTP + SSE + WS
@@ -818,8 +820,9 @@ The daemon is the deployment. It binds a unix socket by default
 (`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `$TMPDIR` on macOS), with the directory `0700`
 and the socket `0600`. `--addr 127.0.0.1:7777` adds the opt-in TCP listener: every request
 there needs a bearer token, which the daemon writes to
-`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. That is the v0.1 story; ADR 0013
-replaces it with a session JWT once the first account exists. `acpilot token rotate` replaces it
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. That token is bootstrap-only:
+once `acpilot auth init` creates the local account, the listener requires the JWT from
+`/v1/auth/login` and refuses the file token. `acpilot token rotate` replaces it
 without a restart, because the daemon reads the file per request.
 
 `acpilot serve` starts the daemon on a free loopback port and prints the page URL with
@@ -860,7 +863,9 @@ installs and CI use. Everything else is either a selector or the daemon's addres
 | `ACPILOT_HOME` | Moves the config and data root. Every test uses a temp one. |
 | `ACPILOT_PROFILE` | Selects the profile by name or directory. `--profile` wins over it. |
 | `ACPILOT_API_URL` | The daemon endpoint: an `http://…` URL or a unix-socket path. |
-| `ACPILOT_TOKEN` | The bearer token for a TCP listener; the token file is the default. |
+| `ACPILOT_TOKEN` | The bootstrap bearer token for a TCP listener; refused after the first account exists. |
+| `ACPILOT_LSP_INDEX` | The language-server catalog URL; the published default is used when unset. |
+| `ACPILOT_LSP_INDEX_PUBKEY` | The catalog's 64-hex ed25519 public key; required by `acpilot lsp`. |
 | `ACPILOT_DAEMON` | The `acpilotd` to spawn when it is not beside the client. |
 | `ACPILOT_TAB_WIDTH` | An example preference override; `ACPILOT_PREFERENCES__TAB_WIDTH` is the namespaced spelling. |
 | `ACPILOT_SSH`, `ACPILOT_WSL` | The transport programs, when they are not on `PATH`. |

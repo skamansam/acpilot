@@ -95,16 +95,16 @@ WebSocket bridge. The completions in a tab therefore match the TUI's, including
 for a server running on the SSH host.
 </Aside>
 
-## Auth
-
-The unix socket needs no token. Its access control is the filesystem. Anything on
-TCP, loopback included, needs a bearer token: a random value in a `0600` file
-beside the socket, compared in constant time. There is no user database in v0.1,
-so there is no password hash to store. ADR 0013 decides the local-account and
-OIDC model for when login lands; until then the file is the only place the
-secret lives. TLS
-termination is the deployment's job. The daemon does not pretend to be a web
-server fleet.
+## AuthThe unix socket needs no token. Its access control is the filesystem. Anything on
+TCP, loopback included, needs a credential. Until `acpilot auth init` creates the
+local account, that is the bootstrap token: a random value in a `0600` file beside
+the socket, compared in constant time. Afterward it is the JWT from
+`POST /v1/auth/login` (or `acpilot auth login`), and the static token is refused.
+The account store is `users.sqlite` in the data root; passwords are Argon2id and
+only the hash is stored. OIDC and a browser login page are not built yet, so the
+page's token field is still how a browser authenticates — paste the JWT, or stay
+in bootstrap. TLS termination is the deployment's job. The daemon does not pretend
+to be a web server fleet.
 
 The page itself is served with a strict policy. `default-src 'none'` applies.
 Inline script and style only, because the bundle is one file. `connect-src

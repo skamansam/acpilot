@@ -38,8 +38,10 @@ network. Therefore:
 
 - **Trust-pinned.** Hashed on first use, prompt once, re-prompt if the binary
   changes.
-- **No silent downloads.** Detection is the default. A managed install is explicit,
-  checksummed and pinned before use; it is the D12 direction, not built yet.
+- **No silent downloads.** Detection is the default. A managed install is an
+  explicit `acpilot lsp install`, verified against a signed catalog and the
+  archive's checksum before it is unpacked (ADR 0014); no timer or startup path
+  fetches one.
 - **Restricted to the workspace root**, like agents.
 - **Timeouts everywhere**, plus `$/cancelRequest`, plus a crash-loop cap. A
   wedged server costs a status-line warning, not a frozen editor.
@@ -111,6 +113,16 @@ buffer unchanged — rather than running a binary that changed under the name
 somebody approved. The refusal is local: a remote server's bytes are the host's to
 hash (P7-11). A server nobody has pinned still starts; requiring an answer before
 first use is the part of P7-12 still open.
+
+The catalog installer is built. `acpilot lsp search|install|list|remove` fetches
+`index-v1.json`, checks the detached signature with `ACPILOT_LSP_INDEX_PUBKEY`,
+verifies the archive's size and sha256, unpacks only regular files, and records the
+executable's digest under `<data>/lsp/<id>/<version>/<target>/`. The daemon resolves
+that install ahead of `PATH`. What is not built yet is the publication: no signed
+`index-v1.json` is served, so the command needs a mirror and a key until the first
+catalog ships. The install record is also not yet enforced as the per-language pin
+P7-12 asks for; a pinned program is still approved through
+`POST /v1/lsp/servers/{language}/trust`.
 
 The rest of the engine arrives in the language intelligence phase (P7). The
 design phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16

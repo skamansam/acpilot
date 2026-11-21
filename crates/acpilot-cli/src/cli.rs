@@ -107,6 +107,22 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Create the local account a TCP daemon requires (ADR 0013).
+    ///
+    /// This is a filesystem operation, not a daemon call: the first account can
+    /// only be created on the machine the daemon runs on, and requiring the daemon
+    /// to be up would make a first install depend on the thing it is securing.
+    Auth {
+        /// Which auth verb.
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Search, install, and remove managed language servers (ADR 0014).
+    Lsp {
+        /// Which lsp verb.
+        #[command(subcommand)]
+        command: LspCommand,
+    },
     /// Explain which settings file a value came from.
     Config {
         /// Which config verb.
@@ -395,6 +411,64 @@ pub enum RecipesCommand {
         /// Bearer token for a daemon on a TCP endpoint.
         #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
         token: Option<String>,
+    },
+}
+
+/// Everything under `acpilot auth`.
+///
+/// Passwords are read from stdin, never from an argument: a password in `ps` or a
+/// shell history is a password disclosed before it is used.
+#[derive(Debug, Subcommand)]
+pub enum AuthCommand {
+    /// Create the first account. Refused once one exists.
+    Init {
+        /// Account name: letters, digits, `-`, `_`, `.` and `@`.
+        name: String,
+    },
+    /// Change the account's password. Reads the current one, then the new one.
+    Passwd {
+        /// Account name.
+        name: String,
+    },
+    /// Check a name and password and print a session for it.
+    ///
+    /// The access token is what a TCP client sends; the refresh token is the one
+    /// `/v1/auth/refresh` rotates. Both are printed because this command is the
+    /// local way to obtain them without a running daemon.
+    Login {
+        /// Account name.
+        name: String,
+    },
+    /// Say whether the daemon has an account, and whether bootstrap mode is over.
+    Status,
+}
+
+/// Everything under `acpilot lsp`.
+#[derive(Debug, Subcommand)]
+pub enum LspCommand {
+    /// List catalog entries, optionally filtered by id, name or language.
+    Search {
+        /// Text to match; absent lists everything.
+        query: Option<String>,
+    },
+    /// Install one server version for this machine.
+    ///
+    /// The catalog's signature and the archive's checksum are checked before
+    /// anything is unpacked. The install is the approval; no daemon restart or
+    /// second prompt follows it.
+    Install {
+        /// Catalog id, as `search` prints it.
+        id: String,
+        /// Version to install; the newest published when absent.
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+    },
+    /// List the servers this machine has installed from the catalog.
+    List,
+    /// Remove every installed version of one server.
+    Remove {
+        /// Catalog id.
+        id: String,
     },
 }
 
@@ -830,6 +904,8 @@ pub fn run(cli: Cli) -> u8 {
         Some(Command::Keys { command }) => run_keys(command, profile.as_deref()),
         Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),
+        Some(Command::Auth { command }) => run_auth(command),
+        Some(Command::Lsp { command }) => crate::lsp::run(command),
         Some(Command::Config { command }) => run_config(command, profile.as_deref()),
         Some(Command::Profile { command }) => run_profile(command),
         Some(Command::Workspace { command }) => run_workspace(command, profile.as_deref()),
@@ -3168,6 +3244,107 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
 /// Printing the path rather than the token keeps it off a screen that is being
 /// shared, and the file is `0600`: the person who needs it can `cat` it, and the
 /// person who does not learn nothing from the command's output.
+/// Run one `acpilot auth` verb against the local account store.
+///
+/// The store is the data root's `users.sqlite`, which is the same file the daemon
+/// reads on every TCP request: a change here takes effect on the next request with
+/// no restart, exactly like a rotated token.
+fn run_auth(command: AuthCommand) -> u8 {
+    let accounts = acpilotd::Accounts::default();
+    match command {
+        AuthCommand::Init { name } => {
+            let password = match crate::secret::read_value(std::io::stdin().lock()) {
+                Ok(password) => password,
+                Err(error) => {
+                    eprintln!("acpilot auth init: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            match accounts.create_owner(&name, &password) {
+                Ok(user) => {
+                    println!("created account `{}`", user.name);
+                    println!(
+                        "the static daemon token is no longer accepted; log in with `acpilot auth login {}`",
+                        user.name
+                    );
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot auth init: {error}");
+                    exit::FAILURE
+                }
+            }
+        }
+        AuthCommand::Passwd { name } => {
+            let mut text = String::new();
+            use std::io::Read as _;
+            if let Err(error) = std::io::stdin().read_to_string(&mut text) {
+                eprintln!("acpilot auth passwd: cannot read stdin: {error}");
+                return exit::FAILURE;
+            }
+            let mut lines = text.lines();
+            let (Some(current), Some(new)) = (lines.next(), lines.next()) else {
+                eprintln!(
+                    "acpilot auth passwd: expected the current password on the first line and the \
+                     new one on the second"
+                );
+                return exit::USAGE;
+            };
+            match accounts.change_password(&name, current, new) {
+                Ok(()) => {
+                    println!("changed the password for `{name}`; existing sessions are revoked");
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot auth passwd: {error}");
+                    exit::FAILURE
+                }
+            }
+        }
+        AuthCommand::Login { name } => {
+            let password = match crate::secret::read_value(std::io::stdin().lock()) {
+                Ok(password) => password,
+                Err(error) => {
+                    eprintln!("acpilot auth login: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            match accounts
+                .authenticate(&name, &password)
+                .and_then(|user| accounts.issue(&user))
+            {
+                Ok(session) => {
+                    println!("Token        {}", session.access_token);
+                    println!("Refresh      {}", session.refresh_token);
+                    println!("Expires in   {}s", session.expires_in);
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot auth login: {error}");
+                    exit::FAILURE
+                }
+            }
+        }
+        AuthCommand::Status => match accounts.status() {
+            Ok(status) if status.accounts => {
+                println!(
+                    "{} account(s); bootstrap mode is over and the static token is refused",
+                    status.users
+                );
+                exit::SUCCESS
+            }
+            Ok(_) => {
+                println!("no account yet; the static token is accepted until `acpilot auth init`");
+                exit::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("acpilot auth status: {error}");
+                exit::FAILURE
+            }
+        },
+    }
+}
+
 fn run_token(command: TokenCommand) -> u8 {
     match command {
         TokenCommand::Rotate => {

@@ -12,6 +12,8 @@ Commands:
   ext        Install, verify, and approve extensions
   secret     Store, list, and remove credentials in the OS keyring
   token      Show and rotate the token a TCP daemon requires
+  auth       Create the local account a TCP daemon requires (ADR 0013)
+  lsp        Search, install, and remove managed language servers (ADR 0014)
   config     Explain which settings file a value came from
   profile    Create, inspect, and remove profiles
   workspace  Open, list, and remove workspaces

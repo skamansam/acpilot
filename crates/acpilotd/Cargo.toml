@@ -80,6 +80,12 @@ acpilot-git = { workspace = true }
 # records who may drive this machine, and a file that records it must not also
 # hand out the credential. The workspace already pins the crate for exactly this.
 argon2 = { workspace = true }
+# The account store is SQLite, in the data root rather than a profile: one set of
+# accounts per person, not per project (ADR 0013).
+rusqlite = { workspace = true }
+# Access tokens are Ed25519-signed, the same primitive the release and extension
+# indexes already use. A symmetric key would make every verifier a signer.
+ed25519-dalek = { workspace = true }
 # The pairing code and the salt are both drawn from the system source, the same one
 # `acpilot-host` uses for the daemon token; a code from a weaker source is a code
 # that can be guessed while it is being typed.

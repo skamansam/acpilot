@@ -138,6 +138,81 @@ fn built_in_entry(language: &str) -> Option<Entry> {
         .map(|(id, program, args)| Entry::built_in(id, program, args))
 }
 
+/// A server `acpilot lsp install` placed under `<data>/lsp`, when it answers
+/// `language`.
+///
+/// Managed installs outrank `PATH` (ADR 0014): a person who asked for a specific
+/// checked archive meant that binary, and a different program under the same name
+/// on `PATH` would silently replace it. The executable is an absolute path, so the
+/// resolver does not search for it at all.
+///
+/// The newest version directory wins. Version strings are the project's, so this is
+/// a lexicographic choice within one id; it is stable and needs no version parser,
+/// and a catalog that publishes a version out of order is a review bug.
+fn managed_entry(language: &str) -> Option<Entry> {
+    let root = acpilot_profile::data_dir().join("lsp");
+    let mut newest: Option<(String, Entry)> = None;
+    let servers = std::fs::read_dir(&root).ok()?;
+    for server in servers.flatten() {
+        let versions = std::fs::read_dir(server.path()).ok();
+        for version in versions.into_iter().flatten().flatten() {
+            let targets = std::fs::read_dir(version.path()).ok();
+            for target in targets.into_iter().flatten().flatten() {
+                let manifest = target.path().join("install.json");
+                let Ok(text) = std::fs::read_to_string(&manifest) else {
+                    continue;
+                };
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let answers = record
+                    .get("languages")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|languages| {
+                        languages
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .any(|named| named == language)
+                    });
+                if !answers {
+                    continue;
+                }
+                let Some(program) = record.get("executable").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(version) = record.get("version").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let args = record
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|args| {
+                        args.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let entry = Entry {
+                    language: language.to_owned(),
+                    program: program.to_owned(),
+                    args,
+                    extension: None,
+                };
+                if newest
+                    .as_ref()
+                    .is_none_or(|(known, _)| version > known.as_str())
+                {
+                    newest = Some((version.to_owned(), entry));
+                }
+            }
+        }
+    }
+    newest.map(|(_, entry)| entry)
+}
+
 /// What a server answered, and the encoding its columns are counted in.
 #[derive(Debug)]
 pub struct Answer {
@@ -339,7 +414,7 @@ impl Servers {
             return Some(entry.clone());
         }
         drop(activated);
-        built_in_entry(language)
+        managed_entry(language).or_else(|| built_in_entry(language))
     }
 
     /// Ask the server for `language` where the name at `offset` in `text` is used.
@@ -659,6 +734,7 @@ impl Servers {
                     .iter()
                     .find(|entry| entry.language == *language)
                     .cloned()
+                    .or_else(|| managed_entry(language))
                     .unwrap_or_else(|| Entry::built_in(language, program, args))
             })
             .map(|entry| state_of(&sessions, now, entry))

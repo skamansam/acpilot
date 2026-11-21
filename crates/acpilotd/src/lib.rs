@@ -43,7 +43,8 @@ use utoipa::OpenApi as _;
 
 // The ACP bridge: this daemon answering as an agent for a driver that attached
 // over stdio or over HTTP with a paired token (P4.5-10).
-mod auth;
+mod accounts;
+pub mod auth;
 // The remote half of that bridge: JSON-RPC over HTTP, the driver's event stream
 // and the cockpit routes that pair and revoke drivers.
 pub mod acp_http;
@@ -97,6 +98,7 @@ mod trust;
 mod usage;
 mod workspaces;
 
+pub use accounts::Accounts;
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
 // The language server table is the daemon's, not a client's: `doctor` reports what
@@ -2680,6 +2682,7 @@ pub fn router_with(state: AppState) -> Router {
     let cors = state.cors();
     let app = Router::new()
         .route("/v1/health", get(health))
+        .merge(auth::routes())
         .route("/v1/agents", get(agents))
         .merge(trust::routes())
         .route("/v1/permissions", get(permissions))

@@ -3,7 +3,7 @@ title: Recipes
 description: One model, one prompt, one budget — as a file you can diff, review, and share.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-3)
+<span class="pill pill--boarding">boarding</span> &nbsp; Models phase (P4.5-3, P4.5-7)
 
 A **recipe** is a tuned configuration for one model of one provider. It is TOML in
 the profile, and you can review it in a diff. Sharing one means sending a file.
@@ -38,7 +38,7 @@ stop = []
 window = 32768
 reserve_output = 1500
 strategy = "truncate_oldest"
-max_corpus_bytes = 262144
+max_corpus_bytes = 65536
 
 [tools]
 read_files = true
@@ -70,7 +70,7 @@ notes = "Good at extraction, bad at arithmetic. Do not promote without a probe."
 | `context.window` | integer | Must not exceed the model's reported window |
 | `context.reserve_output` | integer | Held back so the answer cannot be truncated by its own budget |
 | `context.strategy` | enum | `truncate_oldest`, `summarize`, `refuse` |
-| `context.max_corpus_bytes` | integer | Ceiling before tokenisation |
+| `context.max_corpus_bytes` | integer | Ceiling before tokenisation. Four bytes count as one token, and the ceiling has to fit the window beside the reserved output, the prompt and the tool schemas |
 | `tools.*` | bool | A **ceiling**, not a grant. The broker still answers each call |
 | `tools.max_steps` | integer | `1`–`50`. The loop stops here and says so |
 | `notes` | string? | What it is good at, and what it is bad at |
@@ -101,6 +101,72 @@ applies to the next run. A syntax error keeps the last good version and raises a
 notice in every attached UI. It does **not** fail a turn that is already
 streaming. An editor that loses your work because a file was half-written while
 you saved it is a bad editor.
+</Aside>
+
+## What a run's prompt is made of
+
+Before a request leaves, the window is divided into five parts: the system prompt, the
+corpus, the conversation, the tool schemas and the reserved output. A prompt that does
+not fit names the size of every part, in tokens.
+
+The corpus comes from the run's selectors. Each selector is a glob, a file ceiling and a
+byte ceiling per file.
+
+- The workspace's `.gitignore` applies. A corpus cannot read what the file tree hides.
+- The same workspace always produces the same order: paths sorted, each file once.
+- A file is cut at `max_bytes` on a character boundary. A file that is not UTF-8 is
+  skipped, because it is not text a model can read.
+- The context ceiling counts the file headers too, not only the file text.
+
+Every cut is a notice with its numbers, so a run can say what it left out.
+
+The strategy decides what happens when the conversation does not fit:
+
+| `strategy` | What happens |
+| --- | --- |
+| `truncate_oldest` | Drops the oldest messages. A tool result never outlives the call it answers |
+| `summarize` | Asks for a summary of the oldest messages. Assembly sends nothing, so the caller makes that request and assembles again |
+| `refuse` | Fails the run and names how many tokens are over |
+
+A window that cannot hold the system prompt, the corpus, the tools and the reserved
+output fails under every strategy, because none of them shrinks those parts.
+
+Token counts are estimates of four bytes per token until the server reports `usage`. A
+hint of 25 percent either way is the plan, and a run record says whether a count was
+measured or estimated.
+
+## Run records
+
+Every run appends one line to the profile's `runs.jsonl`. The line is never rewritten.
+
+The line holds the request and the answer:
+
+- the prompt, and its `sha256:` digest;
+- the selectors, and the files they resolved to with their sizes;
+- the budget, and the sampling parameters actually sent;
+- timings, first token, usage, stop reason and every warning.
+
+A page of runs is newest first. The cursor is a run id, not an offset, because a log
+only grows: an offset would repeat a line when something was appended between two
+pages. A cursor that names another recipe's run is refused.
+
+A replay re-sends the stored prompt and selectors as a new run with its own record,
+so it does not carry the old idempotency key. The corpus is read from the workspace
+again: the record keeps each file's path and size, not its bytes. A replay is
+byte-identical while the tree and the recipe are unchanged, and the record it writes
+says what it actually sent.
+
+A partial last line means a crash during a write. Reading stops there and keeps what
+came before. A broken line that is not the last one names its number, and a newer
+`schema_version` is refused rather than half-read.
+
+<Aside type="note" title="Status">
+The routes are in place: `POST /v1/recipes/{id}/runs` writes a record and streams the
+run, `GET /v1/recipes/{id}/runs` pages them, `GET /v1/recipes/{id}/runs/{run}` reads one
+back, and `POST /v1/recipes/{id}/runs/{run}/replay` re-sends it. A recipe is a real file
+the API reads and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5), and
+`acpilot recipes run <id> "…"` prints a run's answer on stdout and its thinking
+on stderr, so a terminal shows a reasoning run that spent its budget thinking.
 </Aside>
 
 ## Why files and not a database

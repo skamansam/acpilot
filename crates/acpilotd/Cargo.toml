@@ -35,6 +35,9 @@ acpilot-host = { workspace = true }
 # consumer to parse the wrong one.
 acpilot-profile = { workspace = true }
 acpilot-proto = { workspace = true }
+# Skills are discovered and validated by the same parser the model agent uses, so
+# `GET /v1/skills` cannot accept a draft the agent would later refuse.
+acpilot-skills = { workspace = true }
 # The record a restart reads: sessions and their events outlive the process that
 # streamed them, and a conversation a client asks about by id has to be
 # answerable after the daemon that ran it is gone.
@@ -47,6 +50,11 @@ acpilot-stats = { workspace = true }
 # mention is the parse tree, and it has to run where the text is. The grammars are the
 # ones the editor links, so one crate answers both surfaces.
 acpilot-text = { workspace = true, optional = true }
+# The ACP bridge is this daemon answering as an agent (P4.5-10): a driver speaks
+# ACP to `acpilotd --acp`, and the protocol's own types are what it reads and
+# writes. The same crate the client engine uses, so one schema describes both
+# seats rather than two transcriptions drifting apart.
+agent-client-protocol = { workspace = true }
 # References come from a language server where one is installed: scope is the
 # server's answer rather than the parse tree's guess.
 acpilot-lsp = { workspace = true }
@@ -60,10 +68,22 @@ acpilot-web = { workspace = true }
 # The web page is the third surface drawn from the same theme tokens: the daemon
 # resolves the palette once at startup rather than serving a page with its own.
 acpilot-extensions = { workspace = true }
+# An index install downloads an archive from the URL the signed listing names.
+# The client is the daemon's because a window asks the daemon to install, and the
+# daemon is the process that can verify the listing before it fetches anything.
+reqwest = { workspace = true }
 # The tree's letters are git's answer, asked once per listing on the host where
 # the files are. Shelling out keeps the daemon agreeing with the command line
 # about what is staged, and the crate's absence is a tree without letters.
 acpilot-git = { workspace = true }
+# A remote driver's token is kept as an Argon2id hash in a `0600` ledger: the file
+# records who may drive this machine, and a file that records it must not also
+# hand out the credential. The workspace already pins the crate for exactly this.
+argon2 = { workspace = true }
+# The pairing code and the salt are both drawn from the system source, the same one
+# `acpilot-host` uses for the daemon token; a code from a weaker source is a code
+# that can be guessed while it is being typed.
+getrandom = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 # The daemon's settings are a cascade rather than a flag per file: a user-level
@@ -74,6 +94,7 @@ figment = { workspace = true, features = ["toml"] }
 # `futures` is where the workspace already gets it.
 futures = { workspace = true }
 jiff = { workspace = true }
+uuid = { workspace = true }
 # `.gitignore` matching for the file tree. The daemon answers the listing, so the
 # patterns are read where the ignore files are rather than guessed at by a client
 # that never saw them — which is also what keeps a remote workspace's tree honest.
@@ -107,9 +128,6 @@ utoipa = { workspace = true }
 vt100 = { workspace = true }
 
 [dev-dependencies]
-# A pane over an agent's terminal is tested by asking the agent side for one, so
-# this crate needs the protocol's request type — tests only: no route speaks ACP.
-agent-client-protocol = { workspace = true }
 # The socket test talks to the daemon the way a client does, over the transport a
 # client uses, rather than through `oneshot` on the router.
 acpilot-client = { workspace = true }
@@ -120,7 +138,6 @@ tokio-tungstenite = { workspace = true }
 # reviewable diff rather than a string assertion somebody has to remember.
 insta = { workspace = true }
 http-body-util = { workspace = true }
-reqwest = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 

@@ -24,6 +24,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::doctor;
 use crate::export;
 use crate::ext::{self, Paths};
+use crate::registry;
 use crate::secret;
 
 /// `acpilot` command line.
@@ -58,6 +59,36 @@ pub struct Cli {
 pub enum Command {
     /// Print version and protocol information.
     Version,
+    /// Say how this copy was installed, and replace it when it is yours to replace.
+    ///
+    /// The answer is the installation's, not this build's: `install.json` beside the
+    /// binary says `apt`, `brew`, `cargo`, `tarball`, … (ADR 0010), and only the
+    /// methods nobody owns are replaced here. A package-managed copy prints the command
+    /// that upgrades it instead, because a binary written over files the package
+    /// manager owns is a file that manager puts back on its next upgrade.
+    ///
+    /// An installation nobody owns is updated from the latest release: the asset for
+    /// this platform is downloaded, its sha256 is compared with the one the release
+    /// published, and only then are the programs written beside the old ones and
+    /// renamed over them, so a failure halfway leaves a program that still runs.
+    Update {
+        /// A new `acpilot` binary to put in place of this one, instead of downloading a
+        /// release. For a machine that cannot reach GitHub, or a build made here.
+        ///
+        /// Written beside the running binary and renamed over it, so a failure halfway
+        /// is not a half-written program. Refused for a package-managed copy.
+        #[arg(long, value_name = "PATH", conflicts_with = "version")]
+        from: Option<PathBuf>,
+        /// The release to install, for example `v0.2.0` or `0.2.0`.
+        ///
+        /// The default is the newest published release. A version already installed
+        /// is reported and nothing is downloaded.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
+        /// Only say how this copy was installed; download and replace nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Install, verify, and approve extensions.
     Ext {
         /// Which ext verb.
@@ -93,6 +124,12 @@ pub enum Command {
         /// Which workspace verb.
         #[command(subcommand)]
         command: WorkspaceCommand,
+    },
+    /// Print the key table in force, with the layers extensions contribute.
+    Keys {
+        /// Which keys verb.
+        #[command(subcommand)]
+        command: KeysCommand,
     },
     /// Open the terminal UI against a running daemon, or run one here.
     ///
@@ -222,6 +259,33 @@ pub enum Command {
         #[command(subcommand)]
         command: ModelsCommand,
     },
+    /// List and remove the agents a profile declares.
+    Agents {
+        /// Which agents verb.
+        #[command(subcommand)]
+        command: AgentsCommand,
+    },
+    /// Pair a remote ACP driver, inspect the bridge, and revoke a driver.
+    ///
+    /// Pairing is the human act the remote bridge requires: the code is shown
+    /// here, typed into the driver, single-use and short-lived. The daemon's
+    /// HTTP routes are the contract; these verbs are the terminal's way to them.
+    Acp {
+        /// Which acp verb.
+        #[command(subcommand)]
+        command: AcpCommand,
+    },
+    /// Run a recipe's prompt and stream the answer.
+    ///
+    /// This is the terminal's window onto `POST /v1/recipes/{id}/runs`: the same
+    /// stream the model lab draws, printed as it arrives. It needs a daemon, and
+    /// starts one when none is running, because a run is the daemon's work and a
+    /// second model client here would be a second answer to provider resolution.
+    Recipes {
+        /// Which recipes verb.
+        #[command(subcommand)]
+        command: RecipesCommand,
+    },
 }
 
 /// Everything under `acpilot models`.
@@ -235,6 +299,102 @@ pub enum ModelsCommand {
     Probe {
         /// Provider id from the profile's `providers.toml`.
         id: Option<String>,
+    },
+}
+
+/// The daemon endpoint flags shared by the ACP verbs.
+#[derive(Debug, clap::Args)]
+pub struct AcpEndpoint {
+    /// Endpoint of the daemon: a URL, or a unix socket path.
+    #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+    api_url: Option<String>,
+    /// Bearer token for a daemon on a TCP endpoint.
+    #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+    token: Option<String>,
+}
+
+/// Everything under `acpilot acp`.
+#[derive(Debug, Subcommand)]
+pub enum AcpCommand {
+    /// Issue a one-time code for a driver to claim.
+    Pair {
+        /// Let the driver answer permission requests for turns it starts.
+        #[arg(long)]
+        grant_answer_permissions: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// Print whether the bridge is listening and what it bound.
+    Bridge {
+        /// Print the summary as one JSON object.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// List every driver on record, including revoked ones.
+    Drivers {
+        /// Print the rows as one JSON array.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+    /// Revoke a driver's token; its next request is refused.
+    Revoke {
+        /// Driver id, as `acpilot acp drivers` prints it.
+        id: String,
+        #[command(flatten)]
+        endpoint: AcpEndpoint,
+    },
+}
+
+/// Everything under `acpilot agents`.
+#[derive(Debug, Subcommand)]
+pub enum AgentsCommand {
+    /// Remove the `agents.toml` entry promotion wrote for a recipe.
+    ///
+    /// This is the inverse of `POST /v1/recipes/{id}/promote`: the block leaves,
+    /// and when it was the only agent the file is removed rather than left as an
+    /// empty manifest the loader would refuse. An entry a person wrote by hand is
+    /// refused, because promotion never owned it.
+    Rm {
+        /// Agent id, as the manifest spells it.
+        id: String,
+    },
+}
+
+/// Everything under `acpilot recipes`.
+#[derive(Debug, Subcommand)]
+pub enum RecipesCommand {
+    /// Run a recipe's prompt and print the model's answer as it streams.
+    ///
+    /// The daemon resolves the recipe and its provider, assembles the corpus and
+    /// appends the record; this verb only watches the frames. The answer is
+    /// stdout and a reasoning model's thinking is stderr, so a redirect keeps the
+    /// answer alone while a terminal shows both. A failed run prints the daemon's
+    /// reason on stderr and exits non-zero, so a script can tell an answer from a
+    /// refusal.
+    Run {
+        /// Recipe id, as it appears under the profile's `recipes/`.
+        id: String,
+        /// The user message.
+        prompt: String,
+        /// Workspace root the recipe's corpus selectors resolve against.
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
+        /// Print the finished run's record as one JSON object instead of the text.
+        ///
+        /// Deltas are suppressed: a script that pipes this to `jq` wants the
+        /// summary, and a summary mixed with answer text is neither.
+        #[arg(long)]
+        json: bool,
+        /// Endpoint of the daemon: a URL, or a unix socket path.
+        #[arg(long, env = "ACPILOT_API_URL", value_name = "URL|PATH")]
+        api_url: Option<String>,
+        /// Bearer token for a daemon on a TCP endpoint.
+        #[arg(long, env = "ACPILOT_TOKEN", value_name = "TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -431,13 +591,97 @@ pub enum SecretCommand {
 /// Everything under `acpilot ext`.
 #[derive(Debug, Subcommand)]
 pub enum ExtCommand {
-    /// Install an extension from a local directory.
+    /// Install an extension from the signed index, or from a local directory.
     Add {
-        /// Extension directory containing `extension.toml`.
-        #[arg(long, value_name = "DIR")]
-        from: PathBuf,
+        /// Extension id from the index, for example `acpilot.night-flight`.
+        id: Option<String>,
+        /// Link a directory checkout instead of copying it, so an edit applies
+        /// without adding it again.
+        #[arg(long, value_name = "DIR", conflicts_with = "id")]
+        from: Option<PathBuf>,
+        /// Version to install. The newest the index lists when absent.
+        #[arg(long, value_name = "VERSION", requires = "id")]
+        version: Option<String>,
+        /// A different index: an https URL or a file. Defaults to the one this
+        /// build ships.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        /// Activate it in this profile once it is installed, so installing and
+        /// approving are one command.
+        #[arg(long, value_name = "PROFILE")]
+        activate: Option<String>,
+        /// Print the installed version as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// List the extensions a signed index offers.
+    Search {
+        /// Case-insensitive text matched against the id and the publisher.
+        query: Option<String>,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        /// Print the listings as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Install the newest listed version of what is already installed.
+    Update {
+        /// Only this extension. Every installed one when absent.
+        id: Option<String>,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        /// Print what changed as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Remove every installed version of an extension.
+    Remove {
+        /// Extension id, `publisher.name`.
+        id: String,
+        /// Print what was removed as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// List installed extensions, and whether the store would load each one.
+    List {
+        /// Print the rows as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
+    },
+    /// Show what the index offers for one extension beside what is installed.
+    Show {
+        /// Extension id, `publisher.name`.
+        id: String,
+        /// A different index: an https URL or a file.
+        #[arg(long, value_name = "URL|PATH")]
+        index: Option<String>,
+        /// Print what the index offers beside what is installed as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        store: StoreArgs,
+        #[command(flatten)]
+        config: ConfigArgs,
     },
     /// Import a TextMate `.tmTheme` as a theme extension and install it.
     ImportTheme {
@@ -453,6 +697,9 @@ pub enum ExtCommand {
         /// Activate it in this profile after installing.
         #[arg(long, value_name = "PROFILE")]
         activate: Option<String>,
+        /// Print the result as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -463,6 +710,9 @@ pub enum ExtCommand {
         /// Verify everything. Required: a partial verify is not a safety check.
         #[arg(long)]
         all: bool,
+        /// Print the verdicts as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
     },
@@ -471,6 +721,9 @@ pub enum ExtCommand {
         /// Report what would be removed without deleting anything.
         #[arg(long)]
         dry_run: bool,
+        /// Print what would be or was removed as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         store: StoreArgs,
         #[command(flatten)]
@@ -480,6 +733,9 @@ pub enum ExtCommand {
     Activate {
         /// Extension id, `publisher.name`.
         id: String,
+        /// Print what the approval list now says as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
@@ -489,6 +745,9 @@ pub enum ExtCommand {
     Deactivate {
         /// Extension id, `publisher.name`.
         id: String,
+        /// Print what the approval list now says as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
@@ -498,10 +757,21 @@ pub enum ExtCommand {
     Why {
         /// Preset or agent id, for example `rust-analyzer`.
         id: String,
+        /// Print the chain as one JSON document.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         config: ConfigArgs,
         #[command(flatten)]
         store: StoreArgs,
+    },
+    /// List every theme a profile can draw with, inheritance resolved.
+    Themes {
+        /// Print the themes as one JSON document.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        config: ConfigArgs,
     },
 }
 
@@ -532,6 +802,16 @@ pub struct SecretProfileArgs {
     pub config: ConfigArgs,
 }
 
+/// Keys verbs.
+#[derive(Debug, Subcommand)]
+pub enum KeysCommand {
+    /// Build the table `acpilot tui` would use and list it.
+    ///
+    /// A pack's layer that takes a key already in use is refused with both verbs
+    /// named and the pack that wrote it, rather than resolved by going unnoticed.
+    Check,
+}
+
 /// Run a parsed command and return the process exit code.
 pub fn run(cli: Cli) -> u8 {
     let Cli { profile, command } = cli;
@@ -541,7 +821,13 @@ pub fn run(cli: Cli) -> u8 {
             println!("api      {API_PREFIX}");
             exit::SUCCESS
         }
+        Some(Command::Update {
+            from,
+            version,
+            check,
+        }) => crate::update::run(from, version, check),
         Some(Command::Ext { command }) => run_ext(command, profile.as_deref()),
+        Some(Command::Keys { command }) => run_keys(command, profile.as_deref()),
         Some(Command::Secret { command }) => run_secret(command, profile.as_deref()),
         Some(Command::Token { command }) => run_token(command),
         Some(Command::Config { command }) => run_config(command, profile.as_deref()),
@@ -577,6 +863,9 @@ pub fn run(cli: Cli) -> u8 {
             mouse: !no_mouse,
         }),
         Some(Command::Models { command }) => run_models(command, profile.as_deref()),
+        Some(Command::Agents { command }) => run_agents(command, profile.as_deref()),
+        Some(Command::Acp { command }) => run_acp(command, profile.as_deref()),
+        Some(Command::Recipes { command }) => run_recipes(command, profile.as_deref()),
         Some(Command::Doctor {
             path,
             api_url,
@@ -1411,6 +1700,316 @@ fn run_config(command: ConfigCommand, profile: Option<&str>) -> u8 {
     }
 }
 
+/// `acpilot agents rm`.
+fn run_agents(command: AgentsCommand, profile: Option<&str>) -> u8 {
+    match command {
+        AgentsCommand::Rm { id } => {
+            let profile = match models_profile(profile) {
+                Ok(profile) => profile,
+                Err(message) => {
+                    eprintln!("acpilot agents rm: {message}");
+                    return exit::NOT_FOUND;
+                }
+            };
+            let path = acpilot_agent::promote::path_in(profile.root());
+            match acpilot_agent::promote::demote(&path, &id) {
+                Ok(()) => {
+                    println!("removed {id} from {}", path.display());
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    // Nothing to remove is a different answer from a refusal, and
+                    // a script should be able to tell them apart.
+                    let code = match &error {
+                        acpilot_agent::promote::PromoteError::Missing { .. } => exit::NOT_FOUND,
+                        _ => exit::FAILURE,
+                    };
+                    eprintln!("acpilot agents rm: {error}");
+                    code
+                }
+            }
+        }
+    }
+}
+
+/// `acpilot acp ...`: pairing and revocation through the daemon's routes.
+fn run_acp(command: AcpCommand, profile: Option<&str>) -> u8 {
+    enum Action {
+        Pair(bool),
+        Bridge(bool),
+        Drivers(bool),
+        Revoke(String),
+    }
+
+    let (endpoint, action) = match command {
+        AcpCommand::Pair {
+            grant_answer_permissions,
+            endpoint,
+        } => (endpoint, Action::Pair(grant_answer_permissions)),
+        AcpCommand::Bridge { json, endpoint } => (endpoint, Action::Bridge(json)),
+        AcpCommand::Drivers { json, endpoint } => (endpoint, Action::Drivers(json)),
+        AcpCommand::Revoke { id, endpoint } => (endpoint, Action::Revoke(id)),
+    };
+
+    let mut daemon_args = Vec::new();
+    if let Some(name) = profile {
+        match acpilot_profile::Profile::named(name) {
+            Ok(profile) => {
+                daemon_args.push("--profile".to_owned());
+                daemon_args.push(profile.root().display().to_string());
+            }
+            Err(error) => {
+                eprintln!("acpilot acp: {error}");
+                return exit::NOT_FOUND;
+            }
+        }
+    }
+    let options = acpilot_client::daemon::Options {
+        endpoint: endpoint.api_url,
+        no_spawn: false,
+        token: endpoint.token.or_else(acpilot_host::token::local),
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot acp: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot acp: {error}");
+            return exit::FAILURE;
+        }
+    };
+
+    runtime.block_on(async move {
+        let client = running.client;
+        match action {
+            Action::Pair(grant) => match client.pair_driver(grant).await {
+                Ok(code) => {
+                    println!("code {}", code.code);
+                    println!("expires {}", code.expires_at);
+                    if let Some(url) = code.handshake_url {
+                        println!("connect {url}");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp pair: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Bridge(json) => match client.acp_bridge().await {
+                Ok(bridge) => {
+                    if json {
+                        match serde_json::to_string_pretty(&bridge) {
+                            Ok(text) => println!("{text}"),
+                            Err(error) => {
+                                eprintln!("acpilot acp bridge: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else if bridge.enabled {
+                        println!("enabled");
+                        if let Some(bind) = bridge.bind {
+                            println!("bind {bind}");
+                        }
+                        if let Some(url) = bridge.public_url {
+                            println!("public {url}");
+                        }
+                        println!("token required {}", bridge.require_token);
+                        println!(
+                            "drivers {} connected · {} known",
+                            bridge.connected, bridge.known_drivers
+                        );
+                    } else {
+                        println!("off");
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp bridge: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Drivers(json) => match client.acp_drivers().await {
+                Ok(drivers) => {
+                    if json {
+                        match serde_json::to_string_pretty(&drivers) {
+                            Ok(text) => println!("{text}"),
+                            Err(error) => {
+                                eprintln!("acpilot acp drivers: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else if drivers.is_empty() {
+                        println!("no drivers paired");
+                    } else {
+                        for driver in drivers {
+                            println!(
+                                "{}\t{}\t{:?}\t{} sessions · {} turns\t{}",
+                                driver.id,
+                                driver.name,
+                                driver.status,
+                                driver.sessions,
+                                driver.prompt_turns,
+                                driver.peer
+                            );
+                        }
+                    }
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp drivers: {error}");
+                    exit::FAILURE
+                }
+            },
+            Action::Revoke(id) => match client.revoke_driver(&id).await {
+                Ok(driver) => {
+                    println!("revoked {}", driver.id);
+                    exit::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("acpilot acp revoke: {error}");
+                    exit::FAILURE
+                }
+            },
+        }
+    })
+}
+
+/// `acpilot recipes run <id> "…"`.
+fn run_recipes(command: RecipesCommand, profile: Option<&str>) -> u8 {
+    let RecipesCommand::Run {
+        id,
+        prompt,
+        root,
+        json,
+        api_url,
+        token,
+    } = command;
+    // `--profile` is a name here and a directory at the daemon, the same split
+    // `workspace open` makes: a daemon started with `--profile work` would treat
+    // it as a relative path.
+    let mut daemon_args = Vec::new();
+    if let Some(name) = profile {
+        match acpilot_profile::Profile::named(name) {
+            Ok(profile) => {
+                daemon_args.push("--profile".to_owned());
+                daemon_args.push(profile.root().display().to_string());
+            }
+            Err(error) => {
+                eprintln!("acpilot recipes run: {error}");
+                return exit::NOT_FOUND;
+            }
+        }
+    }
+    let options = acpilot_client::daemon::Options {
+        endpoint: api_url,
+        no_spawn: false,
+        token: token.or_else(acpilot_host::token::local),
+        daemon_args,
+    };
+    let running = match acpilot_client::daemon::ensure_blocking(&options) {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("acpilot recipes run: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("acpilot recipes run: {error}");
+            return exit::FAILURE;
+        }
+    };
+    let request = acpilot_proto::model::RunRequest {
+        prompt,
+        corpus: Vec::new(),
+        idempotency_key: None,
+    };
+    let root = root.map(|root| root.to_string_lossy().into_owned());
+    runtime.block_on(async move {
+        use futures::StreamExt;
+        use std::io::Write as _;
+
+        let mut stream = running.client.run_recipe(&id, root.as_deref(), &request);
+        let mut out = std::io::stdout();
+        let mut err = std::io::stderr();
+        // Whether a thought is open on stderr, so the answer starts on its own
+        // line instead of continuing the thought's.
+        let mut thinking = false;
+        while let Some(frame) = stream.next().await {
+            match frame {
+                Ok(acpilot_client::ModelRunStream::Delta { text, .. }) if !json => {
+                    if thinking {
+                        let _ = writeln!(err);
+                        thinking = false;
+                    }
+                    let _ = out.write_all(text.as_bytes());
+                    let _ = out.flush();
+                }
+                Ok(acpilot_client::ModelRunStream::Thought { text, .. }) if !json => {
+                    // The answer is stdout and thinking is not the answer, so a
+                    // run piped to a file stays the answer alone. On a terminal
+                    // both streams reach the screen, which is where a reasoning
+                    // run that spends its budget thinking would otherwise look
+                    // empty.
+                    let _ = err.write_all(text.as_bytes());
+                    let _ = err.flush();
+                    thinking = true;
+                }
+                Ok(acpilot_client::ModelRunStream::Finished(run)) => {
+                    if json {
+                        match serde_json::to_string(&run) {
+                            Ok(record) => {
+                                let _ = writeln!(out, "{record}");
+                            }
+                            Err(error) => {
+                                eprintln!("acpilot recipes run: {error}");
+                                return exit::FAILURE;
+                            }
+                        }
+                    } else {
+                        // The answer is stdout; the record's id is a note for the
+                        // person, so piping the answer stays clean.
+                        if thinking {
+                            let _ = writeln!(err);
+                            thinking = false;
+                        }
+                        let _ = writeln!(out);
+                    }
+                    let _ = out.flush();
+                    if !json {
+                        eprintln!("run {}", run.id);
+                    }
+                }
+                Ok(acpilot_client::ModelRunStream::Delta { .. }) => {}
+                Ok(
+                    acpilot_client::ModelRunStream::Started { .. }
+                    | acpilot_client::ModelRunStream::Thought { .. }
+                    | acpilot_client::ModelRunStream::Other { .. },
+                ) => {}
+                Err(error) => {
+                    eprintln!("acpilot recipes run: {error}");
+                    return exit::FAILURE;
+                }
+            }
+        }
+        exit::SUCCESS
+    })
+}
+
 /// `acpilot models probe`.
 fn run_models(command: ModelsCommand, profile: Option<&str>) -> u8 {
     let ModelsCommand::Probe { id } = command;
@@ -1875,6 +2474,72 @@ fn run_tui(flags: TuiFlags) -> u8 {
     }
 }
 
+/// Build the key table a launch would use and print it.
+///
+/// It reads what the client reads — the profile's `keymap.toml`, under the layers
+/// its activated extensions contribute — so the check and the screen cannot
+/// disagree about which key means what.
+fn run_keys(command: KeysCommand, profile: Option<&str>) -> u8 {
+    match command {
+        KeysCommand::Check => {
+            let root = match Root::resolve(None) {
+                Ok(root) => root,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            let resolved = match ProfileResolver::new()
+                .flag(profile.map(Path::new))
+                .process_environment()
+                .resolve(&root)
+            {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return if error.is_missing() {
+                        exit::NOT_FOUND
+                    } else {
+                        exit::FAILURE
+                    };
+                }
+            };
+            let directory = resolved.profile().root().to_path_buf();
+            let layers = match acpilot_tui::extension_keymaps(Some(&directory)) {
+                Ok(layers) => layers,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            let path = directory.join("keymap.toml");
+            let path = if path.is_file() {
+                path
+            } else {
+                acpilot_profile::config_dir().join("keymap.toml")
+            };
+            let keymap = match acpilot_tui::keymap::Keymap::load_with(&path, &layers) {
+                Ok(keymap) => keymap,
+                Err(error) => {
+                    eprintln!("acpilot keys: {error}");
+                    return exit::FAILURE;
+                }
+            };
+            for layer in &layers {
+                println!("layer {} · {} keys", layer.extension, layer.keys.len());
+            }
+            println!("preset {}", keymap.preset_name());
+            for context in acpilot_tui::keymap::Context::ALL {
+                println!("[{}]", context.name());
+                for (keys, what) in keymap.rows(context) {
+                    println!("  {keys:<18} {what}");
+                }
+            }
+            exit::SUCCESS
+        }
+    }
+}
+
 /// The file a launch named, relative to the workspace root.
 ///
 /// The daemon addresses files by workspace-relative path, so an argument from the
@@ -2172,25 +2837,148 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
     // the same identity the launch resolution falls back to.
     let named = profile.unwrap_or(acpilot_profile::launch::DEFAULT_PROFILE);
     match command {
-        ExtCommand::Add { from, store } => {
-            let paths = match Paths::resolve(store.store, None) {
+        ExtCommand::Add {
+            id,
+            from,
+            version,
+            index,
+            activate,
+            json,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
-            match ext::add(&paths, &from) {
-                Ok(line) => {
-                    println!("{line}");
-                    println!("approve it for a profile with `acpilot ext activate <id>`");
-                    exit::SUCCESS
+            match (from, id) {
+                (Some(from), _) => match ext::add(&paths, &from) {
+                    Ok(stored) => {
+                        let activated = match activate.as_deref() {
+                            Some(profile) => match ext::activate(&paths, profile, &stored.id) {
+                                Ok(_) => Some(profile),
+                                Err(error) => return fail(&error),
+                            },
+                            None => None,
+                        };
+                        if json {
+                            let profiles: Vec<String> = activated
+                                .map(|profile| vec![profile.to_owned()])
+                                .unwrap_or_default();
+                            print_json(&serde_json::json!({
+                                "extension": stored.summary(&profiles),
+                                "activated_in": activated,
+                            }));
+                        } else {
+                            println!("linked {} to {}", stored.label(), stored.path.display());
+                            println!("edits in the checkout apply without adding it again");
+                            match activated {
+                                Some(profile) => {
+                                    println!("activated {} in profile {profile}", stored.id);
+                                }
+                                None => println!(
+                                    "approve it for a profile with `acpilot ext activate {} \
+                                     --profile <name>`",
+                                    stored.id
+                                ),
+                            }
+                        }
+                        exit::SUCCESS
+                    }
+                    Err(error) => fail(&error),
+                },
+                (None, Some(id)) => ext_report(
+                    registry::add(
+                        &paths,
+                        index.as_deref(),
+                        &id,
+                        version.as_deref(),
+                        activate.as_deref(),
+                    ),
+                    json,
+                ),
+                (None, None) => {
+                    eprintln!(
+                        "acpilot ext add: name an extension id, or pass --from <DIR> for a local \
+                         checkout"
+                    );
+                    exit::USAGE
                 }
-                Err(error) => fail(&error),
             }
+        }
+        ExtCommand::Search {
+            query,
+            index,
+            json,
+            config,
+        } => {
+            let paths = match Paths::resolve(None, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(
+                registry::search(&paths, index.as_deref(), query.as_deref()),
+                json,
+            )
+        }
+        ExtCommand::Update {
+            id,
+            index,
+            json,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(
+                registry::update(&paths, index.as_deref(), id.as_deref()),
+                json,
+            )
+        }
+        ExtCommand::Remove {
+            id,
+            json,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(registry::remove(&paths, &id), json)
+        }
+        ExtCommand::List {
+            json,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(registry::list(&paths), json)
+        }
+        ExtCommand::Show {
+            id,
+            index,
+            json,
+            store,
+            config,
+        } => {
+            let paths = match Paths::resolve(store.store, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(registry::show(&paths, index.as_deref(), &id), json)
         }
         ExtCommand::ImportTheme {
             from,
             id,
             version,
             activate,
+            json,
             store,
             config,
         } => {
@@ -2200,15 +2988,19 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
             };
             match ext::import_theme(&paths, &from, &id, &version, activate.as_deref()) {
                 Ok(lines) => {
-                    for line in lines {
-                        println!("{line}");
+                    if json {
+                        print_json(&serde_json::json!({ "id": id, "lines": lines }));
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
                     }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Verify { all, store } => {
+        ExtCommand::Verify { all, json, store } => {
             if !all {
                 eprintln!(
                     "acpilot ext verify: pass --all; verifying a subset is not a safety check"
@@ -2220,9 +3012,16 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Err(error) => return fail(&error),
             };
             match ext::verify_all(&paths) {
-                Ok((all_ready, lines)) => {
-                    for line in lines {
-                        println!("{line}");
+                Ok((all_ready, rows, lines)) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "ready": all_ready,
+                            "extensions": rows
+                        }));
+                    } else {
+                        for line in lines {
+                            println!("{line}");
+                        }
                     }
                     if all_ready {
                         exit::SUCCESS
@@ -2235,6 +3034,7 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
         }
         ExtCommand::Prune {
             dry_run,
+            json,
             store,
             config,
         } => {
@@ -2243,53 +3043,121 @@ fn run_ext(command: ExtCommand, profile: Option<&str>) -> u8 {
                 Err(error) => return fail(&error),
             };
             match ext::prune(&paths, dry_run) {
-                Ok(lines) => {
-                    for line in lines {
-                        println!("{line}");
+                Ok(removed) => {
+                    if json {
+                        let rows: Vec<serde_json::Value> = removed
+                            .iter()
+                            .map(
+                                |(id, version)| serde_json::json!({ "id": id, "version": version }),
+                            )
+                            .collect();
+                        print_json(&serde_json::json!({
+                            "dry_run": dry_run,
+                            "removed": rows
+                        }));
+                    } else if removed.is_empty() {
+                        println!("nothing to prune");
+                    } else {
+                        for (id, version) in &removed {
+                            println!(
+                                "{} {id}@{version}",
+                                if dry_run { "would remove" } else { "removed" }
+                            );
+                        }
                     }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Activate { id, config, store } => {
+        ExtCommand::Activate {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::activate(&paths, named, &id) {
-                Ok(line) => {
-                    println!("{line}");
+                Ok(changed) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "changed": changed
+                        }));
+                    } else if changed {
+                        println!("activated {id} in profile {named}");
+                    } else {
+                        println!("{id} was already active in profile {named}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Deactivate { id, config, store } => {
+        ExtCommand::Deactivate {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::deactivate(&paths, named, &id) {
-                Ok(line) => {
-                    println!("{line}");
+                Ok(changed) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "changed": changed
+                        }));
+                    } else if changed {
+                        println!("deactivated {id} in profile {named}");
+                    } else {
+                        println!("{id} was not active in profile {named}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
         }
-        ExtCommand::Why { id, config, store } => {
+        ExtCommand::Why {
+            id,
+            json,
+            config,
+            store,
+        } => {
             let paths = match Paths::resolve(store.store, config.config) {
                 Ok(paths) => paths,
                 Err(error) => return fail(&error),
             };
             match ext::why(&paths, named, &id) {
                 Ok(text) => {
-                    print!("{text}");
+                    if json {
+                        print_json(&serde_json::json!({
+                            "id": id,
+                            "profile": named,
+                            "explanation": text
+                        }));
+                    } else {
+                        print!("{text}");
+                    }
                     exit::SUCCESS
                 }
                 Err(error) => fail(&error),
             }
+        }
+        ExtCommand::Themes { json, config } => {
+            let paths = match Paths::resolve(None, config.config) {
+                Ok(paths) => paths,
+                Err(error) => return fail(&error),
+            };
+            ext_report(registry::themes(&paths, Some(named)), json)
         }
     }
 }
@@ -2460,6 +3328,38 @@ fn run_secret(command: SecretCommand, flag: Option<&str>) -> u8 {
                 }
             }
         }
+    }
+}
+
+/// Print a registry verb's lines, or its one error.
+///
+/// These verbs already say what to do next in the line itself, so the failure
+/// path is one sentence rather than a table; the exit status is what a script
+/// reads.
+fn ext_report(result: Result<registry::Report, String>, json: bool) -> u8 {
+    match result {
+        Ok(report) => {
+            if json {
+                print_json(&report.json);
+            } else {
+                for line in &report.lines {
+                    println!("{line}");
+                }
+            }
+            exit::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            exit::FAILURE
+        }
+    }
+}
+
+/// Print one JSON document, the shape `--json` promises.
+fn print_json(value: &serde_json::Value) {
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => println!("{text}"),
+        Err(error) => eprintln!("error: the answer is not JSON: {error}"),
     }
 }
 

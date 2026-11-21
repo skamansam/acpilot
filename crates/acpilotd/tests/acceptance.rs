@@ -21,6 +21,7 @@
 //! subscription exists loses its first event, and a `resolve` that does not wake the
 //! agent's wait is a `200` that changes nothing.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,19 @@ mod common;
 
 /// How long a test waits for the agent before calling it a hang.
 const PATIENCE: Duration = Duration::from_secs(20);
+
+/// Await one client call, or fail naming the call that did not answer.
+///
+/// Every call in this file goes through here, and the reason is the runner that
+/// lost six hours: a client call without a bound turns a stall into a hung test
+/// binary, and under `cargo test` a hung test has no timeout at all — the job is
+/// cancelled at its limit with nothing said. A bound does not change what the
+/// call must return; it changes a hang into a line that names the wait.
+async fn within<T>(what: &str, call: impl Future<Output = T>) -> T {
+    tokio::time::timeout(PATIENCE, call)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not answer inside {PATIENCE:?}"))
+}
 
 /// A daemon on a temporary socket, its store, and the client that drives it.
 ///
@@ -67,15 +81,17 @@ impl Harness {
     }
 
     async fn session(&self) -> String {
-        self.client
-            .create_session(&CreateSessionRequest {
+        within(
+            "the create-session call",
+            self.client.create_session(&CreateSessionRequest {
                 workspace_id: String::new(),
                 agent_id: "mock".into(),
                 title: None,
-            })
-            .await
-            .expect("a session")
-            .id
+            }),
+        )
+        .await
+        .expect("a session")
+        .id
     }
 }
 
@@ -146,7 +162,7 @@ async fn daemon_in(
 
     let client = Client::new(socket.display().to_string());
     for _ in 0..200 {
-        if client.health().await.is_ok() {
+        if within("the health probe", client.health()).await.is_ok() {
             return (client, stop, server);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -154,24 +170,37 @@ async fn daemon_in(
     panic!("the daemon never answered on {}", socket.display());
 }
 
-/// The next event's sequence, or a panic naming what was being waited for.
+/// The next event's sequence, or a panic naming what was being waited for and what
+/// the daemon says the session is doing while it waits.
 async fn next_event(
+    what: &str,
     stream: &mut futures::stream::BoxStream<
         'static,
         Result<acpilot_client::SessionStream, acpilot_client::ClientError>,
     >,
+    client: &Client,
+    session: &str,
 ) -> u64 {
     // A heartbeat names the last sequence rather than adding one, so it is the
     // stream saying it is alive while the event is still on its way. The server sends
     // one every 15 s and a loaded runner can meet it before the event it is waiting
-    // for; failing there would blame the keep-alive for the wait. The event is still
-    // required inside the window, so this skips the frame, not the assertion.
+    // for; failing there would blame the keep-alive for the wait.
+    //
+    // Patience is a deadline for the whole wait, not a budget per read, and the
+    // difference is the third sighting (2026-11-20): with a timeout around each
+    // `next()` a stream that never produced the event but kept sending heartbeats
+    // reset the clock every 15 s, so the loop spun for the 300 s nextest allows and
+    // failed with no line naming the wait at all. A heartbeat skips the frame, never
+    // the deadline.
+    let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        let frame = tokio::time::timeout(PATIENCE, stream.next())
-            .await
-            .expect("an event inside the patience window")
-            .expect("the stream is still open")
-            .expect("a frame");
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = match tokio::time::timeout(left, stream.next()).await {
+            Ok(Some(Ok(frame))) => frame,
+            Ok(Some(Err(error))) => panic!("{what} failed: {error}"),
+            Ok(None) => panic!("{what} was in a stream that closed"),
+            Err(_) => break,
+        };
         match frame {
             acpilot_client::SessionStream::Event(event) => return event.seq,
             acpilot_client::SessionStream::Heartbeat { seq } => {
@@ -180,18 +209,35 @@ async fn next_event(
             other => panic!("expected an event, got {other:?}"),
         }
     }
+
+    // The wait timed out. Ask the daemon what the session is doing, because the
+    // answer separates the two readings that look identical from the socket: a turn
+    // that never ran (the agent was never started, or it failed, and no event will
+    // arrive) from a turn whose events exist but were not delivered to this stream.
+    let status = tokio::time::timeout(PATIENCE, client.session(session))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|summary| format!("{:?}", summary.status))
+        .unwrap_or_else(|| "not answering either".to_string());
+    panic!("{what} did not arrive inside {PATIENCE:?}; the session is {status}");
 }
 
 /// Wait until the session reports `status`, or fail saying what it reports instead.
 async fn wait_for_status(client: &Client, id: &str, status: SessionStatus) {
     for _ in 0..400 {
-        let summary = client.session(id).await.expect("the session");
+        let summary = within("the session summary", client.session(id))
+            .await
+            .expect("the session");
         if summary.status == status {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let observed = client.session(id).await.expect("the session").status;
+    let observed = within("the session summary", client.session(id))
+        .await
+        .expect("the session")
+        .status;
     panic!("session {id} is {observed:?}, not {status:?}");
 }
 
@@ -216,19 +262,18 @@ async fn a_scripted_session_runs_from_create_to_a_resolved_permission() {
         .expect("a first frame")
         .expect("the current preferences");
 
-    harness
-        .client
-        .prompt(&session, "permission")
-        .await
-        .expect("the turn is accepted");
+    within(
+        "the first prompt",
+        harness.client.prompt(&session, "permission"),
+    )
+    .await
+    .expect("the turn is accepted");
 
     // The agent asks for a shell command. It is pending until somebody answers,
     // which is the contract `GET /v1/permissions?status=pending` exists for.
     let mut request = None;
     for _ in 0..400 {
-        let pending = harness
-            .client
-            .pending_permissions()
+        let pending = within("the pending list", harness.client.pending_permissions())
             .await
             .expect("the pending list");
         if let Some(first) = pending.into_iter().next() {
@@ -244,11 +289,14 @@ async fn a_scripted_session_runs_from_create_to_a_resolved_permission() {
         "the request offers at least one option: {request:?}"
     );
 
-    let decision = harness
-        .client
-        .resolve(&request.id, PermissionOption::AllowOnce)
-        .await
-        .expect("the decision is accepted");
+    let decision = within(
+        "the resolve call",
+        harness
+            .client
+            .resolve(&request.id, PermissionOption::AllowOnce),
+    )
+    .await
+    .expect("the decision is accepted");
     assert_eq!(decision.option, PermissionOption::AllowOnce);
 
     // Every other client hears the answer too: the pending list is state, so a
@@ -274,29 +322,34 @@ async fn a_scripted_session_runs_from_create_to_a_resolved_permission() {
 
     // At least one event arrived on the stream for that turn: the transcript is
     // the channel the client reads, not the pending list.
-    let first = next_event(&mut events).await;
+    let first = next_event("the first event", &mut events, &harness.client, &session).await;
     assert!(first >= 1);
 
     // A second turn proves the session is still usable after a permission.
-    harness
-        .client
-        .prompt(&session, "stream 2")
-        .await
-        .expect("a second prompt is accepted");
+    within(
+        "the second prompt",
+        harness.client.prompt(&session, "stream 2"),
+    )
+    .await
+    .expect("a second prompt is accepted");
     let mut chunks = 0;
     while chunks < 2 {
-        next_event(&mut events).await;
+        next_event(
+            "the second turn's event",
+            &mut events,
+            &harness.client,
+            &session,
+        )
+        .await;
         chunks += 1;
     }
 }
 
 #[tokio::test]
 async fn a_stream_replays_after_a_drop_with_no_gap() {
-    let harness = Harness::start().await;
+    let mut harness = Harness::start().await;
     let session = harness.session().await;
-    harness
-        .client
-        .prompt(&session, "stream 6")
+    within("the prompt", harness.client.prompt(&session, "stream 6"))
         .await
         .expect("the turn is accepted");
 
@@ -305,7 +358,15 @@ async fn a_stream_replays_after_a_drop_with_no_gap() {
     let mut first = harness.client.session_events(&session, 0);
     let mut seen = Vec::new();
     while seen.len() < 2 {
-        seen.push(next_event(&mut first).await);
+        seen.push(
+            next_event(
+                "the first two events",
+                &mut first,
+                &harness.client,
+                &session,
+            )
+            .await,
+        );
     }
     let last = *seen.last().expect("two events");
     drop(first);
@@ -313,7 +374,15 @@ async fn a_stream_replays_after_a_drop_with_no_gap() {
     // Reconnect with `Last-Event-ID`, the header a browser's `EventSource` sends.
     let mut rest = harness.client.session_events(&session, last);
     while seen.len() < 6 {
-        seen.push(next_event(&mut rest).await);
+        seen.push(
+            next_event(
+                "the replay after the reconnect",
+                &mut rest,
+                &harness.client,
+                &session,
+            )
+            .await,
+        );
     }
 
     assert_eq!(
@@ -325,21 +394,35 @@ async fn a_stream_replays_after_a_drop_with_no_gap() {
         harness.directory.path().join("profile.sqlite").exists(),
         "the conversation was recorded as it streamed"
     );
+
+    // And stopped, the way the restart test stops its daemon rather than returning
+    // with a live session behind it: a session still running when the test ends is
+    // torn down by the runtime, which is the step that has stalled a runner.
+    if let Some(stop) = harness.stop.take() {
+        let _ = stop.send(());
+    }
+    harness.server.abort();
 }
 
 #[tokio::test]
 async fn a_conversation_is_still_there_after_the_daemon_that_ran_it() {
     let harness = Harness::start().await;
     let session = harness.session().await;
-    harness
-        .client
-        .prompt(&session, "stream 3")
+    within("the prompt", harness.client.prompt(&session, "stream 3"))
         .await
         .expect("the turn is accepted");
     let mut events = harness.client.session_events(&session, 0);
     let mut seen = Vec::new();
     while seen.len() < 3 {
-        seen.push(next_event(&mut events).await);
+        seen.push(
+            next_event(
+                "the stored conversation's event",
+                &mut events,
+                &harness.client,
+                &session,
+            )
+            .await,
+        );
     }
     drop(events);
 
@@ -366,7 +449,9 @@ async fn a_conversation_is_still_there_after_the_daemon_that_ran_it() {
 
     let (client, stop, server) = daemon_in(directory.path()).await;
 
-    let sessions = client.sessions().await.expect("the session list");
+    let sessions = within("the session list", client.sessions())
+        .await
+        .expect("the session list");
     let stored = sessions
         .iter()
         .find(|summary| summary.id == session)

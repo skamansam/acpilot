@@ -6,9 +6,13 @@
 //! is a user-visible change and should show up as a diff.
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -50,6 +54,158 @@ fn acpilot_with_env(args: &[&str], key: &str, value: &str) -> Output {
         .expect("run acpilot")
 }
 
+/// A listener answering the two calls `acpilot recipes run` makes: `/v1/health`
+/// and one named run as an SSE stream.
+///
+/// A real daemon would need a provider, a recipe and a profile. This serves the
+/// client's contract directly, so the test is about the split between the two
+/// streams rather than about assembling a workspace — and the frames are the
+/// ones `acpilotd` writes, not a second shape invented for the test.
+struct FakeDaemon {
+    endpoint: String,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FakeDaemon {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a fake daemon");
+        let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !stopping.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let mut head = Vec::new();
+                        let mut buffer = [0u8; 1024];
+                        // Headers only: the run's prompt is posted body content
+                        // this fake does not read.
+                        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                            match stream.read(&mut buffer) {
+                                Ok(0) | Err(_) => break,
+                                Ok(read) => head.extend_from_slice(&buffer[..read]),
+                            }
+                        }
+                        let request = String::from_utf8_lossy(&head);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or_default();
+                        let answer = if path.starts_with("/v1/health") {
+                            health_response()
+                        } else if path.contains("/runs") {
+                            run_response()
+                        } else {
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                .to_vec()
+                        };
+                        let _ = stream.write_all(&answer).and_then(|()| stream.flush());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            endpoint,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for FakeDaemon {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        // Wake the accept loop so it can see the flag and exit.
+        let _ = std::net::TcpStream::connect(self.endpoint.trim_start_matches("http://"));
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    [head.as_bytes(), body].concat()
+}
+
+fn health_response() -> Vec<u8> {
+    // The version the client checks against is this build's, because a client
+    // and a daemon from one workspace are one version.
+    let body = format!(
+        "{{\"ok\":true,\"service\":\"acpilotd\",\"version\":\"{}\",\"api\":\"/v1\"}}",
+        env!("CARGO_PKG_VERSION")
+    );
+    http_response("application/json", body.as_bytes())
+}
+
+fn run_response() -> Vec<u8> {
+    use acpilot_proto::model::{RunStatus, RunSummary, SamplingParams, TokenUsage};
+
+    let run = RunSummary {
+        id: "run-1".to_owned(),
+        recipe_id: "demo".to_owned(),
+        status: RunStatus::Succeeded,
+        started_at: "2026-11-16T00:00:00Z".to_owned(),
+        first_token_ms: Some(4),
+        total_ms: Some(9),
+        tokens: TokenUsage {
+            prompt: 3,
+            completion: 3,
+            estimated: false,
+        },
+        tokens_per_second: Some(1.0),
+        stop_reason: Some("stop".to_owned()),
+        warnings: Vec::new(),
+        params: SamplingParams::default(),
+        corpus_files: 0,
+        message: None,
+    };
+    let frame = |event: &str, data: serde_json::Value| format!("event: {event}\ndata: {data}\n\n");
+    let mut body = String::new();
+    body.push_str(&frame(
+        "model.run.started",
+        serde_json::json!({
+            "run_id": "run-1",
+            "recipe_id": "demo",
+            "provider_id": "mock",
+            "model_id": "mock-1",
+            "started_at": "2026-11-16T00:00:00Z"
+        }),
+    ));
+    // Two chunks a side, so a client that buffered the whole stream and printed
+    // it afterwards would not be mistaken for one that streams.
+    for text in ["weighing", " it"] {
+        body.push_str(&frame(
+            "model.run.thought",
+            serde_json::json!({ "run_id": "run-1", "text": text }),
+        ));
+    }
+    for text in ["hello ", "from the model"] {
+        body.push_str(&frame(
+            "model.run.delta",
+            serde_json::json!({ "run_id": "run-1", "text": text }),
+        ));
+    }
+    body.push_str(&frame(
+        "model.run.finished",
+        serde_json::json!({ "run": run }),
+    ));
+    http_response("text/event-stream", body.as_bytes())
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -69,6 +225,70 @@ fn install_pack(dir: &TempDir) {
         "schema_version = 1\n\n[[servers]]\nid = \"rust-analyzer\"\nname = \"rust-analyzer\"\ncommand = \"pack-analyzer\"\nargs = []\nlanguages = [\"rust\"]\nroot_markers = [\"Cargo.toml\"]\n",
     )
     .expect("write lsp preset");
+}
+
+#[test]
+fn recipes_run_keeps_thinking_on_stderr_and_the_answer_on_stdout() {
+    let daemon = FakeDaemon::start();
+    let endpoint = daemon.endpoint.as_str();
+
+    let plain = acpilot(&[
+        "recipes",
+        "run",
+        "demo",
+        "say hello",
+        "--api-url",
+        endpoint,
+        "--token",
+        "test-token",
+    ]);
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    assert_eq!(
+        stdout(&plain),
+        "hello from the model\n",
+        "a redirect of stdout keeps the answer alone"
+    );
+    assert!(
+        !stdout(&plain).contains("weighing"),
+        "thinking is not the answer: {}",
+        stdout(&plain)
+    );
+    assert_eq!(
+        stderr(&plain),
+        "weighing it\nrun run-1\n",
+        "thinking streams to stderr, then the record's id is a note"
+    );
+    assert!(
+        !stderr(&plain).contains("from the model"),
+        "the answer is not repeated on stderr: {}",
+        stderr(&plain)
+    );
+
+    let json = acpilot(&[
+        "recipes",
+        "run",
+        "demo",
+        "say hello",
+        "--json",
+        "--api-url",
+        endpoint,
+        "--token",
+        "test-token",
+    ]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    assert_eq!(
+        stderr(&json),
+        "",
+        "--json is one object on stdout; thinking would be a second stream"
+    );
+    let record: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("stdout is one JSON object");
+    assert_eq!(record["id"], "run-1");
+    assert!(
+        !stdout(&json).contains("weighing"),
+        "the record carries the answer's summary, not the thinking: {}",
+        stdout(&json)
+    );
 }
 
 #[test]
@@ -832,5 +1052,68 @@ fn a_profile_export_imports_and_a_second_import_is_a_conflict() {
         Some(4),
         "an existing profile is a conflict: {}",
         stderr(&again)
+    );
+}
+
+#[test]
+fn agents_rm_removes_a_promoted_entry_and_refuses_a_hand_written_one() {
+    let config = TempDir::new();
+    let workspace = TempDir::new();
+    let profile = config.path().join("profiles/work");
+    fs::create_dir_all(&profile).expect("profile directory");
+    fs::write(profile.join("config.toml"), "schema_version = 1\n").expect("profile config");
+    fs::write(
+        profile.join("agents.toml"),
+        "schema_version = 1\n\n[[agents]]\n\
+         # acpilot:promoted recipe=\"recipes/demo.toml\" mtime=\"2026-11-12T12:00:00Z\"\n\
+         id = \"demo\"\ntransport = \"acp-stdio\"\ncommand = \"acpilot-agent-lm\"\n\
+         args = [\"--recipe\", \"demo\"]\n",
+    )
+    .expect("manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "--profile",
+            profile.to_str().expect("path"),
+            "agents",
+            "rm",
+            "demo",
+        ])
+        .current_dir(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !profile.join("agents.toml").exists(),
+        "the last promoted entry takes the file with it"
+    );
+
+    // A hand-written entry is not promotion's to remove: the id is refused and
+    // the file is left exactly as it was.
+    let hand_written = "schema_version = 1\n\n[[agents]]\nid = \"mine\"\n\
+                        transport = \"acp-stdio\"\ncommand = \"my-agent\"\n";
+    fs::write(profile.join("agents.toml"), hand_written).expect("manifest");
+    let output = Command::new(env!("CARGO_BIN_EXE_acpilot"))
+        .args([
+            "--profile",
+            profile.to_str().expect("path"),
+            "agents",
+            "rm",
+            "mine",
+        ])
+        .current_dir(workspace.path())
+        .env("ACPILOT_HOME", config.path())
+        .output()
+        .expect("run acpilot");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("written by hand"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(profile.join("agents.toml")).expect("manifest"),
+        hand_written
     );
 }

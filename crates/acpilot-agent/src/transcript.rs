@@ -161,6 +161,9 @@ pub struct Grant {
     pub session: String,
     /// Agent that asked, when the request carried one.
     pub agent: Option<String>,
+    /// ACP driver whose turn asked, when it came through the bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_id: Option<String>,
     /// What kind of request it was: `file_write`, `terminal`, …
     pub kind: String,
     /// Tool label, when the request had one.
@@ -182,6 +185,7 @@ impl From<AuditEntry> for Grant {
             at: entry.at,
             session: entry.session,
             agent: entry.agent,
+            driver_id: None,
             // The wire spelling (`file_write`), not the Rust variant name: the
             // same word the API and the agent's own permission request use.
             kind: serde_json::to_value(entry.kind)
@@ -277,7 +281,22 @@ impl Transcript {
     ///
     /// The same two as [`Self::event`].
     pub fn grant(&self, entry: AuditEntry) -> Result<(), TranscriptError> {
-        self.append(&Entry::Grant(entry.into()))
+        self.grant_with_driver(entry, None)
+    }
+
+    /// Append one decision with the driver whose turn asked, when there was one.
+    ///
+    /// The broker knows the session and the request, not who connected; the owner
+    /// task is the one that knows the driver, so it is passed here rather than
+    /// looked up from a ledger that may have been revoked since.
+    pub fn grant_with_driver(
+        &self,
+        entry: AuditEntry,
+        driver: Option<&str>,
+    ) -> Result<(), TranscriptError> {
+        let mut grant = Grant::from(entry);
+        grant.driver_id = driver.map(str::to_owned);
+        self.append(&Entry::Grant(grant))
     }
 
     /// Append one record.

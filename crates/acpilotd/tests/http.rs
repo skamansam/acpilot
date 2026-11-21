@@ -256,7 +256,7 @@ async fn openapi_is_served_and_valid() {
     // implements itself. A client generated from this document must see it.
     assert_eq!(
         body["paths"]["/v1/agents"]["get"]["responses"]["200"]["description"],
-        "Every configured agent, with its availability on this host"
+        "Every configured agent and every agent an activated extension provides, with its availability on this host"
     );
 }
 
@@ -376,6 +376,52 @@ async fn stats_are_one_row_per_agent_with_nothing_invented() {
     // `0` would report a full, empty or measured-wrong track instead of asking.
     assert!(rows[0].get("context").is_none(), "{rows:?}");
     assert!(rows[0].get("credits").is_none(), "{rows:?}");
+    rows[0]["updated_at"]
+        .as_str()
+        .expect("a timestamp")
+        .parse::<jiff::Timestamp>()
+        .expect("RFC 3339, because a clock a client cannot read is no use");
+}
+
+#[tokio::test]
+async fn provider_rows_come_first_and_invent_no_balance() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("providers.toml");
+    std::fs::write(
+        &path,
+        "schema_version = 1\n\
+         [[providers]]\nid = \"lm\"\nkind = \"lm_studio\"\nlabel = \"LM Studio\"\n\
+         base_url = \"http://127.0.0.1:1234\"\nenabled = false\n\
+         [[providers]]\nid = \"openrouter\"\nkind = \"open_ai_compatible\"\n\
+         base_url = \"https://openrouter.ai/api/v1\"\nenabled = false\n",
+    )
+    .expect("providers.toml");
+    let providers = acpilotd::providers::Providers::load(path).expect("providers load");
+    let (status, body) = get_from(
+        router_with(AppState::new().with_providers(providers)),
+        "/v1/stats",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("a list");
+    assert_eq!(rows.len(), 2, "one row per declaration: {rows:?}");
+    assert_eq!(rows[0]["id"], "lm");
+    assert_eq!(rows[0]["kind"], "provider");
+    assert_eq!(rows[0]["label"], "LM Studio");
+    assert!(
+        rows[0].get("context").is_none(),
+        "a provider has no conversation to measure"
+    );
+    assert!(
+        rows[0].get("credits").is_none(),
+        "a local server has no balance to read"
+    );
+    assert_eq!(rows[1]["id"], "openrouter");
+    assert!(
+        rows[1].get("credits").is_none(),
+        "a disabled provider is not contacted for a balance: {rows:?}"
+    );
     rows[0]["updated_at"]
         .as_str()
         .expect("a timestamp")

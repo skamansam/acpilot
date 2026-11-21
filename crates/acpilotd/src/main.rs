@@ -83,6 +83,15 @@ struct Cli {
     /// Print the OpenAPI document and exit, without binding a socket.
     #[arg(long)]
     print_openapi: bool,
+
+    /// Serve ACP over stdin/stdout instead of binding an endpoint.
+    ///
+    /// The bridge's local transport (P4.5-10): a driver spawns this process and
+    /// speaks ACP to it, and the profile's agents run here rather than in the
+    /// driver's process. Nothing listens, so no socket, pidfile or token is
+    /// involved; stdout is the protocol and logs stay on stderr.
+    #[arg(long)]
+    acp: bool,
 }
 
 #[tokio::main]
@@ -106,6 +115,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     logging(&config);
 
+    // The bridge's local transport before anything binds: a driver owns this
+    // process's pipes, and a daemon that also took the socket would be two
+    // endpoints pretending to be one.
+    if cli.acp {
+        return serve_acp(&config).await;
+    }
+
     // Before the bind: a second daemon that fails on the port would otherwise have
     // to explain `EADDRINUSE` on its own, and the pidfile knows who has it.
     let pidfile = acpilotd::pidfile::acquire(&config.pidfile, &config.target)?;
@@ -121,6 +137,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.workspace,
         config.cors,
     )?);
+    // The cockpit's answers and the driver listener read one settings value: a
+    // pairing route that said the bridge was off while it was listening would be
+    // two answers to the same question.
+    profiles.set_bridge(config.bridge.clone());
+
+    if config.bridge.enabled {
+        let bind = config
+            .bridge
+            .bind
+            .clone()
+            .ok_or("`[acp.bridge] enabled = true` needs a `bind` address")?;
+        let state = profiles.state(&profiles.active()).ok_or_else(|| {
+            format!(
+                "the ACP bridge serves the active profile, and `{}` did not load",
+                profiles.active()
+            )
+        })?;
+        let listener = tokio::net::TcpListener::bind(&bind).await?;
+        tracing::info!(%bind, "serving ACP over HTTP for paired drivers");
+        // A separate listener on purpose: a driver token and the daemon token are
+        // different credentials, and one middleware deciding both would be one
+        // mistake away from treating them as the same one.
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, acpilotd::acp_http::router(state)).await {
+                tracing::error!(%error, "the ACP bridge listener stopped");
+            }
+        });
+    }
+
     tracing::info!(
         endpoint = %config.target,
         database = %config.database.display(),
@@ -144,6 +189,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Removed before the return, so a clean exit leaves no record saying a daemon
     // is running; the drop is idempotent, but the order here is the readable one.
     drop(pidfile);
+    Ok(())
+}
+
+/// Serve ACP over stdin/stdout for the profile this daemon was started with.
+///
+/// The state is the one a request with that profile's header would reach, so the
+/// bridge and the API cannot disagree about the workspace, the agents or the
+/// broker. A daemon with no profile serves its anonymous state, and the bridge
+/// refuses `session/new` there because there are no agents to start — which is a
+/// better answer than refusing to launch.
+async fn serve_acp(config: &acpilotd::config::Config) -> Result<(), Box<dyn std::error::Error>> {
+    let profiles = std::sync::Arc::new(acpilotd::profiles::Profiles::discover(
+        config.profile.as_deref(),
+        &config.workspace,
+        config.cors,
+    )?);
+    let name = profiles.active();
+    let state = profiles
+        .state(&name)
+        .ok_or_else(|| format!("no profile named `{name}` to serve over ACP"))?;
+    tracing::info!(profile = %name, "serving ACP over stdio");
+    acpilotd::bridge::serve_stdio(state).await?;
+    profiles.shutdown_language_servers().await;
     Ok(())
 }
 

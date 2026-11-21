@@ -32,8 +32,7 @@ Until the signed index lands, `ext add` takes a directory, not a URL:
 
 ```bash
 git clone https://github.com/you/acpilot-pack /tmp/acpilot-pack
-acpilot ext add --from /tmp/acpilot-pack/pack
-acpilot ext activate you.pack --profile work
+acpilot ext add --from /tmp/acpilot-pack/pack --activate work
 ```
 
 The store still hashes it and records the checksum. `ext verify --all` runs the

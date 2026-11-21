@@ -4,6 +4,86 @@
  */
 
 export interface paths {
+    "/v1/acp/bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the ACP bridge is doing
+         * @description Whether the driver listener is on, the address it bound, and how many drivers are connected or on record. Off unless `[acp.bridge] enabled = true` names a `bind` address.
+         */
+        get: operations["acp_bridge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/drivers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The drivers paired with this daemon
+         * @description Including revoked drivers: the row answers who prompted a turn after the credential has stopped working.
+         */
+        get: operations["acp_drivers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/drivers/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a driver's token
+         * @description The next request carrying the old token is `401`; the row stays so a transcript can still answer who prompted a turn.
+         */
+        post: operations["revoke_driver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/acp/pairings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time pairing code
+         * @description The code is shown to a person, typed into a driver, single-use and expires in two minutes. `grant_answer_permissions` is the person's decision, not the driver's: without it the driver's turns wait for a human to answer the agent's permission requests.
+         */
+        post: operations["pair_driver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents": {
         parameters: {
             query?: never;
@@ -59,6 +139,105 @@ export interface paths {
         get: operations["events_doc"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every installed extension version
+         * @description One row per installed version, with the profiles that activate it. A blocked version is listed with its reason rather than hidden: the refusal is a fact about the bytes.
+         */
+        get: operations["list_doc"];
+        put?: never;
+        /**
+         * Install an extension from the signed index or a directory
+         * @description An index install verifies the listing's signature, checks the archive's size and sha256, and refuses an archive whose manifest names a different id, version or publisher. A `path` install copies that directory through the same store checks.
+         */
+        post: operations["install_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One extension: installed versions, contributions and index listings */
+        get: operations["detail_doc"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove every installed version of one extension
+         * @description Refused while a profile activates the id; the error names the profiles to deactivate first.
+         */
+        delete: operations["remove_doc"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve an installed extension for one profile */
+        post: operations["activate_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw one profile's approval */
+        post: operations["deactivate_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/extensions/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rehash every installed version of one extension
+         * @description `ready` is false when any version's bytes no longer match the recorded checksum, or the manifest no longer loads.
+         */
+        post: operations["verify_doc"];
         delete?: never;
         options?: never;
         head?: never;
@@ -425,6 +604,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/lsp/servers/{language}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record that a language server's program is approved */
+        post: operations["trust_language_server_doc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the declared providers report right now
+         * @description Asks every enabled provider, or the one named by `?provider=`. A provider that cannot answer is listed in `problems` beside the models the others returned, because a list that quietly omitted a server would look like a server with no models.
+         */
+        get: operations["list_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/permissions": {
         parameters: {
             query?: never;
@@ -613,6 +829,172 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a provider declaration
+         * @description Removes the row from `providers.toml` and forgets its last answer. A recipe that still names it makes this `409`: deleting the server would leave a recipe with no clue why it cannot run.
+         */
+        delete: operations["delete_provider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/providers/{id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask one provider what it has, and keep the answer
+         * @description The only route that contacts a server without a declaration changing. A disabled provider is reported as disabled and is not contacted. A refused credential is `unauthorized`, not `unreachable`.
+         */
+        post: operations["probe_provider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recipes this profile holds
+         * @description One row per `recipes/<id>.toml`, sorted by id. Each read re-reads the directory, so a file edited by hand is visible without a restart. A file that does not load is a `400` naming it, not a silently shorter list.
+         */
+        get: operations["list_recipes"];
+        put?: never;
+        /**
+         * Write a recipe file
+         * @description Writes `recipes/<id>.toml` and reads the directory back. A recipe naming an undeclared or disabled provider is `400`, and the new file is removed. An id that is already a file is `409`.
+         */
+        post: operations["create_recipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One recipe */
+        get: operations["get_recipe"];
+        put?: never;
+        post?: never;
+        /** Remove a recipe file */
+        delete: operations["delete_recipe"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write a recipe into `agents.toml` as an agent
+         * @description Writes one `acp-stdio` entry whose command is `acpilot-agent-lm`, with a comment naming the recipe file and its mtime. An entry with the same id that promotion did not write is `409` and is left untouched. The tools probe is asked once and its answer, when it is bad or could not be given, comes back in `warnings`; warnings never block the write. Removing the entry is `acpilot agents rm`.
+         */
+        post: operations["promote_recipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One page of a recipe's runs, newest first
+         * @description The cursor is a run id, not an offset: the log only grows, and an offset would repeat or skip a line when something is appended between two pages. A cursor naming another recipe's run is `400`.
+         */
+        get: operations["list_runs"];
+        put?: never;
+        /**
+         * Run a recipe and stream the answer
+         * @description Assembles the prompt (master prompt, corpus selectors, budget), calls the configured provider once and appends a record to the profile's `runs.jsonl`. The response is an SSE stream: `model.run.started`, `model.run.delta`, `model.run.finished`. A run with corpus selectors needs a `root` query parameter. There is no job to poll and no second request: the stream is the run.
+         */
+        post: operations["start_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}/runs/{run}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One run's record: the answer and the request that produced it
+         * @description The page returns summaries because that is what a history draws. This returns the stored request as well: the prompt, the corpus selectors, the files they resolved to with sizes, and the budget the assembly planned against. A run the log does not hold is `404`, including a run id that belongs to another recipe.
+         */
+        get: operations["get_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{id}/runs/{run}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a recorded request again, unchanged
+         * @description Re-sends the prompt and corpus selectors the record holds, through the recipe as it is now, and appends a new record with its own id: a replay is an experiment to compare with the first line, not a retry that overwrites it. The corpus is read from `root` again because the record stores paths and sizes rather than file bytes, so a replay is byte-identical only while the workspace and recipe are unchanged.
+         */
+        post: operations["replay_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -700,6 +1082,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the skills this workspace can see
+         * @description Workspace skills override profile skills, which override those an activated extension ships. Instructions are included for preview.
+         */
+        get: operations["list_skills"];
+        put?: never;
+        /**
+         * Create or replace a skill
+         * @description The draft is validated by the same parser that reads `SKILL.md`; a rejected draft leaves the previous file intact. `destination` chooses the workspace or the profile.
+         */
+        post: operations["save_skill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stats": {
         parameters: {
             query?: never;
@@ -729,6 +1135,26 @@ export interface paths {
         put?: never;
         /** Start a terminal */
         post: operations["create_terminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every theme a profile can draw with, resolved
+         * @description Built-in themes plus those an activated extension provides, with inheritance applied and every token as `#rrggbb`. `selected` names the surfaces whose settings choose the theme, for the daemon's own profile.
+         */
+        get: operations["themes_doc"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -827,6 +1253,14 @@ export interface components {
         AgentSummary: {
             /** @description Command that will be spawned, for display and debugging. */
             command: string;
+            /**
+             * @description Extension that provided this agent, when it came from one.
+             *
+             *     A client asking to trust the binary can name the pack — "trust
+             *     rust-analyzer from acpilot.rust-pack?" — instead of asking about a bare
+             *     path nobody recognizes.
+             */
+            extension?: string | null;
             /** @description Agent identifier. */
             id: components["schemas"]["String"];
             /** @description Human-readable name. */
@@ -978,6 +1412,53 @@ export interface components {
             address?: string | null;
             /** @description How the daemon would reach the host. */
             kind: components["schemas"]["HostKind"];
+        };
+        /**
+         * @description Ask for a code, from the cockpit.
+         *
+         *     The person issuing the code decides whether the driver may answer permission
+         *     requests; a driver cannot grant itself one by asking.
+         */
+        CreatePairingRequest: {
+            /**
+             * @description Allow the paired driver to answer permission requests for the turns it
+             *     starts. Off by default, and off is the safe answer.
+             */
+            grant_answer_permissions?: boolean;
+        };
+        /**
+         * @description Request body for `POST /v1/recipes`.
+         *
+         *     The same fields a recipe file has, without `updated_at`: the file's mtime is
+         *     the timestamp, and a client that supplied one would be writing a claim about a
+         *     file it does not own.
+         */
+        CreateRecipeRequest: {
+            /** @description Context plan. */
+            context: components["schemas"]["ContextBudget"];
+            /** @description Identifier, also the file name under `recipes/`. */
+            id: components["schemas"]["String"];
+            /** @description Display label. */
+            label: string;
+            /** @description Model identifier to send. */
+            model_id: string;
+            /** @description What this recipe is for, and what it is bad at. */
+            notes?: string | null;
+            /** @description Provider to call. */
+            provider_id: components["schemas"]["String"];
+            /** @description Sampling knobs. Absent means the agent-shaped defaults. */
+            sampling?: components["schemas"]["SamplingParams"];
+            /**
+             * Format: int32
+             * @description Schema version; this build reads 1.
+             */
+            schema_version: number;
+            /** @description Skills whose instructions are part of this recipe's system prompt. */
+            skills?: string[];
+            /** @description The master prompt. */
+            system_prompt: string;
+            /** @description Tool ceiling for the promoted agent. */
+            tools: components["schemas"]["ToolExposure"];
         };
         /** @description Request body for `POST /v1/sessions`. */
         CreateSessionRequest: {
@@ -1174,6 +1655,15 @@ export interface components {
             /** @description What is wrong with it. */
             message: string;
         };
+        /** @description What an activation request changed. */
+        ExtensionAction: {
+            /** @description `false` when the list already said what it was now asked to say. */
+            changed: boolean;
+            /** @description Namespaced identifier. */
+            id: components["schemas"]["String"];
+            /** @description Profile the approval was written to, or withdrawn from. */
+            profile: string;
+        };
         /** @description One thing an extension provides, named as the profile will see it. */
         ExtensionContribution: {
             /**
@@ -1192,10 +1682,14 @@ export interface components {
             active_profiles: string[];
             /** @description Everything it contributes, flattened. */
             contributions: components["schemas"]["ExtensionContribution"][];
+            /** @description Versions the signed index offers for this id. */
+            listed?: components["schemas"]["ExtensionListing"][];
             /** @description The manifest as written, for reviewing before enabling. */
             manifest: string;
             /** @description The same summary the list endpoint returns. */
             summary: components["schemas"]["ExtensionSummary"];
+            /** @description Every installed version, oldest first. The newest is [`Self::summary`]. */
+            versions?: components["schemas"]["ExtensionSummary"][];
         };
         /**
          * @description What an extension contributes.
@@ -1205,7 +1699,34 @@ export interface components {
          *     on each contribution.
          * @enum {string}
          */
-        ExtensionKind: "theme" | "language_servers" | "agents" | "grammars" | "snippets" | "keymap" | "transcript_parser";
+        ExtensionKind: "theme" | "language_servers" | "agents" | "skills" | "grammars" | "snippets" | "keymap" | "transcript_parser";
+        /** @description One version a signed index offers, as shown beside what is installed. */
+        ExtensionListing: {
+            /** @description `sha256:<64 hex characters>` over the archive's bytes. */
+            checksum: string;
+            /** @description Where the archive is downloaded from. */
+            download: string;
+            /** @description The registry the listing is filed under. */
+            kind: components["schemas"]["ExtensionKind"];
+            /** @description Oldest acpilot that can load it. */
+            min_acpilot?: string | null;
+            /** @description Who published it. */
+            publisher: string;
+            /**
+             * Format: int64
+             * @description The archive's length in bytes.
+             */
+            size: number;
+            /** @description Semantic version. */
+            version: string;
+        };
+        /** @description What a removal deleted. */
+        ExtensionRemoval: {
+            /** @description Namespaced identifier. */
+            id: components["schemas"]["String"];
+            /** @description Versions removed, oldest first. */
+            versions: string[];
+        };
         /**
          * @description How the extension got here.
          * @enum {string}
@@ -1218,6 +1739,8 @@ export interface components {
         ExtensionStatus: "installed" | "active" | "disabled" | "blocked";
         /** @description An extension as returned by `GET /v1/extensions`. */
         ExtensionSummary: {
+            /** @description Profiles that activate this id. Empty when none does. */
+            active_profiles?: string[];
             /** @description SHA-256 of the installed directory, verified against the index. */
             checksum?: string | null;
             /** @description One sentence, shown in the list. */
@@ -1240,6 +1763,13 @@ export interface components {
             status: components["schemas"]["ExtensionStatus"];
             /** @description Semantic version from the manifest. */
             version: string;
+        };
+        /** @description The result of rehashing every installed version of one id. */
+        ExtensionVerify: {
+            /** @description The versions, with their verdicts. */
+            extensions: components["schemas"]["ExtensionSummary"][];
+            /** @description Whether every version still matches its recorded checksum. */
+            ready: boolean;
         };
         /**
          * @description What happened to a path since the last commit.
@@ -1561,10 +2091,15 @@ export interface components {
          *     `path` wins when both are present, because a developer typing a path means it.
          */
         InstallExtensionRequest: {
-            /** @description Activate it in the profile named by `X-Acpilot-Profile` after verifying. */
-            activate: boolean;
+            /** @description Activate it in the daemon's profile after verifying. */
+            activate?: boolean;
             /** @description Identifier from the index, or the manifest's id for a path install. */
             id: components["schemas"]["String"];
+            /**
+             * @description A different index: an https URL or a file. The one this build ships when
+             *     absent.
+             */
+            index?: string | null;
             /** @description Directory to link instead of downloading. */
             path?: string | null;
             /** @description Version to install. The index's latest when absent. */
@@ -1620,12 +2155,20 @@ export interface components {
          * @description Lifecycle state of a language server.
          * @enum {string}
          */
-        LspServerStatus: "starting" | "ready" | "indexing" | "crashed" | "stopped";
+        LspServerStatus: "starting" | "ready" | "indexing" | "crashed" | "stopped" | "untrusted";
         /** @description A language server as returned by `GET /v1/lsp/servers`. */
         LspServerSummary: {
             /** @description Command that was spawned. */
             command: string;
             encoding?: components["schemas"]["PositionEncoding"] | null;
+            /**
+             * @description The extension that introduced this row, absent for this build's own.
+             *
+             *     A client that asks the person to trust a command has to name where the
+             *     command came from, and "rust-analyzer from acpilot.rust-pack" is a question
+             *     about a pin, while a bare path is a question about nothing.
+             */
+            extension?: string | null;
             /** @description Server identifier. */
             id: components["schemas"]["String"];
             /** @description Language identifiers this server is attached to. */
@@ -1692,6 +2235,25 @@ export interface components {
             /** @description Accepts images alongside text. */
             vision: boolean;
         };
+        /**
+         * @description One model list, with the providers that could not answer.
+         *
+         *     The two halves are beside each other on purpose: a list that quietly omitted a
+         *     server would look like a server with no models.
+         */
+        ModelCatalogue: {
+            /** @description Models from every provider that answered, in provider declaration order. */
+            models: components["schemas"]["DiscoveredModel"][];
+            /** @description Providers that did not answer, and why. */
+            problems: components["schemas"]["ModelProblem"][];
+        };
+        /** @description A provider that could not answer a model list. */
+        ModelProblem: {
+            /** @description Why it did not answer. */
+            message: string;
+            /** @description Provider id. */
+            provider_id: components["schemas"]["String"];
+        };
         /** @description A tuned configuration for one model, as returned by `GET /v1/recipes`. */
         ModelRecipe: {
             /** @description Context plan. */
@@ -1713,6 +2275,13 @@ export interface components {
              * @description Schema version, so migrations are explicit.
              */
             schema_version: number;
+            /**
+             * @description Skills whose instructions are part of this recipe's system prompt.
+             *
+             *     Empty means none. A name that is not present is reported when the run
+             *     starts rather than silently omitted.
+             */
+            skills?: string[];
             /**
              * @description The master prompt. The whole point of the lab is editing this and seeing
              *     what changes.
@@ -1741,6 +2310,18 @@ export interface components {
             name: string;
             /** @description Scopes it would like. `answer_permissions` requires an explicit grant. */
             requested_scopes: components["schemas"]["DriverScope"][];
+        };
+        /**
+         * @description What a driver gets when it claims a pair: its row, and the token once.
+         *
+         *     The token is in this response and nowhere else — the ledger keeps an Argon2id
+         *     hash of it, so a driver that loses it asks for another code.
+         */
+        PairedDriver: {
+            /** @description The driver, as the cockpit will list it. */
+            driver: components["schemas"]["AcpDriverSummary"];
+            /** @description The bearer token every later request carries. */
+            token: string;
         };
         /**
          * @description A one-time pairing code, from `POST /v1/acp/pairings`.
@@ -2153,6 +2734,48 @@ export interface components {
             status: components["schemas"]["ProviderStatus"];
         };
         /**
+         * @description Request body for `PATCH /v1/recipes/{id}`.
+         *
+         *     Only the fields present move. A recipe id is not editable: the file name is the
+         *     identity a run record and an agent manifest refer to.
+         */
+        RecipePatch: {
+            context?: components["schemas"]["ContextBudget"] | null;
+            /** @description New display label. */
+            label?: string | null;
+            /** @description New model identifier. */
+            model_id?: string | null;
+            /** @description New note. */
+            notes?: string | null;
+            provider_id?: components["schemas"]["String"] | null;
+            sampling?: components["schemas"]["SamplingParams"] | null;
+            /** @description New skill selection. `Some(vec![])` clears it; `None` leaves it alone. */
+            skills?: string[] | null;
+            /** @description New master prompt. */
+            system_prompt?: string | null;
+            tools?: components["schemas"]["ToolExposure"] | null;
+        };
+        /**
+         * @description The request half of a run record.
+         *
+         *     This is what the run sent, not what the recipe would send now: the recipe may
+         *     have been edited since, and the lab's point is to show the run that happened.
+         */
+        RecordedRunRequest: {
+            /** @description The budget the assembly planned against. */
+            budget: components["schemas"]["ContextBudget"];
+            /** @description Selectors in the order the run used them. */
+            corpus: components["schemas"]["CorpusSelector"][];
+            /** @description The files they resolved to, in prompt order. */
+            files: components["schemas"]["ResolvedCorpusFile"][];
+            /** @description The user message, unchanged. */
+            prompt: string;
+            /** @description `sha256:` and the hex digest of the prompt. */
+            prompt_sha256: string;
+            /** @description The master prompt's digest, when the recipe had one. */
+            system_prompt_sha256?: string | null;
+        };
+        /**
          * @description One use of an identifier, for the references panel.
          *
          *     `column` is a character column rather than a byte offset: a pane places a caret on
@@ -2212,10 +2835,57 @@ export interface components {
             /** @description Workspace id, when the client names one. The daemon serves exactly one. */
             workspace?: string | null;
         };
+        /**
+         * @description One file a corpus selector resolved to, as the run recorded it.
+         *
+         *     Recorded rather than re-derived: the lab shows the files a run actually read,
+         *     with their sizes, and a replay must not depend on the workspace still looking
+         *     the way it did.
+         */
+        ResolvedCorpusFile: {
+            /**
+             * Format: int64
+             * @description Bytes read from disk.
+             */
+            bytes: number;
+            /** @description Path relative to the workspace root, with `/` separators. */
+            path: string;
+            /**
+             * Format: int32
+             * @description Tokens the file was estimated at.
+             */
+            tokens: number;
+        };
+        /** @description One page of a recipe's runs, newest first. */
+        RunPage: {
+            next?: components["schemas"]["String"] | null;
+            /** @description The runs. */
+            runs: components["schemas"]["RunSummary"][];
+        };
+        /** @description One run's record: what it answered, and what it was asked. */
+        RunRecordView: {
+            /**
+             * @description What the model thought before it answered, when the server reported any.
+             *
+             *     Absent for a model that does not think out loud. A reasoning model with a
+             *     tight answer budget can spend all of it here and return no `content`, so
+             *     this is what tells a person the run worked and the budget was short.
+             */
+            reasoning?: string | null;
+            /** @description The request that produced it. */
+            request: components["schemas"]["RecordedRunRequest"];
+            /**
+             * Format: int32
+             * @description Schema version of the stored line.
+             */
+            schema_version: number;
+            /** @description The run, as the page also returns it. */
+            summary: components["schemas"]["RunSummary"];
+        };
         /** @description Request body for `POST /v1/recipes/{id}/runs`. */
         RunRequest: {
-            /** @description Corpus pulled from the current workspace, in order. */
-            corpus: components["schemas"]["CorpusSelector"][];
+            /** @description Corpus pulled from the current workspace, in order. Absent means none. */
+            corpus?: components["schemas"]["CorpusSelector"][];
             /** @description Client-generated key that makes retries safe. */
             idempotency_key?: string | null;
             /** @description The user message. */
@@ -2362,6 +3032,14 @@ export interface components {
             agent_id: components["schemas"]["String"];
             /** @description RFC 3339 timestamp of creation. */
             created_at: string;
+            /**
+             * @description Driver that opened this session, when it came through the ACP bridge.
+             *
+             *     Absent for a session a person opened at the machine. The id is the one
+             *     `GET /v1/acp/drivers` lists, so a transcript can answer who asked after
+             *     the connection ended.
+             */
+            driver_id?: string | null;
             /** @description Session identifier. */
             id: components["schemas"]["String"];
             /**
@@ -2385,6 +3063,40 @@ export interface components {
         SetModeRequest: {
             /** @description The id of the mode to switch to, as the agent advertised it. */
             mode: string;
+        };
+        /**
+         * @description Where a saved skill is written.
+         * @enum {string}
+         */
+        SkillDestination: "workspace" | "profile";
+        /** @description A create-or-replace request from the lab. */
+        SkillDraft: {
+            /** @description One-line description, at most 1024 characters. */
+            description: string;
+            /** @description Workspace or profile. */
+            destination: components["schemas"]["SkillDestination"];
+            /** @description Instructions after the frontmatter. */
+            instructions: string;
+            /** @description Lowercase hyphenated name, also the directory name. */
+            name: string;
+        };
+        /**
+         * @description Where a skill was found.
+         * @enum {string}
+         */
+        SkillSource: "workspace" | "profile" | "extension";
+        /** @description One skill, including its instructions for preview. */
+        SkillSummary: {
+            /** @description One-line description used by the picker. */
+            description: string;
+            /** @description The instructions after the frontmatter. */
+            instructions: string;
+            /** @description Lowercase hyphenated name, also the directory name. */
+            name: string;
+            /** @description Absolute directory containing `SKILL.md`. */
+            path: string;
+            /** @description Which layer provided it. */
+            source: components["schemas"]["SkillSource"];
         };
         /**
          * @description Where one figure came from.
@@ -2458,7 +3170,28 @@ export interface components {
             id: string;
             /** @description Display name. */
             name: string;
+            /** @description Surfaces whose settings name this theme right now. */
+            selected?: components["schemas"]["ThemeSurface"][];
+            /** @description Every syntax token, resolved, as `#rrggbb`. */
+            syntax?: {
+                [key: string]: string;
+            };
+            /** @description Every UI token, resolved, as `#rrggbb`. */
+            ui?: {
+                [key: string]: string;
+            };
         };
+        /**
+         * @description Which frontend is asking for a theme.
+         *
+         *     The theme is one setting per surface rather than one for all of them, because a
+         *     terminal is not a window: a person may want a light editor on the desktop and a
+         *     dark prompt in the terminal beside it. Every surface falls back to
+         *     [`Preferences::theme`] when its own key is unset, so the usual answer — one
+         *     theme, everywhere — stays one line of settings.
+         * @enum {string}
+         */
+        ThemeSurface: "tui" | "gui" | "web";
         /** @description Token counts for a run, and whether they are trustworthy. */
         TokenUsage: {
             /**
@@ -2498,6 +3231,22 @@ export interface components {
             search: boolean;
             /** @description Offer file writes. */
             write_files: boolean;
+        };
+        /**
+         * @description Request body for `PATCH /v1/providers/{id}`.
+         *
+         *     An omitted field is unchanged. Changing where the provider lives is a new
+         *     question, so the route probes again; changing only a label does not.
+         */
+        UpdateProviderRequest: {
+            /** @description New base URL. */
+            base_url?: string | null;
+            /** @description New keyring reference. */
+            credential_ref?: string | null;
+            /** @description Whether the provider may be contacted. */
+            enabled?: boolean | null;
+            /** @description New display label. */
+            label?: string | null;
         };
         /**
          * @description Request body for `POST /v1/workspaces`.
@@ -2555,6 +3304,120 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    acp_bridge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bridge's state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpBridgeSummary"];
+                };
+            };
+        };
+    };
+    acp_drivers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per driver */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpDriverSummary"][];
+                };
+            };
+        };
+    };
+    revoke_driver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Driver id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcpDriverSummary"];
+                };
+            };
+            /** @description No such driver */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    pair_driver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePairingRequest"];
+            };
+        };
+        responses: {
+            /** @description The code and when it expires */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingCode"];
+                };
+            };
+            /** @description The body is not a pairing request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The bridge is not enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     agents_doc: {
         parameters: {
             query?: never;
@@ -2564,7 +3427,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every configured agent, with its availability on this host */
+            /** @description Every configured agent and every agent an activated extension provides, with its availability on this host */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2607,12 +3470,323 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap */
+            /** @description text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every installed version, ordered by id and then version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSummary"][];
+                };
+            };
+            /** @description The store could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    install_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallExtensionRequest"];
+            };
+        };
+        responses: {
+            /** @description The installed version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSummary"];
+                };
+            };
+            /** @description The request names nothing installable, or the archive failed its checks */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The id or version is not in the index */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description That id and version are already installed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    detail_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The detail, newest version first in `versions` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionDetail"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No version of that id is installed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    remove_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The versions removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRemoval"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Nothing installed under that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A profile still activates it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    activate_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description What the approval list now says */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionAction"];
+                };
+            };
+            /** @description Not a namespaced id, or a blocked/absent extension */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No ready version of that id is installed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The daemon has no profile to write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    deactivate_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description What the approval list now says; `changed` is false when it already did not list the id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionAction"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The daemon has no profile to write */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    verify_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Extension id, `publisher.name` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each version with its verdict */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionVerify"];
+                };
+            };
+            /** @description Not a namespaced extension id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Nothing installed under that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -3818,6 +4992,52 @@ export interface operations {
             };
         };
     };
+    trust_language_server_doc: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LSP language id */
+                language: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The row, now approved, with the pin that made it so */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LspServerSummary"];
+                };
+            };
+        };
+    };
+    list_models: {
+        parameters: {
+            query?: {
+                /** @description Only this provider id */
+                provider?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Models and the providers that could not answer */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogue"];
+                };
+            };
+        };
+    };
     permissions_doc: {
         parameters: {
             query?: {
@@ -4329,6 +5549,414 @@ export interface operations {
             };
         };
     };
+    delete_provider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declaration is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A recipe still names it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    probe_provider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The provider, with the answer it gave */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSummary"];
+                };
+            };
+            /** @description No such provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_recipes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every recipe that loads */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"][];
+                };
+            };
+        };
+    };
+    create_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description The recipe as it now reads */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"];
+                };
+            };
+            /** @description An id or field this build cannot use */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The id is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recipe */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelRecipe"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    promote_recipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description The agent as `GET /v1/agents` will now report it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotedAgent"];
+                };
+            };
+            /** @description No profile directory, or an id the manifest loader refuses */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A hand-written entry already owns the id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_runs: {
+        parameters: {
+            query?: {
+                /** @description Runs per page; 20 when absent */
+                limit?: number;
+                /** @description Return runs older than this run id */
+                before?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of summaries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPage"];
+                };
+            };
+            /** @description The cursor does not belong to this recipe */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    start_run: {
+        parameters: {
+            query?: {
+                /** @description Workspace root for corpus selectors */
+                root?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description The run's frames */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description A body or corpus root this build cannot use */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The provider is not declared, disabled, or unreachable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description Run id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's record */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunRecordView"];
+                };
+            };
+            /** @description No such run for this recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    replay_run: {
+        parameters: {
+            query?: {
+                /** @description Workspace root for corpus selectors */
+                root?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description Run id to replay */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new run's frames */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description No such run for this recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The provider is not declared, disabled, or unreachable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list_sessions: {
         parameters: {
             query?: never;
@@ -4592,6 +6220,68 @@ export interface operations {
             };
         };
     };
+    list_skills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSummary"][];
+                };
+            };
+        };
+    };
+    save_skill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillDraft"];
+            };
+        };
+        responses: {
+            /** @description The written skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSummary"];
+                };
+            };
+            /** @description The draft is not a valid skill */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workspace or profile to write into */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     read_stats: {
         parameters: {
             query?: never;
@@ -4695,6 +6385,38 @@ export interface operations {
             };
             /** @description The host could not start the program on a PTY */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    themes_doc: {
+        parameters: {
+            query?: {
+                /** @description Profile id. The daemon's own profile when absent */
+                profile?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Themes ordered by id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeSummary"][];
+                };
+            };
+            /** @description No profile was named and the daemon has none */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

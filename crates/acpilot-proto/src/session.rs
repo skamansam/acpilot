@@ -44,6 +44,13 @@ pub struct SessionSummary {
     pub title: String,
     /// Lifecycle state.
     pub status: SessionStatus,
+    /// Driver that opened this session, when it came through the ACP bridge.
+    ///
+    /// Absent for a session a person opened at the machine. The id is the one
+    /// `GET /v1/acp/drivers` lists, so a transcript can answer who asked after
+    /// the connection ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_id: Option<String>,
     /// RFC 3339 timestamp of creation.
     pub created_at: String,
     /// RFC 3339 timestamp of the last event.

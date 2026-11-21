@@ -1,0 +1,129 @@
+---
+source: crates/acpilot-model/tests/wire_snapshot.rs
+expression: "Value::Array(bodies.into_iter().map(canonical).collect())"
+---
+[
+  {
+    "max_tokens": 256,
+    "messages": [
+      {
+        "content": "You are terse.",
+        "role": "system"
+      },
+      {
+        "content": "which file?",
+        "role": "assistant"
+      },
+      {
+        "content": "read the file",
+        "role": "user"
+      }
+    ],
+    "model": "qwen2-7b-instruct",
+    "repeat_penalty": 1.100000023841858,
+    "response_format": {
+      "json_schema": {
+        "name": "answer",
+        "schema": {
+          "properties": {
+            "answer": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "json_schema"
+    },
+    "seed": 7,
+    "stop": [
+      "\n\n"
+    ],
+    "stream": false,
+    "temperature": 0.20000000298023224,
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ],
+    "top_k": 40,
+    "top_p": 0.949999988079071
+  },
+  {
+    "max_tokens": 256,
+    "messages": [
+      {
+        "content": "You are terse.",
+        "role": "system"
+      },
+      {
+        "content": "which file?",
+        "role": "assistant"
+      },
+      {
+        "content": "read the file",
+        "role": "user"
+      }
+    ],
+    "model": "qwen2-7b-instruct",
+    "repeat_penalty": 1.100000023841858,
+    "response_format": {
+      "json_schema": {
+        "name": "answer",
+        "schema": {
+          "properties": {
+            "answer": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "json_schema"
+    },
+    "seed": 7,
+    "stop": [
+      "\n\n"
+    ],
+    "stream": false,
+    "temperature": 0.20000000298023224,
+    "tools": [
+      {
+        "function": {
+          "description": "Read a file",
+          "name": "read_file",
+          "parameters": {
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ],
+    "top_p": 0.949999988079071
+  }
+]

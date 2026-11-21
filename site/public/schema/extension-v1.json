@@ -44,6 +44,11 @@
           "const": "agents"
         },
         {
+          "description": "Agent Skills (`SKILL.md` directories) installed with the extension.",
+          "type": "string",
+          "const": "skills"
+        },
+        {
           "description": "A prebuilt tree-sitter grammar plus its queries.",
           "type": "string",
           "const": "grammars"

@@ -31,8 +31,21 @@ pub const DESCRIPTION_LIMIT: usize = 1024;
 pub enum SkillSource {
     /// A project's `.acpilot/skills/` directory.
     Workspace,
+    /// A profile's `skills/` directory, available to every workspace it opens.
+    Profile,
     /// An activated extension's `skills/` directory.
     Extension,
+}
+
+impl SkillSource {
+    /// Precedence: a project beats a profile, which beats a pack.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Workspace => 3,
+            Self::Profile => 2,
+            Self::Extension => 1,
+        }
+    }
 }
 
 /// One parsed skill.
@@ -155,11 +168,31 @@ pub fn discover(
     workspace_root: &Path,
     extension_roots: &[PathBuf],
 ) -> Result<Vec<Skill>, SkillError> {
+    discover_scoped(workspace_root, None, extension_roots)
+}
+
+/// Discover skills from a workspace, an optional profile, and extension roots.
+///
+/// Precedence is project over profile over pack: a project's instructions are
+/// about this checkout, a profile's are about every checkout, and a pack's are
+/// somebody else's defaults. A lower layer with the same name is replaced; two
+/// skills in one layer are still an error.
+pub fn discover_scoped(
+    workspace_root: &Path,
+    profile_root: Option<&Path>,
+    extension_roots: &[PathBuf],
+) -> Result<Vec<Skill>, SkillError> {
     let mut found: BTreeMap<String, Skill> = BTreeMap::new();
 
-    // Extensions first, so a workspace skill with the same name can replace it.
     for root in extension_roots {
         load_tree(&root.join("skills"), SkillSource::Extension, &mut found)?;
+    }
+    if let Some(profile_root) = profile_root {
+        load_tree(
+            &profile_root.join("skills"),
+            SkillSource::Profile,
+            &mut found,
+        )?;
     }
     load_tree(
         &workspace_root.join(".acpilot/skills"),
@@ -168,6 +201,59 @@ pub fn discover(
     )?;
 
     Ok(found.into_values().collect())
+}
+
+/// Write one skill under `root`, validated by the same parser that reads it.
+///
+/// `root` is the workspace, profile or extension directory; the directory layout
+/// follows from `source`. The write is one rename, so a half-written `SKILL.md`
+/// is never discoverable.
+pub fn save_skill(
+    root: &Path,
+    source: SkillSource,
+    name: &str,
+    description: &str,
+    instructions: &str,
+) -> Result<Skill, SkillError> {
+    let directory = match source {
+        SkillSource::Workspace => root.join(".acpilot/skills").join(name),
+        SkillSource::Profile | SkillSource::Extension => root.join("skills").join(name),
+    };
+    let path = directory.join("SKILL.md");
+    let description = description.trim();
+    let instructions = instructions.trim();
+    let contents = render(name, description, instructions);
+    // Parse before writing: a name that is not a directory, a missing
+    // description or an empty body is refused while the old file is intact.
+    let skill = parse_skill(&contents, &path, source)?;
+    fs::create_dir_all(&directory).map_err(|source| SkillError::Io {
+        path: directory.clone(),
+        source,
+    })?;
+    let temporary = directory.join("SKILL.md.tmp");
+    fs::write(&temporary, contents).map_err(|source| SkillError::Io {
+        path: temporary.clone(),
+        source,
+    })?;
+    fs::rename(&temporary, &path).map_err(|source| SkillError::Io { path, source })?;
+    Ok(skill)
+}
+
+/// The file text for one skill, with the YAML escaped rather than interpolated.
+#[must_use]
+pub fn render(name: &str, description: &str, instructions: &str) -> String {
+    // A JSON string is a valid YAML double-quoted scalar, and escaping by hand
+    // keeps this crate free of a serialization dependency it does not otherwise
+    // need. A description is one line, but a pasted one may not be.
+    let description = description
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!(
+        "---\nname: {name}\ndescription: \"{description}\"\n---\n\n{}\n",
+        instructions.trim()
+    )
 }
 
 fn load_tree(
@@ -198,11 +284,12 @@ fn load_tree(
         }
         let skill = load_skill(&manifest, source)?;
         if let Some(existing) = found.get(&skill.name) {
-            // The workspace is the only source allowed to shadow another one.
-            if skill.source == SkillSource::Workspace && existing.source == SkillSource::Extension {
+            if skill.source.rank() > existing.source.rank() {
                 found.insert(skill.name.clone(), skill);
                 continue;
             }
+            // Equal precedence is a real collision: two packs, or two skills in
+            // one directory, claiming one name means neither is predictable.
             return Err(SkillError::Duplicate {
                 name: skill.name,
                 first: existing.directory.clone(),

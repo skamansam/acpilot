@@ -207,11 +207,15 @@ mod tests {
         (Target::Tcp(addr.to_string()), listener)
     }
 
-    /// A port nothing is listening on: bound once, then dropped.
+    /// A port nothing answers on, and that no other test can take.
+    ///
+    /// Binding `:0` and dropping it leaves the port free for the kernel to hand to
+    /// the next `bind(":0")` in this same binary — a neighbouring test's live
+    /// listener then answers for a daemon that is supposed to be dead, and this test
+    /// fails for a reason that is not about pidfiles. The discard port is below the
+    /// ephemeral range, so nothing in this file can be given it.
     fn silent_endpoint() -> Target {
-        let (target, listener) = live_endpoint();
-        drop(listener);
-        target
+        Target::Tcp("127.0.0.1:9".into())
     }
 
     #[test]

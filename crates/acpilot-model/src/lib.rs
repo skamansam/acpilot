@@ -13,16 +13,21 @@
 
 use std::time::Duration;
 
+use futures::StreamExt;
+
 use acpilot_core::AcpilotError;
 use acpilot_proto::model::{
     DiscoveredModel, MetadataSource, ModelCapabilities, ProviderKind, SamplingParams,
 };
 use serde_json::{Map, Value};
 
+pub mod context;
+mod credits;
 mod lmstudio;
 mod openai;
 mod wire;
 
+pub use credits::{BALANCE_TIMEOUT, balance, balance_endpoint};
 pub use lmstudio::LmStudio;
 pub use openai::OpenAi;
 
@@ -31,13 +36,28 @@ pub const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a single generation may take. Generous on purpose: a 70B model on a
 /// laptop is slow, not broken, and cancelling a turn is the user's job.
 pub const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long a streaming body may go without a byte before it is called stalled.
+///
+/// [`CHAT_TIMEOUT`] caps the request; this caps the silence inside it. A server
+/// that accepted the request and then stopped sending would otherwise hold a run
+/// for the full five minutes, which to the person watching is a hung daemon. One
+/// minute is long enough for a slow token on a loaded machine and short enough
+/// that a stall is reported while the person still remembers asking.
+pub const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Connection timeout. A local server either answers the TCP handshake at once or
 /// is not running; waiting longer only delays the honest error.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Optional parameters that a server may reject. They are removed one at a time
 /// on a `400`, and the removal is reported rather than hidden.
-const OPTIONAL_PARAMS: [&str; 5] = ["top_k", "repeat_penalty", "seed", "stop", "response_format"];
+const OPTIONAL_PARAMS: [&str; 6] = [
+    "top_k",
+    "repeat_penalty",
+    "seed",
+    "stop",
+    "response_format",
+    "stream_options",
+];
 
 /// A declared model server.
 ///
@@ -215,6 +235,13 @@ pub struct Stats {
 pub struct ChatResponse {
     /// Assistant text, empty when the answer was only tool calls.
     pub content: String,
+    /// The model's thinking, empty when it produced none.
+    ///
+    /// A reasoning model writes this before it writes `content`, and an answer
+    /// budget spent thinking leaves `content` empty. Kept apart because it is not
+    /// the answer: a caller that drew it in the answer's place would be putting
+    /// words in the model's mouth.
+    pub reasoning: String,
     /// Tool calls in the order the model produced them.
     pub tool_calls: Vec<ToolCall>,
     /// Why generation stopped, as the server phrased it.
@@ -312,6 +339,32 @@ impl Backend {
         match self {
             Self::LmStudio(backend) => backend.chat(request).await,
             Self::OpenAiCompatible(backend) => backend.chat(request).await,
+        }
+    }
+
+    /// Send one chat request, handing each piece of assistant text to `on_text`
+    /// and each piece of the model's thinking to `on_reasoning`.
+    ///
+    /// The assembled answer is the same type [`Backend::chat`] returns, so a
+    /// caller can stream the words and still read the tool calls and stop reason.
+    /// Text is delivered exactly once: a caller that draws it must not draw
+    /// `content` again. A server that ignores `stream: true` sends one JSON body,
+    /// which arrives only in `content` — a caller that saw no text must draw it.
+    ///
+    /// Thinking is never passed to `on_text`: it is a different thing the model
+    /// said, and a reasoning model's tight budget can leave `content` empty while
+    /// the thinking is all there was.
+    pub async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        on_text: &mut (dyn FnMut(&str) + Send),
+        on_reasoning: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<ChatResponse, AcpilotError> {
+        match self {
+            Self::LmStudio(backend) => backend.chat_stream(request, on_text, on_reasoning).await,
+            Self::OpenAiCompatible(backend) => {
+                backend.chat_stream(request, on_text, on_reasoning).await
+            }
         }
     }
 
@@ -421,38 +474,173 @@ pub(crate) async fn post_chat(
             return Ok((value, unsupported));
         }
 
-        let refused = status.as_u16() == 400 || status.as_u16() == 422;
         let detail = response.text().await.unwrap_or_default();
-        let next = if refused {
-            OPTIONAL_PARAMS
-                .iter()
-                .find(|name| body.contains_key(**name))
-                .copied()
-        } else {
-            None
-        };
+        if let Some(error) = refusal(provider, status, &detail, body, &mut unsupported) {
+            return Err(error);
+        }
+    }
+}
 
-        let Some(name) = next else {
-            return Err(AcpilotError::ModelUnavailable {
+/// Decide what a non-success chat status means.
+///
+/// `None` means one optional parameter was removed from `body` and the request
+/// may be sent again. `Some(error)` is the server's refusal, reported as-is:
+/// guessing again at a broken server only makes it a slow one.
+fn refusal(
+    provider: &Provider,
+    status: reqwest::StatusCode,
+    detail: &str,
+    body: &mut Map<String, Value>,
+    unsupported: &mut Vec<String>,
+) -> Option<AcpilotError> {
+    let refused = status.as_u16() == 400 || status.as_u16() == 422;
+    let next = if refused {
+        OPTIONAL_PARAMS
+            .iter()
+            .find(|name| body.contains_key(**name))
+            .copied()
+    } else {
+        None
+    };
+
+    let Some(name) = next else {
+        return Some(AcpilotError::ModelUnavailable {
+            provider: provider.id.clone(),
+            message: format!(
+                "server answered {status}{}",
+                if detail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", truncate(detail, 400))
+                }
+            ),
+        });
+    };
+
+    tracing::debug!(
+        provider = %provider.id,
+        parameter = name,
+        "server refused an optional parameter; retrying without it"
+    );
+    body.remove(name);
+    unsupported.push(name.to_owned());
+    None
+}
+
+/// POST a chat body asking for a stream, and deliver the text as it arrives.
+///
+/// The retry rule is the one [`post_chat`] follows, and it only ever runs before
+/// the body is read: once the first frame is delivered, a failure is reported
+/// rather than retried, because a retry would show the same words twice.
+pub(crate) async fn post_chat_stream(
+    client: &reqwest::Client,
+    provider: &Provider,
+    url: &str,
+    body: &mut Map<String, Value>,
+    on_text: &mut (dyn FnMut(&str) + Send),
+    on_reasoning: &mut (dyn FnMut(&str) + Send),
+) -> Result<ChatResponse, AcpilotError> {
+    let mut unsupported = Vec::new();
+
+    loop {
+        let mut request = client
+            .post(url)
+            .timeout(CHAT_TIMEOUT)
+            .json(&Value::Object(body.clone()));
+        if let Some(token) = &provider.token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| transport_error(&provider.id, &error))?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let detail = response.text().await.unwrap_or_default();
+            if let Some(error) = refusal(provider, status, &detail, body, &mut unsupported) {
+                return Err(error);
+            }
+            continue;
+        }
+
+        // A server is allowed to ignore `stream: true` and answer one JSON body.
+        // That is a complete answer, not an empty stream, and refusing it would
+        // break every compatible server that is silent about a flag it drops.
+        let streaming = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        if !streaming {
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|error| unexpected(&provider.id, &error))?;
+            return wire::parse(value, unsupported)
+                .map_err(|error| unexpected(&provider.id, &error));
+        }
+
+        let mut sse = wire::Sse::default();
+        let mut streamed = wire::Streamed::default();
+        let mut bytes = response.bytes_stream();
+        loop {
+            let next = stall_guard(bytes.next(), &provider.id, STREAM_STALL_TIMEOUT).await?;
+            let Some(chunk) = next else {
+                break;
+            };
+            let chunk = chunk.map_err(|error| AcpilotError::ModelUnavailable {
                 provider: provider.id.clone(),
-                message: format!(
-                    "server answered {status}{}",
-                    if detail.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", truncate(&detail, 400))
-                    }
-                ),
-            });
-        };
+                message: format!("the stream broke mid-answer: {error}"),
+            })?;
+            for payload in sse.push(&String::from_utf8_lossy(&chunk)) {
+                let frame: Value = serde_json::from_str(&payload).map_err(|error| {
+                    unexpected(&provider.id, &format!("unreadable stream frame: {error}"))
+                })?;
+                let piece = streamed
+                    .push(frame)
+                    .map_err(|error| unexpected(&provider.id, &error))?;
+                if !piece.answer.is_empty() {
+                    on_text(&piece.answer);
+                }
+                if !piece.reasoning.is_empty() {
+                    on_reasoning(&piece.reasoning);
+                }
+            }
+            if sse.done() {
+                break;
+            }
+        }
 
-        tracing::debug!(
-            provider = %provider.id,
-            parameter = name,
-            "server refused an optional parameter; retrying without it"
-        );
-        body.remove(name);
-        unsupported.push(name.to_owned());
+        return streamed
+            .finish(sse.done(), unsupported)
+            .map_err(|error| unexpected(&provider.id, &error));
+    }
+}
+
+/// Await one read from a streaming body, failing the run if the provider goes
+/// quiet for `stall`.
+///
+/// Silence is the only failure that looks like success: the request is open, the
+/// daemon is waiting, and nothing will arrive. [`CHAT_TIMEOUT`] would eventually
+/// fail it, but five minutes of spinner is indistinguishable from a hung daemon,
+/// and the record should say the stream stalled rather than that a request timed
+/// out. Returning drops the response body, which cancels the HTTP request.
+async fn stall_guard<T>(
+    next: impl std::future::Future<Output = Option<T>>,
+    provider: &str,
+    stall: Duration,
+) -> Result<Option<T>, AcpilotError> {
+    match tokio::time::timeout(stall, next).await {
+        Ok(next) => Ok(next),
+        Err(_) => Err(AcpilotError::ModelUnavailable {
+            provider: provider.to_owned(),
+            message: format!(
+                "the stream stalled: the provider sent nothing for {}s, so the request was cancelled",
+                stall.as_secs()
+            ),
+        }),
     }
 }
 
@@ -526,5 +714,30 @@ mod tests {
     fn an_unreported_context_window_is_unknown_not_a_default() {
         assert_eq!(source(None), MetadataSource::Unknown);
         assert_eq!(source(Some(4096)), MetadataSource::Server);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_quiet_stream_is_stalled_and_a_delivered_chunk_precedes_it() {
+        use futures::StreamExt as _;
+
+        let mut chunks = futures::stream::iter([1]).chain(futures::stream::pending::<i32>());
+        assert_eq!(
+            stall_guard(chunks.next(), "mock", Duration::from_secs(1))
+                .await
+                .expect("a ready chunk is not a stall"),
+            Some(1)
+        );
+        let error = stall_guard(chunks.next(), "mock", Duration::from_secs(1))
+            .await
+            .expect_err("silence is not an answer");
+        assert!(
+            matches!(error, AcpilotError::ModelUnavailable { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("stalled"), "{error}");
+        assert!(
+            error.to_string().contains("1s"),
+            "the failure says how long the silence was: {error}"
+        );
     }
 }

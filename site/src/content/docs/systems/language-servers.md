@@ -80,13 +80,37 @@ keeping a session as an optimisation and keeping it as a leak. Someone who walks
 away from the editor stops paying for an index nobody is reading.
 
 What that machinery is doing is a route rather than a rumour. `GET /v1/lsp/servers`
-answers one row per language this build can start. The row says running or
-stopped, the encoding it negotiated, and the last `textDocument/references` round
-trip in milliseconds. That is the answer, not the index. A language with no row
+answers one row per language this daemon can start: the four the build knows, and
+any an activated extension adds. A pack's preset for a language the build already
+knows replaces that row, because activation sits above the built-ins, and
+deactivating it puts the build's row back without a restart. The row says running
+or stopped, the encoding it negotiated, and the last `textDocument/references`
+round trip in milliseconds. That is the answer, not the index. A language with no row
 has no server here, which is what a references list answered by the parse tree
 already said. The TUI prints those rows on its status line from the palette's
 **LSP status** row. That frontend has no `:` command line yet, so the palette's
 own query is where `lsp status` sits.
+
+A row that came from a pack can also be a question. The daemon pins a language
+server the way it pins an agent: `POST /v1/lsp/servers/{language}/trust` records the
+SHA-256 of that program's bytes, and the listing reports `untrusted` once the file
+no longer hashes to what was approved. It is keyed by language because a language is
+what a client lists and what a URL can hold, but the pin is stored against the
+program: `typescript-language-server` answers for both `typescript` and `javascript`,
+and one approval covers both. The TUI asks on the palette's **LSP status** row when
+the list contains such a row, naming the program, the language and the pack —
+"trust rust-analyzer from acpilot.rust-pack?" — and approving leaves a sentence on
+the status line rather than claiming the server started, because a pin that is
+recorded does not start a process. That question is why the row carries its pack id
+all the way to a client.
+
+An answer is enforced, not merely remembered. The daemon refuses to start a server
+whose bytes no longer hash to the pin it recorded, so references fall back to the
+parse tree, diagnostics report that nobody checked, and formatting returns the
+buffer unchanged — rather than running a binary that changed under the name
+somebody approved. The refusal is local: a remote server's bytes are the host's to
+hash (P7-11). A server nobody has pinned still starts; requiring an answer before
+first use is the part of P7-12 still open.
 
 The rest of the engine arrives in the language intelligence phase (P7). The
 design phase's P0-7 probe is done. Framing, negotiation, and the UTF-8/UTF-16

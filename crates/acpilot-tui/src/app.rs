@@ -6,7 +6,7 @@
 //! state be driven by a test with no daemon and no terminal.
 
 use acpilot_demo::{Command, CommandAction, Diff, FileNode, Run};
-use acpilot_proto::agent::AgentSummary;
+use acpilot_proto::agent::{AgentStatus, AgentSummary};
 use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::profile::Preferences;
@@ -19,6 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::backend::{Request, Update};
 use crate::editor::{EditorPane, Mode};
 use crate::keymap::{Action, Context, Keymap};
+use crate::lab::{FIELDS, Lab, Pane};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
 
@@ -583,11 +584,13 @@ pub struct Entry {
     /// then `completed` — is one row whose status moved, not two rows. The agent
     /// names the call, so the name is what the second event is matched on.
     pub tool: Option<ToolCall>,
-    /// Whether a tool call's detail is hidden.
+    /// Whether a foldable entry's detail is hidden.
     ///
-    /// Folded by default: the header says which tool ran, and a transcript that
-    /// printed every result in full is a conversation nobody can find the reply
-    /// in. `Enter` in the transcript opens the one under the cursor.
+    /// A tool call is folded by default: the header says which tool ran, and a
+    /// transcript that printed every result in full is a conversation nobody can
+    /// find the reply in. A thought starts open, because it is what the agent
+    /// said, and is folded when its length is in the way. `Enter` in the
+    /// transcript opens or folds the row under the cursor.
     pub folded: bool,
 }
 
@@ -1805,6 +1808,18 @@ pub struct App {
     pub agent_picker: bool,
     /// Which row of that picker `Enter` chooses.
     pub agent_selected: usize,
+    /// The agent whose pin question is up, if one is.
+    ///
+    /// An id rather than a row: the roster is re-read while the question is on
+    /// screen, and an index would answer about whatever moved into that place.
+    pub agent_pin: Option<String>,
+    /// The language servers the daemon listed, when one of them needs an answer.
+    pub lsp_servers: Vec<acpilot_proto::lsp::LspServerSummary>,
+    /// The language whose server's program changed, while that question is up.
+    ///
+    /// A language id rather than a row: the question has to survive the list being
+    /// read again, and an index would answer about whatever moved into that place.
+    pub lsp_pin: Option<String>,
     /// Whether the outline panel is on screen.
     ///
     /// Apart from the side it is on: a panel that is put away has not moved, and the
@@ -1923,6 +1938,12 @@ pub struct App {
     pub review: Option<Review>,
     /// The workspace content search, when one is up.
     pub grep: Option<GrepSearch>,
+    /// The model lab, when it is over the panes.
+    ///
+    /// A page rather than a pane: a recipe is about the model, not the workspace,
+    /// and a pane that opened a settings screen would be a fourth column that is
+    /// not part of the three-panel model every frontend shares.
+    pub lab: Option<Lab>,
     /// The source-control pane, when one is up.
     pub source: Option<SourceControl>,
     /// The commit composer, when it is over the source-control pane.
@@ -2699,6 +2720,9 @@ impl App {
             show_assistant: assistant,
             agent_picker: false,
             agent_selected: 0,
+            agent_pin: None,
+            lsp_servers: Vec::new(),
+            lsp_pin: None,
             show_outline: false,
             outline: Vec::new(),
             outline_selected: 0,
@@ -2729,6 +2753,7 @@ impl App {
             diff: None,
             review: None,
             grep: None,
+            lab: None,
             source: None,
             commit: None,
             pending_line: None,
@@ -2953,6 +2978,18 @@ impl App {
                 }
                 continue;
             }
+            if entry.kind == Kind::Thought && entry.folded {
+                let lines = entry.text.matches('\n').count() + 1;
+                let noun = if lines == 1 { "line" } else { "lines" };
+                rows.push(TranscriptRow {
+                    kind: entry.kind,
+                    segments: vec![crate::markdown::Segment::plain(format!(
+                        "thinking · {lines} {noun} · Enter opens it"
+                    ))],
+                    entry: index,
+                });
+                continue;
+            }
             rows.extend(entry.text.split('\n').map(|line| TranscriptRow {
                 kind: entry.kind,
                 segments: vec![crate::markdown::Segment::plain(line)],
@@ -2981,6 +3018,8 @@ impl App {
                             .map_or(0, |call| call.detail.lines().count())
                     };
                     1 + detail
+                } else if entry.kind == Kind::Thought && entry.folded {
+                    1
                 } else {
                     entry.text.matches('\n').count() + 1
                 }
@@ -3169,9 +3208,9 @@ impl App {
 
     /// Open or close the tool call under the transcript's cursor.
     ///
-    /// A tool call is a row until it is asked about, and a result nobody can open
-    /// is a result a person scrolls past without knowing it is there.
-    fn toggle_tool(&mut self) {
+    /// A tool call or a thought is a row until it is asked about, and detail
+    /// nobody can open is detail a person scrolls past without knowing it is there.
+    fn toggle_fold(&mut self) {
         let (height, _) = self.transcript_grid();
         let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
         self.transcript.view.clamp((height, u16::MAX), max_scroll);
@@ -3180,14 +3219,18 @@ impl App {
             return;
         };
         let entry = row.entry;
-        if !self
-            .entries
-            .get(entry)
-            .is_some_and(|entry| entry.tool.is_some())
-        {
-            self.status = "that row is not a tool call".to_owned();
+        let Some(target) = self.entries.get(entry) else {
+            return;
+        };
+        if target.tool.is_none() && target.kind != Kind::Thought {
+            self.status = "that row does not fold".to_owned();
             return;
         }
+        let label = if target.kind == Kind::Thought {
+            "thinking"
+        } else {
+            "tool call"
+        };
         let folded = self
             .entries
             .get_mut(entry)
@@ -3196,14 +3239,25 @@ impl App {
                 entry.folded
             })
             .unwrap_or(false);
-        // The length changed under the cursor; putting the view back at the tail
-        // when it was live is what keeps a fold from scrolling the transcript.
+        // The entries under the cursor changed height, so the row that was there
+        // may no longer exist. Put the cursor on the entry's new first row — its
+        // folded header, or its first line when it opens — before clamping, or a
+        // second `Enter` would act on a blank row and the fold could not be undone.
+        let row = self
+            .transcript_rows()
+            .iter()
+            .position(|row| row.entry == entry)
+            .unwrap_or(0);
+        self.transcript.view.cursor = (row, self.transcript.view.cursor.1);
         let max_scroll = self.transcript_len().saturating_sub(usize::from(height));
-        self.transcript.view.scroll = self.transcript.view.scroll.min(max_scroll);
+        self.transcript.view.clamp((height, u16::MAX), max_scroll);
+        // Keep the row that moved on screen, without scrolling a live transcript
+        // away from its tail when the fold happened above it.
+        self.transcript.view.scroll = self.transcript.view.scroll.min(row);
         self.status = if folded {
-            "tool call folded · Enter opens it".to_owned()
+            format!("{label} folded · Enter opens it")
         } else {
-            "tool call opened · Enter folds it".to_owned()
+            format!("{label} opened · Enter folds it")
         };
     }
 
@@ -3288,11 +3342,11 @@ impl App {
         if self.transcript.typing.is_some() {
             return self.transcript_search_key(key);
         }
-        // `Enter` opens or folds the tool call under the cursor: a read-only pane
-        // has the key free, and a result a person can see is the difference between
-        // a call they can judge and a line they scroll past.
+        // `Enter` opens or folds the tool call or thought under the cursor: a
+        // read-only pane has the key free, and detail a person can see is the
+        // difference between a call they can judge and a line they scroll past.
         if key.code == KeyCode::Enter {
-            self.toggle_tool();
+            self.toggle_fold();
             return None;
         }
         let grid = self.transcript_grid();
@@ -3460,8 +3514,129 @@ impl App {
                 self.connected = true;
                 self.status = format!("connected · acpilotd {version}");
             }
+            Update::LabLoaded {
+                recipes,
+                models,
+                problems,
+                skills,
+            } => {
+                let mut lab = self.lab.take().unwrap_or_default();
+                lab.recipes = recipes;
+                lab.models = models;
+                lab.problems = problems;
+                lab.skills = skills;
+                lab.skill_selected = lab.skill_selected.min(lab.skills.len().saturating_sub(1));
+                lab.loading = false;
+                lab.selected = lab.selected.min(lab.recipes.len().saturating_sub(1));
+                if lab.recipes.is_empty() {
+                    self.status = "model lab · no recipes in this profile".to_owned();
+                } else {
+                    self.status = format!("model lab · {} recipes", lab.recipes.len());
+                    if let Some(recipe) = lab.recipe() {
+                        self.pending.push(Request::LabRuns(recipe.id.clone()));
+                    }
+                }
+                self.lab = Some(lab);
+            }
+            Update::LabSaved(recipe) => {
+                if let Some(lab) = self.lab.as_mut()
+                    && let Some(slot) = lab.recipes.get_mut(lab.selected)
+                    && slot.id == recipe.id
+                {
+                    *slot = recipe;
+                    lab.dirty = false;
+                }
+                self.status = "recipe saved".to_owned();
+            }
+            Update::LabSkillSaved(skill) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    if let Some(slot) = lab.skills.iter_mut().find(|row| row.name == skill.name) {
+                        *slot = skill.clone();
+                    } else {
+                        lab.skills.push(skill.clone());
+                    }
+                    lab.skill_selected = lab
+                        .skills
+                        .iter()
+                        .position(|row| row.name == skill.name)
+                        .unwrap_or(0);
+                    lab.skill_editor = None;
+                }
+                self.status = format!("skill {} saved", skill.name);
+            }
+            Update::LabRuns(runs) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.runs = runs;
+                    lab.run_selected = lab.run_selected.min(lab.runs.len().saturating_sub(1));
+                    lab.record = None;
+                    lab.loading = false;
+                }
+            }
+            Update::LabRecord(record) => {
+                if let Some(lab) = self.lab.as_mut()
+                    && lab
+                        .current_run()
+                        .is_some_and(|run| run.id == record.summary.id)
+                {
+                    lab.record = Some(*record);
+                    lab.thinking = lab
+                        .record
+                        .as_ref()
+                        .and_then(|record| record.reasoning.clone())
+                        .unwrap_or_default();
+                }
+            }
+            Update::LabRunStarted { run_id } => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = true;
+                    lab.output.clear();
+                    lab.thinking.clear();
+                    lab.error = None;
+                    lab.status = Some(format!("running · {run_id}"));
+                }
+            }
+            Update::LabRunDelta(text) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.output.push_str(&text);
+                }
+            }
+            Update::LabThought(text) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.thinking.push_str(&text);
+                }
+            }
+            Update::LabRunFinished(run) => {
+                let run = *run;
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = false;
+                    lab.runs.retain(|existing| existing.id != run.id);
+                    lab.runs.insert(0, run.clone());
+                    lab.run_selected = 0;
+                    lab.record = None;
+                    self.pending.push(Request::LabRecord {
+                        recipe: run.recipe_id.clone(),
+                        run: run.id.clone(),
+                    });
+                }
+            }
+            Update::LabError(message) => {
+                if let Some(lab) = self.lab.as_mut() {
+                    lab.running = false;
+                    lab.loading = false;
+                    lab.error = Some(message.clone());
+                }
+                self.status = format!("model lab · {message}");
+            }
             Update::Agents(agents) => {
                 self.agents = agents;
+                // A question about an agent the roster no longer has is a question
+                // nobody can answer, and leaving the card up would say otherwise.
+                if let Some(pinned) = &self.agent_pin
+                    && !self.agents.iter().any(|agent| &agent.id == pinned)
+                {
+                    self.agent_pin = None;
+                    self.status = "the roster changed · that agent is gone".to_owned();
+                }
                 // The roster can shrink under a picker that is already up, and a
                 // selection past the end would be an index nothing opens.
                 if self.agent_selected >= self.agents.len() {
@@ -3898,6 +4073,25 @@ impl App {
                     self.ask_about_problems();
                 }
             }
+            Update::LspServers(servers) => {
+                // Only one reading of this list arrives: the daemon sends it when a row
+                // is waiting for an answer, because every other list is a status line.
+                let untrusted = servers
+                    .iter()
+                    .find(|server| server.status == acpilot_proto::lsp::LspServerStatus::Untrusted)
+                    .and_then(|server| server.languages.first().cloned());
+                self.lsp_servers = servers;
+                match untrusted {
+                    Some(language) => {
+                        self.lsp_pin = Some(language);
+                        self.status =
+                            "a language server's program changed under its name".to_owned();
+                    }
+                    None => {
+                        self.status = "every language server here is approved".to_owned();
+                    }
+                }
+            }
             Update::Status(message) => self.status = message,
             Update::Preferences(preferences) => {
                 self.preferences = preferences;
@@ -4097,6 +4291,12 @@ impl App {
         // The content search is the next question out: it is drawn over every pane
         // and its keys are text, so letting a key through to a pane would be a key
         // acting on something nobody can see.
+        // The model lab is a page over every pane, drawn rather than put beside
+        // them, so while it is up a key belongs to it and to nothing behind it.
+        if self.lab.is_some() {
+            return self.lab_key(key);
+        }
+
         if self.grep.is_some() {
             return self.grep_key(key);
         }
@@ -4148,6 +4348,18 @@ impl App {
         // waiting would be a pane that traps the session.
         if self.action(Context::App, key) == Some(Action::Terminal) {
             return self.toggle_terminal();
+        }
+
+        // The pin question is about a command that will not run until it is
+        // answered, so it owns the keyboard before anything that starts one.
+        if self.agent_pin.is_some() {
+            return self.agent_pin_key(key);
+        }
+
+        // The same question about a server: a program whose bytes nobody approved is
+        // not going to start, so the answer owns the keyboard first.
+        if self.lsp_pin.is_some() {
+            return self.lsp_pin_key(key);
         }
 
         // Choosing an agent is a question with a list of answers, and the panes it
@@ -6064,7 +6276,7 @@ impl App {
             }
             MenuAction::SelectAgent => return self.select_agent(),
             MenuAction::CloseAssistant => self.close_assistant(),
-            MenuAction::ModelLab => self.planned("P4.5", "the model lab"),
+            MenuAction::ModelLab => return self.toggle_lab(),
             MenuAction::Cancel => return Some(Request::Cancel),
             MenuAction::AnswerPermission => self.reopen_permission(),
             MenuAction::Quit => {
@@ -6128,8 +6340,12 @@ impl App {
     /// start over a key file would be worse than starting on the keys it describes
     /// everywhere else. The caller says where the problem is, because the screen is
     /// not up yet when this runs.
-    pub fn remember_keymap(&mut self, path: std::path::PathBuf) -> Option<String> {
-        match Keymap::load(&path) {
+    pub fn remember_keymap(
+        &mut self,
+        path: std::path::PathBuf,
+        layers: &[acpilot_extensions::KeymapLayer],
+    ) -> Option<String> {
+        match Keymap::load_with(&path, layers) {
             Ok(keymap) => {
                 self.keymap = keymap;
                 self.apply_vim_mode();
@@ -6631,6 +6847,293 @@ impl App {
                 Some(Request::Quit)
             }
         }
+    }
+
+    /// Open the model lab, or put it away.
+    ///
+    /// The design pass has no daemon, so it says so instead of opening a page that
+    /// would spend its first frame apologising.
+    fn toggle_lab(&mut self) -> Option<Request> {
+        if self.lab.take().is_some() {
+            self.notice("the model lab is closed");
+            return None;
+        }
+        if self.demo {
+            self.notice("the design pass has no daemon, so it has no model lab");
+            return None;
+        }
+        self.lab = Some(Lab {
+            loading: true,
+            ..Lab::default()
+        });
+        self.status = "model lab · reading recipes…".to_owned();
+        Some(Request::LabLoad)
+    }
+
+    /// The model lab's keys.
+    ///
+    /// A page over every pane, so it owns the keyboard the way the palette does.
+    /// `Esc` backs out one step at a time — the prompt, the inspector, then the
+    /// page — because the first `Esc` out of a half-typed prompt meaning "close"
+    /// would lose the prompt to the key that means "not that".
+    fn lab_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let mut lab = self.lab.take()?;
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let mut request = None;
+        let mut close = false;
+
+        if let Some(mut editor) = lab.skill_editor.take() {
+            let mut keep = true;
+            match key.code {
+                KeyCode::Esc => keep = false,
+                KeyCode::Tab => editor.field = (editor.field + 1) % 3,
+                KeyCode::BackTab => editor.field = (editor.field + 2) % 3,
+                KeyCode::Enter if editor.field == 2 => editor.value_mut().push('\n'),
+                KeyCode::Enter => editor.field = (editor.field + 1) % 3,
+                KeyCode::Backspace => {
+                    editor.value_mut().pop();
+                }
+                KeyCode::Char('s') if control => {
+                    request = Some(Request::LabSkillSave(Box::new(editor.draft())));
+                }
+                KeyCode::Char('d') if control => {
+                    editor.destination = match editor.destination {
+                        acpilot_proto::skills::SkillDestination::Workspace => {
+                            acpilot_proto::skills::SkillDestination::Profile
+                        }
+                        acpilot_proto::skills::SkillDestination::Profile => {
+                            acpilot_proto::skills::SkillDestination::Workspace
+                        }
+                    };
+                }
+                KeyCode::Char(character) if !control => editor.value_mut().push(character),
+                _ => {}
+            }
+            if keep {
+                lab.skill_editor = Some(editor);
+            }
+        } else if let Some(draft) = lab.draft.as_mut() {
+            match key.code {
+                KeyCode::Esc => lab.draft = None,
+                KeyCode::Enter if draft.multiline() => {
+                    let at = Self::offset(&draft.text, draft.cursor);
+                    draft.text.insert(at, '\n');
+                    draft.cursor += 1;
+                }
+                KeyCode::Enter => match lab.commit() {
+                    Ok(()) => lab.status = Some("applied · ^S writes the recipe".to_owned()),
+                    Err(reason) => lab.status = Some(reason),
+                },
+                KeyCode::Backspace if draft.cursor > 0 => {
+                    let at = Self::offset(&draft.text, draft.cursor - 1);
+                    draft.text.remove(at);
+                    draft.cursor -= 1;
+                }
+                KeyCode::Char(character) if !control => {
+                    let at = Self::offset(&draft.text, draft.cursor);
+                    draft.text.insert(at, character);
+                    draft.cursor += 1;
+                }
+                _ => {}
+            }
+        } else if lab.typing {
+            match key.code {
+                KeyCode::Esc => lab.typing = false,
+                KeyCode::Backspace => {
+                    lab.prompt.pop();
+                }
+                KeyCode::Enter => {
+                    lab.typing = false;
+                    if lab.prompt.trim().is_empty() {
+                        lab.status = Some("write a prompt first · i".to_owned());
+                    } else {
+                        request = self.lab_run(&lab);
+                    }
+                }
+                KeyCode::Char(character) if !control => lab.prompt.push(character),
+                _ => {}
+            }
+        } else {
+            match key.code {
+                KeyCode::Esc if lab.inspector => lab.inspector = false,
+                KeyCode::Esc => close = true,
+                KeyCode::Tab => lab.pane = lab.pane.next(),
+                KeyCode::BackTab => lab.pane = lab.pane.previous(),
+                KeyCode::Up => request = Self::lab_move(&mut lab, false),
+                KeyCode::Down => request = Self::lab_move(&mut lab, true),
+                KeyCode::Char('k') if !control => request = Self::lab_move(&mut lab, false),
+                KeyCode::Char('j') if !control => request = Self::lab_move(&mut lab, true),
+                KeyCode::Char(' ') if lab.pane == Pane::Recipe => {
+                    if let Some(value) = lab.toggle_field() {
+                        lab.status = Some(value);
+                    }
+                }
+                KeyCode::Enter => match lab.pane {
+                    Pane::Recipe => {
+                        if FIELDS.get(lab.field).is_some_and(|field| field.editable()) {
+                            lab.begin_field();
+                        } else if let Some(value) = lab.toggle_field() {
+                            lab.status = Some(value);
+                        }
+                    }
+                    Pane::Corpus => lab.begin_selector(),
+                    Pane::Skills => {
+                        if let Some(skill) = lab.skills.get(lab.skill_selected) {
+                            lab.skill_editor = Some(crate::lab::SkillEditor::new(Some(skill)));
+                        }
+                    }
+                    Pane::Output => {
+                        if let (Some(recipe), Some(run)) = (lab.recipe(), lab.current_run()) {
+                            request = Some(Request::LabRecord {
+                                recipe: recipe.id.clone(),
+                                run: run.id.clone(),
+                            });
+                        }
+                    }
+                },
+                KeyCode::Char('i') if !control && lab.pane == Pane::Output => {
+                    lab.typing = true;
+                    lab.status = Some("prompt · Enter runs · Esc leaves".to_owned());
+                }
+                KeyCode::Char('v') if !control => lab.inspector = !lab.inspector,
+                KeyCode::Char('c') if !control => {
+                    lab.compare = Some(lab.run_selected);
+                    lab.status = Some(format!("comparing against run {}", lab.run_selected + 1));
+                }
+                KeyCode::Char('n') if !control && lab.pane == Pane::Skills => {
+                    lab.skill_editor = Some(crate::lab::SkillEditor::new(None));
+                }
+                KeyCode::Char(' ') if lab.pane == Pane::Skills => {
+                    let name = lab
+                        .skills
+                        .get(lab.skill_selected)
+                        .map(|skill| skill.name.clone());
+                    if let (Some(name), Some(recipe)) = (name, lab.recipe_mut()) {
+                        if let Some(position) =
+                            recipe.skills.iter().position(|selected| selected == &name)
+                        {
+                            recipe.skills.remove(position);
+                            lab.status = Some(format!("{name} removed from the recipe"));
+                        } else {
+                            recipe.skills.push(name.clone());
+                            lab.status = Some(format!("{name} added to the recipe"));
+                        }
+                        lab.dirty = true;
+                    }
+                }
+                KeyCode::Char('a') if !control && lab.pane == Pane::Corpus => lab.add_selector(),
+                KeyCode::Char('x') if !control && lab.pane == Pane::Corpus => lab.remove_selector(),
+                KeyCode::Char('[') => {
+                    lab.step_recipe(false);
+                    request = lab
+                        .recipe()
+                        .map(|recipe| Request::LabRuns(recipe.id.clone()));
+                }
+                KeyCode::Char(']') => {
+                    lab.step_recipe(true);
+                    request = lab
+                        .recipe()
+                        .map(|recipe| Request::LabRuns(recipe.id.clone()));
+                }
+                KeyCode::Char('r') if !control => {
+                    lab.loading = true;
+                    request = Some(Request::LabLoad);
+                }
+                KeyCode::Char('r') if control => {
+                    if lab.prompt.trim().is_empty() {
+                        lab.status = Some("write a prompt first · i".to_owned());
+                    } else {
+                        request = self.lab_run(&lab);
+                    }
+                }
+                KeyCode::Char('s') if control => {
+                    if let Some(recipe) = lab.recipe().cloned() {
+                        request = Some(Request::LabSave(Box::new(recipe)));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if close {
+            self.status = "the model lab is closed".to_owned();
+            return None;
+        }
+        if let Some(status) = lab.status.take() {
+            self.status = status;
+        }
+        self.lab = Some(lab);
+        request
+    }
+
+    /// Run the recipe with the prompt as typed, or say what is missing.
+    ///
+    /// An empty prompt is refused here rather than at the daemon: the run would
+    /// still read the corpus and record a line, and "why did nothing happen" is a
+    /// worse answer than naming the key that writes one.
+    fn lab_run(&self, lab: &Lab) -> Option<Request> {
+        let recipe = lab.recipe()?;
+        Some(Request::LabRun {
+            recipe: recipe.id.clone(),
+            root: self.workspace.clone(),
+            request: acpilot_proto::model::RunRequest {
+                prompt: lab.prompt.clone(),
+                corpus: lab.selectors.clone(),
+                idempotency_key: None,
+            },
+        })
+    }
+
+    /// Move the lab's cursor within the pane it is in.
+    fn lab_move(lab: &mut Lab, forward: bool) -> Option<Request> {
+        match lab.pane {
+            Pane::Recipe => {
+                lab.field = if forward {
+                    (lab.field + 1).min(FIELDS.len().saturating_sub(1))
+                } else {
+                    lab.field.saturating_sub(1)
+                };
+            }
+            Pane::Skills => {
+                lab.skill_selected = if forward {
+                    (lab.skill_selected + 1).min(lab.skills.len().saturating_sub(1))
+                } else {
+                    lab.skill_selected.saturating_sub(1)
+                };
+            }
+            Pane::Corpus => {
+                lab.selector = if forward {
+                    (lab.selector + 1).min(lab.selectors.len().saturating_sub(1))
+                } else {
+                    lab.selector.saturating_sub(1)
+                };
+            }
+            Pane::Output => {
+                let next = if forward {
+                    (lab.run_selected + 1).min(lab.runs.len().saturating_sub(1))
+                } else {
+                    lab.run_selected.saturating_sub(1)
+                };
+                if next != lab.run_selected {
+                    lab.run_selected = next;
+                    lab.record = None;
+                    let recipe = lab.recipe()?;
+                    let run = lab.current_run()?;
+                    return Some(Request::LabRecord {
+                        recipe: recipe.id.clone(),
+                        run: run.id.clone(),
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// The byte offset of a character index, or the end of the text.
+    fn offset(text: &str, character: usize) -> usize {
+        text.char_indices()
+            .nth(character)
+            .map_or(text.len(), |(index, _)| index)
     }
 
     /// Say that a command is designed and not built, naming the task.
@@ -7349,9 +7852,59 @@ impl App {
             KeyCode::Enter => {
                 if let Some(agent) = self.agents.get(self.agent_selected) {
                     let id = agent.id.clone();
+                    // A binary that changed under a name is a question before it is
+                    // a session: starting it would be the one thing a pin exists to
+                    // stop.
+                    if agent.status == AgentStatus::Untrusted {
+                        self.agent_picker = false;
+                        self.agent_pin = Some(id);
+                        self.status = "a command changed under this name".to_owned();
+                        return None;
+                    }
                     self.agent_picker = false;
                     return self.start_agent(&id);
                 }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The keys the pin question answers to.
+    ///
+    /// `y` is the only key that records anything: the question is about a program
+    /// whose bytes changed, so `y` and `n` have to be the difference between
+    /// writing a pin and leaving it unapproved.
+    fn agent_pin_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let id = self.agent_pin.take()?;
+                self.status = format!("approving {id}…");
+                return Some(Request::TrustAgent { id });
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+                self.agent_pin = None;
+                self.status = "not approved · that command will not run".to_owned();
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The keys the language-server pin question answers to.
+    ///
+    /// `y` is the only key that writes, for the reason the agent question gives: the
+    /// difference between the two answers has to be a pin or no pin.
+    fn lsp_pin_key(&mut self, key: KeyEvent) -> Option<Request> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let language = self.lsp_pin.take()?;
+                self.status = format!("approving the {language} server…");
+                return Some(Request::TrustLanguageServer { language });
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+                self.lsp_pin = None;
+                self.status = "not approved · that server will not start".to_owned();
             }
             _ => {}
         }
@@ -7750,8 +8303,80 @@ mod tests {
             transport: acpilot_proto::agent::AgentTransport::AcpStdio,
             status: acpilot_proto::agent::AgentStatus::Available,
             command: id.to_owned(),
+            extension: None,
             protocol_version: None,
         }
+    }
+
+    #[test]
+    fn an_agent_whose_binary_changed_asks_before_it_runs() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        let mut changed = agent("test-agent", "Test Agent");
+        changed.status = AgentStatus::Untrusted;
+        changed.extension = Some("acpilot.test-agents".to_owned());
+        app.apply(Update::Agents(vec![changed]));
+        app.agent_picker = true;
+
+        // `Enter` on an untrusted row is the question, not a session: nothing is
+        // started for a program whose bytes nobody approved.
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.agent_pin.as_deref(), Some("test-agent"));
+        assert!(!app.agent_picker, "the question replaces the list");
+
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::TrustAgent {
+                id: "test-agent".to_owned()
+            })
+        );
+        assert_eq!(app.agent_pin, None, "one answer per question");
+    }
+
+    #[test]
+    fn a_language_server_whose_program_changed_asks_before_it_starts() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::LspServers(vec![
+            acpilot_proto::lsp::LspServerSummary {
+                id: "rust-analyzer".to_owned(),
+                languages: vec!["rust".to_owned()],
+                command: "rust-analyzer".to_owned(),
+                status: acpilot_proto::lsp::LspServerStatus::Untrusted,
+                encoding: None,
+                extension: Some("acpilot.rust-pack".to_owned()),
+                round_trip_ms: None,
+            },
+        ]));
+
+        // The list is a question rather than a line, and the row that made it one is
+        // the row the answer is about.
+        assert_eq!(app.lsp_pin.as_deref(), Some("rust"));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::TrustLanguageServer {
+                language: "rust".to_owned()
+            })
+        );
+        assert_eq!(app.lsp_pin, None, "one answer per question");
+    }
+
+    #[test]
+    fn leaving_the_server_pin_question_writes_nothing() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.lsp_pin = Some("rust".to_owned());
+
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
+        assert_eq!(app.lsp_pin, None, "the question is closed either way");
+        assert!(app.status.contains("will not start"), "{}", app.status);
+    }
+
+    #[test]
+    fn leaving_the_pin_question_writes_nothing() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.agent_pin = Some("test-agent".to_owned());
+
+        assert_eq!(app.handle_key(key(KeyCode::Char('n'))), None);
+        assert_eq!(app.agent_pin, None, "the question is closed either way");
+        assert!(app.status.contains("will not run"), "{}", app.status);
     }
 
     #[test]
@@ -7876,6 +8501,7 @@ mod tests {
             agent_id: "mock".to_owned(),
             title: title.to_owned(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-10-24T00:00:00Z".to_owned(),
             updated_at: "2026-10-24T00:00:00Z".to_owned(),
         }
@@ -7914,6 +8540,56 @@ mod tests {
         assert_eq!(app.entries.len(), 1);
         assert_eq!(app.entries[0].text, "Hello world");
         assert_eq!(app.entries[0].kind, Kind::Assistant);
+    }
+
+    #[test]
+    fn a_promoted_agents_thinking_is_its_own_paragraph() {
+        // What `acpilot-agent-lm` sends for a recipe's reasoning: an
+        // `AgentThoughtChunk`, which the daemon records as a `Thought` event.
+        let mut app = App::new("http://127.0.0.1:7777");
+        open(&mut app);
+        app.apply_event(event(
+            1,
+            SessionEventKind::Thought,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "weighing " }
+            }),
+        ));
+        app.apply_event(event(
+            2,
+            SessionEventKind::Thought,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "it" }
+            }),
+        ));
+        app.apply_event(event(
+            3,
+            SessionEventKind::MessageChunk,
+            serde_json::json!({
+                "role": "assistant",
+                "content": { "type": "text", "text": "hello" }
+            }),
+        ));
+
+        assert_eq!(app.entries.len(), 2, "thinking is not part of the answer");
+        assert_eq!(app.entries[0].kind, Kind::Thought);
+        assert_eq!(
+            app.entries[0].text, "weighing it",
+            "chunks of one thought are one paragraph"
+        );
+        assert_eq!(app.entries[1].kind, Kind::Assistant);
+        assert_eq!(app.entries[1].text, "hello");
+
+        // The pane draws the row with its kind, which is what gives it the dim
+        // italic style instead of the answer's.
+        let rows = app.transcript_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, Kind::Thought);
+        assert_eq!(rows[0].text(), "weighing it");
+        assert_eq!(rows[1].kind, Kind::Assistant);
+        assert_eq!(rows[1].text(), "hello");
     }
 
     #[test]
@@ -9604,7 +10280,7 @@ mod tests {
 
         let mut app = App::new("daemon");
         let error = app
-            .remember_keymap(path)
+            .remember_keymap(path, &[])
             .expect("a sentence about the file");
         assert!(error.contains("flow-north"), "{error}");
         assert_eq!(
@@ -11540,6 +12216,31 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert!(app.entries[0].folded, "and it closes again");
         assert_eq!(app.transcript_len(), 1);
+    }
+
+    #[test]
+    fn enter_folds_a_long_thought_to_one_row() {
+        let mut app = transcript_app();
+        app.entries = vec![Entry {
+            kind: Kind::Thought,
+            text: "first\nsecond\nthird".to_owned(),
+            ..Entry::default()
+        }];
+        app.handle_key(key(KeyCode::F(3)));
+        assert_eq!(app.transcript_len(), 3, "thinking starts open");
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.entries[0].folded, "the thought folded");
+        assert_eq!(app.transcript_len(), 1);
+        let rows = app.transcript_rows();
+        assert_eq!(rows.len(), 1, "a folded thought is one row");
+        assert_eq!(rows[0].kind, Kind::Thought, "it keeps its own styling");
+        assert_eq!(rows[0].text(), "thinking · 3 lines · Enter opens it");
+        assert!(app.status.contains("thinking folded"), "{}", app.status);
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.entries[0].folded, "and it opens again");
+        assert_eq!(app.transcript_len(), 3);
     }
 
     #[test]

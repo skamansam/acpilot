@@ -57,6 +57,7 @@ export default defineConfig({
           label: 'Flight deck',
           items: [
             { label: 'CLI', link: '/flight-deck/cli/' },
+            { label: 'Updating', link: '/flight-deck/update/' },
             { label: 'TUI', link: '/flight-deck/tui/' },
             { label: 'Desktop', link: '/flight-deck/desktop/' },
             { label: 'Web', link: '/flight-deck/web/' },

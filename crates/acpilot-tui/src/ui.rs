@@ -8,6 +8,7 @@
 //! replaced later.
 
 use acpilot_demo::{Diff, DiffKind};
+use acpilot_proto::agent::AgentStatus;
 use acpilot_proto::permission::PermissionRequest;
 use acpilot_proto::session::SessionStatus;
 use acpilot_proto::terminal::TerminalSize;
@@ -80,8 +81,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.about {
         draw_about(frame, app, body);
     }
-    if app.agent_picker {
+    if app.agent_pin.is_some() {
+        draw_agent_pin(frame, app, body);
+    } else if app.agent_picker {
         draw_agent_picker(frame, app, body);
+    }
+    if app.lsp_pin.is_some() {
+        draw_lsp_pin(frame, app, body);
     }
     if app.terminal_picker {
         draw_terminal_picker(frame, app, body);
@@ -116,6 +122,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     }
     if app.commit.is_some() {
         draw_commit_composer(frame, app, body);
+    }
+    if let Some(lab) = &app.lab {
+        crate::lab::draw(frame, lab, &app.theme, body);
     }
     if app.first_run {
         draw_first_run(frame, &app.theme, body);
@@ -2978,10 +2987,26 @@ fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(app.theme.text_muted())
             };
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!("{marker}{}", agent.name), row),
                 Span::styled(format!("  {}", agent.id), id),
-            ])
+            ];
+            // Where the row came from, because that is what the pin question will
+            // name: a person deciding about a command should see the pack first.
+            if let Some(pack) = &agent.extension {
+                spans.push(Span::styled(
+                    format!("  from {pack}"),
+                    Style::default().fg(app.theme.text_muted()),
+                ));
+            }
+            // And the one state that changes what `Enter` does.
+            if agent.status == AgentStatus::Untrusted {
+                spans.push(Span::styled(
+                    "  · not approved",
+                    Style::default().fg(app.theme.warning()),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
     lines.push(Line::from(""));
@@ -2993,6 +3018,118 @@ fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(format!(" Agents · {} ", app.agents.len()))
         .border_style(Style::default().fg(app.theme.accent()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
+/// The pin question: a command whose bytes changed since somebody approved it.
+///
+/// A card rather than a status line, because the answer decides which program
+/// runs: a decision taken from a sentence is one nobody read.
+fn draw_agent_pin(frame: &mut Frame, app: &App, area: Rect) {
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let Some(id) = app.agent_pin.as_deref() else {
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    match app.agents.iter().find(|agent| agent.id == id) {
+        Some(agent) => {
+            lines.push(Line::from(Span::styled(
+                format!("Trust {}?", agent.name),
+                Style::default()
+                    .fg(app.theme.text())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                match &agent.extension {
+                    Some(pack) => {
+                        format!("from {pack}, and its program changed since it was approved")
+                    }
+                    None => "its program changed since it was approved".to_owned(),
+                },
+                Style::default().fg(app.theme.text_muted()),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                agent.command.clone(),
+                Style::default().fg(app.theme.accent_high()),
+            )));
+        }
+        // The roster moved under the question. Naming the gap is better than an
+        // empty card, because no key on this card can approve an agent that is not
+        // declared any more.
+        None => lines.push(Line::from(Span::styled(
+            format!("{id} is no longer in this profile's roster"),
+            Style::default().fg(app.theme.danger()),
+        ))),
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y approves · n leaves it unapproved",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Approve a command ")
+        .border_style(Style::default().fg(app.theme.warning()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
+/// The same question about a language server: a program a pack introduced, whose
+/// bytes changed since somebody approved it.
+///
+/// A card for the reason the agent's is: the answer decides which program a caret's
+/// questions go to, and a decision taken from a status line is one nobody read.
+fn draw_lsp_pin(frame: &mut Frame, app: &App, area: Rect) {
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let Some(language) = app.lsp_pin.as_deref() else {
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    let row = app.lsp_servers.iter().find(|server| {
+        server
+            .languages
+            .first()
+            .is_some_and(|first| first == language)
+    });
+    match row {
+        Some(server) => {
+            lines.push(Line::from(Span::styled(
+                match &server.extension {
+                    Some(pack) => format!("Trust {} from {pack}?", server.command),
+                    None => format!("Trust {}?", server.command),
+                },
+                Style::default()
+                    .fg(app.theme.text())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "its program changed since it was approved",
+                Style::default().fg(app.theme.text_muted()),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("for {language}"),
+                Style::default().fg(app.theme.accent_high()),
+            )));
+        }
+        // The list moved under the question; naming the gap is better than a card
+        // whose `y` would approve a row that is not listed any more.
+        None => lines.push(Line::from(Span::styled(
+            format!("no language server is listed for {language} any more"),
+            Style::default().fg(app.theme.danger()),
+        ))),
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "y approves · n leaves it unapproved",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Approve a language server ")
+        .border_style(Style::default().fg(app.theme.warning()));
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
@@ -3168,14 +3305,16 @@ mod tests {
                 transport: AgentTransport::AcpStdio,
                 status: AgentStatus::Available,
                 command: "one".to_owned(),
+                extension: None,
                 protocol_version: None,
             },
             AgentSummary {
                 id: "two".to_owned(),
                 name: "Two".to_owned(),
                 transport: AgentTransport::AcpStdio,
-                status: AgentStatus::Available,
+                status: AgentStatus::Untrusted,
                 command: "two".to_owned(),
+                extension: Some("acpilot.two-pack".to_owned()),
                 protocol_version: None,
             },
         ];
@@ -3185,6 +3324,63 @@ mod tests {
         let text = render(&mut app);
         assert!(text.contains("Agents · 2"), "{text}");
         assert!(text.contains("▸ Two"), "the chosen row is marked: {text}");
+        assert!(
+            text.contains("from acpilot.two-pack"),
+            "a row says where it came from: {text}"
+        );
+        assert!(
+            text.contains("not approved"),
+            "and the one state that changes what Enter does: {text}"
+        );
+    }
+
+    #[test]
+    fn the_language_server_question_names_the_pack_the_program_and_the_language() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.lsp_servers = vec![acpilot_proto::lsp::LspServerSummary {
+            id: "rust-analyzer".to_owned(),
+            languages: vec!["rust".to_owned()],
+            command: "rust-analyzer".to_owned(),
+            status: acpilot_proto::lsp::LspServerStatus::Untrusted,
+            encoding: None,
+            extension: Some("acpilot.rust-pack".to_owned()),
+            round_trip_ms: None,
+        }];
+        app.lsp_pin = Some("rust".to_owned());
+
+        let text = render(&mut app);
+        assert!(
+            text.contains("Trust rust-analyzer from acpilot.rust-pack?"),
+            "the question names the pack: {text}"
+        );
+        assert!(text.contains("for rust"), "and the language: {text}");
+    }
+
+    #[test]
+    fn the_pin_question_names_the_pack_the_program_and_the_answer() {
+        let mut app = App::new("http://127.0.0.1:7777");
+        app.agents = vec![AgentSummary {
+            id: "rust-analyzer".to_owned(),
+            name: "Rust Analyzer".to_owned(),
+            transport: AgentTransport::AcpStdio,
+            status: AgentStatus::Untrusted,
+            command: "/usr/local/bin/rust-analyzer --stdio".to_owned(),
+            extension: Some("acpilot.rust-pack".to_owned()),
+            protocol_version: None,
+        }];
+        app.agent_pin = Some("rust-analyzer".to_owned());
+
+        let text = render(&mut app);
+        assert!(text.contains("Trust Rust Analyzer?"), "{text}");
+        assert!(
+            text.contains("from acpilot.rust-pack"),
+            "the question names the pack, not a bare path: {text}"
+        );
+        assert!(
+            text.contains("rust-analyzer --stdio"),
+            "and the command itself: {text}"
+        );
+        assert!(text.contains("y approves"), "{text}");
     }
 
     fn app_with_session() -> App {
@@ -3197,6 +3393,7 @@ mod tests {
             agent_id: "mock".to_owned(),
             title: "wire the tui".to_owned(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-10-24T00:00:00Z".to_owned(),
             updated_at: "2026-10-24T00:00:00Z".to_owned(),
         });
@@ -3283,6 +3480,35 @@ mod tests {
         assert!(text.contains("Permission needed"), "{text}");
         assert!(text.contains("Write src/main.rs"), "{text}");
         assert!(text.contains("y allow once"), "{text}");
+    }
+
+    /// The DoD's other half: a paired driver causes a permission request, and the
+    /// person at the machine sees it. The driver's own stream never carries it —
+    /// that is `a_driver_without_the_grant_is_told_why_it_waits` in
+    /// `acpilotd/tests/acp_bridge.rs`; this is the drawing.
+    #[test]
+    fn the_permission_a_paired_driver_causes_is_drawn_in_the_tui() {
+        let mut app = app_with_session();
+        app.sessions[0].status = SessionStatus::AwaitingPermission;
+        app.permissions.push(permission(
+            "bridge-1",
+            PermissionKind::Terminal,
+            vec![PermissionOption::AllowOnce, PermissionOption::Deny],
+            "Run `cargo test`",
+        ));
+        app.permission_card = true;
+
+        let text = render(&mut app);
+        assert!(text.contains("Permission needed"), "{text}");
+        assert!(text.contains("Run `cargo test`"), "{text}");
+        assert!(
+            text.contains("y allow once"),
+            "the person can answer without the driver: {text}"
+        );
+        assert!(
+            !text.contains("session/request_permission"),
+            "the card is a person's question, not the protocol's request: {text}"
+        );
     }
 
     #[test]

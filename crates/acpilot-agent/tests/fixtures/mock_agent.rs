@@ -10,6 +10,7 @@
 //! | Prompt | What the agent does |
 //! | --- | --- |
 //! | `stream <n>` | emits `n` message chunks numbered from 1, then ends the turn |
+//! | `tools` | sends a tool call, its completion, a one-entry plan and a mode change, then ends the turn |
 //! | `permission` | asks the client to allow a shell command, reports the answer, ends the turn |
 //! | `fs` | reads `seed.txt` in the session's cwd, reads a path outside it (the cwd's parent), writes a file in the cwd, reports each answer, ends the turn |
 //! | `write <path>` | writes one file at the absolute path given, reports the answer, ends the turn |
@@ -39,13 +40,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, ContentBlock, ContentChunk, CreateTerminalRequest, Implementation,
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, Notice,
-    NoticeSeverity, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    ReadTextFileRequest, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionMode, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent, ToolCallUpdate, ToolCallUpdateFields,
-    WriteTextFileRequest,
+    AgentCapabilities, ContentBlock, ContentChunk, CreateTerminalRequest, CurrentModeUpdate,
+    Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
+    Notice, NoticeSeverity, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
+    PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, ReadTextFileRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionMode, SessionModeState,
+    SessionNotification, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    TextContent, ToolCall, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind, WriteTextFileRequest,
 };
 use agent_client_protocol::{Agent, Client, Stdio, on_receive_request};
 
@@ -116,6 +118,42 @@ async fn main() {
                         ))?;
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
+                    Directive::Tools => {
+                        // The shapes a driver's transcript needs beyond text: a row
+                        // that starts in progress, a patch that finishes it, the plan
+                        // and the mode the agent settled into.
+                        connection.send_notification(SessionNotification::new(
+                            session.clone(),
+                            SessionUpdate::ToolCall(
+                                ToolCall::new("tool-1", "Read seed.txt")
+                                    .kind(ToolKind::Read)
+                                    .status(ToolCallStatus::InProgress)
+                                    .locations(vec![ToolCallLocation::new(
+                                        workspace().join("seed.txt"),
+                                    )]),
+                            ),
+                        ))?;
+                        connection.send_notification(SessionNotification::new(
+                            session.clone(),
+                            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                                "tool-1",
+                                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                            )),
+                        ))?;
+                        connection.send_notification(SessionNotification::new(
+                            session.clone(),
+                            SessionUpdate::Plan(Plan::new(vec![PlanEntry::new(
+                                "Read seed.txt",
+                                PlanEntryPriority::High,
+                                PlanEntryStatus::Completed,
+                            )])),
+                        ))?;
+                        connection.send_notification(SessionNotification::new(
+                            session.clone(),
+                            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("code")),
+                        ))?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    }
                     Directive::Hang => {
                         // SDK 5 answers a request when its responder is dropped,
                         // so a hung agent is one that keeps the responder alive
@@ -135,9 +173,10 @@ async fn main() {
                                 Directive::Write(path) => write_file(&task, &session, path).await,
                                 Directive::Terminal => exercise_terminal(&task, &session).await,
                                 // `spawn` is only reached for the four above.
-                                Directive::Stream(_) | Directive::Hang | Directive::Commit => {
-                                    Vec::new()
-                                }
+                                Directive::Stream(_)
+                                | Directive::Hang
+                                | Directive::Commit
+                                | Directive::Tools => Vec::new(),
                             };
                             for line in report {
                                 task.send_notification(notice(&session, line))?;
@@ -167,6 +206,7 @@ enum Directive {
     Write(PathBuf),
     Terminal,
     Commit,
+    Tools,
     Hang,
 }
 
@@ -181,6 +221,7 @@ fn directive(text: &str) -> Directive {
     match text.trim() {
         "permission" => Directive::Permission,
         "fs" => Directive::Fs,
+        "tools" => Directive::Tools,
         "terminal" => Directive::Terminal,
         "hang" => Directive::Hang,
         other => match other.strip_prefix("stream ") {

@@ -81,8 +81,9 @@ point of the split.
   order. They answer what you can open, what it said, and what you want to say.
   The transcript renders an assistant reply's markdown (headings, lists, quotes,
   fenced code, inline code, bold, italic, links). It folds every tool call to
-  one row whose status moves in place. `Enter` under the copy cursor opens the
-  result. While the open session is busy, a cursor sits at the end of the last
+  one row whose status moves in place, and draws the agent's thinking as its own
+  softly styled row. `Enter` under the copy cursor folds or opens the tool call
+  or thinking row, so a long reason can be put away without hiding the answer. While the open session is busy, a cursor sits at the end of the last
   line and the title says `streaming`. The composer is multiline, and `@` opens
   a path completion the daemon walks. - The **status line** is connection,
   profile, focused pane, cursor, last message, and the daemon address when there
@@ -105,7 +106,7 @@ document open.
 | Pane | Today | Task |
 | --- | --- | --- |
 | Menu bar, About | real, and every row is an existing path | — |
-| Sessions, transcript, composer | real, over the daemon. The transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and a streaming cursor. The composer is multiline with `@path` completion from the daemon's walk | — |
+| Sessions, transcript, composer | real, over the daemon. The transcript is a pane (`Tab`, `F3`) with scroll, find, copy, markdown, foldable tool calls and thinking rows, and a streaming cursor. The composer is multiline with `@path` completion from the daemon's walk | — |
 | Permission card | real: the request's own title, kind and session, a preview of the write when it is one, and one row per option the request actually sent (`y` once, `a` always for the session, `n` deny). `Tab`/`Shift-Tab` move between questions that are waiting, and `Esc` answers later. The card is drawn over the transcript while it streams, because a turn in flight is exactly when an agent asks | — |
 | Diff review | real: `Ctrl-D` opens it over the card, unified or two columns, a decision per hunk, answered through the same permission path. `Esc` closes it and leaves the question pending | — |
 | Source control | real: `F6` opens a modal pane over the shell, fed by `GET /v1/git/status` and both halves of `GET /v1/git/diff`. The changed paths are on the left. The selected file's **Unstaged** and **Staged** sections are on the right, one hunk at a time, with the chosen unstaged hunk marked. `j`/`k` choose a path and `h`/`l` choose an unstaged hunk. `Shift-S` stages that one hunk through `POST /v1/git/stage-hunk`, `PgUp`/`PgDn` scroll the diff, and `s`/`u` move the selected path in or out of the index through `POST /v1/git/stage` and `/unstage`. `r` asks the daemon again. `d` arms `POST /v1/git/discard` (working tree back to the index, staged changes kept) and `x` arms `POST /v1/git/checkout` (both halves back to `HEAD`). Both wait for `y`, and `n` or `Esc` cancels. Checkout is refused before the first commit and for an untracked path, where discard is the action that removes it. `--demo` uses its one seeded changed file and refuses the writes | — |
@@ -115,7 +116,7 @@ document open.
 | Theme | real: every colour is a token from the theme the settings name (`theme_tui` over `theme`), resolved for the terminal, the desktop app and the page the daemon serves. A running client watches the settings files and recolours on save. `theme_follow_terminal` solves the terminal's palette from the terminal's own `OSC 11`/`10` pair instead of naming one | `prefs.changed` over the daemon's event stream (P4-7) |
 | File tree | real: the daemon's `GET /v1/files/list`, one directory per row opened and spliced into the flat list with a depth. `Enter` reads a file through `GET /v1/files` and opens it in the editor. `H` asks for the rows an ignore rule hides (`include_ignored`), which arrive marked and are drawn greyed. `/` searches the workspace by path through `GET /v1/files/search`, which ranks a substring or initials and walks with the same ignore rules, so a find cannot see what the tree cannot. `Ctrl-Shift-F` (or the palette's **Search file contents**) opens a jump list fed by `GET /v1/files/grep`, and each row carries the line with the words that matched marked (folded the way the daemon folded them). `Enter` opens the file at that line. A row's letter is the daemon's, not the client's: the listing marks each path with what git says changed (`M`, `A`, `?`, `D`, `!`), and gives a directory the most urgent change beneath it. A workspace that is not a repository, or a host without `git`, shows none rather than claiming everything is committed | P6.5-4 opens that pane with `F6`, drawing the changed paths and the selected file's diff |
 | Editor | real: a `Document` drawn through `acpilot-text::pane` — virtualised rows, horizontal scroll, gutter with numbers and git markers parsed from the diff, current line, bracket matching, the daemon's language-server problems as gutter letters refreshed once the buffer has been still for 480 ms, `/` find with smart case, `Ctrl-G` go-to-line, a click that lands a caret, a drag that selects and a `y` that copies, and a wheel that scrolls the view. It is editable: `i`/`a`/`I`/`A`/`o`/`O` enter insert mode, `u` and `Ctrl-Z` undo, `Ctrl-Y` redoes, and the title names the mode the keys are in. `v` enters visual mode, where motions extend the run and `y` copies it, `d`/`x` delete it, and `Esc` leaves. `:` opens a command line with `:w`, `:q`/`:q!`, `:N` and `:e path`. A run of Up/Down keeps the column it started from across a short line, and Shift-click extends a selection. The buffer is whatever the tree opened, or the seeded one in `--demo`, and a `+` on the tab says the text is not the file's. Its normal and visual keys are the keymap's, so `keymap.toml` can move them | P7-10 (saving) |
-| Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a roster, plus an estimated context for an agent with a conversation behind it and no window unless the agent names one. So a live bar before any session is rows that say so, and the seeded rows in `--demo` exercise all four sources | P4.5-12 (provider rows and balances) |
+| Stats bar | real: one row per integration from `GET /v1/stats`, drawn by `acpilot-stats` (the crate the desktop app and the page also use). A context and a credit track per row, an indeterminate track when nobody reported a denominator, the fill coloured by source rather than by level, and `F4` for where each figure came from. The daemon's rows are a provider row per declaration plus the agent roster, with an estimated context for an agent that has a conversation behind it and no window unless the agent names one; a provider reports credits only where the daemon knows a balance endpoint (OpenRouter today). So a live bar before any session is rows that say so, and the seeded rows in `--demo` exercise all four sources | configured windows and plan ceilings (P4.5-12 `Open:`) |
 | Outline panel | real: `acpilot_text::outline` collects the open buffer's definitions from the parse tree. `Show outline` in the Panels menu puts it up, `j`/`k` choose and `Enter` puts the caret on the definition's line. It re-reads when the text has changed since the last read, because `App::tick` compares `Document::revision`. A burst of typing therefore costs one parse a frame rather than one per keystroke | — |
 | Project map panel | real: the agent writes `.acpilot/project-map.toml` — `updated`, then one `[[areas]]` with a `name`, the `path` it owns, a `summary` and the `depends_on` it leans on — and `GET /v1/project/map` parses it where the workspace is. The panel lists the areas in the order the agent wrote them, marks the area the open file belongs to (deepest path wins, compared by segments so `crates/tui` is not the parent of `crates/tui-tools`) and opens its summary and edges. `j`/`k` choose, `Enter` puts a summary on the status line, and `r` re-reads a map the agent has just rewritten. A workspace with no map says so rather than showing an empty list | a regeneration prompt over the tree and the README. The map is a document a person can correct, so the panel reads it rather than writing it |
 | Wiki panel | planned, not built: linked pages per subsystem in the workspace, read in a pane with a page list and a jump. A link to an unwritten page is the prompt to write it | panel work in `TODO.md` |
@@ -129,7 +130,7 @@ document open.
 | terminal picker | `j`/`k` choose · `Enter` attach · `n` start a shell in the session's workspace · `Esc`/`q` close |
 | agent picker | `j`/`k` choose · `Enter` chooses the agent and reveals the assistant · `Esc`/`q` close |
 | menu bar | `←`/`→` titles · `↓`/`Enter` open · `↑`/`↓` rows · `Enter` run · `Esc` back one level · `Alt`+letter another menu · click and hover work too |
-| transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call under the cursor |
+| transcript | the copy keys below, because the keyboard being there is what reading it means · `Enter` folds or opens the tool call or thinking row under the cursor |
 | files | `j`/`k` move · `h`/`l` collapse/expand · `Enter` open · `/` find a file across the workspace — the daemon's walk, so the ignore rules apply; `↑`/`↓` choose, `Enter` opens, `Esc` puts the tree back · `H` shows the paths an ignore rule hides, greyed and italic, asking every open directory again so the tree keeps its shape · a click focuses the tree on that row · `Ctrl-R` re-lists, which is how a change to `tree_respect_gitignore` arrives · the tree is the daemon's listing, so it hides what the workspace's `.gitignore` files hide unless that preference or `H` says otherwise |
 | editor | `h`/`j`/`k`/`l` cursor in a column that Up/Down remembers · `0`/`$` start/end of line · `PgUp`/`PgDn` a page · `/` or `Ctrl-F` find · `n`/`N` next/previous match · `Ctrl-G` line[:column] · `v` visual selection · `y` copy the selection · `Esc` clear it · `Ctrl-S` or `:w` save · `:` command line (`:q` refuses unsaved text, `:q!` discards) · `i`/`a` insert at the caret or after it · `I`/`A` at the line's start or end · `o`/`O` a line below or above · `u`/`Ctrl-Z` undo · `Ctrl-Y` redo · `x` delete a character · `F12` definition · click puts the caret · Shift-click extends the selection · drag selects · wheel scrolls the view |
 | visual mode | motions (`h`/`j`/`k`/`l`, arrows, `0`/`$`, `PgUp`/`PgDn`) extend the run · `y` copy · `d`/`x` delete · `:` a command · `v`/`Esc`/click leave |
@@ -360,3 +361,37 @@ session's stored events at 45 ms a chunk.
    the divider moves the same width, so neither gesture is the only way. What is
    still open is whether the drag should also persist: the widths reset on
    launch today.
+## The model lab
+
+`Session → Build an Agent in the Model Lab…` opens a page over the panes
+(P4.5-8), not a fourth column: a recipe is about the model, and a settings screen
+in a column would be a fourth panel in a shell whose point is three.
+
+Three panes answer three questions. **Recipe** is the draft that will be sent:
+label, master prompt, sampling, budget, tool ceiling. **Corpus** is what the
+workspace contributes — selectors, the files the last run resolved them to, and a
+byte meter against the recipe's ceiling. **Output** is the answer as it streams,
+the gauges the provider reported, and the run history.
+
+The rules are the ones a lab needs to be worth reading:
+
+- A figure the provider did not report is absent or says `not reported`. Estimated
+  tokens carry a sentence saying the server reported no usage, and the gauges are
+  coloured as an estimate.
+- The inspector (`v`) shows the exact request a run sent: prompt, selectors, the
+  files with sizes and tokens, the budget, and the parameters. The files come from
+  the run's record, which is why `GET /v1/recipes/{id}/runs/{run}` exists; without
+  a record the inspector says what the plan is and leaves the file list empty
+  rather than guessing.
+- A parameter the server refused is named in the run's warnings, beside the
+  request, because a knob that silently does nothing is worse than no knob.
+- Compare (`c`) marks a run as the base; the selected run's gauges then carry the
+  token and latency difference. A run that did not report a duration is compared
+  in tokens only and says so.
+- Editing is local until `^S`. `Esc` backs out one step at a time — the prompt,
+  the inspector, the draft, the page — so the key that means "not that" cannot
+  throw away a half-typed prompt.
+
+Promotion is one keystroke away in the ticket, not here: `POST
+/v1/recipes/{id}/promote` is P4.5-9's route, so the lab saves and runs but does
+not write `agents.toml` yet.

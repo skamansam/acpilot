@@ -4,6 +4,8 @@
 //! "works for me" means something. Commands that belong to phases which have not
 //! shipped yet fail loudly rather than pretending to succeed.
 
+mod resources;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
@@ -153,6 +155,50 @@ enum Task {
         /// Target triples to build for; the host's own target when none are given.
         #[arg(long, value_name = "TRIPLE")]
         target: Vec<String>,
+        /// Which half of the release to build.
+        ///
+        /// `local` is the archives for the named targets, which is what a runner can
+        /// build for itself; `global` is the installers, the formula and the SBOMs,
+        /// which are made once for the whole release. The release workflow runs the
+        /// two halves on different machines, and running both on each of them would
+        /// upload the same installer three times.
+        #[arg(long, value_enum, default_value_t = DistArtifacts::All)]
+        artifacts: DistArtifacts,
+        /// The version this release is published as, when it differs from the one in
+        /// `Cargo.toml`.
+        ///
+        /// dist names a release after the workspace manifest and refuses a `--tag`
+        /// that disagrees with it, while this repository's version comes from the
+        /// merged pull request's labels (`.github/scripts/next_version.py`). The task
+        /// writes this version into the generated installers and formulae, so they
+        /// name the tag the release will actually create.
+        #[arg(long, value_name = "X.Y.Z")]
+        release_version: Option<String>,
+    },
+    /// Measure the CPU and memory of the programs a release ships (XT-4).
+    ///
+    /// Starts a built binary against a temporary profile, drives one scripted load,
+    /// samples the whole process tree every 100 ms, and writes the figures beside the
+    /// window and the machine they came from to `docs/notes/resources.md`. A number
+    /// without its load and its hardware measures the machine.
+    ///
+    /// The rows a phase has not reached yet are named at the end of the run rather
+    /// than skipped silently: a language server needs one installed (P7), the window
+    /// needs a display (P10), the page needs a browser (P11), and `acpilotd-helper`
+    /// has no build until P9.
+    Resources {
+        /// Measure the debug build. Release is what an archive carries; this is only
+        /// for a fast loop, and the note records which profile it measured.
+        #[arg(long)]
+        debug: bool,
+        /// How many times each row is measured; the median is reported.
+        #[arg(long, default_value_t = 3, value_name = "N")]
+        repeats: u32,
+        /// Compare the medians with the budgets and exit non-zero when one is past
+        /// its margin, instead of writing the note. What CI runs: release only, and
+        /// never fewer than three runs.
+        #[arg(long)]
+        gate: bool,
     },
 }
 
@@ -214,7 +260,22 @@ fn main() -> ExitCode {
         Task::Schema => run_schema(),
         Task::Dev => run_dev(),
         Task::WebBuild => run_web_build(),
-        Task::Dist { target } => run_dist(&target),
+        Task::Dist {
+            target,
+            artifacts,
+            release_version,
+        } => run_dist(&target, artifacts, release_version.as_deref()),
+        Task::Resources {
+            debug,
+            repeats,
+            gate,
+        } => {
+            if resources::run(debug, repeats, gate) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 
@@ -962,6 +1023,29 @@ fn embedded_page_drift() -> Option<bool> {
     Some(String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
+/// Which half of a release [`run_dist`] builds.
+///
+/// The split is cargo-dist's own: archives (and the MSI/NSIS installers it makes per
+/// target) are `local`, made by a machine that can build for that target; the shell
+/// and PowerShell scripts, the Homebrew formula and the per-program SBOMs are
+/// `global`, made once. `all` is a developer's run, which wants everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DistArtifacts {
+    Local,
+    Global,
+    All,
+}
+
+impl DistArtifacts {
+    fn builds_local(self) -> bool {
+        matches!(self, Self::Local | Self::All)
+    }
+
+    fn builds_global(self) -> bool {
+        matches!(self, Self::Global | Self::All)
+    }
+}
+
 /// Build the artifacts a release uploads, with cargo-dist.
 ///
 /// Two prerequisites are checked rather than assumed, because both fail in a way
@@ -974,7 +1058,21 @@ fn embedded_page_drift() -> Option<bool> {
 /// installer scripts and manifests are the output of a specific dist, and "the
 /// release built on the runner" and "the release built here" have to be the same
 /// thing for `xtask dist` to mean anything.
-fn run_dist(targets: &[String]) -> ExitCode {
+fn run_dist(
+    targets: &[String],
+    artifacts: DistArtifacts,
+    release_version: Option<&str>,
+) -> ExitCode {
+    let release = match release_version {
+        Some(text) => match parse_release_version(text) {
+            Ok(version) => Some(version.to_owned()),
+            Err(why) => {
+                eprintln!("==> dist: {why}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     let Some(pinned) = configured_dist_version() else {
         eprintln!(
             "==> dist: dist-workspace.toml has no `cargo-dist-version`; the version is \
@@ -1017,27 +1115,325 @@ fn run_dist(targets: &[String]) -> ExitCode {
     // it, while the installer scripts, the formula and the checksum file are made
     // once per program. `host` mode alone builds only the installers for *this*
     // machine's OS, which would leave the PowerShell script out of a run on Linux.
-    let mut local = Command::new("dist");
-    local.arg("build");
-    for target in targets {
-        local.args(["--target", target]);
-    }
-    if !run_step("build (dist, archives)", local) {
-        return ExitCode::FAILURE;
+    if artifacts.builds_local() {
+        let mut local = Command::new("dist");
+        // `--artifacts=local` is not implied by `--target`: without it dist also
+        // writes the global installers and the formula, and a release that built
+        // those on three runners would upload three files with one name.
+        local.args(["build", "--artifacts=local"]);
+        for target in targets {
+            local.args(["--target", target]);
+        }
+        if !run_step("build (dist, archives)", local) {
+            return ExitCode::FAILURE;
+        }
     }
 
-    let mut global = Command::new("dist");
-    global.args(["build", "--artifacts=global"]);
-    if !run_step("build (dist, installers)", global) {
-        return ExitCode::FAILURE;
-    }
+    if artifacts.builds_global() {
+        let mut global = Command::new("dist");
+        global.args(["build", "--artifacts=global"]);
+        if !run_step("build (dist, installers)", global) {
+            return ExitCode::FAILURE;
+        }
 
-    if !build_sboms() {
-        return ExitCode::FAILURE;
+        if !build_sboms() {
+            return ExitCode::FAILURE;
+        }
+
+        // After dist, because dist will not write another version: `--tag` is checked
+        // against the manifest rather than overriding it. Only text changes here — the
+        // archives, their checksums and the signature over them are what must not.
+        if let Some(version) = &release
+            && !retag_for_release(version)
+        {
+            return ExitCode::FAILURE;
+        }
+
+        if !mark_homebrew_formulas() {
+            return ExitCode::FAILURE;
+        }
     }
 
     report_dist_artifacts();
     ExitCode::SUCCESS
+}
+
+/// The line a formula needs so a Homebrew copy reports itself as `brew`.
+///
+/// dist generates the formula from the same archive the tarball users download, and
+/// that archive's `install.json` says `tarball` — which is true of the bytes and false
+/// of the installation. The formula is the package that put them in the Cellar, so it
+/// writes its own marker in the same directory as the binary, through `version`,
+/// which the formula already declares. Without it `acpilot update` would treat a
+/// `brew` copy as the user's own and write inside a keg that `brew upgrade` will
+/// discard.
+///
+/// The marker is JSON in a Ruby string: `\"` is how a double quote is written inside
+/// one, and `#{version}` is the formula's own version, so the two cannot drift.
+const BREW_MARKER: &str = "(bin/\"install.json\").write(\"{\\\"method\\\":\\\"brew\\\",\\\"version\\\":\\\"#{version}\\\"}\")";
+
+/// The fragment that says a formula has already been marked.
+const BREW_MARKED: &str = "\\\"method\\\":\\\"brew\\\"";
+
+/// Write the marker into the formula that installs `acpilot`, in each `def install`
+/// block.
+///
+/// The aliases dist writes (`bin.install_symlink`) are skipped: a symlink is not the
+/// copy that answers `current_exe`, and a formula whose only install line was an
+/// alias would otherwise get a marker in a keg that holds no binary of ours.
+///
+/// Only the client's formula writes it: `bin/install.json` is one path in the prefix,
+/// so two formulae that both write it cannot be installed together — Homebrew refuses
+/// to link one path out of two kegs — and the daemon's formula has no question to
+/// answer that the client's marker does not. A run that finds no formula installing
+/// `acpilot` is a failure rather than a pass, because then nothing can say `brew`.
+///
+/// One per platform block rather than once per file: the formula has a separate
+/// `install` for each `on_macos`/`on_linux` branch, and whichever branch runs is the
+/// one whose binary answers `current_exe`.
+fn mark_homebrew_formulas() -> bool {
+    let dir = dist_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{}: {error}", dir.display());
+            return false;
+        }
+    };
+    let mut formulas: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rb"))
+        .collect();
+    formulas.sort();
+    if formulas.is_empty() {
+        eprintln!(
+            "==> homebrew: dist wrote no formula and the config asks for one, so no \
+             installation can say `brew`"
+        );
+        return false;
+    }
+    let mut marked_client = false;
+    for path in formulas {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let formula = match fs::read_to_string(&path) {
+            Ok(formula) => formula,
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return false;
+            }
+        };
+        if !installs_program(&formula, CLIENT_PROGRAM) {
+            continue;
+        }
+        marked_client = true;
+        let marked = match with_brew_marker(&formula) {
+            Ok(marked) => marked,
+            Err(why) => {
+                eprintln!("==> homebrew: {name}: {why}");
+                return false;
+            }
+        };
+        if marked == formula {
+            continue;
+        }
+        if let Err(error) = fs::write(&path, &marked) {
+            eprintln!("{}: {error}", path.display());
+            return false;
+        }
+        println!("    {name} says `brew` beside its binary");
+    }
+    if !marked_client {
+        eprintln!(
+            "==> homebrew: no formula installs `{CLIENT_PROGRAM}`, so no installation can \
+             say `brew`"
+        );
+        return false;
+    }
+    true
+}
+
+/// Insert the marker after every `bin.install` line of one formula, and only those.
+///
+/// Indentation is copied from the line it follows, because the generated formula
+/// indents by platform nesting and a marker at the wrong depth is a syntax error in
+/// Ruby rather than a cosmetic difference. A formula that already says `brew` is left
+/// exactly as it is, so running the task twice is not two markers.
+fn with_brew_marker(formula: &str) -> Result<String, String> {
+    if formula.contains(BREW_MARKED) {
+        return Ok(formula.to_owned());
+    }
+    let mut marked = String::with_capacity(formula.len() + BREW_MARKER.len() * 4 + 64);
+    let mut inserted = 0;
+    for line in formula.lines() {
+        marked.push_str(line);
+        marked.push('\n');
+        let trimmed = line.trim_start();
+        if installs_a_file(trimmed) {
+            marked.push_str(&line[..line.len() - trimmed.len()]);
+            marked.push_str(BREW_MARKER);
+            marked.push('\n');
+            inserted += 1;
+        }
+    }
+    if inserted == 0 {
+        return Err(
+            "the formula has no `bin.install` line, so there is nowhere to write the marker"
+                .to_owned(),
+        );
+    }
+    Ok(marked)
+}
+
+/// Whether a formula line installs a file, rather than a symlink to one.
+///
+/// `bin.install_symlink` shares the prefix, and dist writes it for every alias a
+/// package declares, so the two are one character apart in a file nobody reads
+/// closely.
+fn installs_a_file(line: &str) -> bool {
+    line.strip_prefix("bin.install")
+        .is_some_and(|rest| !rest.starts_with('_'))
+}
+
+/// The program whose formula writes the marker: `acpilot` is the copy that answers
+/// `acpilot update`.
+const CLIENT_PROGRAM: &str = "acpilot";
+
+/// Whether a formula's `install` puts the named program in the prefix.
+///
+/// The name is quoted, so `bin.install "acpilot"` matches while `"acpilotd"`,
+/// `"acpilot-gui"` and `bin.install_symlink` do not. dist writes one `bin.install`
+/// per file; a line that names more than one matches on its first name.
+fn installs_program(formula: &str, program: &str) -> bool {
+    let start = format!("bin.install \"{program}\"");
+    formula.lines().map(str::trim).any(|line| {
+        line.strip_prefix(start.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(','))
+    })
+}
+
+/// `X.Y.Z`, the form a release version takes, with or without the tag's `v`.
+fn parse_release_version(text: &str) -> Result<&str, String> {
+    let trimmed = text.trim();
+    let version = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let parts: Vec<&str> = version.split('.').collect();
+    let numeric = parts
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    if parts.len() != 3 || !numeric {
+        return Err(format!(
+            "`{text}` is not a release version; it is X.Y.Z, and the tag adds the `v`"
+        ));
+    }
+    Ok(version)
+}
+
+/// The same text with dist's version replaced, or [`None`] when it names none.
+///
+/// Split from the file walk so the substitution has a test without a dist run. Those
+/// files write the version three ways — `releases/download/v0.1.0`, `version "0.1.0"`
+/// and `"version":"0.1.0"` — which is why the bare number is what changes, bounded so
+/// that a longer version is left alone.
+fn retagged(text: &str, manifest: &str, version: &str) -> Option<String> {
+    let rewritten = replace_version(text, manifest, version);
+    (rewritten != text).then_some(rewritten)
+}
+
+/// Replace a bare version wherever it is a whole number of its own.
+///
+/// `0.1.0` becomes `0.2.7` inside a URL, a `version` line and a JSON field alike, while
+/// `10.1.0` and `0.1.0-rc1` are left as they are: a substring replacement would rewrite
+/// a different version, which is a bug that waits for the one release with a `10` in it.
+fn replace_version(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find(from) {
+        let (before, matched) = rest.split_at(index);
+        out.push_str(before);
+        let after = &matched[from.len()..];
+        let starts_here = before
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_ascii_digit() && character != '.');
+        let ends_here = after.chars().next().is_none_or(|character| {
+            !character.is_ascii_digit() && character != '.' && character != '-'
+        });
+        if starts_here && ends_here {
+            out.push_str(to);
+            rest = after;
+        } else {
+            // Not this version: keep it and look again one character later.
+            out.push_str(&matched[..1]);
+            rest = &matched[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Write the release tag into the installers and formulae dist just generated.
+///
+/// dist names a release after the workspace manifest, and `dist build --tag` is checked
+/// against that rather than overriding it, so a release whose version comes from a
+/// merged pull request's labels would otherwise ship a formula and two installers
+/// pointing at a tag nobody creates. The tag is text: no archive, checksum or signature
+/// is touched, which is why this can run after dist has packaged everything.
+///
+/// A file with nothing to rewrite is a failure rather than a skip — it would mean dist
+/// stopped writing the tag where this expects it, and the alternative is publishing an
+/// installer that downloads a 404.
+fn retag_for_release(version: &str) -> bool {
+    let manifest = env!("CARGO_PKG_VERSION");
+    if manifest == version {
+        return true;
+    }
+    let dir = dist_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{}: {error}", dir.display());
+            return false;
+        }
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "sh" || ext == "ps1" || ext == "rb")
+        })
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("==> dist: no installers or formula were written to retag");
+        return false;
+    }
+    for path in files {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return false;
+            }
+        };
+        let Some(rewritten) = retagged(&text, manifest, version) else {
+            eprintln!("==> dist: {name} names no `v{manifest}`, so it cannot be retagged");
+            return false;
+        };
+        if let Err(error) = fs::write(&path, rewritten) {
+            eprintln!("{}: {error}", path.display());
+            return false;
+        }
+        println!("    {name} points at v{version}");
+    }
+    true
 }
 
 /// Generate the SBOMs the config asks for, and put them where dist declares them.
@@ -1816,6 +2212,158 @@ mod tests {
             "the job that publishes `required checks` must be a pull request's; on a push \
              its entry is at best skipped, which is not success"
         );
+    }
+
+    #[test]
+    fn a_formula_says_brew_beside_the_binary_it_installs() {
+        let formula = r#"class Acpilot < Formula
+  version "0.2.0"
+  on_macos do
+    def install
+      bin.install "acpilot"
+    end
+  end
+
+  on_linux do
+    def install
+      bin.install "acpilot"
+    end
+  end
+end
+"#;
+        let marked = with_brew_marker(formula).expect("the formula is markable");
+        assert_eq!(
+            marked.matches(BREW_MARKED).count(),
+            2,
+            "both platform installs write the marker: {marked}"
+        );
+        assert!(
+            marked.contains(&format!("      {BREW_MARKER}")),
+            "the marker is indented like the line it follows: {marked}"
+        );
+        assert!(
+            marked.contains("(bin/\"install.json\").write(\"{"),
+            "the marker lands beside the binary, in the keg's bin: {marked}"
+        );
+        assert!(
+            marked.contains("#{version}"),
+            "the version is the formula's own, not a number written twice: {marked}"
+        );
+        assert_eq!(
+            with_brew_marker(&marked).expect("a marked formula stays valid"),
+            marked,
+            "marking twice is not two markers"
+        );
+    }
+
+    #[test]
+    fn the_marker_belongs_to_the_recipe_that_installs_the_client() {
+        let client =
+            "class AcpilotCli < Formula\n  def install\n    bin.install \"acpilot\"\n  end\nend\n";
+        let daemon =
+            "class Acpilotd < Formula\n  def install\n    bin.install \"acpilotd\"\n  end\nend\n";
+        let gui = "class AcpilotGui < Formula\n  def install\n    bin.install \"acpilot-gui\"\n  end\nend\n";
+        assert!(
+            installs_program(client, CLIENT_PROGRAM),
+            "the recipe that installs `acpilot` is the one that carries the marker"
+        );
+        assert!(
+            !installs_program(daemon, CLIENT_PROGRAM),
+            "`acpilotd` is not `acpilot`, or two kegs would write one path"
+        );
+        assert!(
+            !installs_program(gui, CLIENT_PROGRAM),
+            "`acpilot-gui` is neither"
+        );
+        assert!(
+            !installs_program(client, "acpilotd"),
+            "the check is the whole name, not a prefix"
+        );
+        assert!(
+            installs_program(
+                "    bin.install \"acpilot\", \"install.json\"\n",
+                CLIENT_PROGRAM
+            ),
+            "a line that puts two files in the prefix still installs the client"
+        );
+        assert!(
+            !installs_program(
+                "    bin.install_symlink bin/source.to_s => dest\n",
+                CLIENT_PROGRAM
+            ),
+            "an alias is not an install of the client"
+        );
+    }
+
+    #[test]
+    fn a_release_version_is_three_numbers_with_or_without_the_tag() {
+        assert_eq!(parse_release_version("9.9.9"), Ok("9.9.9"));
+        assert_eq!(parse_release_version("v0.2.7"), Ok("0.2.7"));
+        assert_eq!(parse_release_version(" 1.0.0 "), Ok("1.0.0"));
+        assert!(parse_release_version("").is_err(), "no version");
+        assert!(parse_release_version("1.2").is_err(), "two parts");
+        assert!(parse_release_version("1.2.3.4").is_err(), "four parts");
+        assert!(
+            parse_release_version("0.2.7-rc1").is_err(),
+            "a prerelease is not what a release tag labels"
+        );
+        assert!(parse_release_version("nightly").is_err(), "not a number");
+    }
+
+    #[test]
+    fn the_generated_installer_and_formula_are_retagged() {
+        let installer = "ARTIFACT_DOWNLOAD_URLS=\"https://github.com/skamansam/acpilot/releases/download/v0.1.0\"\n";
+        let rewritten = retagged(installer, "0.1.0", "0.2.7").expect("the tag is there");
+        assert!(rewritten.contains("download/v0.2.7\""), "{rewritten}");
+        assert!(!rewritten.contains("v0.1.0"), "{rewritten}");
+
+        let formula = "class AcpilotCli < Formula\n  version \"0.1.0\"\n      url \"https://github.com/skamansam/acpilot/releases/download/v0.1.0/acpilot-cli-aarch64-apple-darwin.tar.gz\"\nend\n";
+        let rewritten = retagged(formula, "0.1.0", "0.2.7").expect("it names the version");
+        assert!(rewritten.contains("version \"0.2.7\""), "{rewritten}");
+        assert!(rewritten.contains("download/v0.2.7/"), "{rewritten}");
+        assert!(!rewritten.contains("v0.1.0"), "{rewritten}");
+
+        assert_eq!(
+            retagged("nothing dist would write", "0.1.0", "0.2.7"),
+            None,
+            "a file with no version is a failure to report, not a silent pass"
+        );
+        assert_eq!(
+            retagged("10.1.0 and 0.1.0-rc1 stay", "0.1.0", "0.2.7"),
+            None,
+            "a longer version and a prerelease are not this one"
+        );
+        assert_eq!(
+            retagged("APP_VERSION=\"0.1.0\"", "0.1.0", "0.2.7").as_deref(),
+            Some("APP_VERSION=\"0.2.7\""),
+            "the installer's own version changes too"
+        );
+    }
+
+    #[test]
+    fn an_alias_beside_the_binary_is_not_marked() {
+        let formula = "class AcpilotCli < Formula\n  def install_binary_aliases!\n    dests.each do |dest|\n      bin.install_symlink bin/source.to_s => dest\n    end\n  end\n\n  def install\n    bin.install \"acpilot\"\n  end\nend\n";
+        let marked = with_brew_marker(formula).expect("the real install is markable");
+        assert_eq!(
+            marked.matches(BREW_MARKED).count(),
+            1,
+            "one marker, for the file and not for the alias: {marked}"
+        );
+    }
+
+    #[test]
+    fn a_formula_that_only_makes_aliases_is_a_failure() {
+        let formula = "class AcpilotCli < Formula\n  def install_binary_aliases!\n    bin.install_symlink bin/source.to_s => \"acpilot-cli\"\n  end\nend\n";
+        let refused =
+            with_brew_marker(formula).expect_err("a symlink is not a copy of ours to mark");
+        assert!(refused.contains("bin.install"), "{refused}");
+    }
+
+    #[test]
+    fn a_formula_with_nothing_to_mark_is_a_failure_not_a_silent_skip() {
+        let refused = with_brew_marker("class Acpilot < Formula\nend\n")
+            .expect_err("there is no install line");
+        assert!(refused.contains("bin.install"), "{refused}");
     }
 
     #[test]

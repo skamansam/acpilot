@@ -36,6 +36,14 @@ pub enum LspServerStatus {
     Crashed,
     /// Shut down because no open document needs it.
     Stopped,
+    /// Approved once, but the program's bytes changed since.
+    ///
+    /// The one state here that is not about the process, and the one a client acts on
+    /// differently: a row can be stopped and approved, or running a binary nobody
+    /// approved after an upgrade replaced it. Reported in place of the lifecycle state
+    /// because the question — "is this the program you approved?" — outranks "is it
+    /// running", exactly as `AgentStatus::Untrusted` does for agents.
+    Untrusted,
 }
 
 /// A language server as returned by `GET /v1/lsp/servers`.
@@ -52,6 +60,13 @@ pub struct LspServerSummary {
     /// Encoding agreed during `initialize`, absent before the handshake.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<PositionEncoding>,
+    /// The extension that introduced this row, absent for this build's own.
+    ///
+    /// A client that asks the person to trust a command has to name where the
+    /// command came from, and "rust-analyzer from acpilot.rust-pack" is a question
+    /// about a pin, while a bare path is a question about nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
     /// The last `textDocument/references` round trip, in milliseconds.
     ///
     /// The answer and not the index: a cold server's first answer pays for an index

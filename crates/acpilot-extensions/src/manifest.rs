@@ -170,6 +170,7 @@ pub const fn kind_name(kind: ExtensionKind) -> &'static str {
         ExtensionKind::Theme => "theme",
         ExtensionKind::LanguageServers => "language_servers",
         ExtensionKind::Agents => "agents",
+        ExtensionKind::Skills => "skills",
         ExtensionKind::Grammars => "grammars",
         ExtensionKind::Snippets => "snippets",
         ExtensionKind::Keymap => "keymap",

@@ -86,7 +86,19 @@ pub fn replaces(method: &str) -> Replaces {
 /// upgrade.
 #[must_use]
 pub fn install_of(exe: &Path) -> Option<Install> {
-    markers(exe).into_iter().find_map(read)
+    install_at(exe).map(|(_, install)| install)
+}
+
+/// The same, with the file the answer came from.
+///
+/// An update has to write the version it installed back into the marker that decided
+/// it might: that file, and not a second one beside the program, is the installation
+/// this copy already has.
+#[must_use]
+pub fn install_at(exe: &Path) -> Option<(PathBuf, Install)> {
+    markers(exe)
+        .into_iter()
+        .find_map(|path| read(path.clone()).map(|install| (path, install)))
 }
 
 /// The places [`install_of`] looks, in order.
@@ -179,6 +191,16 @@ mod tests {
         for method in ["script", "tarball", "appimage", "cargo"] {
             assert_eq!(replaces(method), Replaces::SelfOwned, "{method}");
         }
+    }
+
+    #[test]
+    fn the_marker_is_named_where_it_was_found() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let marker = write_marker(directory.path(), r#"{ "method": "script" }"#);
+        let (path, install) =
+            super::install_at(&directory.path().join("acpilot")).expect("the marker");
+        assert_eq!(path, marker);
+        assert_eq!(install.method, "script");
     }
 
     #[test]

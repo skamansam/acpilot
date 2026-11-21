@@ -1,4 +1,62 @@
-# Acpilot
+<div align="center">
+  <img src="site/src/assets/logo.svg" alt="Acpilot logo" width="120">
+  <h1>Acpilot</h1>
+  <p><strong>One editor. Every agent. You fly.</strong></p>
+  <p>A Rust-native workbench for ACP coding agents — terminal, desktop and browser, one daemon.</p>
+</div>
+
+<p align="center">
+  <a href="https://github.com/skamansam/acpilot/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/skamansam/acpilot/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE-MIT"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg"></a>
+  <img alt="Rust 1.95+" src="https://img.shields.io/badge/rust-1.95%2B-orange.svg">
+  <a href="TODO.md"><img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-red.svg"></a>
+  <a href="https://agentclientprotocol.com"><img alt="Agent Client Protocol v1" src="https://img.shields.io/badge/ACP-v1-blueviolet.svg"></a>
+</p>
+
+<p align="center">
+  <a href="https://rudeboy.dev/acpilot/"><strong>Read the field manual</strong></a>
+  ·
+  <a href="docs/api.md">API documentation</a>
+  ·
+  <a href="https://github.com/skamansam/acpilot/issues/new?labels=bug">Report a bug</a>
+  ·
+  <a href="https://github.com/skamansam/acpilot/issues/new?labels=enhancement">Request a feature</a>
+</p>
+
+<details open>
+<summary><strong>📔 Table of Contents</strong></summary>
+
+- [1. About the Project](#1-about-the-project)
+  - [Why "Acpilot" (and the runners-up)](#why-acpilot-and-the-runners-up)
+  - [The problem](#the-problem)
+- [2. Features](#2-features)
+- [3. Architecture](#3-architecture)
+  - [Core concepts](#core-concepts)
+  - [Agent manifests](#agent-manifests)
+  - [Profiles](#profiles)
+- [4. Usage](#4-usage)
+- [5. Tech Stack](#5-tech-stack)
+- [6. Repository layout](#6-repository-layout)
+- [7. Roadmap](#7-roadmap)
+- [8. Non-goals for v0.1](#8-non-goals-for-v01)
+- [9. Design principles](#9-design-principles)
+- [10. Getting Started](#10-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Running tests](#running-tests)
+  - [Run locally](#run-locally)
+  - [Deployment](#deployment)
+- [11. Configuration](#11-configuration)
+  - [Environment variables](#environment-variables)
+- [12. Contributing](#12-contributing)
+- [13. FAQ](#13-faq)
+- [14. License](#14-license)
+- [15. Contact](#15-contact)
+- [16. Acknowledgements](#16-acknowledgements)
+
+</details>
+
+## 1. About the Project
 
 > **Vibecoded, on purpose.** I am a software developer, but I do not have the time
 > to hand-code all my ideas. As a result, this project is vibecoded with
@@ -10,8 +68,6 @@
 It reads like a flight crew that has seen too much, and it is honest about which
 phase each page belongs to. Preview it locally with `cd site && npm run dev`.
 
-**One editor. Every agent. You fly.**
-
 Acpilot is a code editor for the agent era. It is Rust-native, and coding agents are
 its first-class citizens: Claude, Codex, Devin, Gemini, Freebuff, or any program you
 care to wrap. All of them run over the [Agent Client Protocol][acp] (ACP), from any
@@ -22,10 +78,12 @@ interface you prefer: terminal, TUI, native GUI, or browser.
 only step in to approve the dangerous bits.
 
 - Status: **pre-alpha**. The workspace, the daemon API and the agent engine build and
-  are tested. [TODO.md](TODO.md) tracks what is left.
+  are tested. The [ACPilot Roadmap](https://github.com/users/skamansam/projects/4)
+  project tracks what is left, and [TODO.md](TODO.md) holds the plan text.
 - License: dual MIT OR Apache-2.0.
-- Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon).
-- Directory: `acpilot/`, the planned Rust workspace (edition 2024). §6 gives the layout.
+- Binaries: `acpilot` (CLI + TUI + GUI launcher), `acpilotd` (daemon),
+  `acpilot-agent-lm` (a model recipe run as an ACP agent).
+- Directory: `acpilot/`, the Rust workspace (edition 2024). §6 gives the layout.
 
 ### Why "Acpilot" (and the runners-up)
 
@@ -41,7 +99,7 @@ only step in to approve the dangerous bits.
 
 ---
 
-## 1. The problem
+### The problem
 
 An agent is now a program that edits your repo, runs your tests, and asks for permission
 to `rm -rf`. The ecosystem converged on two facts:
@@ -60,7 +118,7 @@ Acpilot is the neutral workbench. It is an editor that treats *agents* the way V
 treated *extensions*: a managed, permissioned, observable resource that you can address
 from anywhere.
 
-## 2. What Acpilot does
+## 2. Features
 
 - **Edits code.** A real editor: rope buffers, tree-sitter highlighting, search,
   multi-cursor, diffs. The TUI and the GUI share it, so behaviour does not fork.
@@ -243,7 +301,7 @@ here means running the wrong agent with the wrong key. Settings cascade per key 
 Profiles are local identities, not accounts: two developers on one box means two profiles.
 Nothing is synced, hosted, or sent anywhere.
 
-## 4. Interfaces
+## 4. Usage
 
 ### CLI — `acpilot` (the API, typed)
 
@@ -324,8 +382,8 @@ GET    /v1/stats
 ```
 
 The list is **frozen** for v1. [`docs/api.md`](docs/api.md) gives the reasoning and the
-rejected alternatives. Providers, models, recipes and the ACP bridge are deliberately
-later. None of them changes a route above.
+rejected alternatives. Models, recipes, providers and the ACP bridge landed with the models phase.
+None of them changes a route above.
 
 Every route takes `X-Acpilot-Profile`. On a mutating request, a daemon that serves more
 than one profile *requires* it, so a client cannot act as the wrong identity silently. On
@@ -350,11 +408,11 @@ enough to switch on. `invalid_request` (400), `permission_denied` (403), `not_fo
 OpenAPI 3.1 is generated from the Rust types (`utoipa`). TS and Rust clients are generated
 from it, so a third-party UI is a weekend project, not a fork.
 
-## 5. Library research: what to build each UI on
+## 5. Tech Stack
 
-Versions are what `cargo search` reports as of **2026-10-20**. The point of the table is
-not novelty. It is minimising the number of places where we will be the first serious user
-of a library.
+The point of the table below is not novelty. It is minimising the number of places where
+we will be the first serious user of a library. Versions are what `cargo search` reports
+as of **2026-10-20**.
 
 ### 5.1 Protocol core (everything depends on this)
 
@@ -582,10 +640,11 @@ acpilot/
 │   ├── acpilot-core/          # domain: workspaces, sessions, agents, permissions
 │   ├── acpilot-text/          # rope, selection, edits, tree-sitter, diff — UI-agnostic
 │   ├── acpilot-agent/         # ACP client engine, supervision, transcript adapters
-│   ├── acpilot-model/         # local model backends, capability probes, recipes
+│   ├── acpilot-model/         # local model backends, capability probes, prompt assembly
+│   ├── acpilot-agent-lm/      # `acpilot-agent-lm`: a recipe run as an ACP agent (P4.5)
 │   ├── acpilot-host/          # Host trait: local, ssh, wsl
 │   ├── acpilot-lsp/           # LSP engine: supervision, document sync, diagnostics
-│   ├── acpilot-profile/       # profiles, config cascade, preferences, path roots
+│   ├── acpilot-profile/       # profiles, config cascade, provider declarations, recipes
 │   ├── acpilot-store/         # one SQLite database per profile: sessions, events, grants
 │   ├── acpilot-extensions/    # extension manifests, theme tokens, presets, loader
 │   ├── acpilot-client/        # typed client for the daemon API: REST + SSE
@@ -608,7 +667,9 @@ acpilot/
 └── TODO.md
 ```
 
-## 7. Roadmap (details in [TODO.md](TODO.md))
+## 7. Roadmap
+
+The task-by-task plan, every `Result:` and every `Open:` line live in [TODO.md](TODO.md).
 
 | Phase | Outcome |
 | --- | --- |
@@ -657,5 +718,246 @@ so they are additive, not rewrites.
 6. **Profiles are isolation boundaries, not themes.** If two things must not share a
    credential or a history, they must not share a profile. The code must not be able to
    guess which one it is in.
+
+## 10. Getting Started
+
+### Prerequisites
+
+- **Rust** — the toolchain is pinned in `rust-toolchain.toml`. The workspace floor is
+  **1.95**, set by `rusqlite_migration` rather than by taste (see §5.9).
+- **git** — the editor's gutter, diffs and commit writer use your own `git`, so filters,
+  worktrees and submodules mean what they mean on the command line.
+- **Node 22 + npm** — only for the web UI and the docs site. `cargo xtask check --no-web`
+  needs neither.
+- **A coding agent** — `claude-code-acp`, `gemini --experimental-acp`, `freebuff`,
+  `codex`, or anything you can wrap in a PTY or expose as an HTTP/JSON-RPC ACP endpoint.
+  None is bundled, and Acpilot has no opinion about which one is best.
+- **The language servers you already use** — `rust-analyzer`,
+  `typescript-language-server` and friends are detected, never downloaded.
+- **Desktop shell libraries on Linux** — only when building `acpilot gui`:
+
+  ```bash
+  sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+    libwayland-dev libfreetype-dev libfontconfig1-dev pkg-config clang
+  ```
+
+Install the test runner and the commit hook once:
+
+```bash
+cargo install --locked cargo-nextest prek
+prek install   # writes .git/hooks/pre-commit; it runs the same gate as CI
+```
+
+### Installation
+
+Build from source. The release workflow produces archives for Linux (gnu and musl,
+`x86_64` and `aarch64`), macOS (Intel and Apple silicon) and Windows `x86_64`:
+
+```bash
+git clone https://github.com/skamansam/acpilot.git
+cd acpilot
+cargo build --workspace
+```
+
+That produces three programs: `acpilot` (CLI, TUI and GUI launcher), `acpilotd` (the
+daemon) and `acpilot-agent-lm` (a model recipe running as an ACP agent). A client looks
+for `acpilotd` beside its own executable, never on `PATH`; `ACPILOT_DAEMON` names one
+somewhere else.
+
+### Running tests
+
+`cargo xtask check` is the gate — the same commands CI runs: `cargo fmt --check`, clippy
+with `-D warnings`, the workspace nextest run, the `docs`-feature tests, the P0-5 probe,
+the web UI's checks and the desktop shell's build. `cargo xtask check --no-web` is the
+Rust-only loop when Node is not the point.
+
+```bash
+cargo xtask check                 # everything
+cargo xtask check --no-web        # no Node, no web build
+cargo nextest run --workspace --no-fail-fast
+cargo test -p acpilotd --test acp_bridge     # one integration suite
+cargo test -p acpilotd stats                 # a filter, when narrowing a failure
+cargo test -p acpilotd --features docs       # CI's separate docs-feature job
+```
+
+Unit tests sit in `#[cfg(test)]` modules beside the code. Anything crossing a process, a
+file or a wire boundary gets an integration suite under `crates/<crate>/tests/`. Tests
+that need a tool this machine may not have (`rust-analyzer`, a PTY agent, an SSH fixture)
+are `#[ignore]`d on purpose; see [CONTRIBUTING.md](CONTRIBUTING.md). The OpenAPI snapshot
+and `wire_contract.rs` are contracts, not coverage: regenerate the snapshot deliberately
+and review its diff.
+
+### Run locally
+
+```bash
+cargo xtask run tui -- .                  # daemon + TUI, building both
+cargo run -p acpilot-cli -- tui --demo    # the whole shell on seeded data, no daemon
+cargo xtask run daemon                    # the backend alone, for a debugger
+cargo xtask dev                           # daemon + Vite over the web UI
+cargo run -p acpilot-cli -- serve         # web UI on a loopback port; prints the URL and token
+```
+
+The daemon's health route is also a useful check that the socket is the one you think:
+
+```bash
+curl -s --unix-socket "$XDG_RUNTIME_DIR/acpilot/acpilot.sock" http://localhost/v1/health
+```
+
+On Windows the daemon listens on `127.0.0.1:7777` until the named pipe exists, so pass
+`--addr 127.0.0.1:7777` and call `curl.exe` (PowerShell's `curl` is an
+`Invoke-WebRequest` alias that rejects `-s`).
+
+If you change anything under `web/`, run `cargo xtask web-build` and commit the
+regenerated `crates/acpilot-web/assets/index.html` in the same change; CI compares the
+committed page with a fresh build. A pane, key or theme-token change also needs
+`cargo xtask showcase`, and its regenerated JSON belongs in the same commit.
+
+### Deployment
+
+The daemon is the deployment. It binds a unix socket by default
+(`$XDG_RUNTIME_DIR/acpilot/acpilot.sock`, `$TMPDIR` on macOS), with the directory `0700`
+and the socket `0600`. `--addr 127.0.0.1:7777` adds the opt-in TCP listener: every request
+there needs a bearer token, which the daemon writes to
+`$XDG_RUNTIME_DIR/acpilot/token` and logs at startup. `acpilot token rotate` replaces it
+without a restart, because the daemon reads the file per request.
+
+`acpilot serve` starts the daemon on a free loopback port and prints the page URL with
+its token; `--bind 0.0.0.0:7777` opens it to the LAN. The compiled SPA is embedded in the
+daemon, so a release tarball has no asset directory to lose. `acpilot tui` needs no daemon
+at all — it runs the daemon's core in-process when nothing answers (P6-11) — but a daemon
+that *is* running is attached to first, because its sessions outlive the window.
+
+The docs site under [`site/`](site/) is Astro + Starlight and deploys to GitHub Pages at
+<https://rudeboy.dev/acpilot/>. Build it with `cd site && npm run build`; the release
+workflow rebuilds it from `main`.
+
+`cargo xtask dist` is the packaging path without a tag: it drives `cargo-dist` from
+`dist-workspace.toml` and writes archives, checksums, the shell and PowerShell installers,
+a Homebrew formula and an SBOM per program into `target/distrib/`. It needs
+`cargo-dist` 0.32.0 and `cargo-cyclonedx` on `PATH`.
+
+## 11. Configuration
+
+There is no `.env`. Configuration is TOML, resolved per key:
+
+```
+built-in defaults < global config.toml < profile < workspace .acpilot/config.toml < environment < flags
+```
+
+`acpilot config explain <key>` and `acpilot profile diff a b` name the file that won. A
+key that does not resolve is an error, never a silent fallback — guessing here means
+running the wrong agent with the wrong key. The full layout, the cascade and the profile
+rules are in §3.
+
+`ACPILOT_HOME` moves the whole config and data root, which is what tests, portable
+installs and CI use. Everything else is either a selector or the daemon's address.
+
+### Environment variables
+
+| Variable | What it does |
+| --- | --- |
+| `ACPILOT_HOME` | Moves the config and data root. Every test uses a temp one. |
+| `ACPILOT_PROFILE` | Selects the profile by name or directory. `--profile` wins over it. |
+| `ACPILOT_API_URL` | The daemon endpoint: an `http://…` URL or a unix-socket path. |
+| `ACPILOT_TOKEN` | The bearer token for a TCP listener; the token file is the default. |
+| `ACPILOT_DAEMON` | The `acpilotd` to spawn when it is not beside the client. |
+| `ACPILOT_TAB_WIDTH` | An example preference override; `ACPILOT_PREFERENCES__TAB_WIDTH` is the namespaced spelling. |
+| `ACPILOT_SSH`, `ACPILOT_WSL` | The transport programs, when they are not on `PATH`. |
+| `ACPILOT_HELPER_DIR` | Where the in-host helper is installed. |
+| `RUST_LOG` | The `tracing` filter for the daemon and the clients. |
+
+Agents and provider credentials are not environment files. They live in a profile's
+`agents.toml` and `providers.toml` as `keyring:<name>` references, resolved in that
+profile's namespace; the values never enter a config file or an HTTP answer. See §3 for
+the manifest example and the profile rules.
+
+## 12. Contributing
+
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) is the authority on the gate,
+the test rules, the platform rule, commits, git history, pull requests and releases.
+
+The short version:
+
+- `cargo xtask check` green locally. CI runs the same commands on Linux, macOS and
+  Windows, so a platform-specific shortcut is caught there.
+- One idea per commit, imperative subject, scoped by area (`proto:`, `acpilotd:`, `tui:`,
+  `docs:`). The body explains why.
+- One pull request per phase, with a capability PR per ticket targeting the phase branch.
+- Never `git commit --no-verify`: the same failure is waiting in CI.
+- A new dependency needs a sentence on why the existing ones do not do the job, plus a
+  clean `cargo deny`. The version policy is latest stable, with the documented pins.
+- A wire change moves the OpenAPI snapshot in the same PR; a behaviour change moves
+  `docs/api.md`, the site pages and `docs/notes/` with it.
+- Platform `cfg` goes only under a crate's `src/platform/`, one file per platform. The
+  workspace forbids `unsafe`.
+
+The plan is [TODO.md](TODO.md), and the [ACPilot Roadmap](https://github.com/users/skamansam/projects/4)
+project tracks each ticket's state.
+
+## 13. FAQ
+
+**Is Acpilot usable today?** It is **pre-alpha**. The workspace, daemon API, agent engine,
+TUI, web UI, desktop shell and models phase build and are tested, but the surface still
+moves. The [status page](https://rudeboy.dev/acpilot/status/) says which capability is
+where, and TODO.md holds the plan text.
+
+**Do I need an account, a cloud service or an API key for Acpilot itself?** No. The daemon
+binds localhost by default, profiles are local identities, and nothing is synced or
+hosted. A remote agent or a hosted model provider is something you declare, with a
+credential in your own keyring.
+
+**Which agents does it run?** Any ACP-speaking program over stdio or HTTP/JSON-RPC, and
+any plain CLI wrapped in a PTY. One `agents.toml` entry describes each one.
+
+**Does Acpilot ship or host a model?** No. The model lab points at a provider you already
+run (LM Studio on day one, plus any OpenAI-compatible server), records runs, and can
+promote a tuned recipe into an ordinary `acp-stdio` agent manifest.
+
+**Does it download language servers or extensions?** Not in v0.1. Language servers are
+detected where they are installed; extensions are declarative data installed from a
+reviewed index, never a script.
+
+**Why does `acpilot tui` work with no daemon running?** When `GET /v1/health` goes
+unanswered, it runs the daemon's core in the same process (P6-11), so nothing is written
+and sessions end with the window. Run `acpilotd` (or a service manager) when they should
+not. `--no-spawn` means "attach or fail".
+
+**What about Windows?** Unix and macOS are built first; Windows and WSL are the Windows
+phase (P9). Platform code lives under `src/platform/`, one file per platform, and CI
+cross-checks `acpilot-host` for Windows and macOS on every run.
+
+## 14. License
+
+Dual-licensed under either of
+
+- [MIT](LICENSE-MIT)
+- [Apache-2.0](LICENSE-APACHE)
+
+at your option. The workspace sets `license = "MIT OR Apache-2.0"` for every crate.
+
+## 15. Contact
+
+Acpilot is maintained by [@skamansam](https://github.com/skamansam).
+
+- Bugs and concrete proposals: [open an issue](https://github.com/skamansam/acpilot/issues).
+- What is being built and why: [TODO.md](TODO.md) and the
+  [ACPilot Roadmap](https://github.com/users/skamansam/projects/4).
+- Design decisions that bind the codebase: [`docs/adr/`](docs/adr/).
+
+## 16. Acknowledgements
+
+The Agent Client Protocol and its schema come from [Zed Industries](https://zed.dev)
+and the [agentclientprotocol.com](https://agentclientprotocol.com) community. The Rust SDK
+(`agent-client-protocol`) is what the engine and the bridge are built on.
+
+The interface stands on [ratatui](https://ratatui.rs) and crossterm,
+[ropey](https://github.com/cessen/ropey), [tree-sitter](https://tree-sitter.github.io),
+[gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
+[CodeMirror](https://codemirror.net) + [xterm.js](https://xtermjs.org).
+
+The docs site is [Astro](https://astro.build) + [Starlight](https://starlight.astro.build);
+the badges are [Shields.io](https://shields.io).
+
+The README follows [Louis3797/awesome-readme-template](https://github.com/Louis3797/awesome-readme-template).
 
 [acp]: https://agentclientprotocol.com

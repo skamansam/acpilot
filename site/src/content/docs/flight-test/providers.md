@@ -3,7 +3,12 @@ title: Providers
 description: LM Studio first, the OpenAI-compatible rail for everything else, and no scanning of the local network without a request from you.
 ---
 
-<span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-1, P4.5-2)
+<span class="pill pill--boarding">boarding</span> &nbsp; Models phase (P4.5-1, P4.5-2, P4.5-7)
+
+<Aside type="note" title="Status">
+The provider routes are served: list, add, edit, remove, probe, and `GET /v1/models`.
+`acpilot models probe` is the CLI wrapper. The lab that draws these rows is P4.5-8.
+</Aside>
 
 A **provider** is a URL and a dialect. That is the whole abstraction. Acpilot does
 not download models, manage GPU memory, or restart your inference server. LM

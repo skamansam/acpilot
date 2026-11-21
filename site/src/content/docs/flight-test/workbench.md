@@ -7,8 +7,15 @@ description: Three panes, honest gauges, and the exact JSON it sent.
 
 The lab is one screen with three panes and a strip of instruments. It is a client
 of the daemon API. It uses the same recipes, runs and transcript as the CLI and
-the browser. Close it mid-run and the run keeps going. The daemon does the work,
-and the pane was only ever a window.
+the browser. A run is the POST that streams it: closing the stream abandons the
+run, and no record is written. A background run job is a design for P4.5-8, not a
+claim about today.
+
+<Aside type="note" title="Status">
+No pane exists yet. `POST /v1/recipes/{id}/runs` streams a run and appends its
+record, and `GET /v1/recipes/{id}/runs` pages them. The panes and the compare view
+are P4.5-8; promotion is P4.5-9.
+</Aside>
 
 ```mermaid
 flowchart LR
@@ -144,7 +151,7 @@ Two runs, side by side: token delta, latency delta, stop reason, and a diff of t
 answers. Runs are immutable records, so comparison never re-rolls the dice. If you
 want a new sample, that is a new run, clearly labelled.
 
-Promotion lives here, one keystroke away. It warns first:
+Promotion is designed to live here, one keystroke away. It warns first:
 
 ```text
 promote recipe "corpus-scraper" as agent "corpus-scraper"?

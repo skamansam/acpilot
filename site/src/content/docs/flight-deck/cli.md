@@ -38,7 +38,7 @@ parsing English. This table is a promise. Changing it is a breaking change.
 ```text
 acpilot host add|ls|test|rm
 acpilot workspace open|ls|rm
-acpilot agents list|refresh|show
+acpilot agents rm <id>
 acpilot session new|ls|show|rm|fork
 acpilot prompt <text> [--session <id|@alias>] [--file <path>] [--follow]
 acpilot watch <session>
@@ -47,10 +47,11 @@ acpilot files ls|cat|write
 acpilot term attach
 acpilot profile new|ls|show|use|rm|export|import|diff
 acpilot models probe <provider> | ls
-acpilot recipes ls|show|new|run|rm|promote
+acpilot recipes run <id> "…" [--root <dir>] [--json]
 acpilot runs ls|show|replay|compare
 acpilot acp pair|token show|token rotate|drivers|revoke
-acpilot ext add --from <dir> | import-theme --from <file> --id <publisher.name>
+acpilot ext add (--from <dir> | <id>) [--activate <profile>]
+acpilot ext import-theme --from <file> --id <publisher.name> [--activate <profile>]
 acpilot ext verify --all | prune [--dry-run]
 acpilot [--profile <name|dir>] <command>
 acpilot ext activate|deactivate <id>
@@ -223,6 +224,14 @@ daemon's flags, so they only apply when this command starts it. A daemon that is
 already running keeps the ones it started with. Naming a different profile or
 workspace is exit `4`. Showing one project's sessions under another project's
 name is worse than an error.
+
+`agents rm`, `models probe` and `recipes run` from that list are served today; the
+other `recipes` and `runs` verbs are still the plan. `recipes run` streams the
+answer to stdout and prints the finished record's id on stderr, and `--json`
+replaces the text with the finished summary so `jq` has one object to read. A
+reasoning model's thinking goes to stderr as it arrives, before the answer: on a
+terminal a tight budget spent thinking is visible rather than an empty run, and a
+redirect of stdout still holds only the answer.
 
 Scripting the lab is a first-class case, not a workaround. A corpus experiment
 that cannot run in CI is a corpus experiment nobody repeats.

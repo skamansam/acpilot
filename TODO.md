@@ -18,6 +18,18 @@ interfaces, zero rewrites.**
 - "DoD" (definition of done) is stated per phase. It is deliberately testable.
 - Anything marked **[decide]** needs a short ADR in `docs/adr/` before code lands.
 - Estimates are ideal engineering days, not calendar promises.
+- A ticket that only applies to some platforms carries a tag after its code:
+  `· [windows]`, `· [linux]`, `· [macos]`, `· [wsl]`, or a set such as
+  `· [windows, wsl]`. A ticket with no tag must work on every platform, because
+  platform code lives behind `src/platform/` (CONTRIBUTING §Platforms).
+- Order: Unix and macOS first, Windows last (D19). Work the `[wsl]` tickets with
+  the Linux path. Leave the `[windows]` and `[windows, wsl]` tickets until that
+  path is done, then finish the Windows builds.
+- The **ACPilot Roadmap** project is the source of truth for a ticket's state.
+  This file keeps the plan text and each ticket's `Result:`. Every ticket has an
+  issue in that project. The platform tags above are mirrored as the
+  `platform:windows` and `platform:wsl` labels, so a project view can filter by
+  platform.
 
 Ordering rule: **no UI work before the daemon API works.** UIs are clients. If a UI
 needs something, add it to the API first. That single rule is what stops the four
@@ -166,7 +178,7 @@ probe answers one question that would be expensive to get wrong.
     real agents over stdio, and the question here was whether SSH preserves their
     framing.
 
-- [x] **P0-5 · WSL helper round-trip** (1d) — **done 2026-10-21**
+- [x] **P0-5 · WSL helper round-trip** · [windows, wsl] (1d) — **done 2026-10-21**
   - On a Windows box (CI runner or VM), enumerate the distros, run
     `wsl.exe -d <d> --cd ~ -- ~/.local/bin/acpilotd-helper --stdio`, send one JSON
     line, and get one back.
@@ -731,6 +743,47 @@ and deterministic.
     subscribed (`DecidedBy::Unattended`), so a request only becomes pending for a daemon
     with a client on `GET /v1/events` — the test subscribes before prompting, which is
     what a UI does, and that refusal is why a headless daemon cannot park a turn forever.
+    **Observed once (2026-11-19):** on a macOS runner `a_stream_replays_after_a_drop_with_no_gap`
+    and `a_conversation_is_still_there_after_the_daemon_that_ran_it` ran to nextest's 300 s
+    limit with no output while the rest of the suite passed, and a rerun of the same commit
+    was green. Both waits in the file are bounded at 20 s, so the stall was outside them (a
+    synchronous step holding the runtime, or a client call the file does not bound); it is
+    recorded as a runner stall rather than a product fault, and a second sighting should be
+    chased from those two tests instead of being rerun again.
+    **Observed again (2026-11-19 → 20):** the second sighting arrived as a cancelled job
+    rather than a timeout. CI run `44632199623` sat on `check (macos-latest)` from 22:49 to
+    04:50 and was cancelled at the runner's six-hour limit with the test binary still alive;
+    the job log names the step exactly — under `cargo test -p acpilotd --features docs`, where
+    libtest has no per-test timeout at all, `a_stream_replays_after_a_drop_with_no_gap` and the
+    scripted session passed in milliseconds and `a_conversation_is_still_there_after_the_daemon_that_ran_it`
+    then said "has been running for over 60 seconds" and produced nothing for six hours. That
+    is the same test nextest failed at 300 s, so the reading stands and gets sharper: the file
+    had no bound that could fail, only waits that could hang. Every client call in
+    `crates/acpilotd/tests/acceptance.rs` now goes through `within`, which panics in 20 s naming
+    the call that did not answer, and the replay test stops its daemon the way the restart test
+    already did instead of returning with a live session for the runtime to tear down. No
+    assertion moved; the next sighting should name the wait instead of taking a runner with it.
+    Note that the local reproduction attempt was flat: forty runs of the same test binary on
+    Linux passed, so the stall needs the macOS runner and is not something this machine can
+    be asked to show.
+    **A third sighting, and the bound was the hole (2026-11-20):** CI run `44792451842` failed
+    `check (macos-latest)` honestly this time — nextest's own `TIMEOUT [300.017s]` on
+    `a_stream_replays_after_a_drop_with_no_gap`, with 1728 of 1729 tests passing. The file did
+    bound every read, which is why nothing could name the wait: `next_event` wrapped each
+    `stream.next()` in the 20 s patience and skipped heartbeat frames, so a stream that never
+    produced the event it was waiting for but kept sending a heartbeat every 15 s reset the
+    clock on every frame and the loop spun for the full 300 s with no output. Patience is a
+    deadline for the whole wait now: the loop computes the time left against one `Instant` and
+    panics with "the stream sent no event inside 20s", so a heartbeat skips the frame and never
+    the deadline. Three local runs of the three acceptance tests pass.
+    **And the bound reported it:** the next run (`44795408939`) failed the same test in 21.0 s
+    with "the stream sent no event inside 20s" and 1728 of 1729 passing, so the stall is real
+    and is the *first* read of a session's stream on that runner rather than the replay after
+    the reconnect. The panic now names the read it gave up on (the test has five) and asks the
+    daemon what the session is doing at that moment — a turn that never ran is `idle` with no
+    events coming, a turn whose events exist but were not delivered is `busy` — because those
+    two look identical from the socket and lead to different code. Nine local runs of the
+    three tests pass since.
     **Open:** the `insta` snapshots of every error body are still unwritten (each route's
     suite asserts its envelope's fields instead), and the `curl` script the DoD names is
     the test rather than a checked-in shell script, because the client speaks the same wire.
@@ -1136,8 +1189,32 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
-- [ ] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
+**Status (2026-11-13):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
+(discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
+reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
+loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
+and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes an
+`agents.toml` entry, and `acpilot agents rm` reverses it). The ACP bridge's local transport
+landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC with pairing,
+scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming, the
+five bridge tests, byte-identical replay, the promoted agent's P2 smoke, the TUI's
+permission card and the live LM Studio run have landed.
+P4.5-13 (skills) remains. A run writes its record before the `finished` frame, and the
+lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
+resolved.
+
+- [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**
+  - **Result (2026-11-12):** one enum dispatches both dialects, so a provider's shape
+    is a `match` rather than a trait object and every call site is checked. `GET` and
+    `POST /v1/providers` serve the declarations and appear in the OpenAPI document as
+    `list_providers` and `add_provider`. An add writes `providers.toml` before it
+    keeps the row, probes once, and keeps a refused probe as a row with the reason in
+    `detail`. The last answer lives in `providers.state.toml` beside the declaration
+    and repeats its URL, dialect and credential reference, so an edited declaration
+    reads `not_probed` again. `credential_ref` resolves through the profile's keyring
+    namespace, and a reference with no entry stops before a request leaves. The CLI
+    verb calls the same `probe` as the route, so the two cannot disagree.
   `acpilotd::providers` keeps the declared providers and serves `GET` and
   `POST /v1/providers`. Adding one is the explicit probe the phase asks for, so the row
   carries the server's own answer: `reachable` with the model count, `unreachable` with
@@ -1204,15 +1281,50 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     loaded model and records what came back in `ModelCapabilities`. A model that claims tools
     and then emits prose gets `tools: false` with the evidence in `detail`.
 
-- [ ] **P4.5-3 · Recipes** (1d)
+- [x] **P4.5-3 · Recipes** (1d)
   - `profiles/<name>/recipes/<id>.toml`, `schema_version = 1`, unknown keys are errors (same
     rule as config and manifests). Hot-reload on change, 200 ms debounce, last-good kept on a
     parse failure with a notice.
   - Validation at load, not at run: `window` must not exceed the model's reported window; a tool
     the model cannot call is refused with an explanation rather than silently omitted;
     `max_steps` in `1..=50`; `reserve_output + max_corpus_bytes_estimate` must fit.
+  - **Result (2026-11-12):** `crates/acpilot-profile/src/recipes.rs` reads the directory into
+    the wire type `ModelRecipe`, so the file, the API and the lab share one shape. The
+    `updated_at` field is the file's modification time, not something an editor has to bump.
+    A load fails on an unknown key, a newer `schema_version`, an `id` that is not the file
+    name, or a value outside its range. A provider must be declared and enabled. A model is
+    checked only once its provider has been probed: it must exist, answer chat, and report a
+    window at least as wide as the recipe's. Exposed tools on a model without tool support are
+    refused with the tool named, never dropped. The budget counts four bytes as a token, adds a
+    documented 1,024-token allowance for tool schemas, and must leave room in the window.
+    `Live` watches the loaded files through `watch` (the same 200 ms debounce the settings use)
+    and keeps the last good set when a reload fails, which is what raises the notice.
+    **Tests:** the module's own, including a half-written save that keeps the old recipes, an
+    edit that applies on reload, and a real watcher delivering a save.
+  - **Open:** the daemon does not read recipes yet, so no route serves one and no run uses one.
+    The API is P4.5-7 and the lab is P4.5-8. A recipe created after `Live::open` is not watched
+    until the next load: the writer has the new set in hand. The documented example claimed
+    `max_corpus_bytes = 262144`, which cannot fit a 32,768-token window beside its reserved
+    output, so `flight-test/recipes.md` now says 65536 and the field table states the rule.
 
-- [ ] **P4.5-4 · Context assembly** (2d)
+- [x] **P4.5-4 · Context assembly** (2d)
+  - **Result (2026-11-12):** `crates/acpilot-model/src/context.rs` splits a window into
+    system prompt, corpus, history, tool schemas and reserved output, and names every
+    section in tokens in the error and in `Plan`. Selection walks with the daemon's
+    `ignore` rules, so `.gitignore` still wins, then sorts by path and keeps one copy of
+    an overlapping match. A file is cut at its `max_bytes` on a character boundary, a
+    selector stops at `max_files`, a file that is not UTF-8 is skipped, and the corpus
+    ceiling counts the headers the model reads. Every trim is a `Notice` with numbers.
+    `TruncateOldest` drops from the front and never leaves a tool result without its
+    call. `Summarize` returns the messages to replace, because this crate sends no
+    request. `Refuse` returns the shortfall. A window too small for the system prompt
+    alone fails under all three, because no strategy shrinks it. `reconcile` clears
+    `Usage::reported` only when the server reported the counts. **Tests:** 25 in the
+    module, including a real `.gitignore`, a binary file, an overlapping selector pair
+    and each strategy.
+  - **Open:** nothing calls `assemble` yet: P4.5-5 sends the request and P4.5-6 records
+    the run. `ESTIMATE_BAND` is a planning allowance rather than a measurement, and
+    P4.5-6's records are what will calibrate it.
   - Budget split — system prompt, corpus, history, tool schemas, reserved output — with a
     per-section estimate; corpus from `CorpusSelector` globs honouring `max_files`/`max_bytes`,
     `ignore` rules, and a stable order so a run is reproducible.
@@ -1223,7 +1335,29 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     with a documented error band, and every `RunSummary` reconciles against `usage` and sets
     `TokenUsage.estimated = false` only then.
 
-- [ ] **P4.5-5 · `acpilot-agent-lm`** (3d)
+- [x] **P4.5-5 · `acpilot-agent-lm`** (3d)
+  - **Result (2026-11-12):** `crates/acpilot-agent-lm` is an `acp-stdio` agent. `load`
+    resolves a profile, a recipe and its provider, and reads the keyring entry once, so a
+    missing credential is a startup refusal rather than a 401 mid-turn. The loop sends the
+    master prompt, the session history and the tool schemas, then runs each call through
+    the client: `fs/read_text_file`, `fs/write_text_file`, `terminal/create` →
+    `wait_for_exit` → `output` → `release`, and `session/request_permission` before a write
+    or a command. A malformed call gets one repair request; a second failure is a `Notice`
+    and a failed tool call, never a guessed argument. `max_steps` ends the turn with
+    `MaxTurnRequests` and a notice carrying the number. `session/cancel` is raced against
+    the HTTP request, so the connection is dropped at once and the turn returns
+    `Cancelled`. Updates are `AgentMessageChunk`, `ToolCall`/`ToolCallUpdate`, `Notice` and
+    `UsageUpdate`; the prompt response carries the step and token counts in `_meta`.
+    History is trimmed in whole messages against the recipe's window, and the tool schema
+    is generated from `ToolExposure`. `search` is not offered because ACP has no
+    workspace-search callback; the agent says so in a notice instead of running a shell to
+    fake it. **Tests:** fifteen in the crate (nine for the schema and parser, six for
+    trimming, stop reasons, prompt text and session ids), plus a stdio test that spawns
+    the binary against a mock provider and answers its `fs/read_text_file`.
+  - **Open:** nothing writes a `runs.jsonl` record yet; the record needs the request the
+    recipe and run routes assemble, which is P4.5-7. Promotion (P4.5-9) is what writes the
+    manifest entry that makes this binary reachable from `GET /v1/agents`, so today it is
+    started by hand.
   - A small ACP agent binary: reads a recipe, runs the model loop, and reaches the world only
     through ACP client callbacks (`fs/read_text_file`, `fs/write_text_file`, `terminal/*`,
     `session/request_permission`). It holds no filesystem handle of its own.
@@ -1233,7 +1367,24 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - Streams `SessionEvent`-shaped updates so the transcript, the TUI, and the web UI need no
     model-specific code. Usage and stop reason are reported on the final update.
 
-- [ ] **P4.5-6 · Run records** (1d)
+- [x] **P4.5-6 · Run records** (1d)
+  - **Result (2026-11-12):** `crates/acpilotd/src/runs.rs` appends one `RunRecord` per run to a
+    profile's `runs.jsonl`. A record keeps the exact request beside the answer: the prompt and
+    its `sha256:` digest, the master prompt's digest, the selectors in order, the files they
+    resolved to with bytes and estimated tokens, and the budget. The answer half is the wire
+    `RunSummary`, so the API has one shape to serve. `Page` returns a recipe's runs newest first
+    with a run-id cursor rather than an offset, because a log that grows between two requests
+    would make an offset repeat or skip a line silently; a cursor that names another recipe's
+    run is refused. `replay` rebuilds the stored `RunRequest` unchanged and deliberately drops
+    the old idempotency key, because a replay is a new run with its own record. A missing file
+    is an empty log, a partial last line ends the read, a broken line that is not last names its
+    number, and a newer `schema_version` is refused rather than half-read. **Tests:** twelve in
+    the module.
+  - **Replay served (2026-11-15):** `POST /v1/recipes/{id}/runs/{run}/replay` reads the
+    record through `RunLog::replay` and sends its prompt and selectors through the same
+    prepared run as a fresh start, appending a new record. The corpus is read from `root`
+    again because the record keeps paths and sizes, not bytes; the OpenAPI description and
+    `docs/api.md` say so, and the route is in the generated web client.
   - Every run appended to `runs.jsonl` next to the session transcript: exact request (prompt hash,
     sampling, corpus selectors and resolved file list, budget), then the result (latency, first
     token, usage, stop reason, warnings).
@@ -1241,7 +1392,29 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     stored request unchanged. Compare is a diff of two records, so "it was better an hour ago"
     has an answer.
 
-- [ ] **P4.5-7 · API** (1.5d)
+- [x] **P4.5-7 · API** (1.5d)
+  - **Result (2026-11-12):** the model surface is served. `PATCH`/`DELETE /v1/providers/{id}`
+    and `POST /v1/providers/{id}/probe` edit, remove and re-ask a declaration; a delete is
+    `409` while a recipe names it. `GET /v1/models` asks every enabled provider and returns
+    the models beside the providers that could not answer, because a list that silently
+    omits a server looks like a server with no models. `GET/POST /v1/recipes` and
+    `GET/PATCH/DELETE /v1/recipes/{id}` read and write one TOML file per recipe; every write
+    is validated by reading the directory back, and a rejected write restores the old bytes.
+    `POST /v1/recipes/{id}/runs?root=<dir>` assembles the prompt, calls the provider once,
+    appends the record to `runs.jsonl` and then streams `model.run.started`,
+    `model.run.delta` and `model.run.finished`; `GET /v1/recipes/{id}/runs` pages newest
+    first with a run-id cursor. The record is written before `finished` is sent, so a pane
+    that sees the frame has a line to point at. **Tests:** eight in `tests/recipes.rs`
+    (CRUD, refusal, models with one provider down, streamed run and record, root refusal,
+    provider edit/delete conflict, probe, no-profile refusal), six in
+    `tests/mock_server.rs` for the adapters, and two more in the agent's stdio suite.
+  - **Open:** promotion (`POST /v1/recipes/{id}/promote`) is P4.5-9 and is not served yet.
+    The run response is `200` with an SSE body, not the ticket's `202`: a `202` cannot carry
+    the stream,    and a second polling route would be a run id nobody needs. A delta carries text as the
+    provider produces it; one that ignores `stream: true` answers one body, so the run
+    emits one delta. Closing the stream abandons
+    the run and writes no record. `acpilot-client` has no typed wrappers for these routes
+    yet; the OpenAPI document and the TypeScript client are the contract.
   - `GET/POST /v1/providers`, `PATCH/DELETE /v1/providers/{id}`, `POST /v1/providers/{id}/probe`,
     `GET /v1/models`, `GET/POST /v1/recipes`, `GET/PATCH/DELETE /v1/recipes/{id}`,
     `POST /v1/recipes/{id}/runs` (202 + SSE stream), `GET /v1/recipes/{id}/runs`,
@@ -1249,7 +1422,25 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - SSE gains `model.run.started`, `model.run.delta`, `model.run.finished`, `model.provider.status`.
     OpenAPI snapshot updated in the same PR.
 
-- [ ] **P4.5-8 · The lab UI** (2.5d, TUI first; web and desktop reuse the API)
+- [x] **P4.5-8 · The lab UI** (2.5d, TUI first; web and desktop reuse the API)
+  - **Result (2026-11-12):** `crates/acpilot-tui/src/lab.rs` is a page over the panes, opened by
+    Session → Build an Agent in the Model Lab… . Recipes, the model catalogue and runs come from
+    the P4.5-7 routes; `^S` sends every editable field as a `PATCH`, so the daemon's validation
+    is the only rule and a refused value leaves the draft open with the reason. `^R` streams a
+    run, and the finished frames append to the history. `GET /v1/recipes/{id}/runs/{run}` is new:
+    the page carries summaries, and the corpus pane and the inspector need the files a run
+    resolved with their sizes, which only the record holds. Estimated token counts are coloured
+    and say the server reported no usage; a gauge it did not report says `not reported`; a
+    refused parameter is named from the run's warnings. `c` marks a base run and the selected run
+    shows token and latency deltas, or tokens alone when a duration is missing. **Tests:** nine
+    in the lab module (refused ranges, empty optional knobs, the strategy cycle, a tool toggle, a
+    cancelled draft, selector parsing, comparison, the budget meter and the inspector) and one in
+    `crates/acpilotd/tests/recipes.rs` for the record route and its `404`.
+  - **Open:** promotion is not here: `POST /v1/recipes/{id}/promote` is P4.5-9, so the lab saves
+    and runs but writes no `agents.toml`. A run is not cancellable once started; closing the page
+    leaves it streaming into a lab nobody draws. Corpus selectors belong to the run request, not
+    the recipe, so they start empty each time the page opens and only the record remembers what a
+    run used. The web and desktop labs do not exist yet; they use the same routes.
   - Three panes: recipe (master prompt, sampling sliders, context budget, tool ceiling), corpus
     (globs, resolved file list with sizes, budget meter), output (streaming text, run history).
   - Gauges show only what the provider reported: first token, tok/s, stop reason, usage. Estimated
@@ -1260,7 +1451,34 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - Compare mode: two runs side by side with a token and latency delta; promote is one keystroke
     from here, and it warns first.
 
-- [ ] **P4.5-9 · Promotion** (1d)
+- [x] **P4.5-9 · Promotion** (1d)
+  - **Result (2026-11-13):** `POST /v1/recipes/{id}/promote` writes one `[[agents]]` block —
+    `transport = "acp-stdio"`, `command = "acpilot-agent-lm"`, `args = ["--recipe", "<id>"]`,
+    `restart = "on-crash"` and `env = { ACPILOT_RECIPE_PROFILE = "work" }` — under a
+    `# acpilot:promoted recipe="recipes/<id>.toml" mtime="…"` comment. The text edit and its
+    rules are `crates/acpilot-agent/src/promote.rs`, shared with the CLI: a second promotion
+    replaces the block instead of appending one, and an entry with the same id that has no
+    marker is `409` and is left byte-for-byte alone. `acpilot agents rm <id>` removes the
+    block, and removes the file when it was the last agent, which is exactly the state before
+    promotion. The registry now loads a missing `agents.toml` as an empty list, so a daemon
+    started before the first promotion lists the new agent on its next read instead of after a
+    restart, and removing the last entry returns it to an empty list. Warnings travel in the
+    response and never block: a model that did not call the tools probe, a provider that
+    could not be asked, and `tools.search` (which ACP cannot offer) are each named with the
+    reason. **Tests:** eleven in `promote.rs` (create, replace, hand-written refusal for both
+    directions, preservation of neighbouring blocks and comments, deleting the last entry, an
+    id the loader refuses, a quoted label), three in `crates/acpilotd/tests/recipes.rs`
+    (promote then re-promote with `GET /v1/agents` showing it, `409` for a hand-written id,
+    `404` for a recipe that is not there) and one in `crates/acpilot-cli/tests/cli.rs` for the
+    reversal.
+  - **Open:** two of the ticket's three warnings are not computable from what exists. The run
+    log records model-only runs, which never call a tool, so there is no tool-call validity
+    rate to average over the last ten runs; that needs the ACP agent's turns to be recorded
+    (P4.5-11's DoD). Nothing in the tree reports host memory, and a token window is not a byte
+    quantity, so "the window exceeds host memory" has no arithmetic to implement yet. The lab
+    still has no promote key: promotion is the route and the CLI reversal, and the lab's one
+    keystroke is open with the web and desktop labs. There is no `acpilot recipes promote`
+    verb; the route is the contract, as with the other recipe routes.
   - Write the `agents.toml` entry (`transport = "acp-stdio"`, `command = "acpilot-agent-lm"`,
     `args = ["--recipe", "<id>"]`, `env = { ACPILOT_RECIPE_PROFILE = "work" }`), with a comment
     naming the recipe file and its mtime, and refuse to overwrite a hand-written entry.
@@ -1269,7 +1487,69 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - `acpilot agents rm <id>` reverses it exactly; a promoted agent is a manifest line, not a
     migration.
 
-- [ ] **P4.5-10 · ACP bridge for remote drivers** (2d)
+- [x] **P4.5-10 · ACP bridge for remote drivers** (2d)
+  - **Result so far (2026-11-13):** the local transport is served. `acpilotd --acp` answers
+    ACP over stdin/stdout for the profile the daemon was started with, and it is the same
+    state a request with that profile's header would reach — same workspace, agents and
+    broker (`Profiles::state`, `crates/acpilotd/src/bridge.rs`). `session/new` checks the
+    driver's `cwd` is inside the workspace, then opens one of this profile's agents: the
+    only declared agent when there is one, or the one named in `_meta.acpilot.agent`, and
+    several unnamed agents are refused with the list rather than guessed at.
+    `session/prompt` runs the turn through `Sessions::ask` while a second subscription
+    forwards the assistant's text chunks and the daemon's notices as `session/update`
+    notifications, so the driver reads the words as they arrive; `session/cancel` reaches
+    the session's owner task, and the stop reason is `end_turn`. stdout is the protocol, so
+    nothing binds and no pidfile or token is written. **Tests:** five unit tests (one agent
+    needs no naming, several are refused with the list and the way to choose, a named agent
+    is honoured and an unknown one names what exists, a directory outside the workspace is
+    refused, a prompt is its text blocks and an image is dropped rather than described) and
+    one end-to-end test that spawns the binary with `--acp` and drives it with a real ACP
+    client — handshake, `session/new`, a prompt, `chunk 1|chunk 2` received as notifications,
+    and `end_turn`.
+  - **Remote half landed (2026-11-15).** `[acp.bridge] enabled = true` with an explicit
+    `bind` starts a second listener, and the daemon refuses to start rather than enable a
+    port it was not told to bind. A driver claims a single-use two-minute code at
+    `POST /pair` and receives a bearer token once; the ledger (`<profile>/drivers.toml`,
+    `0600`) keeps an Argon2id hash of it, the scopes actually granted, the client name from
+    `initialize`, and the session and prompt counts. `POST /acp` dispatches `initialize`,
+    `session/new`, `session/prompt`, `session/cancel` and `session/answer_permission`, and
+    `GET /acp/events` is the driver's notification stream. Scopes default to
+    observe/prompt/cancel; `answer_permissions` needs the person's grant when the code is
+    issued, and a driver answering without it is `-32003`. A driver owns the sessions it
+    opened: another driver's prompt, cancel or answer is refused. A fixed 60 requests a
+    minute per driver. The cockpit serves `POST /v1/acp/pairings`,
+    `GET /v1/acp/{bridge,drivers}` and `POST /v1/acp/drivers/{id}/revoke`; a revoked
+    driver's next call is `401` and its row stays. **Tests:** six ledger unit tests, two
+    router unit tests, and seven in `tests/acp_bridge.rs` — single-use and expired codes,
+    missing and wrong tokens, scope escalation, a granted answer reaching the broker,
+    revocation, a prompt through a real mock agent, and the scripted driver waiting while
+    the cockpit answers.
+  - **Both transports now forward the whole turn (2026-11-16).** One
+    `acpilotd::acp_update` translates the session record for the stdio bridge and the
+    remote stream, so a driver reads assistant text and thoughts, a tool call's start
+    and every patch, the plan, the mode id and the daemon's notices. A patch carries
+    only the fields the agent changed, so a driver merges it into the row it has and
+    the call's title is not blanked. Notices now keep their description — the old
+    forwarder read `description` where the record writes `message`, so every notice
+    reached a driver as a bare title. Compaction and a changed command list are still
+    dropped: this schema version has no ACP update for either, and a notice would tell
+    a driver something the protocol does not say. **Tests:** five unit tests over the
+    payload shapes in `acp_update.rs`, and one in `tests/acp_bridge.rs` that prompts a
+    real mock agent and reads the tool call, its completion, the plan and the mode
+    change from a paired driver's stream.
+  - **Result (2026-11-16):** the remaining cockpit half landed. Migration 4 adds
+    `driver_id` to `sessions` and `grants`; `session/new` records the driver that opened
+    it, a grant carries the driver that answered it, and `SessionSummary` exposes it, so
+    the transcript answers "who asked for this?" without consulting the ledger. An
+    HTTP-started session records `Some(driver.id)`; stdio and pre-migration rows record
+    `None`. `[acp.bridge] require_token = false` skips the bearer check only when `bind`
+    is loopback (the daemon refuses the config otherwise) and gives that unauthenticated
+    loopback driver all four scopes; the default remains required. `[acp.bridge]
+    rate_limit` sets requests per minute per driver, `0` disables it, and the default is
+    still 60. `acpilot acp pair|bridge|drivers|revoke` are the CLI verbs, built on the
+    client's `pair_driver`, `acp_bridge`, `acp_drivers` and `revoke_driver`. **Open:**
+    driver id is not written to the generic event/audit table; the session and grant rows
+    are the ownership record.
   - `acpilotd` serves ACP over stdio to a local client and over HTTP/JSON-RPC (bearer token,
     `argon2`-hashed, plus a single-use pairing code, two-minute expiry) to a remote one.
     Off unless `[acp.bridge] enabled = true` with an explicit bind address; loopback may skip
@@ -1284,7 +1564,99 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     proxy in v0.1 (documented, not hand-waved), and `GET /v1/acp/{bridge,drivers}` for the
     cockpit's connection panel.
 
-- [ ] **P4.5-11 · Tests** (1.5d)
+- [x] **P4.5-11 · Tests** (1.5d)
+  - **Result so far (2026-11-13):** the request bodies are frozen.
+    `crates/acpilot-model/tests/wire_snapshot.rs` sends one request with every knob set
+    through both dialects and snapshots what left (`chat_body`), the refusal retry pair
+    (`refusal_retry`), and the probe's two requests (`probe_requests`), with keys sorted so
+    the snapshot records the body rather than `preserve_order`. It also pins the two things
+    a snapshot cannot show: a server that answers 200 and silently ignores `top_k` is *not*
+    reported as refusing it — the run says nothing because nothing was said — and a 200
+    followed by a truncated body is `model_unavailable`, not half an answer. The snapshot
+    earned its keep at once: `temperature: 0.2` and `top_p: 0.95` reach the wire as
+    `0.20000000298023224` and `0.949999988079071`, because `SamplingParams` is `f32` and
+    JSON widens it. Servers accept that, so it is recorded rather than changed.
+  - **Streaming landed with it (2026-11-13).** `Backend::chat_stream` hands each piece of
+    assistant text to a callback as the server produces it. The decoder does not assume
+    chunk boundaries, joins tool-call fragments by index, and treats three things as
+    errors rather than short answers: an error frame after the first delta, a transport
+    that breaks mid-answer, and a stream that stops without `finish_reason` or `[DONE]`.
+    A server that ignores `stream: true` and answers one JSON body is a complete answer,
+    not an empty stream. `acpilot-agent-lm` posts each delta to the client as it arrives —
+    ACP notifications are synchronous, so no forwarding task can reorder a chunk behind
+    the turn's usage update — and draws `content` itself only when no delta was seen. The
+    daemon's run route now owns a run task and emits `model.run.delta` per chunk, so the
+    lab draws tokens as they are generated. **Tests:** eight in `tests/mock_stream.rs`
+    (order, LM Studio's own route, an error frame mid-stream, a broken transport, an
+    unfinished stream, a refusal retried before the stream starts, tool-call fragments,
+    and the usage request that keeps a record measured),
+    three parser unit tests, and the agent's stdio suite against a server that ignores the
+    flag.
+  - **Bridge tests landed (2026-11-15) with the remote transport.** `tests/acp_bridge.rs`
+    covers the five the ticket named: a code is single-use and an expired one is refused by
+    name, a missing or wrong driver token is `401` in the envelope, a driver asking for
+    `answer_permissions` it was not granted holds only what it has and its answer is
+    `-32003`, a granted driver's answer reaches the broker's waiting asker, and a revoked
+    driver's next call is `401` while its row stays. Two more cover the DoD's shape: a
+    driver opens a session and prompts a real mock agent to `end_turn`, and a driver without
+    the grant prompts a permission-raising turn while the cockpit lists and answers it — the
+    driver's stream carries the notice and never `session/request_permission`.
+  - **The DoD's automatable halves landed (2026-11-15).** `POST /v1/recipes/{id}/runs/{run}/replay`
+    re-sends the stored prompt and selectors; `tests/recipes.rs` compares the two HTTP bodies
+    byte for byte. `acpilot recipes run <id> "…"` streams a run to stdout (`--json` prints the
+    finished summary instead). The split is pinned through the process boundary
+    (`crates/acpilot-cli/tests/cli.rs`, 2026-11-16): a fake daemon serves the frames
+    `acpilotd` writes, and the test asserts thinking lands on stderr, a redirect of stdout
+    holds the answer alone, and `--json` puts one object on stdout with nothing on stderr. `acpilot-agent-lm`'s stdio suite promotes a recipe, reads the
+    manifest entry promotion wrote and runs the command it names through the P2 session smoke
+    (`initialize`, `session/new`, a prompt, `end_turn`). The TUI test draws the permission a
+    paired driver causes, while `tests/acp_bridge.rs` proves the driver's stream never carries
+    it. `tests/lm_studio.rs` is the real-server end to end, ignored like the LSP tests that
+    need a tool: `cargo test -p acpilotd --test lm_studio -- --ignored`.
+  - **The live LM Studio half ran (2026-11-15).** `cargo test -p acpilotd --test lm_studio
+    -- --ignored` passes against port 1234 with `ornith-1.5-9b@q4_k_m` loaded: the run streams,
+    records usage, and replays into a second record. The earlier timeouts were the server
+    stalling, not the adapter. Two faults were ours. The test read `status` off the
+    `model.run.finished` frame's envelope instead of its `run`, which nothing caught because
+    the test is ignored. And no stream asked for `usage`, so every streamed run recorded an
+    estimate even where the server could measure it; LM Studio returns `prompt_tokens` and
+    `completion_tokens` when `stream_options.include_usage` is set, on both `/v1` and
+    `/api/v0`. `wire::stream_body` now sends it, `stream_options` is in the refusal retry list
+    so a server that rejects the key is retried without it, and
+    `a_stream_asks_for_usage_so_the_counts_are_not_an_estimate` pins the request.
+  - **Reasoning is kept (2026-11-16).** A reasoning model writes its thinking before its
+    answer, and a tight `max_tokens` can spend the whole budget there and answer nothing.
+    The adapter now reads `reasoning_content` (and the `reasoning` spelling) from a
+    streamed delta and from a whole body, delivers it on its own callback, and the run
+    route emits it as `model.run.thought` rather than folding it into `model.run.delta`.
+    The record keeps it in `runs.jsonl`, `GET /v1/recipes/{id}/runs/{run}` returns it, and
+    the lab draws it dimmed above the answer, capped at half the pane so it never crowds
+    the answer out. The ACP turn forwards it as `AgentThoughtChunk`.
+  - **The session transcript and the CLI show thinking too (2026-11-16).**
+    `a_promoted_agents_thinking_is_its_own_paragraph` in `crates/acpilot-tui/src/app.rs`
+    feeds two `Thought` events and an answer chunk and asserts the thinking is its own
+    `Kind::Thought` paragraph, kept apart from the assistant's and drawn as a thought row
+    (which is what applies the dim italic style). The transcript's thinking rows fold with
+    `Enter` like a tool call (`enter_folds_a_long_thought_to_one_row`): open by default,
+    one `thinking · N lines · Enter opens it` row when folded, so a long reason can be put
+    away without losing the answer. `acpilot recipes run` writes thinking to
+    stderr as it arrives, so a terminal shows a reasoning-only run instead of an empty one
+    while stdout stays the answer and `--json` stays one object.
+    `tests/lm_studio.rs` gained `a_tight_budget_spends_it_thinking_and_the_run_says_so`:
+    a recipe with `max_tokens = 48` spends the budget thinking, the stream carries
+    `model.run.thought` and no delta, and the record read back from
+    `GET /v1/recipes/studio/runs/{id}` keeps the reasoning. Both live tests pass in 3.2 s,
+    run with `--test-threads=1` — parallel requests queue behind one loaded model and hit
+    the 300 s chat timeout.
+  - **A stalled stream is cancelled in a minute (2026-11-16).** `CHAT_TIMEOUT` still caps a
+    whole generation at 300 s, but silence inside a streaming body is now its own failure:
+    `STREAM_STALL_TIMEOUT` (60 s) wraps each read, so a provider that sends headers and then
+    stops sending fails the run with "the stream stalled: the provider sent nothing for 60s"
+    instead of holding the turn for the full five minutes. Dropping the body cancels the
+    HTTP request, and the failure is recorded like any other `model_unavailable` run.
+    `stall_guard` owns the timeout, and
+    `a_quiet_stream_is_stalled_and_a_delivered_chunk_precedes_it` pins it with paused
+    time after a delivered chunk, so the test spends no real minute.
   - Mock OpenAI-compatible server: model list, streaming chat, tool calls, a server that ignores
     `top_k`, a server that 500s mid-stream, a server that never finishes. Snapshot the exact
     request bodies so a param regression is a diff.
@@ -1295,11 +1667,30 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
     session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while
     the permission prompt appears in the TUI and not in the script.
 
-- [ ] **P4.5-12 · Integration stats** (1d) — the shared contract landed:
+- [x] **P4.5-12 · Integration stats** (1d) — the shared contract landed:
   `acpilot_proto::stats::IntegrationStats` covers providers and agents, every figure carries
   `StatSource` (`server`, `configured`, `estimated`, `unknown`), and
   `acpilot_core::stats::{context_fill, credit_fill}` is the tested fill math both UIs use.
-  Still open: `GET /v1/stats`, the collector that fills it, and provider balance reads.
+  - **Result (2026-11-16):** `/v1/stats` lists a `provider` row per declaration in
+    `providers.toml`, ahead of the agent roster and in declaration order. A provider has no
+    conversation, so its `context` is absent rather than zero. `credits` is read from the one
+    balance endpoint this build knows — OpenRouter's `GET /api/v1/credits`, through
+    `acpilot_model::balance` — with the declaration's `credential_ref`, and reports used,
+    remaining and limit in USD with `source: server`. The read is cached for a minute: the bar
+    polls every fifteen seconds, and a stats request is not a reason to hammer an account. A
+    provider with no endpoint, a disabled one, a failed read, or a credential that cannot be
+    read has no `credits` key rather than `0.00`; an unreadable credential is never sent
+    anonymously. A row with a reading carries the read's timestamp, so a balance that stopped
+    refreshing goes old; a quiet row carries its last probe. **Tests:** four in
+    `acpilot_model::credits` (endpoint recognition, the spend/purchase mapping, a body with no
+    purchase reporting nothing, the token-bearing read and a refusal against a loopback
+    server) plus one in `acpilotd/tests/http.rs` (provider rows first, quiet, no invented
+    credits).
+  - **Open:** configured windows and plan ceilings have no field in `providers.toml`, so
+    neither is reported and `window_tokens` stays absent; agent context still comes from the
+    transcript rather than the provider's `max_context_length`. Only OpenRouter's balance URL
+    is recognized — a provider that documents another one needs its own endpoint rather than a
+    guessed URL.
   - Context: the window and usage come from the provider when it reports them (LM Studio
     `max_context_length`, `usage`) and from the session transcript (marked `estimated`)
     otherwise; no default window is ever substituted.
@@ -1309,17 +1700,23 @@ and Gemini are not OpenAI-shaped and get their own variant when the adapter exis
   - One row per integration, including quiet ones, so the bar does not reflow when a provider
     stops answering; `updated_at` makes a stale reading visible.
 
-- [ ] **P4.5-13 · Skills** (2d) — `acpilot-skills` parses Agent Skills (`SKILL.md`: YAML
-  frontmatter plus instructions) and resolves workspace `.acpilot/skills/<name>/` over an
-  extension's `skills/<name>/`, with the name/directory/description limits enforced and 12
-  tests over temporary trees. Still open:
-  - a `skills` contribution kind in extension manifests and activation, so a pack can ship them
-    and a profile decides whether they exist;
-  - the creator/editor in the model lab: write `SKILL.md`, validate before saving, preview the
-    instructions, and choose workspace or profile as the destination;
-  - selection in a recipe/session, and how the instructions reach the agent — system prompt for
-    model-backed agents, an ACP attachment for external ones — without pretending every agent
-    has a native skill mechanism.
+- [x] **P4.5-13 · Skills** (2d) — `acpilot-skills` parses Agent Skills (`SKILL.md`: YAML
+  frontmatter plus instructions) and resolves workspace `.acpilot/skills/<name>/` over a
+  profile's `skills/<name>/` over an extension's `skills/<name>/`, with the
+  name/directory/description limits enforced and 12 tests over temporary trees.
+  - **Result (2026-11-16):** extensions can declare a `skills` contribution; the loader
+    resolves its directory and `discover_scoped` merges it below profile and workspace, so
+    a pack ships skills and activation decides whether they exist. `GET /v1/skills`
+    lists every visible skill with its instructions and source, and `POST /v1/skills`
+    validates a draft through the same parser before atomically writing `SKILL.md` into
+    the workspace or profile; a rejected edit leaves the previous file intact. The model
+    lab has a skills pane: `n` creates, `Enter` edits, `Space` adds the skill to the
+    recipe, and `^S` saves with `^D` choosing workspace or profile. A recipe carries
+    `skills: ["name"]`; `acpilot-agent-lm` appends those instructions to its system
+    prompt at `session/new`, and a lab run does the same before assembling the corpus,
+    warning beside the run when a named skill is missing. **Open:** external (non-model)
+    agents get no ACP attachment for skills; the recipe field is the contract, and an
+    external agent that has no native skill mechanism simply receives none.
 
 ---
 
@@ -1364,6 +1761,34 @@ v0.1 (D18).
     private one. Signature failure is a hard error with the key id named.
   - `acpilot ext search|add|update|remove|list|show`; `--from <dir>` installs a path link for
     development; `--index <url>` for a private registry. No fetch on startup, ever.
+  - **Progress 2026-11-18:** the signed index and the six verbs shipped. `marketplace/index.json`
+    plus `index.json.sig` is the reviewed list, verified with `index.rs` and compiled into the
+    binary, so `ext search` and `ext add` read this release's listings without a network call; a
+    private registry uses `--index <path|url>` and the signature beside it. `--index` still means
+    the listing file, not the archive's host. The maintainer key is `MAINTAINER_PUBLIC_KEY` (the
+    release key's public half), and `registry.trusted_keys` in the global `config.toml` adds keys;
+    a settings entry that tries to replace the maintainer id is refused, and every signature
+    failure names the key it saw. `Store::install_from_archive` checks the archive's size and
+    sha256 before unpacking, then requires the manifest to agree with the listing on id, version
+    and publisher before renaming into the store; `archive.rs` unpacks gzip tarballs and zips and
+    refuses absolute or climbing paths, symlinks, hard links and device nodes. `ext update`
+    installs the newest listed version beside the old one (prune removes it), `ext remove`
+    refuses while a profile activates the id, and `list`/`show` report store status beside the
+    index. Tests: index validation and signature cases (including the shipped signature), archive
+    shape and traversal, store installs from a real tarball, and six process-level CLI tests with
+    a local signed index and a one-shot HTTP archive server. `ext add --from` links a checkout
+    rather than copying it, so an edit is what the next reader loads. **Progress 2026-11-19:**
+    `ext add --activate <profile>` installs and approves in one command, for an index install and
+    a `--from` link alike; the approval is written only after the store accepted the bytes, and
+    `--json` reports it as `activated_in` beside the summary whose `active_profiles` names it.
+    **Progress 2026-11-19:** the unpacked tree has its own bound. The listing's `size` is the
+    compressed download and says nothing about what a small gzip expands to, so `archive.rs`
+    spends a budget of `MAX_UNPACKED_BYTES` (64 MiB) from each entry's declared size as it
+    writes, naming the entry that crossed it; a download that passes the archive's own check but
+    would fill the disk is refused whole, and the store's staging directory means nothing half
+    unpacked survives. **Open:** `--json` and the daemon's `/v1/extensions` surface are P4.6-10,
+    and adding a listing means re-signing `index.json` with the maintainer key, which is a
+    release-time step rather than something CI can do.
 
 - [x] **P4.6-5 · Activation and precedence** (1d) — done: `activation.rs`, `effective.rs`, `ext why`; the daemon's `extension.changed` event waits for the mod-shop phase's task P4.6-10
   - Per-profile `extensions.toml` activation list; precedence built-ins < activated extensions <
@@ -1372,7 +1797,8 @@ v0.1 (D18).
   - Deactivating restores the previous answer without a restart; the daemon emits
     `extension.changed` and every attached UI re-reads the registries.
 
-- [ ] **P4.6-6 · Themes as data** (1.5d)
+- [x] **P4.6-6 · Themes as data** (1.5d) — done: one token schema, one resolver, and a live
+  switch on all three surfaces
   - Token schema (`bg`, `bg_panel`, `text`, `text_muted`, `accent`, `accent_high`, `border`,
     `success`, `warning`, `danger`, plus syntax classes), shared by TUI, GUI, and web; hot switch
     via `prefs.changed`.
@@ -1381,29 +1807,108 @@ v0.1 (D18).
     theme (17 foreground tokens x 2 surfaces), `built_in_themes_meet_wcag_aa`. **Consumers and settings done**:
     `theme` plus `theme_tui`/`theme_gui`/`theme_web` in the settings cascade, one shared
     `ThemeRegistry` resolver, the TUI drawing every pane from it, the desktop app and the daemon's
-    page reading the same palettes. **Hot switch done for the two surfaces that can re-read a
-    file**: the TUI watches the settings files and recolours on save, the web page is resolved per
-    request; `prefs.changed` and the desktop app's window remain.
+    page reading the same palettes. **Hot switch done on all three surfaces**: the TUI watches
+    the settings files and recolours on save, the web page is resolved per request, and every
+    desktop window follows the daemon's `prefs` frames (`acpilot-gui::daemon::follow` into
+    `recolour_on_settings`) — that frame is the `prefs.changed` announcement the stream carries.
+    **Finished (2026-11-19):** the window resolves the theme from the daemon's `GET /v1/themes`
+    rows rather than only the binary's built-ins, so a theme an activated extension ships is
+    drawn too; an `extension.*` frame refetches that list and re-applies the current preferences
+    (an activation changes what a theme resolves to without changing the preferences), and a
+    window opened after a save reads the newest theme instead of the launch one.
 
 - [ ] **P4.6-7 · Presets that point at programs** (1d)
   - A `language_servers` or `agents` contribution merges into the typed registries; a command it
     introduces is trust-pinned on first run (P7-12) exactly like a hand-written one, and the pin
     UI names the extension so the question is "trust rust-analyzer from acpilot.rust-pack?" rather
     than a bare binary path.
+  - Progress: an activated extension's `agents` presets are resolved per request and merged into
+    `GET /v1/agents`, session start, and the ACP bridge's choice of agent. `AgentSummary.extension`
+    names the pack and the trust route returns it, so a pin dialog can ask about
+    `test-agent from acpilot.test-agents` rather than a bare path. The profile's `agents.toml` wins
+    an id collision, and a broken activation list is logged without hiding the manifest's roster.
+  - Progress (2026-11-19): an activated extension's `language_servers` presets now join the
+    daemon's table. `AppState::extension_language_servers` reads them from the same verified
+    activation list the roster uses, and `refresh_language_servers` registers them before every
+    table read, so a preset replaces the build's row for its language in `GET /v1/lsp/servers`,
+    references, diagnostics, and formatting, and deactivating the pack restores the built-in
+    without a restart. A language only a pack names is listed after the build's four, and the row
+    carries the pack id internally (`ServerState.extension`). The wire row carries it too
+    (`LspServerSummary.extension`), absent for the build's own rows, so the id a pin dialog needs
+    is not trapped inside the daemon.
+  - Progress (2026-11-20): the pin question is drawn. The TUI's agent picker marks an `untrusted`
+    row with `not approved` and the pack it came from; `Enter` on that row opens a card naming the
+    agent, the pack and the exact command instead of starting a session, and `y` records the pin
+    through `Client::trust_agent` (`POST /v1/agents/{id}/trust`) before the roster is re-read.
+    `n`/`Esc` writes nothing, and a roster that loses the agent closes the question rather than
+    leaving a card nobody can answer. The status line names the pack that was just approved and
+    says to pick the agent again: approving a binary is not starting it. Tests: the question
+    replaces the picker instead of starting a session, `y` answers once, `n` writes nothing, and
+    both the marked row and the card are asserted by their text.
+  - Progress (2026-11-20): the language-server half has its question. A pin for a server's program
+    lives in `lsp_server_pins` (schema 5, `migrations/0005_lsp_server_pins.sql`) and is written by
+    `POST /v1/lsp/servers/{language}/trust`: the route takes a language so the URL is one a client
+    can build, resolves that row's program, and stores the SHA-256 of the bytes under the
+    *program*, because `typescript-language-server` answers for two languages and one approval has
+    to cover both. `GET /v1/lsp/servers` reports `untrusted` for a row whose pin no longer matches
+    the file, in place of its lifecycle state — the same shape `AgentStatus::Untrusted` has — and
+    the row still carries the pack id, so the question names it. The TUI's palette **LSP status**
+    row sends the list instead of a line when a row is waiting for an answer, draws a card naming
+    the program, the language and the pack, and `y` records the pin through
+    `Client::trust_language_server`; `n`/`Esc` writes nothing and the status line says the server
+    will not start. Approving is not starting: the card leaves "approved rust · rust-analyzer from
+    acpilot.rust-pack", and the line still reports the row as stopped. Tests: the store replaces a
+    program's pin rather than accumulating one, the daemon reports a stale pin and the route clears
+    it (then reports it again after the file changes under the approved name), a language with no
+    row is `404`, a daemon with no store is `409`, the route is in the served document, and the TUI
+    asks, answers once, and writes nothing on `Esc`.
+  - Open: the routing map now covers the languages a pack can name (P4.6-8's routing half), so a
+    `go` preset is reachable from a `.go` file, and a pin that no longer matches is refused at
+    start rather than only reported (P7-12): references, diagnostics and formatting fall back
+    instead of spawning the changed binary. Grammar loading for the editor is still P4.6-8's.
 
 - [ ] **P4.6-8 · Grammars** (2d)
   - Prebuilt tree-sitter `.wasm` + `highlights.scm`/`indents.scm`, loaded lazily on first file of
     that language, with a parse-time budget and a visible "grammar missing" fallback rather than
     plain text and no explanation.
+  - Progress (2026-11-20): the routing half is in, because a grammar the editor can load is worth
+    nothing if a `.go` file cannot reach the server a pack declared for it.
+    `acpilotd::lsp::language_of` now reads an extension against `LANGUAGES`, a table of the
+    protocol's language ids and their extensions, instead of four hardcoded arms: `go`, `c`,
+    `cpp`, `java`, `ruby`, `php`, `csharp`, `lua`, `kotlin`, `swift`, `dart`, `zig`, `haskell`,
+    `elixir`, `html`, `css`, `json`, `yaml`, `toml`, `sql`, `bash` and `markdown` join the four
+    the build ships a server for. A language with no row still answers from the parse tree rather
+    than being refused here, so the table can grow ahead of the servers. A test pins that every
+    built-in `SERVERS` id has a routable extension. The grammars themselves — wasm, queries,
+    lazy load, the visible fallback — are the rest of this task.
 
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
     and below the user's own `keymap.toml`, with conflicts reported by `acpilot keys check`.
+  - **Progress (2026-11-19):** keymap layers are read and applied. A `keymap` contribution is
+    parsed by the loader (`KeymapLayer`: a `[keys]` table, and no `preset` — a pack moves keys,
+    it does not choose the editing model). `acpilot-tui` applies the layers above the preset and
+    below the profile's `keymap.toml`, at launch and on every save of that file; the layers are
+    sorted by extension id, and each is checked as it lands, so a pack that takes a key already
+    in use is refused with both verbs and the pack's id named. `acpilot keys check` builds the
+    same table and prints it, so the command and the screen cannot disagree. The client watches
+    the profile's `extensions.toml` as well as `keymap.toml`, so activating or dropping a pack
+    changes the keys on that save rather than waiting for a keymap edit nobody made.
+  - **Open:** snippets are not implemented — the editor has no snippet engine to feed, so the
+    "existing JSON format" this task names does not exist yet, and that half needs its own task.
 
-- [ ] **P4.6-10 · API and CLI** (1d)
+- [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
+  `/v1/events`, and `--json` on every `acpilot ext` verb
   - `GET /v1/extensions`, `GET /v1/extensions/{id}`, `POST /v1/extensions`,
     `POST /v1/extensions/{id}/activate|deactivate|verify`, `DELETE /v1/extensions/{id}`,
     `GET /v1/themes`; SSE `extension.*`. CLI mirrors it, `--json` everywhere.
+  - Install verifies the index signature, the archive's size and sha256, and that the manifest
+    agrees on id, version and publisher; activation writes one profile's `extensions.toml` and
+    removal is refused while any profile activates the id. `GET /v1/themes` applies inheritance
+    and marks the surfaces whose settings select each theme.
+  - The CLI verbs read the local store rather than the daemon, as P4.6-4 established, so an
+    editor can be repaired when its daemon is the broken thing. Their `--json` documents are
+    built from the same rows the routes serve.
 
 - [ ] **P4.6-11 · Tests** (1d)
   - Manifest matrix (missing fields, unknown keys, path traversal, id collision); checksum mismatch
@@ -1414,6 +1919,9 @@ v0.1 (D18).
     names the extension and the manifest version; a tampered extension is refused by name.
   - Status: manifest matrix, checksum/store, activation cycle, precedence, contrast, and the CLI
     verbs are covered; signature failure arrives with task P4.6-4, grammar degradation with task P4.6-8.
+    The stale-pidfile test names the discard port rather than a port it bound and dropped: a released
+    ephemeral port can be handed to a neighbouring test's listener, which made that test answer for a
+    daemon it had declared dead.
 
 - [ ] **P4.6-12 · Import from other editors** (future, not v0.1)
   - TextMate `.tmTheme` is done (`acpilot ext import-theme`). VS Code (JSON themes, node
@@ -1766,6 +2274,44 @@ what needs an editor shell waits for the editor shell.
     with `409` rather than re-found — reloading the pane is the recovery. An untracked path has no
     unstaged diff to split, so it is still staged as a whole. The browser has buttons rather than a
     keyboard route, as its panel has no global keymap.
+- [ ] **P6.5-10 · A document's history, played back** — a timeline above the editor whose stops
+  are the commits that changed the open file, and the file drawn as it was at the stop a person
+  drags to. One increment is one commit that touched this path; the working tree is the newest
+  stop, so an uncommitted edit is visible rather than hidden behind the last commit's date.
+  - **The history is the daemon's, like every other git fact.** `acpilot-git` grows
+    `history(path, limit)` — the commits that touch one path, following renames, in a stable order
+    a slider can index — and `file_at(path, rev)` for the blob at one of them, both by running the
+    user's `git` (`log --follow`, `show <rev>:<path>`), so filters, `.gitattributes` and a
+    configured diff driver mean the same thing here as on the command line.
+    `GET /v1/git/history?path=` and `GET /v1/git/file?path=&rev=` serve the two, with the
+    `404`/`502` meanings P6.5-2 gave the rest of `/v1/git`, so the TUI, the desktop window and the
+    page read one list and one blob instead of three guesses. A path outside the repository, a
+    revision that does not contain the file (added later, renamed, deleted), and bytes that are
+    not UTF-8 are refusals or a stop that says so, never a decode that silently replaces half a
+    file.
+  - **The timeline is the editor pane's.** A row above the buffer draws one tick per stop and the
+    current stop's short id and date; a drag on it (the press/drag/release P6-12 already owns) and
+    `[`/`]` step it, `Home`/`End` jump to the oldest stop and back to the working tree, and the
+    title says `replay · <short id>` while the pane is not live. In replay the buffer is
+    read-only, the caret and the undo history are untouched, and `End` or `Esc` puts the document
+    that was open back on screen — a history view that costs a person their unsaved edit is one
+    they will use once.
+  - **What a stop is, exactly:** every commit reachable from `HEAD` whose diff touches the path,
+    with rename history followed; a merge that introduces no change of its own to the path is not
+    a stop, because dragging through it would show the same bytes twice. The list is capped and
+    says when it is (500, the log route's cap), so a file with ten thousand commits scrubs its
+    recent history instead of freezing a client. Blobs are fetched the first time a stop is shown
+    and kept for as long as the file is open; nothing is prefetched for a stop nobody dragged to.
+  - **DoD:** open a file with at least three commits, drag the timeline through them, and see the
+    file at each; return to the end and type, and the document is the one that was open, undo and
+    caret included; a file added in the second commit starts at that commit rather than at an empty
+    first stop; a file renamed once reaches its older history through the rename.
+  - **Open:** replay shows the file at a stop, not an animated diff between stops — the gutter's
+    `LineChanges` would mark each stop against the one before it, and that is a follow-on. There
+    is no repository-wide timeline (a time view across every file) and no way to restore a stop; a
+    restore is a write and belongs with the confirmed checkout P6.5-8 already owns. The desktop
+    window (P10) and the page (P11) get the same strip over the same two routes; the TUI's is
+    first, because it is where the editor is.
 
 ---
 
@@ -1913,6 +2459,20 @@ untrusted binary with your repo and your network is exactly the hole worth closi
     `acpilot lsp status` shows the resolved binary path and hash.
   - Untrusted workspaces spawn no servers until approved. Generated code and `build.rs`-triggered
     execution are the exact threat this blocks.
+  - Progress (2026-11-20): the pin is enforced where a server starts. `Servers::register` carries
+    the recorded pins beside the rows, and `running` refuses a local server whose program no
+    longer hashes to the approved value — logging the program by name and answering `None`, so
+    references fall back to the parse tree, diagnostics report "nobody checked" and formatting
+    returns the buffer unchanged. All three questions start a server through that one function,
+    so no route can spawn a changed binary by forgetting to ask. A remote server's bytes are the
+    host's to hash, so the check is local-only (P7-11). A pin can only be recorded by a person
+    answering the question (P4.6-7), which is what makes the refusal mean "this changed after
+    you approved it" rather than "nobody has approved it". Test: a file whose bytes change
+    under an approved name is refused, a matching pin and no pin are allowed.
+  - Open: a server nobody has pinned still starts, because the build's own rows and a pack's
+    preset share one code path and only an answer creates a pin; requiring approval before first
+    use is the rest of this task. `policy.toml` pre-approval and `acpilot lsp status` are not
+    built, and so is the workspace-level "untrusted workspaces spawn nothing" rule.
 
 - [ ] **P7-13 · Agents can read diagnostics** (1d)
   - `acpilotd mcp` exposes `lsp_diagnostics`, `lsp_hover`, `lsp_definition` as MCP tools (via
@@ -1999,12 +2559,15 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## Windows phase (P9) — Windows + WSL (≈8 days)
 
-- [ ] **P9-1** Windows build green in CI (MSVC), ConPTY verified via `portable-pty` for both local and WSL terminals.
-- [ ] **P9-2** `acpilot-host::wsl`: distro enumeration (`wsl.exe -l -q`, registry via `winreg` as fallback), default distro detection, `wsl --cd` support, path translation both ways (`C:\a` ↔ `/mnt/c/a`, `\\wsl.localhost\D\a` ↔ `/a`).
-- [ ] **P9-3** In-distro helper: install `acpilotd-helper` into `~/.local/bin` inside the distro on first use, handshake, then all fs/PTY/spawn/LSP happens in-distro (see README §5.6 design note).
-- [ ] **P9-4** WSL terminal pane + WSL agent over the helper's stdio; verify interactive TUIs (colours, resize, Ctrl-C) work through ConPTY.
-- [ ] **P9-5** UNC fallback for read-only browsing; explicit warning in the UI when editing over 9P.
-- [ ] **P9-6** Windows process hygiene: job objects for agent trees, named-pipe single instance, `\\?\` long-path handling, CRLF preservation.
+Every ticket here is platform-tagged. Work P9-3 (`[wsl]`) with the Linux path.
+The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
+
+- [ ] **P9-1** · [windows] Windows build green in CI (MSVC), ConPTY verified via `portable-pty` for both local and WSL terminals.
+- [ ] **P9-2** · [windows, wsl] `acpilot-host::wsl`: distro enumeration (`wsl.exe -l -q`, registry via `winreg` as fallback), default distro detection, `wsl --cd` support, path translation both ways (`C:\a` ↔ `/mnt/c/a`, `\\wsl.localhost\D\a` ↔ `/a`).
+- [ ] **P9-3** · [wsl] In-distro helper: install `acpilotd-helper` into `~/.local/bin` inside the distro on first use, handshake, then all fs/PTY/spawn/LSP happens in-distro (see README §5.6 design note).
+- [ ] **P9-4** · [windows, wsl] WSL terminal pane + WSL agent over the helper's stdio; verify interactive TUIs (colours, resize, Ctrl-C) work through ConPTY.
+- [ ] **P9-5** · [windows] UNC fallback for read-only browsing; explicit warning in the UI when editing over 9P.
+- [ ] **P9-6** · [windows] Windows process hygiene: job objects for agent trees, named-pipe single instance, `\\?\` long-path handling, CRLF preservation.
   - **DoD:** on a clean Windows VM, `acpilot workspace open \\wsl.localhost\Ubuntu\home\me\app`, run an agent inside the distro, edit a file, and see the change from `wsl` — no manual setup beyond `wsl --install`.
 
 ---
@@ -2073,11 +2636,87 @@ untrusted binary with your repo and your network is exactly the hole worth closi
 
 ## Release phase (P12) — Release v0.1 (≈6 days)
 
+- **Progress 2026-11-17:** a release archive now carries `install.json` beside the
+  binaries (`{"method":"tarball","version":"<tag>"}`, written by both package steps in
+  the then-hand-written `release.yml` — the shape ADR 0011 replaced, below), which is
+  what makes ADR 0010's table real rather than tested: an
+  unpacked archive is a copy nobody's package manager owns, so `acpilot update --from`
+  may replace it. `acpilot update` reads that marker through `acpilot_host::install` and
+  answers by owner — a package-managed copy prints its own upgrade command (`sudo apt
+  install --only-upgrade acpilot`, `brew upgrade acpilot`, …) and refuses `--from`, a
+  tarball or `cargo install` is replaced atomically (written beside the binary, executable
+  bit set, then renamed over it), and a copy with no marker is left alone.
+  - **Closed later on 2026-11-17:** the formula now says `brew`. `cargo xtask dist`
+    inserts `(bin/"install.json").write("{\"method\":\"brew\",\"version\":\"#{version}\"}")`
+    after every `bin.install` in each generated formula, and a formula with no install
+    line fails the build rather than shipping a Cellar copy that claims to be a tarball.
+    A real `cargo xtask dist` run then found half of that match wrong: dist writes
+    `bin.install_symlink` for the aliases each formula declares, the shared prefix put a
+    marker inside the alias loop, and a formula installing only a symlink would have been
+    marked `brew` while holding no binary of ours. `installs_a_file` refuses the `_`
+    suffix, and both cases are tests.
+    `acpilot update` also fetches now: `crates/acpilot-cli/src/release.rs` names the asset
+    for this platform (`acpilot-<version>-<target>.tar.gz|zip`), downloads it and the
+    `.sha256` beside it, compares digests, unpacks by the bytes' magic (tar.gz or zip,
+    never by the build's own platform) taking only entry *file names*, and replaces
+    `acpilotd`, `acpilot-gui` (where present) and then `acpilot`, recording the new
+    version in the marker while keeping its method. `--from` still exists for an
+    air-gapped machine, `--version` names a release, `--check` is the report alone.
+  - **Closed later still on 2026-11-17 (ADR 0011):** the two gaps above. A release is
+    now cargo-dist's artifacts, and `release.yml` packages nothing: `cargo xtask dist
+    --artifacts local` runs on a runner per target and `--artifacts global` once for the
+    installers, the marked formula and the SBOMs. That fixes the shape — one archive per
+    program, `acpilot-cli-<triple>.tar.gz` (`zip` on Windows), the version in the tag —
+    so `release.rs` fetches three archives, unpacks each and installs the union. The
+    marker is a static `install.json` that dist *includes* in every archive: editing an
+    archive afterwards would invalidate the checksum baked into the installer built from
+    it. Its `tarball` has no version because one file serves every release.
+    A checksum is not a signature, so each `<asset>.sha256` now publishes a
+    `<asset>.sha256.sig`: a detached ed25519 signature that `update` checks *before* it
+    parses the digest, against the public half compiled in from
+    `ACPILOT_RELEASE_PUBKEY`. A build without that variable refuses to replace itself,
+    and `release.yml` fails rather than publishing unsigned when
+    `ACPILOT_SIGNING_KEY` is unset; `docs/release-key.md` has generation and rotation.
+    Verified here: `cargo xtask dist` produced the three archives with `install.json`
+    inside, and a signed local release served over HTTP was installed by a real
+    `acpilot update` (signature verified, digest verified, `acpilotd` and `acpilot`
+    replaced, marker rewritten), while a tampered checksum was refused.
+  - **Keys 2026-11-17:** the pair exists on the repository, so the archives job stops
+    refusing for a missing key and the signing step stops failing. `ACPILOT_RELEASE_PUBKEY`
+    holds the public half, `ACPILOT_SIGNING_KEY` the private one. The pair was proved
+    against the code rather than the other way round: archives built with the variable,
+    their checksums signed with the secret's key the way `release.yml` signs them, and an
+    updater built with the variable installed them — and refused both a substituted
+    digest and a checksum re-signed by a second key. `release.yml` itself has not been
+    dispatched: running it publishes a tag and a release, which the next version is for.
+  - **Open:** a running daemon keeps the old binary until restarted; the command says so
+    rather than killing one that may be mid-turn. The download path has still not met a
+    real GitHub release that contains this code: `v0.2.6` predates it, so the first
+    end-to-end update is the release after this one. `acpilot update` maps a musl
+    machine to the `gnu` archive; a musl host is an installer's copy and updates
+    through the installer.
 - [ ] **P12-1** `cargo-dist` config: tarballs (linux x86_64/aarch64 musl+gnu, macos arm64/x86_64, windows x86_64), shell + PowerShell installers, Homebrew tap, checksums + SBOM (`cargo-cyclonedx`).
   - Wired: `dist-workspace.toml` pins cargo-dist 0.32.0 and declares those seven targets, the three installers, a sha256 checksum per archive and `cargo-cyclonedx`; `cargo xtask dist` builds the set for one machine and refuses a `dist` of another version, because the artifacts are that version's output.
     - Verified on linux x86_64 (2026-10-29): three archives with `.sha256` beside each, `sha256.sum`, the shell and PowerShell installers and the formula for every program, the source tarball, and three SBOMs — all in `target/distrib/`.
-  - Left: the tap repository (`skamansam/homebrew-tap`) and its `HOMEBREW_TAP_TOKEN` do not exist yet, so the formula is generated and not pushed.
-  - Left, and a decision rather than a chore: cargo-dist archives one *package* per platform, so a release is `acpilot`, `acpilotd` and `acpilot-gui` as three archives that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` still packages one tarball holding all three. Picking one shape belongs with P12-2's workflow work; until then `xtask dist` produces the cargo-dist shape and the workflow produces the other.
+  - **Tap 2026-11-17:** `skamansam/homebrew-tap` exists and `release.yml` publishes the
+    generated formulae to it before the release is created, so a tap never advertises a
+    version whose archives were not published. The push uses the `HOMEBREW_TAP_TOKEN`
+    secret, which is not set yet, so the `tap` job fails until it is. `cargo xtask dist
+    --release-version` writes the release tag into the installers and formulae, because
+    dist names them after `Cargo.toml` (`0.1.0`) and refuses a `--tag` that disagrees.
+    No release has used either half yet, so no tap formula has been installed from a
+    real release.
+  - **Decided 2026-11-17 (ADR 0011):** cargo-dist's shape wins. A release is one archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` now runs `cargo xtask dist --artifacts local` per target and `--artifacts global` once, so there is no second shape and nothing is packaged by hand.
+  - **Checked 2026-11-17:** `release.yml` installs the generated formulae with real
+    Homebrew on a macOS runner, and `publish` waits for that job. It fails the release
+    unless `acpilot update --check` says `installed by brew` and a plain `acpilot
+    update` refuses to write into the keg. The formula's downloads are served from the
+    runner, because dist names the release after `Cargo.toml`'s version (`0.1.0`) and
+    the tag is decided afterwards: a URL under the real release is the one thing the
+    check cannot see before `publish`. The client's and the daemon's formulae are
+    installed together, because they share one prefix: `bin/install.json` is one path,
+    so only the formula that installs `acpilot` writes it, and `acpilot-cli` beside
+    `acpilotd` is the pair that would have failed to link.
   - Note: `cargo-dist` declares the `.cdx.xml` per program and generates it only in the CI job it writes, so `xtask dist` runs `cargo cyclonedx` itself and keeps the three declared SBOMs (`Cargo.toml`'s `[profile.dist]` is what `dist build` asks for).
 - **Progress 2026-11-04:** a version difference can now say how to fix it. ADR 0010 decides
   install provenance: every installation except a bare binary drop ships `install.json`
@@ -2547,6 +3186,142 @@ iced 851–896 ms — and the cost is window/device creation, not the view, whic
 the app *starts* (pre-warmed process, restored window), not a number a framework
 reaches from a cold process. Numbers and method: `docs/notes/gui-bench.md`; the
 decision they settle is `docs/adr/0009-gui-framework.md`.
+
+- [ ] **XT-4** A number for every program's CPU and memory (3d)
+  - The table above names an idle daemon's RSS and a session's memory, and nothing in
+    the tree reports either; there is no CPU budget at all. `cargo xtask resources` is
+    the one harness: it starts a shipped binary against a temporary profile with the
+    mock agent (P2-9) or the mock server (P7-15), drives one scripted load, samples the
+    whole process tree every 100 ms for a named window, and reports peak RSS, mean and
+    peak CPU, and the thread count per process. The binaries are the ones the archives
+    carry: `acpilotd`, `acpilot` (one `doctor`, one `prompt` turn), `acpilot-tui` (a
+    file open, and a turn running), `acpilot-gui` (a window with one pane),
+    `acpilot serve` (idle, and one page connected), and the language servers a
+    workspace starts, measured as children of the daemon so one figure covers
+    initialization and another covers diagnostics after an edit in a 100k-line file.
+    `acpilotd-helper` joins the list when the Windows phase (P9) gives it a build. Every
+    run writes `docs/notes/resources.md` with the machine's state beside the figure,
+    because the design phase's P0-3 learned that a number without the cache state
+    measures the OS rather than the program.
+  - **Idle is a load, not the absence of one.** Each row names its window and what
+    happens inside it — a subscriber on `/v1/events`, the TUI's frame clock, a cursor
+    blink — so "idle" means drawing and waiting, which is where a poller that wakes
+    60 times a second shows up as CPU and nowhere else. CPU is reported as a fraction
+    of one core, per process and per tree, because a percentage of the machine hides
+    the second core a busy loop costs.
+  - **Budgets come from the first run, then CI holds them.** The first measurement
+    fills the table's CPU rows and re-checks the two memory rows against a real
+    process; after that a job on the reference runner repeats the script and fails when
+    a figure moves past the margin that run's own variance allows — three repeats, the
+    median reported, and a budget stated as a median plus a margin rather than as one
+    sample. A hosted runner is noisier than a developer's box, so the job is a
+    regression gate, the note keeps the measured number and the hardware, and neither
+    is a claim about a user's machine.
+  - **What it does not budget:** the agent's own consumption, which is third-party code
+    and is shown in the row only so a turn's total is visible beside the daemon's share
+    of it; the browser tab that `acpilot serve` hands a page to, whose memory is the
+    browser's to report; and video memory, which belongs to the desktop phase's P10-6.
+    A language server's memory is reported per root, because one server is shared by
+    every attached workspace and its cost belongs to the root rather than to whichever
+    editor asked last.
+  - **Lives in `xtask`, not in a shipping crate.** Sampling is per platform (`/proc` on
+    Linux, `ps` on macOS, `GetProcessMemoryInfo` on Windows), and OS code in a product
+    crate has to sit under `src/platform/` and ship — a harness that only runs in a
+    workflow should not add a syscall surface to the daemon. `sysinfo` is the proposal:
+    one dependency, no `unsafe` here, subject to the dependency budget (XT-3). If it
+    refuses a platform, `xtask` may `cfg` its own module, because the rule is about
+    what ships rather than about what measures.
+  - **Order:** the daemon, CLI and TUI rows can be measured today; the language-server
+    rows arrive with the language intelligence phase (P7), the window row with the
+    desktop phase (P10), the page row with the web phase (P11) and the helper with P9.
+    That is why this is cross-cutting rather than a phase: no phase owns all six
+    programs, and measuring at release (P12) would report a regression at the moment
+    there is no time left to fix it.
+  - **DoD:** every program in a release archive has a CPU and a memory figure with its
+    window and machine state in the note, every budget in the table is checkable by one
+    command, and CI fails when one regresses past its margin.
+  - Progress (2026-11-20): the harness exists and two rows are measured. `cargo xtask
+    resources [--debug] [--repeats N]` builds the binaries the archives carry, starts one
+    against a temporary profile, drives one scripted load, samples the whole process tree
+    every 100 ms with `sysinfo`, and writes `docs/notes/resources.md` with peak RSS, mean
+    and peak CPU as a fraction of one core, and the thread count — beside the OS, kernel,
+    CPU, memory and build profile the figures came from, because a number without its
+    machine measures the machine. Each row is measured three times and the median is
+    reported. Threads are counted from `tasks`, not from the process table: on Linux a
+    thread appears there carrying its process's memory, and counting both made the first
+    run report 1.5 GiB for a debug daemon. Rows today: `acpilotd` with a page request every
+    100 ms as its idle load, and `acpilot doctor` as the CLI's startup cost. The rows a
+    phase has not reached — TUI (a terminal's raw mode), GUI (P10), `serve` with a page
+    (P11), language servers (P7's fixture) and `acpilotd-helper` (P9) — are named in the
+    note and at the end of every run rather than skipped silently.
+  - Progress (2026-11-20): the budgets and the CI gate. `cargo xtask resources --gate`
+    repeats each row three times and compares the medians with a budget per row and metric,
+    failing when one is past its budget plus its margin — 50 % for peak RSS and threads,
+    100 % for mean CPU, because a shared runner's CPU time is the scheduler as much as the
+    work. Every comparison is printed, passing or not, so a log tells a figure that moved
+    from one that was never taken; a row measured without a budget, or a budget naming a
+    row the harness does not measure, fails too, so a row cannot leave the gate by being
+    renamed. `--gate` refuses `--debug` and fewer than three repeats: the budgets are
+    release figures, and one sample is not a median. CI's `resources` job is that one
+    command on `ubuntu-latest`, and it is in `required checks`.
+  - Progress (2026-11-20): the session row and the real stream. The daemon's idle load is
+    one `/v1/events` subscriber held open for the whole window rather than a page request
+    every 100 ms, and a second row creates one idle session over the API and measures the
+    daemon beside its fixture agent — the daemon's own process, because the agent is a
+    separate program and its memory is not the session's to budget. The row also makes the
+    table's 15 MB session budget checkable: the gate compares the session row's peak with
+    the idle row's and fails when the difference is past 15 MB with no margin, because that
+    number is a stated ceiling rather than a median this harness discovered. To get there
+    the harness builds `acpilot-agent`'s fixture binary and puts its directory first on the
+    daemon's `PATH`, and gives each run its own `XDG_RUNTIME_DIR`, `ACPILOT_HOME`,
+    `XDG_CONFIG_HOME` and token under the temporary profile, so a row cannot read or write
+    the machine's real state. The budgets are the medians a run on `ubuntu-latest`
+    measured, not a developer's box: the gate compares CI with CI, and the note keeps the
+    local figures beside the runner's limits. Deriving them that way exposed a harness bug
+    rather than a budget question — the one-shot row waited an interval before its first
+    sample, so a `doctor` run that exited inside 40 ms reported 0.0 MiB and passed every
+    budget it was given. It now samples as soon as the process exists and does not count a
+    zero reading, because a process that is gone is not a process that used no memory.
+  - Progress (2026-11-20): the server row, thread budgets that travel, and a lost event.
+    `acpilot serve` is measured with one page connected: the harness fetches the page (the
+    only route that answers without a token) and holds one `/v1/events` subscriber for the
+    window, which is what a browser costs the server; the tab's own memory stays out of
+    scope, as the note says. Thread budgets are now a fixed cost plus one per logical CPU
+    (`4 + 1/core` for the daemon, `8 + 1/core` with a session, `6 + 1/core` for `serve`), so
+    the same constants describe the 8 threads the runner measured and the 28 this machine
+    did: a bare number was a budget for whichever machine took it, and `--gate` would trip
+    on a machine with more cores without a regression to report. The stream had a bug the
+    same row work exposed: `GET /v1/sessions/{id}/events` read the ring and subscribed
+    afterwards, so an event recorded between the two was in neither the replay nor the
+    feed, and a reconnecting client waited for a turn that had already finished. It now
+    subscribes before the replay and drops the overlap by sequence, on both the SSE and
+    the WebSocket route. That fix has a deterministic test: the handoff takes a hook, and
+    the test records an event between the subscription and the ring read — the exact
+    window that used to lose it.
+  - Progress (2026-11-20): the turn row and the table's provenance. `acpilotd + 1 turn`
+    creates a session, sends one prompt over the API and measures the daemon that serves
+    it, because that is where a turn runs: the `acpilot` binary has no `prompt` verb, so
+    the turn path's figure is the daemon's rather than a CLI's. The note's budget table
+    now has a source column — a median the runner took, the per-CPU thread counts, or the
+    table's own 15 MB session ceiling — so a regression check and a stated promise are not
+    printed as though they were the same kind of number.
+  - Progress (2026-11-21): the TUI row. `acpilot tui --demo` runs under a 120x40
+    pseudo-terminal that the harness opens with `portable-pty`, because a client that
+    cannot put its terminal into raw mode refuses to launch, and a row that measured the
+    refusal would measure the launcher. The design pass contacts no daemon and reads no
+    project, so the figure is the frame clock itself: this machine measured 14.7 MiB,
+    0.39 % mean CPU (4.59 % peak while drawing) and one thread. The master is drained by
+    its own thread, because a full-screen frame is several kilobytes and an undrained pty
+    blocks the client mid-draw; the row waits for the first byte before it starts
+    sampling, so a client that never drew is an error rather than a figure.
+  - Open: a turn is measured on the daemon because the CLI has no `prompt` verb (a CLI
+    figure would need one; `acpilot recipes` exercises a model server, not an agent turn);
+    `acpilot doctor` has memory and threads but no CPU (a 170 ms process gives `sysinfo`
+    too few intervals for a percentage, which is why its CPU budget is `None` and not
+    zero); the session row's agent is the repository's fixture, so a real agent's memory
+    is still unmeasured; and the TUI row is the design pass under a fixed 120x40 pty — no
+    daemon, no agent and no keystrokes, so a real session's traffic is not in it, and the
+    desktop window still waits for P10.
 
 ### Security
 

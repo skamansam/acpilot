@@ -183,6 +183,13 @@
             "description": "Command that will be spawned, for display and debugging.",
             "type": "string"
           },
+          "extension": {
+            "description": "Extension that provided this agent, when it came from one.\n\nA client asking to trust the binary can name the pack — \"trust\nrust-analyzer from acpilot.rust-pack?\" — instead of asking about a bare\npath nobody recognizes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Agent identifier."
@@ -474,6 +481,85 @@
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "CreatePairingRequest": {
+        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests; a driver cannot grant itself one by asking.",
+        "properties": {
+          "grant_answer_permissions": {
+            "description": "Allow the paired driver to answer permission requests for the turns it\nstarts. Off by default, and off is the safe answer.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "CreateRecipeRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `POST /v1/recipes`.\n\nThe same fields a recipe file has, without `updated_at`: the file's mtime is\nthe timestamp, and a client that supplied one would be writing a claim about a\nfile it does not own.",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "Context plan."
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier, also the file name under `recipes/`."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "model_id": {
+            "description": "Model identifier to send.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "What this recipe is for, and what it is bad at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider to call."
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/SamplingParams",
+            "description": "Sampling knobs. Absent means the agent-shaped defaults."
+          },
+          "schema_version": {
+            "description": "Schema version; this build reads 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_prompt": {
+            "description": "The master prompt.",
+            "type": "string"
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolExposure",
+            "description": "Tool ceiling for the promoted agent."
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "label",
+          "provider_id",
+          "model_id",
+          "system_prompt",
+          "context",
+          "tools"
         ],
         "type": "object"
       },
@@ -819,6 +905,29 @@
         ],
         "type": "object"
       },
+      "ExtensionAction": {
+        "description": "What an activation request changed.",
+        "properties": {
+          "changed": {
+            "description": "`false` when the list already said what it was now asked to say.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "profile": {
+            "description": "Profile the approval was written to, or withdrawn from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "changed"
+        ],
+        "type": "object"
+      },
       "ExtensionContribution": {
         "description": "One thing an extension provides, named as the profile will see it.",
         "properties": {
@@ -859,6 +968,13 @@
             },
             "type": "array"
           },
+          "listed": {
+            "description": "Versions the signed index offers for this id.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionListing"
+            },
+            "type": "array"
+          },
           "manifest": {
             "description": "The manifest as written, for reviewing before enabling.",
             "type": "string"
@@ -866,6 +982,13 @@
           "summary": {
             "$ref": "#/components/schemas/ExtensionSummary",
             "description": "The same summary the list endpoint returns."
+          },
+          "versions": {
+            "description": "Every installed version, oldest first. The newest is [`Self::summary`].",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -882,12 +1005,81 @@
           "theme",
           "language_servers",
           "agents",
+          "skills",
           "grammars",
           "snippets",
           "keymap",
           "transcript_parser"
         ],
         "type": "string"
+      },
+      "ExtensionListing": {
+        "description": "One version a signed index offers, as shown beside what is installed.",
+        "properties": {
+          "checksum": {
+            "description": "`sha256:<64 hex characters>` over the archive's bytes.",
+            "type": "string"
+          },
+          "download": {
+            "description": "Where the archive is downloaded from.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExtensionKind",
+            "description": "The registry the listing is filed under."
+          },
+          "min_acpilot": {
+            "description": "Oldest acpilot that can load it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publisher": {
+            "description": "Who published it.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The archive's length in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Semantic version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "kind",
+          "publisher",
+          "checksum",
+          "size",
+          "download"
+        ],
+        "type": "object"
+      },
+      "ExtensionRemoval": {
+        "description": "What a removal deleted.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "versions": {
+            "description": "Versions removed, oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "versions"
+        ],
+        "type": "object"
       },
       "ExtensionSource": {
         "description": "How the extension got here.",
@@ -910,6 +1102,13 @@
       "ExtensionSummary": {
         "description": "An extension as returned by `GET /v1/extensions`.",
         "properties": {
+          "active_profiles": {
+            "description": "Profiles that activate this id. Empty when none does.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "checksum": {
             "description": "SHA-256 of the installed directory, verified against the index.",
             "type": [
@@ -976,6 +1175,27 @@
           "kinds",
           "status",
           "source"
+        ],
+        "type": "object"
+      },
+      "ExtensionVerify": {
+        "description": "The result of rehashing every installed version of one id.",
+        "properties": {
+          "extensions": {
+            "description": "The versions, with their verdicts.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "description": "Whether every version still matches its recorded checksum.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "extensions"
         ],
         "type": "object"
       },
@@ -1593,12 +1813,19 @@
         "description": "Request body for `POST /v1/extensions`.\n\nExactly one of `version` (registry) or `path` (local directory) is used;\n`path` wins when both are present, because a developer typing a path means it.",
         "properties": {
           "activate": {
-            "description": "Activate it in the profile named by `X-Acpilot-Profile` after verifying.",
+            "description": "Activate it in the daemon's profile after verifying.",
             "type": "boolean"
           },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Identifier from the index, or the manifest's id for a path install."
+          },
+          "index": {
+            "description": "A different index: an https URL or a file. The one this build ships when\nabsent.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "path": {
             "description": "Directory to link instead of downloading.",
@@ -1616,8 +1843,7 @@
           }
         },
         "required": [
-          "id",
-          "activate"
+          "id"
         ],
         "type": "object"
       },
@@ -1715,7 +1941,8 @@
           "ready",
           "indexing",
           "crashed",
-          "stopped"
+          "stopped",
+          "untrusted"
         ],
         "type": "string"
       },
@@ -1735,6 +1962,13 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "extension": {
+            "description": "The extension that introduced this row, absent for this build's own.\n\nA client that asks the person to trust a command has to name where the\ncommand came from, and \"rust-analyzer from acpilot.rust-pack\" is a question\nabout a pin, while a bare path is a question about nothing.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "id": {
@@ -1863,6 +2097,48 @@
         ],
         "type": "object"
       },
+      "ModelCatalogue": {
+        "description": "One model list, with the providers that could not answer.\n\nThe two halves are beside each other on purpose: a list that quietly omitted a\nserver would look like a server with no models.",
+        "properties": {
+          "models": {
+            "description": "Models from every provider that answered, in provider declaration order.",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredModel"
+            },
+            "type": "array"
+          },
+          "problems": {
+            "description": "Providers that did not answer, and why.",
+            "items": {
+              "$ref": "#/components/schemas/ModelProblem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "ModelProblem": {
+        "description": "A provider that could not answer a model list.",
+        "properties": {
+          "message": {
+            "description": "Why it did not answer.",
+            "type": "string"
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider id."
+          }
+        },
+        "required": [
+          "provider_id",
+          "message"
+        ],
+        "type": "object"
+      },
       "ModelRecipe": {
         "description": "A tuned configuration for one model, as returned by `GET /v1/recipes`.",
         "properties": {
@@ -1902,6 +2178,13 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.\n\nEmpty means none. A name that is not present is reported when the run\nstarts rather than silently omitted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "system_prompt": {
             "description": "The master prompt. The whole point of the lab is editing this and seeing\nwhat changes.",
@@ -1963,6 +2246,24 @@
           "code",
           "name",
           "requested_scopes"
+        ],
+        "type": "object"
+      },
+      "PairedDriver": {
+        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else — the ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
+        "properties": {
+          "driver": {
+            "$ref": "#/components/schemas/AcpDriverSummary",
+            "description": "The driver, as the cockpit will list it."
+          },
+          "token": {
+            "description": "The bearer token every later request carries.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "driver",
+          "token"
         ],
         "type": "object"
       },
@@ -2638,6 +2939,141 @@
         ],
         "type": "object"
       },
+      "RecipePatch": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/recipes/{id}`.\n\nOnly the fields present move. A recipe id is not editable: the file name is the\nidentity a run record and an agent manifest refer to.",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextBudget",
+                "description": "New context plan."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "description": "New model identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "description": "New note.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "New provider."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampling": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SamplingParams",
+                "description": "New sampling knobs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills": {
+            "description": "New skill selection. `Some(vec![])` clears it; `None` leaves it alone.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "system_prompt": {
+            "description": "New master prompt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolExposure",
+                "description": "New tool ceiling."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RecordedRunRequest": {
+        "description": "The request half of a run record.\n\nThis is what the run sent, not what the recipe would send now: the recipe may\nhave been edited since, and the lab's point is to show the run that happened.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "The budget the assembly planned against."
+          },
+          "corpus": {
+            "description": "Selectors in the order the run used them.",
+            "items": {
+              "$ref": "#/components/schemas/CorpusSelector"
+            },
+            "type": "array"
+          },
+          "files": {
+            "description": "The files they resolved to, in prompt order.",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedCorpusFile"
+            },
+            "type": "array"
+          },
+          "prompt": {
+            "description": "The user message, unchanged.",
+            "type": "string"
+          },
+          "prompt_sha256": {
+            "description": "`sha256:` and the hex digest of the prompt.",
+            "type": "string"
+          },
+          "system_prompt_sha256": {
+            "description": "The master prompt's digest, when the recipe had one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prompt",
+          "prompt_sha256",
+          "corpus",
+          "files",
+          "budget"
+        ],
+        "type": "object"
+      },
       "Reference": {
         "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
         "properties": {
@@ -2710,11 +3146,97 @@
         ],
         "type": "object"
       },
+      "ResolvedCorpusFile": {
+        "description": "One file a corpus selector resolved to, as the run recorded it.\n\nRecorded rather than re-derived: the lab shows the files a run actually read,\nwith their sizes, and a replay must not depend on the workspace still looking\nthe way it did.",
+        "properties": {
+          "bytes": {
+            "description": "Bytes read from disk.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path relative to the workspace root, with `/` separators.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Tokens the file was estimated at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "RunPage": {
+        "description": "One page of a recipe's runs, newest first.",
+        "properties": {
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Pass back as `before` for the next page. Absent at the end."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "description": "The runs.",
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "RunRecordView": {
+        "description": "One run's record: what it answered, and what it was asked.",
+        "properties": {
+          "reasoning": {
+            "description": "What the model thought before it answered, when the server reported any.\n\nAbsent for a model that does not think out loud. A reasoning model with a\ntight answer budget can spend all of it here and return no `content`, so\nthis is what tells a person the run worked and the budget was short.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request": {
+            "$ref": "#/components/schemas/RecordedRunRequest",
+            "description": "The request that produced it."
+          },
+          "schema_version": {
+            "description": "Schema version of the stored line.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunSummary",
+            "description": "The run, as the page also returns it."
+          }
+        },
+        "required": [
+          "schema_version",
+          "summary",
+          "request"
+        ],
+        "type": "object"
+      },
       "RunRequest": {
         "description": "Request body for `POST /v1/recipes/{id}/runs`.",
         "properties": {
           "corpus": {
-            "description": "Corpus pulled from the current workspace, in order.",
+            "description": "Corpus pulled from the current workspace, in order. Absent means none.",
             "items": {
               "$ref": "#/components/schemas/CorpusSelector"
             },
@@ -2733,8 +3255,7 @@
           }
         },
         "required": [
-          "prompt",
-          "corpus"
+          "prompt"
         ],
         "type": "object"
       },
@@ -3002,6 +3523,13 @@
             "description": "RFC 3339 timestamp of creation.",
             "type": "string"
           },
+          "driver_id": {
+            "description": "Driver that opened this session, when it came through the ACP bridge.\n\nAbsent for a session a person opened at the machine. The id is the one\n`GET /v1/acp/drivers` lists, so a transcript can answer who asked after\nthe connection ended.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Session identifier."
@@ -3049,6 +3577,85 @@
         },
         "required": [
           "mode"
+        ],
+        "type": "object"
+      },
+      "SkillDestination": {
+        "description": "Where a saved skill is written.",
+        "enum": [
+          "workspace",
+          "profile"
+        ],
+        "type": "string"
+      },
+      "SkillDraft": {
+        "additionalProperties": false,
+        "description": "A create-or-replace request from the lab.",
+        "properties": {
+          "description": {
+            "description": "One-line description, at most 1024 characters.",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/SkillDestination",
+            "description": "Workspace or profile."
+          },
+          "instructions": {
+            "description": "Instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "destination"
+        ],
+        "type": "object"
+      },
+      "SkillSource": {
+        "description": "Where a skill was found.",
+        "enum": [
+          "workspace",
+          "profile",
+          "extension"
+        ],
+        "type": "string"
+      },
+      "SkillSummary": {
+        "description": "One skill, including its instructions for preview.",
+        "properties": {
+          "description": {
+            "description": "One-line description used by the picker.",
+            "type": "string"
+          },
+          "instructions": {
+            "description": "The instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute directory containing `SKILL.md`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Which layer provided it."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "source",
+          "path"
         ],
         "type": "object"
       },
@@ -3177,6 +3784,33 @@
           "name": {
             "description": "Display name.",
             "type": "string"
+          },
+          "selected": {
+            "description": "Surfaces whose settings name this theme right now.",
+            "items": {
+              "$ref": "#/components/schemas/ThemeSurface"
+            },
+            "type": "array"
+          },
+          "syntax": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every syntax token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "ui": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every UI token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "required": [
@@ -3186,6 +3820,15 @@
           "built_in"
         ],
         "type": "object"
+      },
+      "ThemeSurface": {
+        "description": "Which frontend is asking for a theme.\n\nThe theme is one setting per surface rather than one for all of them, because a\nterminal is not a window: a person may want a light editor on the desktop and a\ndark prompt in the terminal beside it. Every surface falls back to\n[`Preferences::theme`] when its own key is unset, so the usual answer — one\ntheme, everywhere — stays one line of settings.",
+        "enum": [
+          "tui",
+          "gui",
+          "web"
+        ],
+        "type": "string"
       },
       "TokenUsage": {
         "description": "Token counts for a run, and whether they are trustworthy.",
@@ -3247,6 +3890,41 @@
           "search",
           "max_steps"
         ],
+        "type": "object"
+      },
+      "UpdateProviderRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/providers/{id}`.\n\nAn omitted field is unchanged. Changing where the provider lives is a new\nquestion, so the route probes again; changing only a label does not.",
+        "properties": {
+          "base_url": {
+            "description": "New base URL.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_ref": {
+            "description": "New keyring reference.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether the provider may be contacted.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkspaceOpenRequest": {
@@ -3342,6 +4020,136 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/acp/bridge": {
+      "get": {
+        "description": "Whether the driver listener is on, the address it bound, and how many drivers are connected or on record. Off unless `[acp.bridge] enabled = true` names a `bind` address.",
+        "operationId": "acp_bridge",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcpBridgeSummary"
+                }
+              }
+            },
+            "description": "The bridge's state"
+          }
+        },
+        "summary": "What the ACP bridge is doing"
+      }
+    },
+    "/v1/acp/drivers": {
+      "get": {
+        "description": "Including revoked drivers: the row answers who prompted a turn after the credential has stopped working.",
+        "operationId": "acp_drivers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AcpDriverSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "One row per driver"
+          }
+        },
+        "summary": "The drivers paired with this daemon"
+      }
+    },
+    "/v1/acp/drivers/{id}/revoke": {
+      "post": {
+        "description": "The next request carrying the old token is `401`; the row stays so a transcript can still answer who prompted a turn.",
+        "operationId": "revoke_driver",
+        "parameters": [
+          {
+            "description": "Driver id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcpDriverSummary"
+                }
+              }
+            },
+            "description": "The revoked row"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such driver"
+          }
+        },
+        "summary": "Revoke a driver's token"
+      }
+    },
+    "/v1/acp/pairings": {
+      "post": {
+        "description": "The code is shown to a person, typed into a driver, single-use and expires in two minutes. `grant_answer_permissions` is the person's decision, not the driver's: without it the driver's turns wait for a human to answer the agent's permission requests.",
+        "operationId": "pair_driver",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            },
+            "description": "The code and when it expires"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not a pairing request"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The bridge is not enabled"
+          }
+        },
+        "summary": "Issue a one-time pairing code"
+      }
+    },
     "/v1/agents": {
       "get": {
         "description": "The document lives in `acpilot-proto` and cannot name a daemon handler without\ndepending on it, so the path is registered here, from the handler's own\nmetadata. The function body is never called.",
@@ -3358,7 +4166,7 @@
                 }
               }
             },
-            "description": "Every configured agent, with its availability on this host"
+            "description": "Every configured agent and every agent an activated extension provides, with its availability on this host"
           }
         },
         "summary": "List agents in the active profile"
@@ -3399,10 +4207,380 @@
         "operationId": "events_doc",
         "responses": {
           "200": {
-            "description": "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
+            "description": "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap"
           }
         },
         "summary": "Follow permission requests, settings changes and problems a server found"
+      }
+    },
+    "/v1/extensions": {
+      "get": {
+        "description": "One row per installed version, with the profiles that activate it. A blocked version is listed with its reason rather than hidden: the refusal is a fact about the bytes.",
+        "operationId": "list_doc",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtensionSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every installed version, ordered by id and then version"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The store could not be read"
+          }
+        },
+        "summary": "List every installed extension version"
+      },
+      "post": {
+        "description": "An index install verifies the listing's signature, checks the archive's size and sha256, and refuses an archive whose manifest names a different id, version or publisher. A `path` install copies that directory through the same store checks.",
+        "operationId": "install_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallExtensionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionSummary"
+                }
+              }
+            },
+            "description": "The installed version"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The request names nothing installable, or the archive failed its checks"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The id or version is not in the index"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "That id and version are already installed"
+          }
+        },
+        "summary": "Install an extension from the signed index or a directory"
+      }
+    },
+    "/v1/extensions/{id}": {
+      "delete": {
+        "description": "Refused while a profile activates the id; the error names the profiles to deactivate first.",
+        "operationId": "remove_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionRemoval"
+                }
+              }
+            },
+            "description": "The versions removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Nothing installed under that id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A profile still activates it"
+          }
+        },
+        "summary": "Remove every installed version of one extension"
+      },
+      "get": {
+        "operationId": "detail_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionDetail"
+                }
+              }
+            },
+            "description": "The detail, newest version first in `versions`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No version of that id is installed"
+          }
+        },
+        "summary": "One extension: installed versions, contributions and index listings"
+      }
+    },
+    "/v1/extensions/{id}/activate": {
+      "post": {
+        "operationId": "activate_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAction"
+                }
+              }
+            },
+            "description": "What the approval list now says"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced id, or a blocked/absent extension"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No ready version of that id is installed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The daemon has no profile to write"
+          }
+        },
+        "summary": "Approve an installed extension for one profile"
+      }
+    },
+    "/v1/extensions/{id}/deactivate": {
+      "post": {
+        "operationId": "deactivate_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAction"
+                }
+              }
+            },
+            "description": "What the approval list now says; `changed` is false when it already did not list the id"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The daemon has no profile to write"
+          }
+        },
+        "summary": "Withdraw one profile's approval"
+      }
+    },
+    "/v1/extensions/{id}/verify": {
+      "post": {
+        "description": "`ready` is false when any version's bytes no longer match the recorded checksum, or the manifest no longer loads.",
+        "operationId": "verify_doc",
+        "parameters": [
+          {
+            "description": "Extension id, `publisher.name`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionVerify"
+                }
+              }
+            },
+            "description": "Each version with its verdict"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a namespaced extension id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Nothing installed under that id"
+          }
+        },
+        "summary": "Rehash every installed version of one extension"
       }
     },
     "/v1/files": {
@@ -4851,6 +6029,65 @@
         "summary": "What the language servers are doing"
       }
     },
+    "/v1/lsp/servers/{language}/trust": {
+      "post": {
+        "operationId": "trust_language_server_doc",
+        "parameters": [
+          {
+            "description": "LSP language id",
+            "in": "path",
+            "name": "language",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LspServerSummary"
+                }
+              }
+            },
+            "description": "The row, now approved, with the pin that made it so"
+          }
+        },
+        "summary": "Record that a language server's program is approved"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "description": "Asks every enabled provider, or the one named by `?provider=`. A provider that cannot answer is listed in `problems` beside the models the others returned, because a list that quietly omitted a server would look like a server with no models.",
+        "operationId": "list_models",
+        "parameters": [
+          {
+            "description": "Only this provider id",
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogue"
+                }
+              }
+            },
+            "description": "Models and the providers that could not answer"
+          }
+        },
+        "summary": "What the declared providers report right now"
+      }
+    },
     "/v1/permissions": {
       "get": {
         "operationId": "permissions_doc",
@@ -5474,6 +6711,488 @@
         "summary": "Declare a model server, and ask it what it has"
       }
     },
+    "/v1/providers/{id}": {
+      "delete": {
+        "description": "Removes the row from `providers.toml` and forgets its last answer. A recipe that still names it makes this `409`: deleting the server would leave a recipe with no clue why it cannot run.",
+        "operationId": "delete_provider",
+        "responses": {
+          "204": {
+            "description": "The declaration is gone"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such provider"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A recipe still names it"
+          }
+        },
+        "summary": "Remove a provider declaration"
+      }
+    },
+    "/v1/providers/{id}/probe": {
+      "post": {
+        "description": "The only route that contacts a server without a declaration changing. A disabled provider is reported as disabled and is not contacted. A refused credential is `unauthorized`, not `unreachable`.",
+        "operationId": "probe_provider",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderSummary"
+                }
+              }
+            },
+            "description": "The provider, with the answer it gave"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such provider"
+          }
+        },
+        "summary": "Ask one provider what it has, and keep the answer"
+      }
+    },
+    "/v1/recipes": {
+      "get": {
+        "description": "One row per `recipes/<id>.toml`, sorted by id. Each read re-reads the directory, so a file edited by hand is visible without a restart. A file that does not load is a `400` naming it, not a silently shorter list.",
+        "operationId": "list_recipes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelRecipe"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every recipe that loads"
+          }
+        },
+        "summary": "The recipes this profile holds"
+      },
+      "post": {
+        "description": "Writes `recipes/<id>.toml` and reads the directory back. A recipe naming an undeclared or disabled provider is `400`, and the new file is removed. An id that is already a file is `409`.",
+        "operationId": "create_recipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRecipe"
+                }
+              }
+            },
+            "description": "The recipe as it now reads"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An id or field this build cannot use"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The id is taken"
+          }
+        },
+        "summary": "Write a recipe file"
+      }
+    },
+    "/v1/recipes/{id}": {
+      "delete": {
+        "operationId": "delete_recipe",
+        "responses": {
+          "204": {
+            "description": "The file is gone"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such recipe"
+          }
+        },
+        "summary": "Remove a recipe file"
+      },
+      "get": {
+        "operationId": "get_recipe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelRecipe"
+                }
+              }
+            },
+            "description": "The recipe"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such recipe"
+          }
+        },
+        "summary": "One recipe"
+      }
+    },
+    "/v1/recipes/{id}/promote": {
+      "post": {
+        "description": "Writes one `acp-stdio` entry whose command is `acpilot-agent-lm`, with a comment naming the recipe file and its mtime. An entry with the same id that promotion did not write is `409` and is left untouched. The tools probe is asked once and its answer, when it is bad or could not be given, comes back in `warnings`; warnings never block the write. Removing the entry is `acpilot agents rm`.",
+        "operationId": "promote_recipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotedAgent"
+                }
+              }
+            },
+            "description": "The agent as `GET /v1/agents` will now report it"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile directory, or an id the manifest loader refuses"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such recipe"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A hand-written entry already owns the id"
+          }
+        },
+        "summary": "Write a recipe into `agents.toml` as an agent"
+      }
+    },
+    "/v1/recipes/{id}/runs": {
+      "get": {
+        "description": "The cursor is a run id, not an offset: the log only grows, and an offset would repeat or skip a line when something is appended between two pages. A cursor naming another recipe's run is `400`.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs per page; 20 when absent",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Return runs older than this run id",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPage"
+                }
+              }
+            },
+            "description": "A page of summaries"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The cursor does not belong to this recipe"
+          }
+        },
+        "summary": "One page of a recipe's runs, newest first"
+      },
+      "post": {
+        "description": "Assembles the prompt (master prompt, corpus selectors, budget), calls the configured provider once and appends a record to the profile's `runs.jsonl`. The response is an SSE stream: `model.run.started`, `model.run.delta`, `model.run.finished`. A run with corpus selectors needs a `root` query parameter. There is no job to poll and no second request: the stream is the run.",
+        "operationId": "start_run",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Workspace root for corpus selectors",
+            "in": "query",
+            "name": "root",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "The run's frames"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A body or corpus root this build cannot use"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such recipe"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The provider is not declared, disabled, or unreachable"
+          }
+        },
+        "summary": "Run a recipe and stream the answer"
+      }
+    },
+    "/v1/recipes/{id}/runs/{run}": {
+      "get": {
+        "description": "The page returns summaries because that is what a history draws. This returns the stored request as well: the prompt, the corpus selectors, the files they resolved to with sizes, and the budget the assembly planned against. A run the log does not hold is `404`, including a run id that belongs to another recipe.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecordView"
+                }
+              }
+            },
+            "description": "The run's record"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such run for this recipe"
+          }
+        },
+        "summary": "One run's record: the answer and the request that produced it"
+      }
+    },
+    "/v1/recipes/{id}/runs/{run}/replay": {
+      "post": {
+        "description": "Re-sends the prompt and corpus selectors the record holds, through the recipe as it is now, and appends a new record with its own id: a replay is an experiment to compare with the first line, not a retry that overwrites it. The corpus is read from `root` again because the record stores paths and sizes rather than file bytes, so a replay is byte-identical only while the workspace and recipe are unchanged.",
+        "operationId": "replay_run",
+        "parameters": [
+          {
+            "description": "Recipe id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Run id to replay",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Workspace root for corpus selectors",
+            "in": "query",
+            "name": "root",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "The new run's frames"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such run for this recipe"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The provider is not declared, disabled, or unreachable"
+          }
+        },
+        "summary": "Run a recorded request again, unchanged"
+      }
+    },
     "/v1/sessions": {
       "get": {
         "operationId": "list_sessions",
@@ -5788,6 +7507,75 @@
         "summary": "Send a prompt"
       }
     },
+    "/v1/skills": {
+      "get": {
+        "description": "Workspace skills override profile skills, which override those an activated extension ships. Instructions are included for preview.",
+        "operationId": "list_skills",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "One row per skill"
+          }
+        },
+        "summary": "List the skills this workspace can see"
+      },
+      "post": {
+        "description": "The draft is validated by the same parser that reads `SKILL.md`; a rejected draft leaves the previous file intact. `destination` chooses the workspace or the profile.",
+        "operationId": "save_skill",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSummary"
+                }
+              }
+            },
+            "description": "The written skill"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The draft is not a valid skill"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workspace or profile to write into"
+          }
+        },
+        "summary": "Create or replace a skill"
+      }
+    },
     "/v1/stats": {
       "get": {
         "operationId": "read_stats",
@@ -5915,6 +7703,49 @@
           }
         },
         "summary": "Start a terminal"
+      }
+    },
+    "/v1/themes": {
+      "get": {
+        "description": "Built-in themes plus those an activated extension provides, with inheritance applied and every token as `#rrggbb`. `selected` names the surfaces whose settings choose the theme, for the daemon's own profile.",
+        "operationId": "themes_doc",
+        "parameters": [
+          {
+            "description": "Profile id. The daemon's own profile when absent",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ThemeSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Themes ordered by id"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No profile was named and the daemon has none"
+          }
+        },
+        "summary": "Every theme a profile can draw with, resolved"
       }
     }
   },

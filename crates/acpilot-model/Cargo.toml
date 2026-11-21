@@ -9,6 +9,14 @@ license.workspace = true
 [dependencies]
 acpilot-core.workspace = true
 acpilot-proto.workspace = true
+# The corpus selectors walk a workspace, and that walk is the daemon's: a second
+# glob-and-gitignore implementation would disagree with the file tree about what a
+# workspace contains.
+ignore.workspace = true
+# `response.bytes_stream()` is polled with `StreamExt`; futures is already a
+# workspace dependency (the daemon uses it), so this is a feature of the same
+# tree rather than a new one.
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,6 +25,13 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+futures.workspace = true
+insta.workspace = true
+# `test-util` pauses the clock, so the stall test proves a silent stream is
+# cancelled without spending a real minute and without a short timeout that only
+# exists for tests.
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

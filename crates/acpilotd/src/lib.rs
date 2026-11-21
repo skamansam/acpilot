@@ -41,8 +41,20 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi as _;
 
+// The ACP bridge: this daemon answering as an agent for a driver that attached
+// over stdio or over HTTP with a paired token (P4.5-10).
 mod auth;
+// The remote half of that bridge: JSON-RPC over HTTP, the driver's event stream
+// and the cockpit routes that pair and revoke drivers.
+pub mod acp_http;
+// One session event, as the driver's protocol spells it. Shared by both transports,
+// because two translations would disagree about what a driver is told.
+mod acp_update;
 mod base64;
+pub mod bridge;
+// Who may drive this daemon remotely, and what they may do: pairing codes, the
+// Argon2id hashes of their tokens, scopes and revocation.
+pub mod drivers;
 // The daemon's settings: two files, then the flags (P3-1). Public because the
 // binary resolves them before it has an `AppState` to attach them to.
 pub mod config;
@@ -55,19 +67,26 @@ mod commit;
 pub mod helper;
 pub mod hosts;
 mod lsp;
+pub mod model_runs;
 pub mod providers;
+pub mod recipes;
+// One line per model run, appended beside the transcripts (P4.5-6).
+pub mod runs;
 // The in-process listener: the same router, served by a client instead of a
 // process (P6-11).
 pub mod embedded;
+pub mod extensions;
 mod lsp_remote;
 pub mod pidfile;
 mod platform;
 mod project;
+mod promote;
 mod pty_remote;
 // Every profile under `<config>/profiles`, and the header rule that picks one per
 // request: `GET /v1/profiles` and `X-Acpilot-Profile` are its surface.
 pub mod profiles;
 mod sessions;
+mod skills;
 mod stats;
 mod terminals;
 // What a person approved: the fingerprint a `POST /v1/agents/{id}/trust` records and
@@ -308,6 +327,11 @@ impl StoreSlot {
 pub struct AppState {
     agents: Option<Arc<Registry>>,
     broker: Option<Arc<Broker>>,
+    /// Who may drive this daemon over the ACP bridge, and with what scopes.
+    drivers: Arc<drivers::Drivers>,
+    /// The bridge's settings, shared so a profile that is already built can hear
+    /// what the command line and the files said.
+    bridge: Arc<Mutex<crate::config::BridgeSettings>>,
     /// The workspace sessions open in, when the daemon was given one.
     workspace: Option<Workspace>,
     /// The profile this daemon serves, by directory name.
@@ -323,6 +347,20 @@ pub struct AppState {
     /// prompt. A path in `GET /v1/health` would be a filesystem fact a browser has
     /// no business knowing, so the two are not the same field.
     profile_root: Option<std::path::PathBuf>,
+    /// Where installed extensions live, when the daemon was told.
+    ///
+    /// `None` is the platform data directory, which is where `acpilot ext add`
+    /// writes without `--store`. A test or an embedded daemon hands over a
+    /// directory it owns, because the routes install real files and a test should
+    /// not write into somebody's home directory.
+    extension_store: Option<std::path::PathBuf>,
+    /// Extra trust roots for a private index.
+    ///
+    /// Beside the maintainer's compiled-in key, never instead of it; the global
+    /// `config.toml` adds to this list through [`AppState::trusted_keys`].
+    trusted_keys: Vec<acpilot_extensions::index::TrustedKey>,
+    /// Extension changes, announced to every client on the profile-wide stream.
+    extension_changes: broadcast::Sender<extensions::Notice>,
     /// The cross-profile index, when the daemon opened one.
     ///
     /// The per-profile workspace registry cannot see another profile, so the
@@ -343,6 +381,19 @@ pub struct AppState {
     /// because a restart's rows come from the profile's `[providers]` table and that
     /// file belongs to the recipes work.
     providers: Arc<providers::Providers>,
+    /// The provider balances this daemon has read, and when.
+    ///
+    /// A cache rather than a field on the row: `/v1/stats` is polled while a person
+    /// watches, and a balance endpoint is somebody else's server. The store is here
+    /// so both the API and the page read one reading rather than two.
+    balances: Arc<stats::Balances>,
+    /// The profile's recipe files, when this daemon has a profile.
+    ///
+    /// A directory rather than a loaded table: a recipe edited by hand is visible on
+    /// the next read, and a write is what validates the whole set.
+    recipes: Option<Arc<recipes::Recipes>>,
+    /// Where this profile's runs are appended, when it has a profile.
+    run_log: Option<runs::RunLog>,
     /// The workspaces clients have opened, and the check that each root was there.
     ///
     /// In memory like the host list: a workspace is a host and a path, and both are
@@ -470,12 +521,17 @@ impl Default for AppState {
         Self {
             agents: None,
             broker: None,
+            drivers: Arc::default(),
+            bridge: Arc::default(),
             workspace: None,
             profile: None,
             profile_root: None,
             index: None,
             hosts: Arc::new(hosts::Hosts::default()),
             providers: Arc::default(),
+            balances: Arc::default(),
+            recipes: None,
+            run_log: None,
             workspaces: Arc::default(),
             sessions: Sessions::default(),
             terminals: Terminals::default(),
@@ -483,6 +539,9 @@ impl Default for AppState {
             store: StoreSlot::None,
             cors: false,
             agent_terminals: Arc::new(AgentTerminals::new(Arc::new(LocalHost))),
+            extension_store: None,
+            trusted_keys: Vec::new(),
+            extension_changes: broadcast::channel(EVENT_BUFFER).0,
             preference_changes: broadcast::channel(EVENT_BUFFER).0,
             preference_errors: broadcast::channel(EVENT_BUFFER).0,
             decided: Arc::default(),
@@ -539,6 +598,30 @@ impl AppState {
     /// different list after every editor save. Nothing is probed here; a row reads
     /// `not_probed` until something asks.
     #[must_use]
+    /// Read and write recipes under `directory`.
+    pub fn with_recipes(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.recipes = Some(Arc::new(recipes::Recipes::open(directory)));
+        self
+    }
+
+    /// Append runs under `directory`.
+    pub fn with_run_log(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.run_log = Some(runs::RunLog::at(&directory.into()));
+        self
+    }
+
+    /// The profile's recipe files, when it has a profile.
+    #[must_use]
+    pub fn recipes(&self) -> Option<&recipes::Recipes> {
+        self.recipes.as_deref()
+    }
+
+    /// The profile's run log, when it has a profile.
+    #[must_use]
+    pub fn run_log(&self) -> Option<&runs::RunLog> {
+        self.run_log.as_ref()
+    }
+
     pub fn with_providers(mut self, providers: providers::Providers) -> Self {
         self.providers = Arc::new(providers);
         self
@@ -601,6 +684,44 @@ impl AppState {
     /// The broker behind the permission routes, when the daemon has one.
     pub fn broker(&self) -> Option<&Arc<Broker>> {
         self.broker.as_ref()
+    }
+
+    /// The drivers paired with this daemon.
+    #[must_use]
+    pub fn drivers(&self) -> &Arc<drivers::Drivers> {
+        &self.drivers
+    }
+
+    /// Keep driver tokens in this ledger.
+    ///
+    /// A profile passes the file beside its own config; a test or an embedded
+    /// daemon keeps them in memory, because a listener that ends with its process
+    /// has nothing to remember them for.
+    #[must_use]
+    pub fn with_drivers(mut self, drivers: Arc<drivers::Drivers>) -> Self {
+        self.drivers = drivers;
+        self
+    }
+
+    /// The bridge's settings, as the files and flags resolved them.
+    #[must_use]
+    pub fn bridge(&self) -> crate::config::BridgeSettings {
+        self.bridge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Tell an already-built state what the bridge's settings are.
+    pub fn set_bridge(&self, settings: crate::config::BridgeSettings) {
+        *self.bridge.lock().unwrap_or_else(PoisonError::into_inner) = settings;
+    }
+
+    /// Build a state that already knows the bridge's settings.
+    #[must_use]
+    pub fn with_bridge(mut self, settings: crate::config::BridgeSettings) -> Self {
+        self.bridge = Arc::new(Mutex::new(settings));
+        self
     }
 
     /// The language servers behind `GET /v1/files/references`.
@@ -910,6 +1031,196 @@ impl AppState {
         }
         self.store = StoreSlot::ready(store);
         self
+    }
+
+    /// Install extensions into this store rather than the platform default.
+    #[must_use]
+    pub fn with_extension_store(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.extension_store = Some(root.into());
+        self
+    }
+
+    /// The extension store this daemon installs into and lists from.
+    ///
+    /// # Errors
+    ///
+    /// The platform has no data directory, which a daemon without an explicit
+    /// store cannot guess.
+    pub fn extension_store(
+        &self,
+    ) -> Result<acpilot_extensions::Store, acpilot_extensions::ExtensionError> {
+        match &self.extension_store {
+            Some(root) => Ok(acpilot_extensions::Store::new(root.clone())),
+            None => acpilot_extensions::Store::open_default(),
+        }
+    }
+
+    /// The extensions this profile activates, verified by the store.
+    ///
+    /// One loader behind both preset registries: agents and language servers differ
+    /// in what they do with a manifest, not in which manifests count.
+    fn active_extensions(
+        &self,
+    ) -> Result<Vec<acpilot_extensions::loader::LoadedExtension>, String> {
+        let Some(directory) = self.profile_root() else {
+            return Ok(Vec::new());
+        };
+        let activation = acpilot_extensions::activation::Activation::load(
+            &directory.join(acpilot_extensions::activation::ACTIVATION_FILE),
+        )
+        .map_err(|error| error.to_string())?;
+        if activation.active.is_empty() {
+            return Ok(Vec::new());
+        }
+        let store = self.extension_store().map_err(|error| error.to_string())?;
+        store
+            .resolve_active(&activation.active)
+            .map(|active| active.extensions)
+            .map_err(|errors| {
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+    }
+
+    /// Language-server presets from the extensions this profile activates.
+    ///
+    /// Sorted by preset id, so two packs that name one language resolve the same way
+    /// on every daemon rather than in activation-file order.
+    ///
+    /// # Errors
+    ///
+    /// The activation file does not parse, or the store cannot resolve it. A caller
+    /// that wants the build's rows regardless logs this and carries on, which is what
+    /// [`AppState::refresh_language_servers`] does.
+    pub fn extension_language_servers(
+        &self,
+    ) -> Result<Vec<acpilot_extensions::LanguageServerPreset>, String> {
+        let mut presets = Vec::new();
+        for extension in self.active_extensions()? {
+            for contribution in &extension.contributions {
+                let acpilot_extensions::Contribution::LanguageServers(from_pack) = contribution
+                else {
+                    continue;
+                };
+                presets.extend(from_pack.iter().cloned());
+            }
+        }
+        presets.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(presets)
+    }
+
+    /// Make the activated extensions' language servers visible to the registry.
+    ///
+    /// Called from the routes rather than once at startup: deactivating a pack has to
+    /// restore the build's row without a restart, which is the same promise the agent
+    /// roster makes. A broken activation list is logged and the build's rows stay in
+    /// force, so a bad file cannot hide the servers that always worked.
+    pub async fn refresh_language_servers(&self) {
+        let presets = match self.extension_language_servers() {
+            Ok(presets) => presets,
+            Err(error) => {
+                tracing::warn!(%error, "the activated language servers could not be read");
+                return;
+            }
+        };
+        let mut rows: Vec<lsp::Entry> = Vec::new();
+        for preset in presets {
+            // A preset with no language cannot be asked for: there is no id a request
+            // could name, so it contributes a row nobody could reach.
+            for language in &preset.languages {
+                if rows.iter().any(|row| row.language == *language) {
+                    continue;
+                }
+                rows.push(lsp::Entry {
+                    language: language.clone(),
+                    program: preset.command.clone(),
+                    args: preset.args.clone(),
+                    extension: Some(preset.extension_id.clone()),
+                });
+            }
+        }
+        // The pins travel with the rows: a server a person approved that changed
+        // under the same name is refused where it would start (P7-12), and an
+        // approval recorded between two requests has to take effect on the next one.
+        self.language_servers
+            .register(rows, crate::trust::lsp_pins(self))
+            .await;
+    }
+
+    /// Agent presets from the extensions this profile activates.
+    ///
+    /// Only activated extensions, not installed ones and not built-ins: the roster
+    /// an extension widens is the one a person approved for this profile. An
+    /// extension's presets cannot name credentials (`parse_agents` refuses one), so
+    /// resolving them with the profile's keyring cannot read a secret the pack
+    /// chose.
+    ///
+    /// # Errors
+    ///
+    /// The activation file does not parse, the store cannot be read, or a preset
+    /// does not resolve. A caller that wants the manifest's agents regardless logs
+    /// this and carries on, which is what [`agent_specs`] does.
+    pub fn extension_agents(&self) -> Result<Vec<(AgentSpec, String)>, String> {
+        let resolver = KeyringResolver::new(self.profile_name().unwrap_or_default());
+        let mut agents = Vec::new();
+        for extension in self.active_extensions()? {
+            for contribution in &extension.contributions {
+                let acpilot_extensions::Contribution::Agents(presets) = contribution else {
+                    continue;
+                };
+                for preset in presets {
+                    let spec = preset
+                        .definition
+                        .resolve(&resolver)
+                        .map_err(|error| error.to_string())?;
+                    agents.push((spec, extension.manifest.id.clone()));
+                }
+            }
+        }
+        Ok(agents)
+    }
+
+    /// Add trust roots for a private index, beside the maintainer's key.
+    #[must_use]
+    pub fn with_trusted_keys(mut self, keys: Vec<acpilot_extensions::index::TrustedKey>) -> Self {
+        self.trusted_keys = keys;
+        self
+    }
+
+    /// The keys an index may be signed by: the ones handed to this state, then the
+    /// global file's.
+    ///
+    /// The global file only, never a workspace's: a project that could add a key
+    /// could sign its own extensions. A file that does not parse contributes
+    /// nothing rather than failing every install: the maintainer's key is still
+    /// trusted, and the error belongs to whoever owns the file.
+    #[must_use]
+    pub fn trusted_keys(&self) -> Vec<acpilot_extensions::index::TrustedKey> {
+        let mut keys = self.trusted_keys.clone();
+        let file = acpilot_profile::user_config_path();
+        if let Ok(settings) = acpilot_profile::settings::Settings::load(Some(&file), None) {
+            keys.extend(settings.registry.trusted_keys.into_iter().map(|key| {
+                acpilot_extensions::index::TrustedKey {
+                    id: key.id,
+                    public_key: key.public_key,
+                }
+            }));
+        }
+        keys
+    }
+
+    /// Subscribe to extension changes, for the profile-wide stream.
+    #[must_use]
+    pub fn subscribe_extensions(&self) -> broadcast::Receiver<extensions::Notice> {
+        self.extension_changes.subscribe()
+    }
+
+    /// Announce an extension change a route just made.
+    pub fn announce_extension(&self, notice: extensions::Notice) {
+        let _ = self.extension_changes.send(notice);
     }
 
     /// Open this profile's store through `stores` the first time a route asks.
@@ -1241,6 +1552,10 @@ pub fn state_for_profile(
         .with_host_identities(identities)
         .with_broker(broker)
         .with_workspace(workspace)
+        // Recipes and runs are the profile's, not this process's: a recipe is a file
+        // beside `providers.toml`, and a run is appended under the profile's state.
+        .with_recipes(profile.recipes_dir())
+        .with_run_log(profile.data_dir())
         // A malformed declaration is a startup failure rather than an empty list:
         // the daemon would otherwise look healthy while the rows somebody wrote
         // were silently absent.
@@ -1398,9 +1713,9 @@ pub fn workspace_at(root: &std::path::Path) -> Result<Workspace, StateError> {
 /// prevent.
 fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry>>, StateError> {
     let path = profile.agents_path();
-    if !path.is_file() {
-        return Ok(None);
-    }
+    // A missing manifest is an empty registry, not no registry: promotion writes
+    // the first entry while the daemon runs, and `GET /v1/agents` has to show it
+    // from the next read rather than from the next restart.
     // Secrets are namespaced by profile name, and the directory is the name: the profiles phase's task P4-2
     // resolves `<name>` to exactly this path. A path with no last segment names
     // no profile, and then nothing has been stored under that name either.
@@ -1420,23 +1735,59 @@ fn load_agents(profile: &acpilot_profile::Profile) -> Result<Option<Arc<Registry
 /// person recorded decides whether a binary that changed is `untrusted` (see
 /// [`trust`]). Nothing is spawned, so listing agents cannot start one; a
 /// handshake-dependent status is reported by the session routes, not here.
-fn summarize(spec: &AgentSpec, pins: &HashMap<String, String>) -> AgentSummary {
-    trust::summary(spec, pins.get(&spec.id).map(String::as_str))
+fn summarize(
+    spec: &AgentSpec,
+    pins: &HashMap<String, String>,
+    extension: Option<&str>,
+) -> AgentSummary {
+    trust::summary(spec, pins.get(&spec.id).map(String::as_str), extension)
+}
+
+/// Every agent this profile can use: its own manifest first, then the ones an
+/// activated extension contributes.
+///
+/// The manifest wins a collision: a person who wrote an id in `agents.toml` means
+/// that entry, and an extension that ships the same id is not an override.
+pub(crate) fn agent_specs(state: &AppState) -> Vec<(AgentSpec, Option<String>)> {
+    let mut specs: Vec<(AgentSpec, Option<String>)> = state
+        .agents
+        .as_ref()
+        .map(|registry| {
+            registry
+                .agents()
+                .iter()
+                .map(|spec| ((**spec).clone(), None))
+                .collect()
+        })
+        .unwrap_or_default();
+    match state.extension_agents() {
+        Ok(extra) => {
+            for (spec, extension) in extra {
+                if !specs.iter().any(|(existing, _)| existing.id == spec.id) {
+                    specs.push((spec, Some(extension)));
+                }
+            }
+        }
+        Err(error) => {
+            // A broken activation list is not a reason to hide the agents the
+            // profile wrote: the roster keeps what it knows, and the reason is in
+            // the log.
+            tracing::warn!(%error, "activated extension agents are not listed");
+        }
+    }
+    specs
 }
 
 /// `GET /v1/agents`.
 ///
-/// An empty list means the daemon has no registry loaded; there is no profile to
-/// answer 404 for yet.
+/// An empty list means the daemon has no registry loaded and no activated
+/// extension contributes an agent; there is no profile to answer 404 for yet.
 async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
     let pins = trust::pins(&state);
-    let summaries = state.agents.as_ref().map_or_else(Vec::new, |registry| {
-        registry
-            .agents()
-            .iter()
-            .map(|spec| summarize(spec, &pins))
-            .collect()
-    });
+    let summaries = agent_specs(&state)
+        .iter()
+        .map(|(spec, extension)| summarize(spec, &pins, extension.as_deref()))
+        .collect();
     Json(summaries)
 }
 
@@ -1453,7 +1804,7 @@ async fn agents(State(state): State<AppState>) -> Json<Vec<AgentSummary>> {
     summary = "List agents in the active profile",
     responses((
         status = 200,
-        description = "Every configured agent, with its availability on this host",
+        description = "Every configured agent and every agent an activated extension provides, with its availability on this host",
         body = Vec<AgentSummary>
     ))
 )]
@@ -1533,13 +1884,17 @@ async fn events(State(state): State<AppState>) -> Response {
         .as_ref()
         .map(|broker| broker.subscribe_resolved());
     let diagnostics = state.subscribe_diagnostics();
+    let extensions = state.subscribe_extensions();
     tokio::spawn(pump(
         state,
-        requests,
-        resolved,
-        preferences,
-        preference_errors,
-        diagnostics,
+        Feeds {
+            requests,
+            resolved,
+            preferences,
+            preference_errors,
+            diagnostics,
+            extensions,
+        },
         sender,
     ));
     Sse::new(futures::stream::unfold(
@@ -1596,6 +1951,22 @@ enum Step {
     PreferenceError(Result<String, broadcast::error::RecvError>),
     /// A language server published problems, or that subscription ended.
     Diagnostics(Result<acpilot_proto::file::DiagnosticsNotice, broadcast::error::RecvError>),
+    /// An extension was installed, removed, activated or deactivated.
+    Extensions(Result<extensions::Notice, broadcast::error::RecvError>),
+}
+
+/// The subscriptions the profile-wide stream reads.
+///
+/// One value rather than a parameter per feed: the list grows with each kind of
+/// announcement, and a new one should extend this struct rather than every call
+/// site's argument list.
+struct Feeds {
+    requests: Option<broadcast::Receiver<PermissionRequest>>,
+    resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
+    preferences: broadcast::Receiver<Preferences>,
+    preference_errors: broadcast::Receiver<String>,
+    diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
+    extensions: broadcast::Receiver<extensions::Notice>,
 }
 
 /// Turn announcements and a clock into SSE frames.
@@ -1606,15 +1977,7 @@ enum Step {
 /// advice names, forever, for a state the daemon could simply describe as quiet.
 /// Preferences are never optional — every daemon has settings — which is why they
 /// are the half that always has something to say.
-async fn pump(
-    state: AppState,
-    mut requests: Option<broadcast::Receiver<PermissionRequest>>,
-    mut resolved: Option<broadcast::Receiver<(String, PermissionOption)>>,
-    mut preferences: broadcast::Receiver<Preferences>,
-    mut preference_errors: broadcast::Receiver<String>,
-    mut diagnostics: broadcast::Receiver<acpilot_proto::file::DiagnosticsNotice>,
-    sender: mpsc::Sender<Event>,
-) {
+async fn pump(state: AppState, mut feeds: Feeds, sender: mpsc::Sender<Event>) {
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Announced frames only: the stream has no replay, so this number is the id of
@@ -1625,7 +1988,7 @@ async fn pump(
         // A daemon without a broker has nothing to poll, and `pending` keeps the
         // branch parked rather than busy.
         let announced = async {
-            match requests.as_mut() {
+            match feeds.requests.as_mut() {
                 Some(requests) => requests.recv().await,
                 None => {
                     std::future::pending::<Result<PermissionRequest, broadcast::error::RecvError>>()
@@ -1635,7 +1998,7 @@ async fn pump(
         };
 
         let answered = async {
-            match resolved.as_mut() {
+            match feeds.resolved.as_mut() {
                 Some(resolved) => resolved.recv().await,
                 None => {
                     std::future::pending::<
@@ -1648,11 +2011,12 @@ async fn pump(
 
         let step = tokio::select! {
             _ = beat.tick() => Step::Beat,
-            preferences = preferences.recv() => Step::Preferences(preferences),
-            error = preference_errors.recv() => Step::PreferenceError(error),
+            preferences = feeds.preferences.recv() => Step::Preferences(preferences),
+            error = feeds.preference_errors.recv() => Step::PreferenceError(error),
             requests = announced => Step::Permission(requests),
             answers = answered => Step::Resolved(answers),
-            published = diagnostics.recv() => Step::Diagnostics(published),
+            published = feeds.diagnostics.recv() => Step::Diagnostics(published),
+            changed = feeds.extensions.recv() => Step::Extensions(changed),
         };
 
         let frame = match step {
@@ -1703,6 +2067,18 @@ async fn pump(
                 seq += 1;
                 diagnostics_frame(Some(seq), &notice)
             }
+            // The frame names the verb as its event, so a client subscribes to
+            // `extension.*` rather than switching on a field inside one event.
+            Step::Extensions(Ok(notice)) => {
+                seq += 1;
+                Event::default()
+                    .event(notice.action.event_name())
+                    .id(seq.to_string())
+                    .data(serde_json::to_string(&notice).expect("an extension notice is JSON"))
+            }
+            Step::Extensions(Err(broadcast::error::RecvError::Lagged(_))) => Event::default()
+                .event("resync")
+                .data(serde_json::json!({ "latest_seq": seq }).to_string()),
             // The client fell behind the announcement channel. It cannot catch up
             // from the stream, so it is told where it now is and refetches what is
             // state: the pending list, and — for preferences, which this daemon can
@@ -1733,7 +2109,8 @@ async fn pump(
             | Step::Resolved(Err(broadcast::error::RecvError::Closed))
             | Step::Preferences(Err(broadcast::error::RecvError::Closed))
             | Step::PreferenceError(Err(broadcast::error::RecvError::Closed))
-            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed)) => break,
+            | Step::Diagnostics(Err(broadcast::error::RecvError::Closed))
+            | Step::Extensions(Err(broadcast::error::RecvError::Closed)) => break,
         };
 
         // A closed channel means the client hung up; there is nobody to tell.
@@ -1896,7 +2273,13 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
         .chain(commit::operations())
         .chain(project::operations())
         .chain(providers::operations())
-        .chain(stats::operations());
+        .chain(recipes::operations())
+        .chain(promote::operations())
+        .chain(model_runs::operations())
+        .chain(acp_http::operations())
+        .chain(stats::operations())
+        .chain(skills::operations())
+        .chain(extensions::operations());
     for (path, method, operation) in module_operations {
         let item = paths.entry(path.to_owned()).or_default();
         match method {
@@ -1937,7 +2320,7 @@ fn permissions_doc() {}
     summary = "Follow permission requests, settings changes and problems a server found",
     responses((
         status = 200,
-        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `heartbeat` every 15 s, `resync` after a gap"
+        description = "text/event-stream: a `prefs` frame on connect and after every settled save, `permission` frames as requests appear, `diagnostics` frames when a language server publishes problems nobody asked about, `extension.installed`/`extension.removed`/`extension.activated`/`extension.deactivated` frames when the store or an activation list changes, `heartbeat` every 15 s, `resync` after a gap"
     ))
 )]
 fn events_doc() {}
@@ -2208,38 +2591,63 @@ async fn docs() -> Html<&'static str> {
 async fn lsp_servers(
     State(state): State<AppState>,
 ) -> Json<Vec<acpilot_proto::lsp::LspServerSummary>> {
-    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
-
+    state.refresh_language_servers().await;
+    let pins = crate::trust::lsp_pins(&state);
     let rows = state
         .language_servers()
         .status()
         .await
         .into_iter()
-        .map(|server| LspServerSummary {
-            id: server.program.to_owned(),
-            languages: vec![server.language.to_owned()],
-            command: server.program.to_owned(),
-            status: if server.running.is_some() {
-                LspServerStatus::Ready
-            } else {
-                LspServerStatus::Stopped
-            },
-            encoding: server
-                .running
-                .as_ref()
-                .map(|running| match running.encoding {
-                    acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
-                    acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
-                }),
-            // Milliseconds, because a round trip is a number a person compares with
-            // a keystroke and not with a clock.
-            round_trip_ms: server
-                .running
-                .and_then(|running| running.round_trip)
-                .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
-        })
+        .map(|server| lsp_summary(&server, pins.get(&server.program).map(String::as_str)))
         .collect();
     Json(rows)
+}
+
+/// One language this build can start, as the API reports it.
+///
+/// The pin decides one state and the process decides the rest, in that order: a
+/// program whose bytes changed since somebody approved it is `untrusted` whether or not
+/// a session happens to be running, because the question a client asks of that row is
+/// about the program and not about the process.
+pub(crate) fn lsp_summary(
+    server: &lsp::ServerState,
+    pin: Option<&str>,
+) -> acpilot_proto::lsp::LspServerSummary {
+    use acpilot_proto::lsp::{LspServerStatus, LspServerSummary, PositionEncoding};
+
+    let changed = pin.is_some_and(|pin| {
+        crate::trust::program_fingerprint(&server.program).as_deref() != Some(pin)
+    });
+    let status = if changed {
+        LspServerStatus::Untrusted
+    } else if server.running.is_some() {
+        LspServerStatus::Ready
+    } else {
+        LspServerStatus::Stopped
+    };
+    LspServerSummary {
+        id: server.program.clone(),
+        languages: vec![server.language.clone()],
+        command: server.program.clone(),
+        status,
+        encoding: server
+            .running
+            .as_ref()
+            .map(|running| match running.encoding {
+                acpilot_lsp::PositionEncoding::Utf8 => PositionEncoding::Utf8,
+                acpilot_lsp::PositionEncoding::Utf16 => PositionEncoding::Utf16,
+            }),
+        // Which pack contributed the row, when one did: a trust question names the
+        // extension, so the id has to survive the trip to the client.
+        extension: server.extension.clone(),
+        // Milliseconds, because a round trip is a number a person compares with a
+        // keystroke and not with a clock.
+        round_trip_ms: server
+            .running
+            .as_ref()
+            .and_then(|running| running.round_trip)
+            .and_then(|round_trip| u64::try_from(round_trip.as_millis()).ok()),
+    }
 }
 
 /// The `GET /v1/lsp/servers` operation, for the OpenAPI document.
@@ -2278,6 +2686,8 @@ pub fn router_with(state: AppState) -> Router {
         .route("/v1/permissions/{id}/resolve", post(resolve))
         .route("/v1/events", get(events))
         .route("/v1/lsp/servers", get(lsp_servers))
+        .merge(trust::lsp_routes())
+        .merge(extensions::routes())
         .route("/v1/openapi.json", get(openapi))
         .route("/", get(web_app))
         .route("/app", get(web_app))
@@ -2292,8 +2702,13 @@ pub fn router_with(state: AppState) -> Router {
         .merge(commit::routes())
         .merge(hosts::routes())
         .merge(providers::routes())
+        .merge(recipes::routes())
+        .merge(promote::routes())
+        .merge(model_runs::routes())
+        .merge(acp_http::routes())
         .merge(sessions::routes())
         .merge(stats::routes())
+        .merge(skills::routes())
         .merge(project::routes())
         .merge(terminals::routes())
         .merge(workspaces::routes())

@@ -153,6 +153,26 @@ impl Sessions {
     /// to a question the client did not ask, and the ticket's rule is to reject
     /// rather than repair.
     pub async fn ask(&self, id: &str, text: String) -> Result<String, ApiError> {
+        self.ask_with(id, text, true).await
+    }
+
+    /// Ask for a turn and accept one that spoke only through notices.
+    ///
+    /// The ACP bridge's prompt is a protocol turn, not a text generation: an agent
+    /// that raises a permission question and reports the answer it heard has done
+    /// what was asked of it, and the driver's response is still `end_turn`. The
+    /// commit-message path keeps [`Self::ask`], because an empty commit message is
+    /// a failure there.
+    pub async fn ask_turn(&self, id: &str, text: String) -> Result<String, ApiError> {
+        self.ask_with(id, text, false).await
+    }
+
+    async fn ask_with(
+        &self,
+        id: &str,
+        text: String,
+        require_text: bool,
+    ) -> Result<String, ApiError> {
         let record = self.handle(id).ok_or_else(|| unknown(id))?;
         match record.status() {
             SessionStatus::Busy | SessionStatus::AwaitingPermission => {
@@ -235,11 +255,33 @@ impl Sessions {
                     message: format!("session {id} failed before it wrote a message"),
                 }))
             }
-            _ if answer.trim().is_empty() => Err(ApiError::new(AcpilotError::AgentFailed {
-                message: format!("session {id} answered with no text"),
-            })),
+            _ if require_text && answer.trim().is_empty() => {
+                Err(ApiError::new(AcpilotError::AgentFailed {
+                    message: format!("session {id} answered with no text"),
+                }))
+            }
             _ => Ok(answer),
         }
+    }
+
+    /// Ask the owner task to stop the turn in flight.
+    ///
+    /// Best-effort like the cancel route: `false` when the session is unknown or
+    /// its mailbox will not take another command. The ACP bridge's
+    /// `session/cancel` is a notification, so there is no answer to give back —
+    /// the daemon's own `cancelled` event is the record that it worked.
+    pub fn cancel(&self, id: &str) -> bool {
+        self.handle(id)
+            .is_some_and(|record| record.commands.try_send(Command::Cancel).is_ok())
+    }
+
+    /// Watch one session's events as they are recorded.
+    ///
+    /// The ACP bridge forwards a turn while it runs, and a second subscription
+    /// alongside [`Self::ask`] is what lets it stream: the record is a broadcast,
+    /// so two readers see the same events rather than one stealing the other's.
+    pub fn subscribe(&self, id: &str) -> Option<broadcast::Receiver<SessionEvent>> {
+        self.handle(id).map(|record| record.subscribe())
     }
 
     /// The id a client holds for the conversation the agent calls `acp_id`.
@@ -328,6 +370,8 @@ pub struct Record {
     profile: String,
     workspace_id: String,
     agent_id: String,
+    /// Driver that opened this session, when it came through the bridge.
+    driver_id: Option<String>,
     lifecycle: Mutex<Lifecycle>,
     log: Mutex<Log>,
     /// The turn in flight, so a cancel can say which one it stopped.
@@ -427,7 +471,7 @@ impl Record {
         store: Option<Arc<Store>>,
     ) -> (Arc<Self>, mpsc::Receiver<Command>) {
         Self::new_for(
-            String::new(),
+            (String::new(), None),
             id,
             workspace_id,
             agent_id,
@@ -442,7 +486,7 @@ impl Record {
     /// Kept apart so a unit test can build a record without inventing a profile;
     /// the create route is the only caller that has one.
     fn new_for(
-        profile: String,
+        (profile, driver_id): (String, Option<String>),
         id: SessionId,
         workspace_id: String,
         agent_id: String,
@@ -477,6 +521,7 @@ impl Record {
                 profile,
                 workspace_id,
                 agent_id,
+                driver_id,
                 lifecycle: Mutex::new(Lifecycle {
                     title: None,
                     status: SessionStatus::Idle,
@@ -536,6 +581,7 @@ impl Record {
             profile: self.profile.clone(),
             workspace_id: self.workspace_id.clone(),
             agent_id: self.agent_id.clone(),
+            driver_id: self.driver_id.clone(),
             title: state
                 .title
                 .clone()
@@ -673,6 +719,7 @@ impl Record {
                     tool: entry.tool.clone().unwrap_or_else(|| entry.title.clone()),
                     decision: option_text(&entry.option),
                     decided_by: entry.decided_by.to_string(),
+                    driver_id: self.driver_id.clone(),
                 };
                 if let Err(error) = store.record_grant(&grant)
                     && !self.store_warned.swap(true, Ordering::Relaxed)
@@ -681,7 +728,7 @@ impl Record {
                 }
             }
             if let Some(transcript) = &self.transcript
-                && let Err(error) = transcript.grant(entry)
+                && let Err(error) = transcript.grant_with_driver(entry, self.driver_id.as_deref())
                 && !self.transcript_warned.swap(true, Ordering::Relaxed)
             {
                 tracing::warn!(%error, session = %self.id, "a grant was not written to the transcript");
@@ -703,7 +750,7 @@ impl Record {
     }
 
     /// A subscription to events recorded from now on.
-    fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
         self.log
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -831,18 +878,23 @@ fn derive_title(prompt: &str) -> Option<String> {
 pub async fn create(
     state: &AppState,
     request: CreateSessionRequest,
+    driver: Option<&str>,
 ) -> Result<SessionSummary, ApiError> {
-    let registry = state.registry().ok_or_else(|| {
+    state.registry().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon has no profile, so it has no agents to start",
         ))
     })?;
-    let spec = registry.get(&request.agent_id).ok_or_else(|| {
-        ApiError::new(AcpilotError::not_found(format!(
-            "agent {} in this profile",
-            request.agent_id
-        )))
-    })?;
+    let spec = crate::agent_specs(state)
+        .into_iter()
+        .find(|(spec, _)| spec.id == request.agent_id)
+        .map(|(spec, _)| Arc::new(spec))
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::not_found(format!(
+                "agent {} in this profile",
+                request.agent_id
+            )))
+        })?;
     let workspace = state.workspace().ok_or_else(|| {
         ApiError::new(AcpilotError::invalid(
             "this daemon was started without a workspace, so a session has no root to open",
@@ -872,7 +924,10 @@ pub async fn create(
     let session = start(Arc::clone(&spec), options, workspace.root.as_path()).await?;
 
     let (record, mailbox) = Record::new_for(
-        state.profile_name().unwrap_or_default().to_owned(),
+        (
+            state.profile_name().unwrap_or_default().to_owned(),
+            driver.map(str::to_owned),
+        ),
         id.clone(),
         workspace.id.clone(),
         spec.id.clone(),
@@ -1236,7 +1291,7 @@ pub async fn create_route(
             "the body is not a session request: {rejection}"
         )))
     })?;
-    create(&state, request).await.map(Json)
+    create(&state, request, None).await.map(Json)
 }
 
 /// `POST /v1/sessions/{id}/prompt`.
@@ -1532,15 +1587,19 @@ async fn serve_stream(state: AppState, id: String, after: u64, mut socket: WebSo
         return;
     };
 
+    // Subscribed before the ring is read, not after: the ring is written before the
+    // broadcast, so an event recorded between the replay's last read and a later
+    // subscription is in neither, and the reconnect waits for a turn that has already
+    // finished. The receiver queues what arrives during the replay, and the `seq <= last`
+    // check below drops the overlap.
+    let (mut live, replay) = subscribe_and_replay(&record, after, || {});
     let mut last = after;
-    for event in record.replay_after(after) {
+    for event in replay {
         last = event.seq;
         if send_event(&mut socket, &event).await.is_err() {
             return;
         }
     }
-
-    let mut live = record.subscribe();
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -1629,6 +1688,24 @@ pub struct AfterQuery {
     after: Option<u64>,
 }
 
+/// Subscribe, then replay: the receiver exists before the ring is read.
+///
+/// The order is the fix for a lost-event window. `Record::record` writes the ring before
+/// it broadcasts, so an event recorded between the replay's last read and a later
+/// subscription is in neither, and a reconnecting client waits for a turn that has
+/// already finished — while the session reports `Idle`, because it is. `between` exists
+/// so a test can record an event inside that window deterministically; both routes pass
+/// a no-op.
+fn subscribe_and_replay(
+    record: &Record,
+    after: u64,
+    between: impl FnOnce(),
+) -> (broadcast::Receiver<SessionEvent>, Vec<SessionEvent>) {
+    let live = record.subscribe();
+    between();
+    (live, record.replay_after(after))
+}
+
 /// Replay what the ring holds, then follow the feed.
 enum Step {
     Beat,
@@ -1636,15 +1713,18 @@ enum Step {
 }
 
 async fn pump(record: Arc<Record>, after: u64, sender: mpsc::Sender<Event>) {
+    // Subscribed before the ring is read, for the same reason the socket route does it:
+    // the ring is written before the broadcast, so an event landing between the replay's
+    // last read and a later subscription would be in neither. The `event.seq <= last`
+    // check below drops the one-event overlap the early subscription creates.
+    let (mut live, replay) = subscribe_and_replay(&record, after, || {});
     let mut last = after;
-    for event in record.replay_after(after) {
+    for event in replay {
         last = event.seq;
         if sender.send(frame(&event)).await.is_err() {
             return;
         }
     }
-
-    let mut live = record.subscribe();
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -2020,6 +2100,30 @@ mod tests {
         assert_eq!(kept.len(), REPLAY_CAPACITY);
         assert_eq!(kept.first().map(|event| event.seq), Some(11));
         assert_eq!(record.last_seq(), (REPLAY_CAPACITY + 10) as u64);
+    }
+
+    #[test]
+    fn an_event_recorded_between_the_subscription_and_the_replay_is_delivered() {
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
+        record.record(event(&record, 1));
+        // The gap the old order had: the subscription exists, the agent records the
+        // turn's next event, and only then does the ring get read. A handler that
+        // subscribed after the replay would lose sequence 2 with the session already
+        // idle, which is exactly the reconnect that waited out its patience.
+        let (mut live, replay) =
+            subscribe_and_replay(&record, 1, || record.record(event(&record, 2)));
+        let mut seqs: Vec<u64> = replay.iter().map(|event| event.seq).collect();
+        while let Ok(event) = live.try_recv() {
+            seqs.push(event.seq);
+        }
+        assert!(seqs.contains(&2), "sequence 2 was lost: {seqs:?}");
     }
 
     #[test]

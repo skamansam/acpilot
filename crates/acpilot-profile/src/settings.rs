@@ -81,6 +81,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "ui",
     "theme",
     "keymap",
+    "registry",
 ];
 
 /// What a launch resolved to, after merging.
@@ -96,6 +97,31 @@ pub struct Settings {
 
     /// The editor and UI preferences, complete: the defaults guarantee every field.
     pub preferences: Preferences,
+
+    /// The registry's trust roots. Read from the global file only: a workspace
+    /// that could add a key could sign its own extensions.
+    #[serde(default)]
+    pub registry: RegistrySettings,
+}
+
+/// The tables `acpilot ext` reads when it decides whose index to believe.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistrySettings {
+    /// Keys an index may be signed by, besides the maintainer's key compiled
+    /// into the binary. Use one here for a private registry.
+    #[serde(default)]
+    pub trusted_keys: Vec<TrustedKey>,
+}
+
+/// One extra trust root, named in an index's detached signature.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedKey {
+    /// Short name the signature file names, for example `work-registry`.
+    pub id: String,
+    /// The key's public half, as 64 hex characters.
+    pub public_key: String,
 }
 
 impl Settings {

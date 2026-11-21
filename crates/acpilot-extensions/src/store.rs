@@ -9,6 +9,11 @@
 //! place. A reader never sees a half-written extension, and an interrupted
 //! install leaves only a dot-directory that every scan ignores.
 //!
+//! A checkout can also be linked instead of copied: its record says `link <path>`
+//! and the version is served from that directory as it is now. A link is not
+//! hashed — the edit is the point — so it is reported as linked rather than
+//! pretending to have a checksum, and removing it never touches the checkout.
+//!
 //! Verification is the part that matters. The checksum covers a canonical byte
 //! stream — a version tag, then each file sorted by path with length-prefixed
 //! names and contents — so it cannot be confused by a file whose contents look
@@ -31,6 +36,9 @@ use crate::manifest::{is_version, validate_namespaced_id, version_tuple};
 
 /// Suffix of the checksum record that sits beside a version directory.
 pub const RECORD_SUFFIX: &str = ".sha256";
+
+/// What a linked version's record starts with, before the checkout's path.
+const LINK_PREFIX: &str = "link ";
 
 /// Domain separation for the hash. Changing this deliberately changes every
 /// checksum, which is exactly what should happen if the format ever moves.
@@ -70,6 +78,12 @@ pub enum BlockReason {
         /// Why it is refused.
         why: String,
     },
+    /// A linked checkout that is gone, changed its id or version, or no longer
+    /// loads.
+    Link {
+        /// What the link says and what was found.
+        message: String,
+    },
     /// The checksum matched but the manifest under it does not load.
     InvalidManifest {
         /// The loader's complaint.
@@ -99,6 +113,7 @@ impl std::fmt::Display for BlockReason {
             Self::BadRecord { message } => write!(f, "checksum record is unusable: {message}"),
             Self::Unreadable { message } => write!(f, "could not read the tree: {message}"),
             Self::UnsafeEntry { path, why } => write!(f, "{path}: {why}"),
+            Self::Link { message } => write!(f, "linked checkout: {message}"),
             Self::InvalidManifest { message } => write!(f, "manifest does not load: {message}"),
             Self::InvalidName { path, message } => write!(f, "{path}: {message}"),
         }
@@ -121,8 +136,10 @@ pub struct StoredExtension {
     pub id: String,
     /// Version, or empty when the directory name is not a version.
     pub version: String,
-    /// Where it lives on disk.
+    /// Where it lives on disk. A linked version's path is the checkout.
     pub path: PathBuf,
+    /// Whether this version is a link to a checkout rather than a copy.
+    pub linked: bool,
     /// Checksum from the record, when there is one.
     pub recorded: Option<String>,
     /// Checksum computed now, when hashing got far enough to produce one.
@@ -144,6 +161,13 @@ impl StoredExtension {
         !self.is_ready()
     }
 
+    /// Whether this version is served from a checkout rather than from bytes the
+    /// store copied.
+    #[must_use]
+    pub fn is_linked(&self) -> bool {
+        self.linked
+    }
+
     /// `id@version`, for reports. Falls back to the path when a directory name
     /// is not a valid pair.
     #[must_use]
@@ -153,6 +177,127 @@ impl StoredExtension {
         } else {
             format!("{}@{}", self.id, self.version)
         }
+    }
+
+    /// The wire summary of this version, as `GET /v1/extensions` and
+    /// `acpilot ext list --json` report it.
+    ///
+    /// Read from the version's own manifest, so the name and the contribution
+    /// list are what the loader will hand a session. A blocked version is still
+    /// described: the report that refuses it should still say which bytes were
+    /// refused.
+    #[must_use]
+    pub fn summary(
+        &self,
+        active_profiles: &[String],
+    ) -> acpilot_proto::extension::ExtensionSummary {
+        use acpilot_proto::extension::{ExtensionSource, ExtensionStatus, ExtensionSummary};
+
+        let loaded = load_dir(&self.path).ok();
+        let manifest = loaded.as_ref().map(|extension| &extension.manifest);
+        let mut kinds = Vec::new();
+        if let Some(extension) = &loaded {
+            for contribution in &extension.contributions {
+                let kind = contribution.kind();
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        ExtensionSummary {
+            id: self.id.clone(),
+            name: manifest.map_or_else(|| self.id.clone(), |manifest| manifest.name.clone()),
+            version: self.version.clone(),
+            publisher: manifest.map_or_else(String::new, |manifest| manifest.publisher.clone()),
+            description: manifest.map_or_else(String::new, |manifest| manifest.description.clone()),
+            kinds,
+            status: if self.is_blocked() {
+                ExtensionStatus::Blocked
+            } else if active_profiles.is_empty() {
+                ExtensionStatus::Installed
+            } else {
+                ExtensionStatus::Active
+            },
+            // A version the store installed has a checksum record; a linked
+            // checkout and a directory somebody pointed the store at do not.
+            source: if self.recorded.is_some() {
+                ExtensionSource::Registry
+            } else {
+                ExtensionSource::Path
+            },
+            checksum: self.recorded.clone(),
+            installed_at: None,
+            homepage: manifest.and_then(|manifest| manifest.homepage.clone()),
+            active_profiles: active_profiles.to_vec(),
+        }
+    }
+
+    /// Everything this version contributes, named as a profile will see it.
+    ///
+    /// Empty for a blocked version: a manifest that does not load has nothing a
+    /// reader can be shown, and inventing contribution names from paths would be
+    /// a second opinion about a file the loader refused.
+    #[must_use]
+    pub fn contributions(&self) -> Vec<acpilot_proto::extension::ExtensionContribution> {
+        use acpilot_proto::extension::{ExtensionContribution, ExtensionKind};
+
+        let Ok(extension) = load_dir(&self.path) else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for contribution in &extension.contributions {
+            match contribution {
+                crate::loader::Contribution::Theme(theme) => rows.push(ExtensionContribution {
+                    kind: ExtensionKind::Theme,
+                    id: theme.id.clone(),
+                    summary: theme.name.clone(),
+                }),
+                crate::loader::Contribution::LanguageServers(presets) => {
+                    for preset in presets {
+                        rows.push(ExtensionContribution {
+                            kind: ExtensionKind::LanguageServers,
+                            id: preset.id.clone(),
+                            summary: format!("{} ({})", preset.name, preset.command),
+                        });
+                    }
+                }
+                crate::loader::Contribution::Agents(presets) => {
+                    for preset in presets {
+                        rows.push(ExtensionContribution {
+                            kind: ExtensionKind::Agents,
+                            id: preset.id().to_owned(),
+                            summary: preset.name().to_owned(),
+                        });
+                    }
+                }
+                crate::loader::Contribution::Keymap(layer) => rows.push(ExtensionContribution {
+                    kind: ExtensionKind::Keymap,
+                    id: "keymap".to_owned(),
+                    summary: format!("{} keys", layer.keys.len()),
+                }),
+                crate::loader::Contribution::Skills { path } => {
+                    rows.push(ExtensionContribution {
+                        kind: ExtensionKind::Skills,
+                        id: path.clone(),
+                        summary: "skills directory".to_owned(),
+                    });
+                }
+                crate::loader::Contribution::Unloaded { kind, path, reason } => {
+                    rows.push(ExtensionContribution {
+                        kind: *kind,
+                        id: path.clone(),
+                        summary: (*reason).to_owned(),
+                    });
+                }
+            }
+        }
+        rows
+    }
+
+    /// The manifest as written, for reviewing before activation.
+    #[must_use]
+    pub fn manifest_text(&self) -> Option<String> {
+        fs::read_to_string(self.path.join(crate::manifest::MANIFEST_FILE)).ok()
     }
 }
 
@@ -265,6 +410,163 @@ impl Store {
             path: destination,
             recorded: Some(checksum.clone()),
             computed: Some(checksum),
+            linked: false,
+            status: StoreStatus::Ready,
+        })
+    }
+
+    /// Link a checkout instead of copying it.
+    ///
+    /// The version's record names the checkout, and everything that reads the
+    /// extension — `ext list`, activation, the daemon's registries — loads that
+    /// directory as it is at that moment, so an edit is visible without re-adding.
+    ///
+    /// A link is deliberately not hashed: a checksum that changed under the store's
+    /// feet would block every edit, which is the opposite of what a link is for. It
+    /// is reported as a path source and never claims a checksum.
+    ///
+    /// # Errors
+    ///
+    /// The directory does not load, its path is not UTF-8, or that id and version
+    /// is already installed or linked.
+    pub fn link_from_dir(
+        &self,
+        source: impl AsRef<Path>,
+    ) -> Result<StoredExtension, ExtensionError> {
+        let source = source.as_ref();
+        let extension = load_dir(source)?;
+        let id = extension.manifest.id.clone();
+        let version = extension.manifest.version.clone();
+        let destination = self.version_path(&id, &version);
+        let record = self.record_path(&id, &version);
+        if destination.exists() || record.exists() {
+            return Err(ExtensionError::AlreadyInstalled { id, version });
+        }
+
+        let target = std::path::absolute(source).map_err(|error| io_error(source, error))?;
+        let target_text = target.to_str().ok_or_else(|| ExtensionError::UnsupportedEntry {
+            path: target.display().to_string(),
+            why: "a linked checkout's path must be valid UTF-8, so a link means the same thing on every host",
+        })?;
+
+        self.ensure_root()?;
+        let parent = destination
+            .parent()
+            .expect("a version path always has an id directory");
+        fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+        fs::create_dir_all(&destination).map_err(|source| io_error(&destination, source))?;
+        write_link_record(&record, target_text)?;
+
+        Ok(StoredExtension {
+            id,
+            version,
+            path: target,
+            recorded: None,
+            computed: None,
+            linked: true,
+            status: StoreStatus::Ready,
+        })
+    }
+
+    /// Install an archive the signed index named.
+    ///
+    /// Two hashes are checked, and they answer different questions. The archive's
+    /// sha256 is compared with the listing's before anything is unpacked, so bytes
+    /// that are not the published archive never become files; then the unpacked
+    /// tree is hashed and recorded the way every store install is, so the store
+    /// can still refuse a directory somebody edited afterwards.
+    ///
+    /// The manifest is the authority on what was installed: an archive that
+    /// unpacks to a different id, version, or publisher than the listing named is
+    /// a mislabeled download, and nothing is written.
+    ///
+    /// The archive's size is the *compressed* bytes, so it cannot bound what they
+    /// expand to; the unpacked tree is capped at
+    /// [`crate::archive::MAX_UNPACKED_BYTES`] as it is written.
+    ///
+    /// # Errors
+    ///
+    /// The archive's size or checksum differs from the index, it does not unpack,
+    /// holds no single extension or more than one, or its manifest disagrees with
+    /// the listing. The destination already existing is [`ExtensionError::AlreadyInstalled`].
+    pub fn install_from_archive(
+        &self,
+        bytes: &[u8],
+        entry: &crate::index::IndexEntry,
+    ) -> Result<StoredExtension, ExtensionError> {
+        let actual_size = bytes.len() as u64;
+        if actual_size != entry.size {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive is {actual_size} bytes and the index says {}; nothing was installed",
+                    entry.size
+                ),
+            });
+        }
+        let digest = sha256_hex(bytes);
+        if digest != entry.digest() {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive's sha256 is {digest} and the index says {}; nothing was installed",
+                    entry.digest()
+                ),
+            });
+        }
+
+        let destination = self.version_path(&entry.id, &entry.version);
+        if destination.exists() {
+            return Err(ExtensionError::AlreadyInstalled {
+                id: entry.id.clone(),
+                version: entry.version.clone(),
+            });
+        }
+
+        self.ensure_root()?;
+        let mut staging = Staging::create(self.staging_path())?;
+        crate::archive::unpack(bytes, staging.path())?;
+        let root = extension_root(staging.path())?;
+        let extension = load_dir(&root)?;
+        if extension.manifest.id != entry.id || extension.manifest.version != entry.version {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "the archive holds {}@{}, not {}; nothing was installed",
+                    extension.manifest.id,
+                    extension.manifest.version,
+                    entry.label()
+                ),
+            });
+        }
+        if extension.manifest.publisher != entry.publisher {
+            return Err(ExtensionError::Index {
+                path: entry.download.clone(),
+                message: format!(
+                    "{} is published by {:?} and the index says {:?}; nothing was installed",
+                    entry.label(),
+                    extension.manifest.publisher,
+                    entry.publisher
+                ),
+            });
+        }
+
+        let checksum = hash_dir(&root)?;
+        let parent = destination
+            .parent()
+            .expect("a version path always has an id directory");
+        fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+        fs::rename(&root, &destination).map_err(|source| io_error(&root, source))?;
+        staging.disarm();
+        write_record(&self.record_path(&entry.id, &entry.version), &checksum)?;
+
+        Ok(StoredExtension {
+            id: entry.id.clone(),
+            version: entry.version.clone(),
+            path: destination,
+            recorded: Some(checksum.clone()),
+            computed: Some(checksum),
+            linked: false,
             status: StoreStatus::Ready,
         })
     }
@@ -301,6 +603,7 @@ impl Store {
                         id: entry.file_name().to_string_lossy().into_owned(),
                         version: String::new(),
                         path: entry.path(),
+                        linked: false,
                         recorded: None,
                         computed: None,
                         status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -323,6 +626,7 @@ impl Store {
                     id: name,
                     version: String::new(),
                     path: id_path.clone(),
+                    linked: false,
                     recorded: None,
                     computed: None,
                     status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -348,6 +652,7 @@ impl Store {
                         id: name.clone(),
                         version: String::new(),
                         path: version.path(),
+                        linked: false,
                         recorded: None,
                         computed: None,
                         status: StoreStatus::Blocked(BlockReason::InvalidName {
@@ -499,19 +804,24 @@ impl Store {
         let record_path = self.record_path(id, version);
 
         let recorded = match fs::read_to_string(&record_path) {
-            Ok(text) => match parse_record(&text) {
-                Ok(checksum) => checksum,
-                Err(message) => {
-                    return blocked(
-                        id,
-                        version,
-                        path,
-                        None,
-                        None,
-                        BlockReason::BadRecord { message },
-                    );
+            Ok(text) => {
+                if let Some(target) = text.strip_prefix(LINK_PREFIX) {
+                    return self.inspect_link(id, version, path, &record_path, target.trim_end());
                 }
-            },
+                match parse_record(&text) {
+                    Ok(checksum) => checksum,
+                    Err(message) => {
+                        return blocked(
+                            id,
+                            version,
+                            path,
+                            None,
+                            None,
+                            BlockReason::BadRecord { message },
+                        );
+                    }
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return blocked(id, version, path, None, None, BlockReason::Unrecorded);
             }
@@ -585,6 +895,63 @@ impl Store {
             path: path.to_path_buf(),
             recorded: Some(recorded),
             computed: Some(computed),
+            linked: false,
+            status: StoreStatus::Ready,
+        }
+    }
+
+    /// Decide a linked version by reading the checkout its record names.
+    ///
+    /// There is no checksum to compare: the record *is* the claim that this
+    /// checkout is the extension, so the answer is whether the checkout is there
+    /// and still says the id and version the store filed it under.
+    fn inspect_link(
+        &self,
+        id: &str,
+        version: &str,
+        path: &Path,
+        record: &Path,
+        target: &str,
+    ) -> StoredExtension {
+        let refuse = |message: String| {
+            let mut stored = blocked(id, version, path, None, None, BlockReason::Link { message });
+            stored.linked = true;
+            stored
+        };
+        if target.is_empty() {
+            return refuse(format!("{} does not name a checkout", record.display()));
+        }
+        let checkout = PathBuf::from(target);
+        if !checkout.is_dir() {
+            return refuse(format!(
+                "the checkout {} is gone; add it again or remove this link",
+                checkout.display()
+            ));
+        }
+        match load_dir(&checkout) {
+            Ok(extension) => {
+                if extension.manifest.id != id || extension.manifest.version != version {
+                    return refuse(format!(
+                        "the checkout now says {}@{}, not {id}@{version}; remove this link and add \
+                         it again",
+                        extension.manifest.id, extension.manifest.version
+                    ));
+                }
+            }
+            Err(error) => {
+                return refuse(format!(
+                    "the checkout at {} does not load: {error}",
+                    checkout.display()
+                ));
+            }
+        }
+        StoredExtension {
+            id: id.to_owned(),
+            version: version.to_owned(),
+            path: checkout,
+            recorded: None,
+            computed: None,
+            linked: true,
             status: StoreStatus::Ready,
         }
     }
@@ -643,6 +1010,7 @@ fn blocked(
         id: id.to_owned(),
         version: version.to_owned(),
         path: path.to_path_buf(),
+        linked: false,
         recorded,
         computed,
         status: StoreStatus::Blocked(reason),
@@ -768,6 +1136,57 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), ExtensionError> {
     Ok(())
 }
 
+/// The directory inside an unpacked archive that holds `extension.toml`.
+///
+/// Release archives are usually wrapped in one directory named after the project
+/// and its version, so both shapes are accepted: the manifest at the root, or one
+/// directory holding it. Two candidates are ambiguous, and picking one by sort
+/// order would make which extension you install depend on the alphabet.
+fn extension_root(staging: &Path) -> Result<PathBuf, ExtensionError> {
+    if staging.join(crate::manifest::MANIFEST_FILE).is_file() {
+        return Ok(staging.to_path_buf());
+    }
+    let mut candidates = Vec::new();
+    let entries = fs::read_dir(staging).map_err(|source| io_error(staging, source))?;
+    for entry in entries {
+        let entry = entry.map_err(|source| io_error(staging, source))?;
+        if entry.path().is_dir() && entry.path().join(crate::manifest::MANIFEST_FILE).is_file() {
+            candidates.push(entry.path());
+        }
+    }
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(ExtensionError::Archive {
+            path: staging.display().to_string(),
+            message: "the archive holds no extension.toml at its root or under one directory; \
+                      nothing was installed"
+                .to_owned(),
+        }),
+        _ => Err(ExtensionError::Archive {
+            path: staging.display().to_string(),
+            message: format!(
+                "the archive holds {} directories with an extension.toml; one archive is one \
+                 extension",
+                candidates.len()
+            ),
+        }),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex(&hasher.finalize())
+}
+
+/// Record that a version is served from `target` instead of from copied bytes.
+fn write_link_record(path: &Path, target: &str) -> Result<(), ExtensionError> {
+    let temporary = path.with_extension("sha256.tmp");
+    fs::write(&temporary, format!("{LINK_PREFIX}{target}\n"))
+        .map_err(|source| io_error(&temporary, source))?;
+    fs::rename(&temporary, path).map_err(|source| io_error(&temporary, source))
+}
+
 fn write_record(path: &Path, checksum: &str) -> Result<(), ExtensionError> {
     let temporary = path.with_extension("sha256.tmp");
     fs::write(&temporary, format!("{checksum}\n"))
@@ -829,5 +1248,143 @@ impl Drop for Staging {
         if self.armed {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::path::Path;
+
+    use super::*;
+    use crate::index::IndexEntry;
+
+    /// A real extension that ships with the workspace, so the archive holds a
+    /// manifest and an asset the loader already accepts.
+    fn fixture_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/acpilot.night-flight")
+    }
+
+    fn pack(directory: &Path, prefix: Option<&str>) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        append_tree(&mut builder, directory, directory, prefix);
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip")
+    }
+
+    fn append_tree<W: Write>(
+        builder: &mut tar::Builder<W>,
+        root: &Path,
+        directory: &Path,
+        prefix: Option<&str>,
+    ) {
+        let mut entries: Vec<_> = std::fs::read_dir(directory)
+            .expect("the fixture is readable")
+            .map(|entry| entry.expect("an entry"))
+            .collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).expect("inside the fixture");
+            let name = match prefix {
+                Some(prefix) => Path::new(prefix).join(relative),
+                None => relative.to_path_buf(),
+            };
+            if path.is_dir() {
+                append_tree(builder, root, &path, prefix);
+            } else {
+                builder
+                    .append_path_with_name(&path, name)
+                    .expect("the fixture file is appended");
+            }
+        }
+    }
+
+    fn entry_for(bytes: &[u8]) -> IndexEntry {
+        let extension = load_dir(fixture_dir()).expect("the fixture loads");
+        IndexEntry {
+            id: extension.manifest.id.clone(),
+            version: extension.manifest.version.clone(),
+            kind: acpilot_proto::extension::ExtensionKind::Theme,
+            publisher: extension.manifest.publisher.clone(),
+            checksum: format!("sha256:{}", sha256_hex(bytes)),
+            size: bytes.len() as u64,
+            min_acpilot: None,
+            download: "https://example.invalid/night-flight-1.0.0.tar.gz".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_archive_named_by_the_index_is_installed_and_ready() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let stored = store
+            .install_from_archive(&bytes, &entry_for(&bytes))
+            .expect("the archive installs");
+        assert!(stored.is_ready(), "{:?}", stored.status);
+        assert_eq!(stored.id, "acpilot.night-flight");
+        assert!(stored.recorded.unwrap().starts_with("sha256:"));
+        assert!(
+            store
+                .verify("acpilot.night-flight", "1.0.0")
+                .expect("verifies")
+                .is_ready()
+        );
+    }
+
+    #[test]
+    fn an_archive_wrapped_in_one_directory_installs() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), Some("night-flight-1.0.0"));
+        let stored = store
+            .install_from_archive(&bytes, &entry_for(&bytes))
+            .expect("the wrapped archive installs");
+        assert!(stored.is_ready(), "{:?}", stored.status);
+        assert!(store.version_path("acpilot.night-flight", "1.0.0").is_dir());
+    }
+
+    #[test]
+    fn bytes_that_are_not_the_published_archive_install_nothing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let entry = entry_for(&bytes);
+        let mut tampered = bytes.clone();
+        let middle = tampered.len() / 2;
+        tampered[middle] ^= 1;
+        let error = store
+            .install_from_archive(&tampered, &entry)
+            .expect_err("a substituted archive is refused");
+        assert!(
+            error.to_string().contains("nothing was installed"),
+            "{error}"
+        );
+        assert!(
+            store.scan().expect("scan").is_empty(),
+            "nothing was written"
+        );
+    }
+
+    #[test]
+    fn an_archive_of_another_extension_is_not_installed_under_a_listing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = Store::new(directory.path().join("extensions"));
+        let bytes = pack(&fixture_dir(), None);
+        let mut entry = entry_for(&bytes);
+        entry.id = "acpilot.paper".to_owned();
+        let error = store
+            .install_from_archive(&bytes, &entry)
+            .expect_err("a mislabeled archive is refused");
+        assert!(
+            error.to_string().contains("acpilot.night-flight"),
+            "{error}"
+        );
+        assert!(!store.version_path("acpilot.paper", "1.0.0").exists());
     }
 }

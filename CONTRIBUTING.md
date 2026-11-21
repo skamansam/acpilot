@@ -497,7 +497,10 @@ node .github/scripts/roadmap.mjs pr 42     # one pull request
 node .github/scripts/roadmap.mjs issue 17  # one issue
 ```
 
-The TODO.md import that filed the issues is `.github/scripts/todo_issues.py`. It is
+The **ACPilot Roadmap** project is the source of truth for a ticket's state: open,
+in progress or done. `TODO.md` keeps the plan text and each ticket's `Result:`.
+
+The import that filed the issues is `.github/scripts/todo_issues.py`. It is
 idempotent, and re-running it after editing `TODO.md` adds only what is new.
 
 `TODO.md` is a tree, and the board is too: one parent issue per phase and per
@@ -526,8 +529,8 @@ mapping lives at the top of the script as data, so a new label is a line.
 A merge builds `acpilot` and `acpilotd` on Linux x86_64, macOS Apple silicon and Windows
 x86_64. It publishes a GitHub release with checksums and rebuilds the docs site. The
 download page reads the releases API at build time, so nothing is committed back and
-`main` stays a tree only pull requests change. The `gui` feature ships in the same
-tarball as the CLI and the daemon, built with `--features acpilot-gui/gui`. The Linux
+`main` stays a tree only pull requests change. Each program ships in its own archive,
+the desktop app built with `--features acpilot-gui/gui`. The Linux
 runner installs the graphics stack it links against, and the Windows and macOS runners
 use their own system frameworks.
 
@@ -539,10 +542,32 @@ other than the one the config pins, so a local build and a released one are the 
 tool's output. It needs two things on `PATH`: `cargo-dist` at that pinned version and
 `cargo-cyclonedx`. It prints the install command for whichever is missing.
 
-The workflow above and `dist` do not package the same shape yet. The workflow puts all
-three programs in one tarball per platform. `cargo-dist` archives one package at a time,
-installed side by side in the same bin directory. Choosing one is P12-2's, and the
-first release is the deadline.
+The workflow and `dist` package one shape, and it is dist's: the workflow runs
+`cargo xtask dist --artifacts local` on a runner per target and `--artifacts global`
+once for the installers, the formula and the SBOMs. A release is therefore one archive
+per program, named after the package and the target, installed side by side in the same
+bin directory, with a signature over every published checksum (ADR 0011). Nothing in
+the workflow edits an archive after dist made it.
+
+A formula nobody can install is caught before anything is published. The `homebrew` job
+installs `acpilot-cli.rb` and `acpilotd.rb` with Homebrew on a macOS runner and fails
+the release unless `acpilot update --check` reports `installed by brew` and a plain
+`acpilot update` refuses to write into the keg (ADR 0010), so the marker the formula
+writes is checked where Homebrew links it. Only the client's formula writes
+`bin/install.json`: it is one path in the prefix, and two kegs that both write it
+cannot be installed together.
+
+The `tap` job publishes the same formulae to `skamansam/homebrew-tap` before the release
+is created, so the tap never advertises a version whose archives were not published. It
+needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with `contents: write` on that
+repository; `GITHUB_TOKEN` cannot write to it. Make one and store it with
+`gh secret set HOMEBREW_TAP_TOKEN` — a release without it fails rather than publishing
+half a release.
+
+`cargo xtask dist --release-version X.Y.Z` is what makes those files point at the
+release. dist names a release after `Cargo.toml` and refuses a `--tag` that disagrees
+with it, so the task rewrites the tag in the generated installers and formulae after
+dist has written them. No archive, checksum or signature is touched.
 
 ## Decisions
 

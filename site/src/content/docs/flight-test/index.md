@@ -27,7 +27,7 @@ Each step is a thing you can look at, diff, and throw away:
 | Provider | A chat endpoint, declared and probed by you | `config.toml` / `providers.toml` |
 | Model | One model id the provider reported | Discovered, never invented |
 | Recipe | Prompt, sampling, context budget, tool ceiling | `profiles/<name>/recipes/<id>.toml` |
-| Run | One request and one answer, recorded | `runs.jsonl`, immutable |
+| Run | One request and one answer, recorded | `profiles/<name>/runs.jsonl`, append-only |
 | Agent | A recipe promoted into `agents.toml` | Spawned like any other ACP agent |
 
 <Aside type="note" title="The autopilot is still the autopilot">
@@ -63,11 +63,13 @@ yesterday?":
 
 ## What exists today
 
-The contract is this page, the five beside it, the OpenAPI types behind them, and
-an ADR that says why. The project does not probe a server yet. The models phase (P4.5) will
-build the crate, the shim agent, and the lab in that order. The API comes first,
-because a workbench that invents its own state would be the sixth thing to
-disagree about what happened.
+Providers, discovery, recipes, prompt assembly, the run log, the model API and the shim
+agent (`acpilot-agent-lm`) are built and tested. A recipe is created over the API, a run
+streams and appends its record, and a page of runs is served. The shim reads a recipe,
+runs the model loop and reaches files, terminals and permissions only through ACP
+callbacks. What is missing is the surface: the lab panes (P4.5-8) and the promotion
+command that writes the manifest entry (P4.5-9). Until P4.5-9, the shim is started by
+hand.
 
 <Aside type="caution" title="Altitude check">
 Pages in this section describe the models phase (P4.5). The [flight status](../status/) page

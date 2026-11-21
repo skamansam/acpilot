@@ -247,10 +247,20 @@ fn touches(event: &Event, file_name: &OsStr) -> bool {
 }
 
 fn read(path: &Path, resolver: &dyn SecretResolver) -> Result<Vec<AgentSpec>, AgentError> {
-    let text = fs::read_to_string(path).map_err(|source| AgentError::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        // A profile with no manifest has no agents, which is the ordinary
+        // first-run state rather than a failure. Promotion writes the first
+        // entry into that state, and removal of the last entry returns to it,
+        // so both a load and a reload have to read "no file" as "no agents".
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(AgentError::Io {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
     manifest::parse(path, &text, resolver)
 }
 

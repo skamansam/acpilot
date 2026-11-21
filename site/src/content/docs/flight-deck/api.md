@@ -44,11 +44,33 @@ the profile directory's name, omitted when the daemon started without one. The
 web page writes that name into its `/p/:profile/...` addresses. A page that
 guessed would address a profile nobody started.
 
+When the daemon's own copy found an `install.json` marker (ADR 0010), the answer
+carries `install`: the method that put it there and the version it recorded.
+
+```json
+{ "ok": true, "service": "acpilotd", "version": "0.2.6", "api": "/v1",
+  "workspace": "app",
+  "install": { "method": "brew", "version": "0.2.6" } }
+```
+
+`method` is a closed set — `apt`, `dnf`, `pacman`, `brew`, `msi`, `script`,
+`tarball`, `appimage`, `cargo` — and it is what decides who may reconcile a
+version mismatch: a package manager owns its files, the other methods are the
+program's own. A client does not have to guess and does not get a second opinion
+from the filesystem; it reads the same table `acpilot update` acts on, which is
+documented under [Updating](/acpilot/flight-deck/update/). The field is absent when no
+marker was found, and absent is treated as nobody's to replace — never as
+permission.
+
 `GET /v1/agents` answers from the profile the operator chose at daemon start.
 `acpilotd --profile <dir>` reads that directory's `agents.toml`. The route reports
 availability from a `PATH` lookup on the daemon's host. It starts no process, so
 listing agents cannot start one. With no profile loaded the list is empty.
-Handshake status (`unhealthy`) and trust pinning (`untrusted`) are later phases.
+Handshake status (`unhealthy`) comes from the session routes. Trust pinning is
+here: an agent whose program no longer matches the pin a person recorded reports
+`untrusted`, and `POST /v1/agents/{id}/trust` records the current binary as
+approved, answering with that agent's summary so a client does not have to list
+again.
 
 `GET /v1/events` makes a prompt immediate instead of polled. A request raised
 after the client connects arrives as a `permission` frame. That frame carries the
@@ -90,10 +112,25 @@ shell an agent started without a second process behind it.
 | Agents | `POST /v1/agents/{id}/refresh`, `POST /v1/agents/{id}/trust` |
 
 | Permissions | `GET /v1/permissions`, `POST /v1/permissions/{id}/resolve` |
-| LSP | `GET /v1/lsp/servers`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
+| LSP | `GET /v1/lsp/servers`, `POST /v1/lsp/servers/{language}/trust`, `GET /v1/lsp/diagnostics`, `POST /v1/lsp/request` |
 | Models (started) | `GET/POST /v1/providers` are live; `POST /v1/providers/{id}/probe` and `GET /v1/models` are planned |
 | Recipes (post-v1) | `GET/POST /v1/recipes`, `POST /v1/recipes/{id}/runs`, `GET /v1/recipes/{id}/runs`, `POST /v1/recipes/{id}/promote` |
-| Remote drivers (post-v1) | `GET /v1/acp/bridge`, `GET /v1/acp/drivers`, `POST /v1/acp/pairings`, `POST /v1/acp/drivers/{id}/revoke`. ACP itself at `/acp` |
+
+## Remote drivers
+
+The bridge is served, and it has two surfaces because it has two credentials.
+The cockpit's routes are on the daemon's listener and need the daemon token:
+
+| Route | What it does |
+| --- | --- |
+| `POST /v1/acp/pairings` | Issues a single-use two-minute code; `grant_answer_permissions` is the person's decision |
+| `GET /v1/acp/bridge` | Whether the driver listener is on, its bind, connected and known counts |
+| `GET /v1/acp/drivers` | Every driver on record, revoked rows included |
+| `POST /v1/acp/drivers/{id}/revoke` | Makes the next call with that token `401`; the row stays |
+
+On the listener `[acp.bridge]` names, a driver claims its code at `POST /pair`,
+speaks JSON-RPC at `POST /acp`, and reads its notifications at `GET /acp/events`.
+The token is required even on loopback, and only its Argon2id hash is kept.
 
 ## The error envelope
 

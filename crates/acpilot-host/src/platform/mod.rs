@@ -39,6 +39,11 @@ compile_error!(
 );
 
 #[cfg(unix)]
+pub use unix::make_executable;
+#[cfg(windows)]
+pub use windows::make_executable;
+
+#[cfg(unix)]
 pub(crate) use unix::{
     default_endpoint, default_shell, detach, private_dir, private_file, spawn_pty,
 };

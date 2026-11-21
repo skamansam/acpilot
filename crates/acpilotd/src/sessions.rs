@@ -1592,9 +1592,9 @@ async fn serve_stream(state: AppState, id: String, after: u64, mut socket: WebSo
     // subscription is in neither, and the reconnect waits for a turn that has already
     // finished. The receiver queues what arrives during the replay, and the `seq <= last`
     // check below drops the overlap.
-    let mut live = record.subscribe();
+    let (mut live, replay) = subscribe_and_replay(&record, after, || {});
     let mut last = after;
-    for event in record.replay_after(after) {
+    for event in replay {
         last = event.seq;
         if send_event(&mut socket, &event).await.is_err() {
             return;
@@ -1688,6 +1688,24 @@ pub struct AfterQuery {
     after: Option<u64>,
 }
 
+/// Subscribe, then replay: the receiver exists before the ring is read.
+///
+/// The order is the fix for a lost-event window. `Record::record` writes the ring before
+/// it broadcasts, so an event recorded between the replay's last read and a later
+/// subscription is in neither, and a reconnecting client waits for a turn that has
+/// already finished — while the session reports `Idle`, because it is. `between` exists
+/// so a test can record an event inside that window deterministically; both routes pass
+/// a no-op.
+fn subscribe_and_replay(
+    record: &Record,
+    after: u64,
+    between: impl FnOnce(),
+) -> (broadcast::Receiver<SessionEvent>, Vec<SessionEvent>) {
+    let live = record.subscribe();
+    between();
+    (live, record.replay_after(after))
+}
+
 /// Replay what the ring holds, then follow the feed.
 enum Step {
     Beat,
@@ -1699,9 +1717,9 @@ async fn pump(record: Arc<Record>, after: u64, sender: mpsc::Sender<Event>) {
     // the ring is written before the broadcast, so an event landing between the replay's
     // last read and a later subscription would be in neither. The `event.seq <= last`
     // check below drops the one-event overlap the early subscription creates.
-    let mut live = record.subscribe();
+    let (mut live, replay) = subscribe_and_replay(&record, after, || {});
     let mut last = after;
-    for event in record.replay_after(after) {
+    for event in replay {
         last = event.seq;
         if sender.send(frame(&event)).await.is_err() {
             return;
@@ -2082,6 +2100,30 @@ mod tests {
         assert_eq!(kept.len(), REPLAY_CAPACITY);
         assert_eq!(kept.first().map(|event| event.seq), Some(11));
         assert_eq!(record.last_seq(), (REPLAY_CAPACITY + 10) as u64);
+    }
+
+    #[test]
+    fn an_event_recorded_between_the_subscription_and_the_replay_is_delivered() {
+        let (record, _mailbox) = Record::new(
+            "s1".into(),
+            "default".into(),
+            "mock".into(),
+            None,
+            None,
+            None,
+        );
+        record.record(event(&record, 1));
+        // The gap the old order had: the subscription exists, the agent records the
+        // turn's next event, and only then does the ring get read. A handler that
+        // subscribed after the replay would lose sequence 2 with the session already
+        // idle, which is exactly the reconnect that waited out its patience.
+        let (mut live, replay) =
+            subscribe_and_replay(&record, 1, || record.record(event(&record, 2)));
+        let mut seqs: Vec<u64> = replay.iter().map(|event| event.seq).collect();
+        while let Ok(event) = live.try_recv() {
+            seqs.push(event.seq);
+        }
+        assert!(seqs.contains(&2), "sequence 2 was lost: {seqs:?}");
     }
 
     #[test]

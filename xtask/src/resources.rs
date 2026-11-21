@@ -58,6 +58,12 @@ const IDLE_ROW: &str = "acpilotd";
 /// Not `acpilotd` again: the gate keys a figure by its row, and two rows under one
 /// name would let one of them stand in for the other.
 const SESSION_ROW: &str = "acpilotd + 1 session";
+/// The daemon with one prompt turn in it: the path a client's keystroke takes.
+///
+/// Not a CLI row: the `acpilot` binary has no `prompt` verb, and the clients that do
+/// start a turn are the TUI and anything speaking the API. What the turn costs the
+/// process that serves it is this row's figure.
+const TURN_ROW: &str = "acpilotd + 1 turn";
 /// `acpilot serve` with one page attached: the CLI's long-lived row.
 const SERVE_ROW: &str = "acpilot serve";
 /// The table's budget for one idle session: what a session may add to the daemon.
@@ -146,11 +152,14 @@ command = "acpilot-mock-agent"
         let session = repeat(repeats, || {
             daemon_with_session(&target.join(exe("acpilotd")), &profile, &workspace)
         })?;
+        let turn = repeat(repeats, || {
+            daemon_with_turn(&target.join(exe("acpilotd")), &profile, &workspace)
+        })?;
         let serve = repeat(repeats, || {
             serve_row(&target.join(exe("acpilot")), &profile, &workspace)
         })?;
         let doctor = repeat(repeats, || doctor(&target.join(exe("acpilot")), &workspace))?;
-        Ok(vec![daemon, session, serve, doctor])
+        Ok(vec![daemon, session, turn, serve, doctor])
     })();
     let _ = fs::remove_dir_all(&profile);
     let figures = measured?;
@@ -208,6 +217,17 @@ const BUDGETS: &[Budget] = &[
     },
     Budget {
         row: SESSION_ROW,
+        rss_peak_mib: 24.0,
+        cpu_mean: Some(0.5),
+        threads: Threads {
+            base: 8,
+            per_core: 1,
+        },
+    },
+    Budget {
+        row: TURN_ROW,
+        // Provisional until a runner run reports the row; the constants take its median
+        // rather than this machine's, like every other memory budget here.
         rss_peak_mib: 24.0,
         cpu_mean: Some(0.5),
         threads: Threads {
@@ -533,25 +553,36 @@ fn median_cpu(figures: &[Figure], field: impl Fn(&Figure) -> Option<f32>) -> Opt
 
 /// `acpilotd` with a temporary profile and one `/v1/events` subscriber.
 fn daemon_idle(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
-    daemon(binary, profile, workspace, None)
+    daemon(binary, profile, workspace, Load::Idle)
 }
 
 /// The same daemon with one idle session in it.
 fn daemon_with_session(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
-    daemon(binary, profile, workspace, Some("mock"))
+    daemon(binary, profile, workspace, Load::Session)
 }
 
-/// A daemon, its subscriber, and — when `agent` is named — one session.
+/// The same daemon with one prompt turn: a client's keystroke, end to end.
+fn daemon_with_turn(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
+    daemon(binary, profile, workspace, Load::Turn)
+}
+
+/// What the daemon has running inside its window.
+#[derive(Debug, Clone, Copy)]
+enum Load {
+    /// A subscriber and nothing else.
+    Idle,
+    /// One session, created over the API and left idle.
+    Session,
+    /// One session with one prompt turn sent through the API.
+    Turn,
+}
+
+/// A daemon, its subscriber, and the load the row names.
 ///
 /// The subscriber opens before the session, so the window measures a daemon that is
 /// already serving the stream: a connection arriving in the middle of a measurement
 /// is the setup's cost, not the load's.
-fn daemon(
-    binary: &Path,
-    profile: &Path,
-    workspace: &Path,
-    agent: Option<&str>,
-) -> Result<Figure, String> {
+fn daemon(binary: &Path, profile: &Path, workspace: &Path, load: Load) -> Result<Figure, String> {
     let port = free_port()?;
     let mut child = spawn(
         Command::new(binary)
@@ -578,8 +609,16 @@ fn daemon(
     let measured = wait_until_healthy(port, &mut child).and_then(|()| {
         let token = wait_for_token(profile)?;
         let subscriber = Subscriber::open(port, &token)?;
-        let figure = match agent {
-            Some(agent) => create_session(port, &token, agent).and_then(|()| {
+        let figure = match load {
+            Load::Idle => measure(
+                &mut child,
+                IDLE_ROW,
+                "idle: one `/v1/events` subscriber open for the window (drawing and waiting)",
+                IDLE_WINDOW,
+                false,
+                true,
+            ),
+            Load::Session => create_session(port, &token, "mock").and_then(|_session| {
                 measure(
                     &mut child,
                     SESSION_ROW,
@@ -590,14 +629,20 @@ fn daemon(
                     false,
                 )
             }),
-            None => measure(
-                &mut child,
-                IDLE_ROW,
-                "idle: one `/v1/events` subscriber open for the window (drawing and waiting)",
-                IDLE_WINDOW,
-                false,
-                true,
-            ),
+            Load::Turn => create_session(port, &token, "mock").and_then(|session| {
+                prompt_session(port, &token, &session).and_then(|()| {
+                    measure(
+                        &mut child,
+                        TURN_ROW,
+                        "one prompt turn: the prompt sent over the API, the fixture agent's \
+                         events recorded and streamed to one subscriber; the daemon's own \
+                         process, with the rest of the window idle",
+                        IDLE_WINDOW,
+                        false,
+                        false,
+                    )
+                })
+            }),
         };
         subscriber.finish();
         figure
@@ -718,9 +763,11 @@ fn wait_for_token(profile: &Path) -> Result<String, String> {
     ))
 }
 
-/// `POST /v1/sessions` with the fixture agent, and an error that names what the
-/// daemon said when it refused.
-fn create_session(port: u16, token: &str, agent: &str) -> Result<(), String> {
+/// `POST /v1/sessions` with the fixture agent, and the id the daemon gave it.
+///
+/// The id is read from the answer rather than generated here: the daemon owns the
+/// conversation's identity, and a second request needs what it called the session.
+fn create_session(port: u16, token: &str, agent: &str) -> Result<String, String> {
     let body = format!(r#"{{"workspace_id":"","agent_id":"{agent}"}}"#);
     let request = format!(
         "POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
@@ -729,13 +776,35 @@ fn create_session(port: u16, token: &str, agent: &str) -> Result<(), String> {
         body.len()
     );
     let response = request_once(port, &request, Duration::from_secs(10))?;
-    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 201") {
-        Ok(())
-    } else {
-        Err(format!(
+    if !(response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.1 201")) {
+        return Err(format!(
             "the session was refused: {}",
             first_line(&response)
-        ))
+        ));
+    }
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    body.split("\"id\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("the session answer named no id: {}", first_line(&response)))
+}
+
+/// `POST /v1/sessions/{id}/prompt`: one turn, which the fixture agent answers at once.
+fn prompt_session(port: u16, token: &str, session: &str) -> Result<(), String> {
+    let body = r#"{"text":"stream 6"}"#;
+    let request = format!(
+        "POST /v1/sessions/{session}/prompt HTTP/1.1\r\nHost: localhost\r\nAuthorization: \
+         Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let response = request_once(port, &request, Duration::from_secs(10))?;
+    if response.starts_with("HTTP/1.1 202") || response.starts_with("HTTP/1.1 200") {
+        Ok(())
+    } else {
+        Err(format!("the prompt was refused: {}", first_line(&response)))
     }
 }
 
@@ -1148,9 +1217,10 @@ fn budget_row(
     value: f64,
     margin: f64,
     unit: Unit,
+    source: &str,
 ) {
     note.push_str(&format!(
-        "| `{}` | {metric} | {} | {:.0} % | {} |\n",
+        "| `{}` | {metric} | {} | {:.0} % | {} | {source} |\n",
         budget.row,
         unit.write(value),
         margin * 100.0,
@@ -1230,10 +1300,13 @@ fn render(figures: &[Figure], release: bool) -> String {
          margin. A figure is written as a budget and a percentage rather than as one sample,\n\
          because the same program on another machine is not the same number, and a gate that\n\
          trips on a scheduling hitch is a gate somebody turns off. A row measured without a\n\
-         budget fails too: a row outside the list is one the gate quietly stopped checking.\n\n",
+         budget fails too: a row outside the list is one the gate quietly stopped checking.\n\
+         The last column says where each budget came from — a median the runner took, or a\n\
+         ceiling the product states — because those are different kinds of promise, and a\n\
+         regression check is only meaningful against the first.\n\n",
     );
-    note.push_str("| program | metric | budget | margin | fails above |\n");
-    note.push_str("| --- | --- | --- | --- | --- |\n");
+    note.push_str("| program | metric | budget | margin | fails above | source |\n");
+    note.push_str("| --- | --- | --- | --- | --- | --- |\n");
     for budget in BUDGETS {
         budget_row(
             &mut note,
@@ -1242,6 +1315,7 @@ fn render(figures: &[Figure], release: bool) -> String {
             budget.rss_peak_mib,
             RSS_MARGIN,
             Unit::Mib,
+            "the runner's median",
         );
         if let Some(cpu_mean) = budget.cpu_mean {
             budget_row(
@@ -1251,10 +1325,16 @@ fn render(figures: &[Figure], release: bool) -> String {
                 cpu_mean,
                 CPU_MARGIN,
                 Unit::Percent,
+                "the runner's median",
             );
         }
+        let source = if budget.threads.per_core == 0 {
+            "the runner's count"
+        } else {
+            "the runner's count, one per CPU"
+        };
         note.push_str(&format!(
-            "| `{}` | threads | {} ({}) | {:.0} % | {} |\n",
+            "| `{}` | threads | {} ({}) | {:.0} % | {} | {source} |\n",
             budget.row,
             budget.threads.on(cpus),
             budget.threads.text(),
@@ -1262,6 +1342,15 @@ fn render(figures: &[Figure], release: bool) -> String {
             (budget.threads.on(cpus) as f64 * (1.0 + THREAD_MARGIN)).ceil() as u64
         ));
     }
+    // The session delta is not a measured median but the table's own promise, so it is
+    // in the same table with its source named rather than left to the prose.
+    note.push_str(&format!(
+        "| `{}` | added RSS | {} | 0 % | {} | the table's {:.0} MB ceiling |\n",
+        SESSION_ROW,
+        Unit::Mib.write(SESSION_MIB),
+        Unit::Mib.write(SESSION_MIB),
+        SESSION_MIB
+    ));
     note.push('\n');
     note.push_str(
         "The `acpilotd` rows are measured with the load named in theirs rather than at rest:\n\

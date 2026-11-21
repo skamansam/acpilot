@@ -3295,12 +3295,22 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     afterwards, so an event recorded between the two was in neither the replay nor the
     feed, and a reconnecting client waited for a turn that had already finished. It now
     subscribes before the replay and drops the overlap by sequence, on both the SSE and
-    the WebSocket route.
-  - Open: a `prompt` turn as a CLI row is the one long-lived load still missing (the
-    `serve` row is in); `acpilot doctor` has memory and threads but no CPU (a 170 ms
-    process gives `sysinfo` too few intervals for a percentage, which is why its CPU
-    budget is `None` and not zero); and the session row's agent is the repository's
-    fixture, so a real agent's memory is still unmeasured.
+    the WebSocket route. That fix has a deterministic test: the handoff takes a hook, and
+    the test records an event between the subscription and the ring read — the exact
+    window that used to lose it.
+  - Progress (2026-11-20): the turn row and the table's provenance. `acpilotd + 1 turn`
+    creates a session, sends one prompt over the API and measures the daemon that serves
+    it, because that is where a turn runs: the `acpilot` binary has no `prompt` verb, so
+    the turn path's figure is the daemon's rather than a CLI's. The note's budget table
+    now has a source column — a median the runner took, the per-CPU thread counts, or the
+    table's own 15 MB session ceiling — so a regression check and a stated promise are not
+    printed as though they were the same kind of number.
+  - Open: a turn is measured on the daemon because the CLI has no `prompt` verb (a CLI
+    figure would need one; `acpilot recipes` exercises a model server, not an agent turn);
+    `acpilot doctor` has memory and threads but no CPU (a 170 ms process gives `sysinfo`
+    too few intervals for a percentage, which is why its CPU budget is `None` and not
+    zero); and the session row's agent is the repository's fixture, so a real agent's
+    memory is still unmeasured.
 
 ### Security
 

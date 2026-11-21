@@ -16,12 +16,13 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.7 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.2 MiB | — | — | 1 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.5 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.0 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.9 MiB | — | — | 1 |
 
-One idle session adds **2.9 MiB** to the daemon's own process — the session row's
+One idle session adds **3.5 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -34,20 +35,27 @@ margin. A figure is written as a budget and a percentage rather than as one samp
 because the same program on another machine is not the same number, and a gate that
 trips on a scheduling hitch is a gate somebody turns off. A row measured without a
 budget fails too: a row outside the list is one the gate quietly stopped checking.
+The last column says where each budget came from — a median the runner took, or a
+ceiling the product states — because those are different kinds of promise, and a
+regression check is only meaningful against the first.
 
-| program | metric | budget | margin | fails above |
-| --- | --- | --- | --- | --- |
-| `acpilotd` | peak RSS | 20.0 MiB | 50 % | 30.0 MiB |
-| `acpilotd` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilotd` | threads | 28 (4 + 1/core) | 50 % | 42 |
-| `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB |
-| `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilotd + 1 session` | threads | 32 (8 + 1/core) | 50 % | 48 |
-| `acpilot serve` | peak RSS | 22.0 MiB | 50 % | 33.0 MiB |
-| `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilot serve` | threads | 28 (4 + 1/core) | 50 % | 42 |
-| `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB |
-| `acpilot doctor` | threads | 2 (2) | 50 % | 3 |
+| program | metric | budget | margin | fails above | source |
+| --- | --- | --- | --- | --- | --- |
+| `acpilotd` | peak RSS | 20.0 MiB | 50 % | 30.0 MiB | the runner's median |
+| `acpilotd` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
+| `acpilotd` | threads | 28 (4 + 1/core) | 50 % | 42 | the runner's count, one per CPU |
+| `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB | the runner's median |
+| `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
+| `acpilotd + 1 session` | threads | 32 (8 + 1/core) | 50 % | 48 | the runner's count, one per CPU |
+| `acpilotd + 1 turn` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB | the runner's median |
+| `acpilotd + 1 turn` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
+| `acpilotd + 1 turn` | threads | 32 (8 + 1/core) | 50 % | 48 | the runner's count, one per CPU |
+| `acpilot serve` | peak RSS | 22.0 MiB | 50 % | 33.0 MiB | the runner's median |
+| `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
+| `acpilot serve` | threads | 28 (4 + 1/core) | 50 % | 42 | the runner's count, one per CPU |
+| `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB | the runner's median |
+| `acpilot doctor` | threads | 2 (2) | 50 % | 3 | the runner's count |
+| `acpilotd + 1 session` | added RSS | 15.0 MiB | 0 % | 15.0 MiB | the table's 15 MB ceiling |
 
 The `acpilotd` rows are measured with the load named in theirs rather than at rest:
 one `/v1/events` subscriber open for the window, and the same daemon with one idle

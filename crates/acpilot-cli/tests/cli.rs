@@ -5,6 +5,8 @@
 //! script or a human reads. Snapshots here are deliberate — changing help output
 //! is a user-visible change and should show up as a diff.
 
+mod support;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,6 +15,8 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
+
+use support::http::read_request;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -91,11 +95,21 @@ impl FakeDaemon {
                             .unwrap_or_default();
                         let answer = if path.starts_with("/v1/health") {
                             health_response()
-                        } else if path.contains("/runs") {
+                        } else if path.starts_with("/v1/recipes/") && path.ends_with("/runs") {
                             run_response()
                         } else {
-                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                                .to_vec()
+                            // Loud on purpose: an unknown request is a bug in the test
+                            // or the client, not an API answer, and a guessed 404 is
+                            // how the macOS flake nearly hid.
+                            let body = serde_json::json!({
+                                "error": format!("the fake daemon has no route for {path}")
+                            })
+                            .to_string();
+                            http_response_with_status(
+                                "500 Internal Server Error",
+                                "application/json",
+                                body.as_bytes(),
+                            )
                         };
                         let _ = stream.write_all(&answer).and_then(|()| stream.flush());
                     }
@@ -114,45 +128,6 @@ impl FakeDaemon {
     }
 }
 
-/// Reads one request: the head, then the body it declares. Answering before the
-/// body is read makes the close that follows a reset on some platforms, and a
-/// reset can discard the answer that was just written — that is the shape of the
-/// macOS 404 this fake produced. A daemon reads what the client sent anyway.
-fn read_request(stream: &mut TcpStream) -> Option<String> {
-    let mut request = Vec::new();
-    let mut buffer = [0u8; 1024];
-    let head_end = loop {
-        if let Some(at) = request.windows(4).position(|window| window == b"\r\n\r\n") {
-            break at + 4;
-        }
-        match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => return None,
-            Ok(read) => request.extend_from_slice(&buffer[..read]),
-        }
-    };
-    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
-    let declared = content_length(&head).unwrap_or(0);
-    let mut read = request.len() - head_end;
-    while read < declared {
-        let want = (declared - read).min(buffer.len());
-        match stream.read(&mut buffer[..want]) {
-            Ok(0) | Err(_) => break,
-            Ok(got) => read += got,
-        }
-    }
-    Some(head)
-}
-
-fn content_length(head: &str) -> Option<usize> {
-    head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        if !name.eq_ignore_ascii_case("content-length") {
-            return None;
-        }
-        value.trim().parse().ok()
-    })
-}
-
 impl Drop for FakeDaemon {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -165,8 +140,12 @@ impl Drop for FakeDaemon {
 }
 
 fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+    http_response_with_status("200 OK", content_type, body)
+}
+
+fn http_response_with_status(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
     let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     [head.as_bytes(), body].concat()
@@ -319,6 +298,53 @@ fn recipes_run_keeps_thinking_on_stderr_and_the_answer_on_stdout() {
         !stdout(&json).contains("weighing"),
         "the record carries the answer's summary, not the thinking: {}",
         stdout(&json)
+    );
+}
+
+/// The fake must read the body its request declares before it answers. Answering
+/// from the head alone leaves the body unread, and closing on unread bytes is a
+/// reset that loses the answer on macOS — the one 404 that made CI red once. The
+/// probe is a real socket: send the head without the body and require silence,
+/// then send the body and require the answer.
+#[test]
+fn the_fake_daemon_waits_for_the_declared_body_before_answering() {
+    let daemon = FakeDaemon::start();
+    let mut stream = TcpStream::connect(daemon.endpoint.trim_start_matches("http://"))
+        .expect("connect to the fake");
+    stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("a read timeout");
+    stream
+        .write_all(
+            b"POST /v1/health HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+        )
+        .expect("the head");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let mut buffer = [0u8; 64];
+    match stream.read(&mut buffer) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) => {}
+        Ok(read) => panic!(
+            "the fake answered before the body arrived: {:?}",
+            String::from_utf8_lossy(&buffer[..read])
+        ),
+        Err(error) => panic!("the probe could not read: {error}"),
+    }
+
+    stream.write_all(b"hello").expect("the body");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("a read timeout");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).expect("read the answer");
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(
+        answer.starts_with("HTTP/1.1 200 OK"),
+        "the body was read before the route answered: {answer:?}"
     );
 }
 

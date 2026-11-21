@@ -6,8 +6,10 @@
 //! real, so a change that verifies the index but skips the archive (or the other
 //! way round) fails here.
 
+mod support;
+
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -18,6 +20,8 @@ use std::time::Duration;
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+use support::http::read_request;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -178,13 +182,8 @@ impl OneFile {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let mut head = Vec::new();
-                        let mut buffer = [0u8; 1024];
-                        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-                            match stream.read(&mut buffer) {
-                                Ok(0) | Err(_) => break,
-                                Ok(read) => head.extend_from_slice(&buffer[..read]),
-                            }
+                        if read_request(&mut stream).is_none() {
+                            continue;
                         }
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

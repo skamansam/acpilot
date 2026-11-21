@@ -1678,15 +1678,21 @@ resolved.
     failure with the test repeated under load;    this note exists so the rerun that made CI
     green does not become the reason nobody looks. **Fixed the same day:** `FakeDaemon`
     reads the body its request declares before it answers, so the close cannot race
-    unread bytes and its fallback 404 now means a request line that was really absent;
-    the prompt is still ignored, it is just no longer left in the socket.
+    unread bytes; its fallback no longer guesses a 404 either — it knows `/v1/health` and
+    `/v1/recipes/{id}/runs` and answers anything else with a `500` naming the path,
+    because a guessed 404 reads as an API answer; the prompt is still ignored, it is just
+    no longer left in the socket.
     **Sweep and reproduction (2026-11-21):** the old fake and the fixed one were each run
     200 times under a full `yes` load at 20 concurrent processes; neither failed, so the
     macOS 404 was not reproduced on Linux. Closing with unread bytes is a reset that this
-    kernel does not turn into a lost answer here, so the fix is preventive rather than
-    demonstrated. The sweep found one other hand-written HTTP server, `OneFile` in
-    `crates/acpilot-cli/tests/registry.rs`, which also reads to `\r\n\r\n` and answers; it
-    serves a single GET of a `.tar.gz`, so no body is left in the socket. Every other
+    kernel does not turn into a lost answer here, so the fix is preventive rather than a
+    demonstrated cure. What is tested is the drain itself: `the_fake_daemon_waits_for_`
+    `the_declared_body_before_answering` opens a real socket, sends a head that declares a
+    five-byte body and requires silence, then sends the body and requires the 200. The
+    sweep found one other hand-written HTTP server, `OneFile` in
+    `crates/acpilot-cli/tests/registry.rs`, which now shares `read_request` in
+    `tests/support/http.rs`; it serves a single GET of a `.tar.gz`, so no body was ever at
+    risk. Every other
     loopback server in `tests/` is axum, which reads the body before the handler runs, and
     the `read_until` hits are the LSP stdio protocol and a pty harness, not HTTP.
   - **DoD:** `acpilot recipes run <id> "…"` streams from a real LM Studio on port 1234, the run

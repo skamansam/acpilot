@@ -3273,15 +3273,22 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     the idle row's and fails when the difference is past 15 MB with no margin, because that
     number is a stated ceiling rather than a median this harness discovered. To get there
     the harness builds `acpilot-agent`'s fixture binary and puts its directory first on the
-    daemon's `PATH`, and gives each run its own `XDG_RUNTIME_DIR`, `ACPILOT_HOME` and token
-    under the temporary profile so a session row cannot touch the machine's real state.
-  - Open: the budgets are still this machine's medians; deriving them from the hosted
-    runner is the next step, so a calibration run prints the runner's figures and the
-    constants take those numbers rather than a wider margin. A long-lived CLI row needs
-    `acpilot serve` or a `prompt` turn with the mock agent, `acpilot doctor` has memory and
-    threads but no CPU (a 170 ms process gives `sysinfo` too few intervals for a
-    percentage, which is why its CPU budget is `None` and not zero), and the session row's
-    agent is the repository's fixture, so a real agent's memory is still unmeasured.
+    daemon's `PATH`, and gives each run its own `XDG_RUNTIME_DIR`, `ACPILOT_HOME`,
+    `XDG_CONFIG_HOME` and token under the temporary profile, so a row cannot read or write
+    the machine's real state. The budgets are the medians a run on `ubuntu-latest`
+    measured, not a developer's box: the gate compares CI with CI, and the note keeps the
+    local figures beside the runner's limits. Deriving them that way exposed a harness bug
+    rather than a budget question — the one-shot row waited an interval before its first
+    sample, so a `doctor` run that exited inside 40 ms reported 0.0 MiB and passed every
+    budget it was given. It now samples as soon as the process exists and does not count a
+    zero reading, because a process that is gone is not a process that used no memory.
+  - Open: a long-lived CLI row needs `acpilot serve` or a `prompt` turn with the mock
+    agent; `acpilot doctor` has memory and threads but no CPU (a 170 ms process gives
+    `sysinfo` too few intervals for a percentage, which is why its CPU budget is `None`
+    and not zero); the session row's agent is the repository's fixture, so a real agent's
+    memory is still unmeasured; and the thread budgets follow the runner's logical CPU
+    count, so `--gate` on a larger box trips the thread rows by design while
+    `cargo xtask resources` still measures and writes the note there.
 
 ### Security
 

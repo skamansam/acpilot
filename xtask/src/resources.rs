@@ -181,25 +181,27 @@ command = "acpilot-mock-agent"
     Ok(true)
 }
 
-/// The budgets: the median a reference run measured, rounded up to a round number.
+/// The budgets: the median a run on GitHub's `ubuntu-latest` measured, rounded up.
 ///
 /// The budget is not the product's ceiling — the table in `TODO.md` names 60 MB for an
-/// idle daemon — but the figure this machine measured, so the gate reports a regression
-/// while it is still a regression rather than when it reaches a number somebody picked
-/// before there was anything to compare it with. A row that stops being measured is also
-/// a failure: a budget nobody checks is a promise nobody keeps.
+/// idle daemon — but the figure the runner the gate runs on measured, so the gate
+/// compares CI with CI rather than a developer's box with a hosted machine. A row that
+/// stops being measured is also a failure: a budget nobody checks is a promise nobody
+/// keeps. Thread counts follow the logical CPU count, so a machine with more cores than
+/// the runner legitimately reports more of them: `cargo xtask resources` measures and
+/// writes the note anywhere, and `--gate` is CI's shape of the question.
 const BUDGETS: &[Budget] = &[
     Budget {
         row: "acpilotd",
-        rss_peak_mib: 32.0,
-        cpu_mean: Some(2.0),
-        threads: 32,
+        rss_peak_mib: 20.0,
+        cpu_mean: Some(0.5),
+        threads: 12,
     },
     Budget {
         row: SESSION_ROW,
-        rss_peak_mib: 32.0,
-        cpu_mean: Some(2.0),
-        threads: 32,
+        rss_peak_mib: 24.0,
+        cpu_mean: Some(0.5),
+        threads: 16,
     },
     Budget {
         row: "acpilot doctor",
@@ -500,6 +502,11 @@ fn daemon(
             // temporary profile instead.
             .env("XDG_RUNTIME_DIR", profile)
             .env("ACPILOT_HOME", profile)
+            // And the config root, so the daemon discovers no profiles but this one:
+            // a row that loaded a developer's real profiles would count threads and
+            // memory that belong to somebody's settings, and the runner's empty list
+            // would be a different daemon.
+            .env("XDG_CONFIG_HOME", profile)
             .env("PATH", search_path(binary)),
         binary,
     )?;
@@ -769,24 +776,34 @@ fn measure(
     let mut system = System::new();
     // sysinfo's CPU figure is a delta between two refreshes; this is the base.
     refresh_for(&mut system, root, one_shot);
-    sleep(interval);
 
     let started = Instant::now();
     let mut samples = 0u32;
+    let mut cpu_samples = 0u32;
     let mut rss_peak = 0u64;
     let mut cpu_peak = 0.0f32;
     let mut cpu_sum = 0.0f32;
     let mut threads = 0usize;
     let mut exited = None;
-    while started.elapsed() < duration {
-        sleep(interval);
+    loop {
+        // Sampled before the sleep, because a one-shot row can be over by the time an
+        // interval elapses: a `doctor` run on a hosted runner exited inside 40 ms and
+        // reported 0.0 MiB, a corpse's memory reading as a figure inside every budget.
+        // A zero reading counts for the same reason — a process that is gone is not a
+        // process that used no memory.
         let (rss, cpu, count) = sample_tree(&mut system, root, one_shot, whole_tree);
-        if count > 0 {
+        if count > 0 && rss > 0 {
             samples += 1;
             rss_peak = rss_peak.max(rss);
-            cpu_peak = cpu_peak.max(cpu);
-            cpu_sum += cpu;
             threads = threads.max(count);
+            // A one-shot row's first delta is the few milliseconds between the base
+            // refresh and this sample rather than a window, so it counts for memory
+            // and threads and not for CPU.
+            if !one_shot || samples > 1 {
+                cpu_samples += 1;
+                cpu_peak = cpu_peak.max(cpu);
+                cpu_sum += cpu;
+            }
         }
         if let Some(status) = child
             .try_wait()
@@ -795,6 +812,10 @@ fn measure(
             exited = Some(status);
             break;
         }
+        if started.elapsed() >= duration {
+            break;
+        }
+        sleep(interval);
     }
 
     if let Some(status) = exited
@@ -811,8 +832,8 @@ fn measure(
     // the delta between two refreshes, and a 170 ms CLI does not give it enough
     // intervals for the number to mean anything. Memory and threads still do, and a
     // `0.00 %` would be a claim this harness cannot make.
-    let (cpu_mean, cpu_peak) = if !one_shot && samples >= 2 {
-        (Some(cpu_sum / samples as f32), Some(cpu_peak))
+    let (cpu_mean, cpu_peak) = if !one_shot && cpu_samples >= 2 {
+        (Some(cpu_sum / cpu_samples as f32), Some(cpu_peak))
     } else {
         (None, None)
     };
@@ -1111,9 +1132,11 @@ fn render(figures: &[Figure], release: bool) -> String {
          program. The session's added memory is checked on its own, with no margin. The\n\
          one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo` too\n\
          few intervals for a percentage — so its CPU budget is `None` rather than zero. The\n\
-         budgets are this machine's figures, so the gate is a regression check: this note\n\
-         keeps the measured number and the hardware, and neither is a claim about a user's\n\
-         machine.\n\n",
+         budgets below are the medians a run on GitHub's `ubuntu-latest` measured, not this\n\
+         machine's: the table above is this machine, and the gate compares the runner with\n\
+         the runner. A box with more logical CPUs reports more threads, because the\n\
+         daemon's pool follows the core count, so `--gate` there trips the thread rows\n\
+         while `cargo xtask resources` still writes this note.\n\n",
     );
 
     note.push_str("## What is not measured here, and why\n\n");
@@ -1130,9 +1153,10 @@ fn render(figures: &[Figure], release: bool) -> String {
 
     note.push_str("## Limitations\n\n");
     note.push_str(
-        "- The budgets came from one machine, not a reference runner; a hosted runner that\n\
-         measures a different figure needs its own budget, not a wider margin around this\n\
-         one's.\n",
+        "- The budgets are one runner's medians, so a runner image whose kernel or CPU count\n\
+         differs can move the thread rows without a regression: re-measure with\n\
+         `cargo xtask resources --gate` on the runner and take its figures rather than\n\
+         widening the margin.\n",
     );
     note.push_str(
         "- The session row's agent is this repository's fixture, not a real agent, and the row\n\

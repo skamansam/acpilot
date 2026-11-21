@@ -226,9 +226,9 @@ const BUDGETS: &[Budget] = &[
     },
     Budget {
         row: TURN_ROW,
-        // Provisional until a runner run reports the row; the constants take its median
-        // rather than this machine's, like every other memory budget here.
-        rss_peak_mib: 24.0,
+        // The runner measured 22.7 MiB and 12 threads on 4 logical CPUs: the session
+        // row's shape, which is what a turn costs on top of the session it runs in.
+        rss_peak_mib: 23.0,
         cpu_mean: Some(0.5),
         threads: Threads {
             base: 8,

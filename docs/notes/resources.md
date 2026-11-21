@@ -16,13 +16,13 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.5 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
 | `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.0 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.9 MiB | — | — | 1 |
+| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.4 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.7 MiB | — | — | 1 |
 
-One idle session adds **3.5 MiB** to the daemon's own process — the session row's
+One idle session adds **3.6 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -47,7 +47,7 @@ regression check is only meaningful against the first.
 | `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB | the runner's median |
 | `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
 | `acpilotd + 1 session` | threads | 32 (8 + 1/core) | 50 % | 48 | the runner's count, one per CPU |
-| `acpilotd + 1 turn` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB | the runner's median |
+| `acpilotd + 1 turn` | peak RSS | 23.0 MiB | 50 % | 34.5 MiB | the runner's median |
 | `acpilotd + 1 turn` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
 | `acpilotd + 1 turn` | threads | 32 (8 + 1/core) | 50 % | 48 | the runner's count, one per CPU |
 | `acpilot serve` | peak RSS | 22.0 MiB | 50 % | 33.0 MiB | the runner's median |

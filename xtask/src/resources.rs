@@ -258,10 +258,11 @@ const BUDGETS: &[Budget] = &[
     },
     Budget {
         row: TUI_ROW,
-        // Provisional until a runner run reports the row; this machine measured
-        // 14.7 MiB, 0.39 % mean CPU and one thread drawing the design pass.
+        // The runner measured 15.9 MiB, 0.30 % mean CPU and one thread on 4 logical
+        // CPUs, and this machine the same one thread on 24: the client draws on one
+        // thread whatever the host has, so there is no per-CPU term.
         rss_peak_mib: 16.0,
-        cpu_mean: Some(4.0),
+        cpu_mean: Some(0.5),
         threads: Threads {
             base: 1,
             per_core: 0,

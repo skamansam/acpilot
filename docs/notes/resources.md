@@ -17,13 +17,13 @@ before a second sample could take a delta, so memory is the only figure it has.
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
 | `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.6 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 21.8 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.0 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilotd + 1 turn` | one prompt turn: the prompt sent over the API, the fixture agent's events recorded and streamed to one subscriber; the daemon's own process, with the rest of the window idle | 22.3 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
 | `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilot tui` | one design pass: `acpilot tui --demo` at its frame clock under a 120x40 pseudo-terminal; no daemon and no session traffic | 14.8 MiB | 0.29 % of one core | 4.73 % of one core | 1 |
+| `acpilot tui` | one design pass: `acpilot tui --demo` at its frame clock under a 120x40 pseudo-terminal; no daemon and no session traffic | 14.6 MiB | 0.19 % of one core | 4.72 % of one core | 1 |
 | `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.8 MiB | — | — | 1 |
 
-One idle session adds **3.2 MiB** to the daemon's own process — the session row's
+One idle session adds **3.4 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -55,7 +55,7 @@ regression check is only meaningful against the first.
 | `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
 | `acpilot serve` | threads | 28 (4 + 1/core) | 50 % | 42 | the runner's count, one per CPU |
 | `acpilot tui` | peak RSS | 16.0 MiB | 50 % | 24.0 MiB | the runner's median |
-| `acpilot tui` | mean CPU | 4.00 % | 100 % | 8.00 % | the runner's median |
+| `acpilot tui` | mean CPU | 0.50 % | 100 % | 1.00 % | the runner's median |
 | `acpilot tui` | threads | 1 (1) | 50 % | 2 | the runner's count |
 | `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB | the runner's median |
 | `acpilot doctor` | threads | 2 (2) | 50 % | 3 | the runner's count |

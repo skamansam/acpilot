@@ -1662,7 +1662,7 @@ resolved.
     request bodies so a param regression is a diff.
   - Bridge tests: expired code, wrong token, scope escalation refused, driver cannot answer a
     permission without the grant, revoked driver's next call fails with `401`.
-  - **Open (2026-11-21): a flaky 404 in the CLI's recipes test.** `check (macos-latest)` in
+  - **Fixed (2026-11-21): the flaky 404 in the CLI's recipes test.** `check (macos-latest)` in
     run `44869362697` (commit `acc8155`) failed once on
     `acpilot-cli::cli recipes_run_keeps_thinking_on_stderr_and_the_answer_on_stdout`,
     panicking at `crates/acpilot-cli/tests/cli.rs:245` after 0.179 s with "acpilot
@@ -1675,8 +1675,20 @@ resolved.
     answers, and drops the connection without reading the POST body, so a reset on the
     unread body can land on the client. The first fix to try is draining `Content-Length`
     bytes before answering (or accepting one connection at a time), and reproducing the
-    failure with the test repeated under load; this note exists so the rerun that made CI
-    green does not become the reason nobody looks.
+    failure with the test repeated under load;    this note exists so the rerun that made CI
+    green does not become the reason nobody looks. **Fixed the same day:** `FakeDaemon`
+    reads the body its request declares before it answers, so the close cannot race
+    unread bytes and its fallback 404 now means a request line that was really absent;
+    the prompt is still ignored, it is just no longer left in the socket.
+    **Sweep and reproduction (2026-11-21):** the old fake and the fixed one were each run
+    200 times under a full `yes` load at 20 concurrent processes; neither failed, so the
+    macOS 404 was not reproduced on Linux. Closing with unread bytes is a reset that this
+    kernel does not turn into a lost answer here, so the fix is preventive rather than
+    demonstrated. The sweep found one other hand-written HTTP server, `OneFile` in
+    `crates/acpilot-cli/tests/registry.rs`, which also reads to `\r\n\r\n` and answers; it
+    serves a single GET of a `.tar.gz`, so no body is left in the socket. Every other
+    loopback server in `tests/` is axum, which reads the body before the handler runs, and
+    the `read_until` hits are the LSP stdio protocol and a pty harness, not HTTP.
   - **DoD:** `acpilot recipes run <id> "…"` streams from a real LM Studio on port 1234, the run
     record reproduces byte-identically on replay, `promote` produces an agent that passes the engine phase (P2)
     session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while

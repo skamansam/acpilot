@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -81,18 +81,10 @@ impl FakeDaemon {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let mut head = Vec::new();
-                        let mut buffer = [0u8; 1024];
-                        // Headers only: the run's prompt is posted body content
-                        // this fake does not read.
-                        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-                            match stream.read(&mut buffer) {
-                                Ok(0) | Err(_) => break,
-                                Ok(read) => head.extend_from_slice(&buffer[..read]),
-                            }
-                        }
-                        let request = String::from_utf8_lossy(&head);
-                        let path = request
+                        let Some(head) = read_request(&mut stream) else {
+                            continue;
+                        };
+                        let path = head
                             .lines()
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
@@ -120,6 +112,45 @@ impl FakeDaemon {
             thread: Some(thread),
         }
     }
+}
+
+/// Reads one request: the head, then the body it declares. Answering before the
+/// body is read makes the close that follows a reset on some platforms, and a
+/// reset can discard the answer that was just written — that is the shape of the
+/// macOS 404 this fake produced. A daemon reads what the client sent anyway.
+fn read_request(stream: &mut TcpStream) -> Option<String> {
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 1024];
+    let head_end = loop {
+        if let Some(at) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break at + 4;
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) | Err(_) => return None,
+            Ok(read) => request.extend_from_slice(&buffer[..read]),
+        }
+    };
+    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+    let declared = content_length(&head).unwrap_or(0);
+    let mut read = request.len() - head_end;
+    while read < declared {
+        let want = (declared - read).min(buffer.len());
+        match stream.read(&mut buffer[..want]) {
+            Ok(0) | Err(_) => break,
+            Ok(got) => read += got,
+        }
+    }
+    Some(head)
+}
+
+fn content_length(head: &str) -> Option<usize> {
+    head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if !name.eq_ignore_ascii_case("content-length") {
+            return None;
+        }
+        value.trim().parse().ok()
+    })
 }
 
 impl Drop for FakeDaemon {

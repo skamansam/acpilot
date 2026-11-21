@@ -17,10 +17,10 @@ before a second sample could take a delta, so memory is the only figure it has.
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
 | `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 19.2 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.1 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.1 MiB | — | — | 1 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.2 MiB | — | — | 1 |
 
-One idle session adds **2.9 MiB** to the daemon's own process — the session row's
+One idle session adds **3.1 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -42,7 +42,7 @@ budget fails too: a row outside the list is one the gate quietly stopped checkin
 | `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB |
 | `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % |
 | `acpilotd + 1 session` | threads | 16 | 50 % | 24 |
-| `acpilot doctor` | peak RSS | 14.0 MiB | 50 % | 21.0 MiB |
+| `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB |
 | `acpilot doctor` | threads | 2 | 50 % | 3 |
 
 The `acpilotd` rows are measured with the load named in theirs rather than at rest:

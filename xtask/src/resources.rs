@@ -205,7 +205,7 @@ const BUDGETS: &[Budget] = &[
     },
     Budget {
         row: "acpilot doctor",
-        rss_peak_mib: 14.0,
+        rss_peak_mib: 8.0,
         // A one-shot row ends before `sysinfo` can take a delta, so it reports no CPU
         // and none is budgeted for it. The row has a budget for what it can measure.
         cpu_mean: None,

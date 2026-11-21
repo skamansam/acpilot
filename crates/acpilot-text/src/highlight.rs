@@ -8,12 +8,17 @@
 //!
 //! Three decisions, each one the fix for a cost a frame-based design pays:
 //!
-//! - **The parse is incremental.** `sync` diffs the new text against the text it
-//!   last parsed, hands tree-sitter that edit and reparses from the old tree, so
-//!   a keystroke re-parses a line rather than a file. The diff is a common
-//!   prefix and suffix rather than a list of edits: it is coarser than the truth
-//!   and never wrong, which is the right trade for something running on every
-//!   keystroke of a large file.
+//! - **The parse is incremental, except where reuse would lie.** `sync` diffs the
+//!   new text against the text it last parsed, hands tree-sitter that edit and
+//!   reparses from the old tree, so a keystroke re-parses a line rather than a
+//!   file. The diff is a common prefix and suffix rather than a list of edits: it
+//!   is coarser than the truth and never wrong, which is the right trade for
+//!   something running on every keystroke of a large file. The exception is a
+//!   tree with an ERROR in it: tree-sitter's incremental error recovery can shape
+//!   error nodes differently from a fresh parse, so a broken buffer is parsed
+//!   whole, and an edit that introduces an error is reparsed once to check it. A
+//!   buffer that is mid-sentence is not the one whose frame cost matters, and the
+//!   colour of the text is.
 //! - **The query runs on the visible range.** The tree covers the whole buffer;
 //!   the query cursor is given the bytes a pane is about to draw. A 60k-line
 //!   file costs what a screen of it costs.
@@ -331,11 +336,33 @@ impl Highlights {
         // keystroke in an empty buffer came back as a file with no nodes in it.
         // `edit_between` answers with the span between the two texts, which is a
         // superset of the real edits: less to reuse, never wrong.
-        if let Some(tree) = self.tree.as_mut() {
+        // A tree with an ERROR in it is not reused. tree-sitter's incremental error
+        // recovery can reshape error nodes differently from a fresh parse — no warning
+        // and no error flag, just a different tree — and the pane's contract is that the
+        // colours describe the text under them. So a buffer that is mid-sentence is
+        // parsed from scratch, and one that is valid keeps the reuse that makes a
+        // keystroke cheap.
+        let mut old = self.tree.take();
+        let stable = old
+            .as_ref()
+            .is_some_and(|tree| !tree.root_node().has_error());
+        if stable && let Some(tree) = old.as_mut() {
             tree.edit(&edit_between(&self.text, &text));
         }
-        let old = self.tree.take();
-        self.tree = self.parser.parse(&text, old.as_ref());
+        let mut parsed = self
+            .parser
+            .parse(&text, if stable { old.as_ref() } else { None });
+        // And an edit that introduces an error is checked against a fresh parse too:
+        // the reuse came from a valid tree, but the repair that shaped the new ERROR
+        // nodes is tree-sitter's, not ours.
+        if stable
+            && parsed
+                .as_ref()
+                .is_some_and(|tree| tree.root_node().has_error())
+        {
+            parsed = self.parser.parse(&text, None);
+        }
+        self.tree = parsed;
         self.text = text;
         true
     }
@@ -531,6 +558,40 @@ mod tests {
         let mut highlights = Highlights::new(grammar);
         highlights.sync(&buffer);
         (buffer, highlights)
+    }
+
+    /// The property test found this on Windows: a text that is mostly quotes and
+    /// brackets, with a paste at offset 0. The incremental parse painted the closing
+    /// quote as a string; a fresh parse of the same text did not, because tree-sitter
+    /// reused the old file's ERROR node and repaired around it differently.
+    #[test]
+    fn an_incremental_parse_agrees_after_a_paste_into_broken_text() {
+        let before = "AaA?a/\"\n\"0]\\ \"%";
+        let inserted = "fc/\n%\n[";
+        let mut buffer = Buffer::from_text(before);
+        let mut grammars = Grammars::new();
+        let grammar = grammars.get("rust").expect("a grammar");
+        let mut incremental = Highlights::new(grammar.clone());
+        incremental.sync(&buffer);
+        incremental.spans(&buffer, 0..buffer.char_len());
+
+        buffer.apply(&[crate::edit::Replacement::of(0..0, inserted)]);
+        incremental.sync(&buffer);
+        let actual = incremental.spans(&buffer, 0..buffer.char_len()).to_vec();
+
+        let mut fresh = Highlights::new(grammar);
+        fresh.sync(&buffer);
+        let expected = fresh.spans(&buffer, 0..buffer.char_len()).to_vec();
+        assert_eq!(
+            actual,
+            expected,
+            "incremental: {:?}\nfresh: {:?}",
+            incremental
+                .tree
+                .as_ref()
+                .map(|tree| tree.root_node().to_sexp()),
+            fresh.tree.as_ref().map(|tree| tree.root_node().to_sexp())
+        );
     }
 
     /// What `tree-sitter-highlight` makes of the same source, as text and token.

@@ -1662,6 +1662,21 @@ resolved.
     request bodies so a param regression is a diff.
   - Bridge tests: expired code, wrong token, scope escalation refused, driver cannot answer a
     permission without the grant, revoked driver's next call fails with `401`.
+  - **Open (2026-11-21): a flaky 404 in the CLI's recipes test.** `check (macos-latest)` in
+    run `44869362697` (commit `acc8155`) failed once on
+    `acpilot-cli::cli recipes_run_keeps_thinking_on_stderr_and_the_answer_on_stdout`,
+    panicking at `crates/acpilot-cli/tests/cli.rs:245` after 0.179 s with "acpilot
+    recipes run: http://127.0.0.1:49218/v1/recipes/demo/runs answered 404 Not Found with
+    a body this API does not define". The other 1748 tests in that job passed, the job's
+    rerun passed, and the same test has passed on macOS and Windows since. The fake's only
+    404 is its fallback for a path that is not `/v1/health` and does not contain `/runs`,
+    so the request line it read was empty or different from the one the client sent. The
+    suspect is the fake's shape rather than the client: it reads only up to `\r\n\r\n`,
+    answers, and drops the connection without reading the POST body, so a reset on the
+    unread body can land on the client. The first fix to try is draining `Content-Length`
+    bytes before answering (or accepting one connection at a time), and reproducing the
+    failure with the test repeated under load; this note exists so the rerun that made CI
+    green does not become the reason nobody looks.
   - **DoD:** `acpilot recipes run <id> "…"` streams from a real LM Studio on port 1234, the run
     record reproduces byte-identically on replay, `promote` produces an agent that passes the engine phase (P2)
     session smoke test, and a scripted ACP client paired as `devin` can prompt that agent while

@@ -38,8 +38,8 @@ network. Therefore:
 
 - **Trust-pinned.** Hashed on first use, prompt once, re-prompt if the binary
   changes.
-- **No auto-download in v0.1.** Detect what is installed. Do not fetch vendored
-  servers from the internet on the user's behalf.
+- **No silent downloads.** Detection is the default. A managed install is explicit,
+  checksummed and pinned before use; it is the D12 direction, not built yet.
 - **Restricted to the workspace root**, like agents.
 - **Timeouts everywhere**, plus `$/cancelRequest`, plus a crash-loop cap. A
   wedged server costs a status-line warning, not a frozen editor.

@@ -566,7 +566,7 @@ them. None of them learns the protocol.
 | Wire types | **`gen-lsp-types` 0.11** (`url` feature) | Generated from the official LSP metamodel, so it tracks the spec and distinguishes `null` from absent. It deliberately leaves URI encoding to the consumer, so we pick `url::Url` — what servers actually send. `lsp-types` 0.97 is unmaintained and moved to `fluent-uri`, trading interoperability for purity (D8). Isolated behind `acpilot-lsp::wire`. |
 | Client loop | **our own** (~400 lines) | `Content-Length` framing, request table, `$/cancelRequest`, `$/progress`, server→client requests. ACP gives us the transport abstraction. LSP framing differs (headers, not newline-delimited), so only the transport is shared. `async-lsp` 0.2 is the fallback: real client support, but pinned to `lsp-types` and built around local stdio. |
 | Document store | `ropey` + our own position mapping | No crate fits: incremental sync, per-URI versions, and UTF-16↔UTF-8 conversion must run against the same buffer the UI edits. |
-| Servers | ~10 presets in `lsp.toml`, declared as data | rust-analyzer, typescript-language-server, gopls, pyright, clangd, lua-language-server, bash-language-server, taplo, yaml-language-server, marksman. Detect-only in v0.1 — no downloads (D12). |
+| Servers | ~10 presets in `lsp.toml`, declared as data | rust-analyzer, typescript-language-server, gopls, pyright, clangd, lua-language-server, bash-language-server, taplo, yaml-language-server, marksman. Detect-only today; managed, checksummed downloads are the D12 direction (not built). |
 | Web transport | `@codemirror/lsp-client` 6.x over a WS bridge | First-party CodeMirror client (6.0, July 2025). Its `Transport` interface maps onto a daemon WebSocket, so the browser sees the same diagnostics as the TUI. |
 | MCP bridge | `agent-client-protocol-rmcp` | Exposes `lsp_diagnostics`/`lsp_hover`/`lsp_definition` to agents, so "what does the compiler say" is a tool call instead of a blind re-run of `cargo check`. |
 
@@ -696,9 +696,9 @@ so they are additive, not rewrites.
 ## 8. Non-goals for v0.1
 
 - Collaborative multi-user editing. Design for it, but do not ship CRDT in v0.1.
-- Being a language server, or shipping and auto-installing other people's servers. We
-  configure the ones you already have, and v0.1 downloads no servers (D12). Extensions can
-  carry a preset for a server you installed yourself, never the binary.
+- Being a language server. We do not ship our own. Detection is the default; a managed
+  download is explicit, checksummed and pinned (the D12 direction, not built). Extensions
+  can carry a preset for a server you installed yourself, never the binary.
 - Synced or hosted profiles. A profile is a local identity, not an account.
 - Being an agent itself. Acpilot ships no hosted model, no default personality, and no
   opinion about which agent is best. The model lab (P4.5) turns a model *you* already run

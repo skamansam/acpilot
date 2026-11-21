@@ -45,6 +45,9 @@ use utoipa::OpenApi as _;
 // over stdio or over HTTP with a paired token (P4.5-10).
 mod accounts;
 pub mod auth;
+// The second way to obtain the same session: OIDC authorization-code login with
+// PKCE against providers in `<data>/auth.toml` (ADR 0013 §5).
+pub mod oidc;
 // The remote half of that bridge: JSON-RPC over HTTP, the driver's event stream
 // and the cockpit routes that pair and revoke drivers.
 pub mod acp_http;
@@ -98,7 +101,7 @@ mod trust;
 mod usage;
 mod workspaces;
 
-pub use accounts::Accounts;
+pub use accounts::{Accounts, User};
 pub use auth::protect;
 pub use files::MAX_FILE_BYTES;
 // The language server table is the daemon's, not a client's: `doctor` reports what
@@ -1137,6 +1140,7 @@ impl AppState {
                     continue;
                 }
                 rows.push(lsp::Entry {
+                    untrusted: false,
                     language: language.clone(),
                     program: preset.command.clone(),
                     args: preset.args.clone(),

@@ -15,6 +15,13 @@ acpilot-extensions = { workspace = true }
 # `acpilot-proto` alone would produce components with no operations in them.
 acpilotd = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+# The catalog is signed by the maintainer's separate ed25519 key; the task refuses
+# to write an unsigned index, because a JSON file nobody signed is not the thing
+# the daemon verifies.
+ed25519-dalek = { workspace = true }
+toml = { workspace = true }
+jiff = { workspace = true }
 # The capture the site's showcase renders: the TUI's own frames and the desktop
 # shell's tables, from the crates that own them rather than from a transcription.
 acpilot-showcase = { workspace = true }

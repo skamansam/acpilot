@@ -254,6 +254,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpilot-relay"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "http-body-util",
+ "jiff",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "acpilot-showcase"
 version = "0.1.0"
 dependencies = [
@@ -381,6 +404,7 @@ dependencies = [
  "ignore",
  "insta",
  "jiff",
+ "jsonwebtoken",
  "reqwest",
  "rusqlite",
  "serde",
@@ -396,6 +420,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trash",
+ "url",
  "utoipa",
  "uuid",
  "vt100",
@@ -2788,7 +2813,7 @@ dependencies = [
  "digest 0.11.3",
  "elliptic-curve",
  "rfc6979",
- "signature",
+ "signature 3.0.0",
  "spki",
  "zeroize",
 ]
@@ -2800,7 +2825,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
  "pkcs8",
- "signature",
+ "signature 3.0.0",
 ]
 
 [[package]]
@@ -2814,7 +2839,7 @@ dependencies = [
  "rand_core 0.10.1",
  "serde",
  "sha2 0.11.1",
- "signature",
+ "signature 3.0.0",
  "subtle",
  "zeroize",
 ]
@@ -4838,6 +4863,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "10.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature 2.2.0",
+ "simple_asn1",
+ "zeroize",
+]
+
+[[package]]
 name = "kasuari"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6146,6 +6188,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7363,7 +7415,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "sha3",
- "signature",
+ "signature 3.0.0",
  "spki",
  "ssh-encoding",
  "ssh-key",
@@ -8159,6 +8211,15 @@ dependencies = [
 
 [[package]]
 name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "signature"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
@@ -8203,6 +8264,18 @@ name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+
+[[package]]
+name = "simple_asn1"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-traits",
+ "thiserror 2.0.21",
+ "time",
+]
 
 [[package]]
 name = "simplecss"
@@ -8378,7 +8451,7 @@ dependencies = [
  "sec1",
  "sha1 0.11.0",
  "sha2 0.11.1",
- "signature",
+ "signature 3.0.0",
  "ssh-cipher",
  "ssh-encoding",
  "zeroize",
@@ -11046,9 +11119,13 @@ dependencies = [
  "acpilot-showcase",
  "acpilotd",
  "clap",
+ "ed25519-dalek",
+ "jiff",
  "portable-pty",
+ "serde",
  "serde_json",
  "sysinfo",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]

@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "generated_at": "2026-11-21T22:27:29.787074479Z",
+  "servers": [
+    {
+      "id": "rust-analyzer",
+      "name": "rust-analyzer",
+      "languages": [
+        "rust"
+      ],
+      "license": "MIT OR Apache-2.0",
+      "redistributable": true,
+      "versions": [
+        {
+          "version": "2026-11-16",
+          "targets": {
+            "aarch64-unknown-linux-gnu": {
+              "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-16/rust-analyzer-aarch64-unknown-linux-gnu.gz",
+              "sha256": "sha256:73d8b9b87384b3115a183a8a51db9f7c205ce4c89ea511f3c8c8fea863038a50",
+              "size": 15120173,
+              "executable": "rust-analyzer",
+              "archive": "gz",
+              "args": []
+            },
+            "x86_64-unknown-linux-gnu": {
+              "url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-16/rust-analyzer-x86_64-unknown-linux-gnu.gz",
+              "sha256": "sha256:4a08727a03094e5114db4438e4bd1d6182cc26eff37d6962115ea1ec1a491ca3",
+              "size": 15663964,
+              "executable": "rust-analyzer",
+              "archive": "gz",
+              "args": []
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

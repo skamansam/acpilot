@@ -345,8 +345,10 @@ token in one startup panel. `--bind 0.0.0.0:7777` opens it to the LAN. The daemo
 compiled SPA (CodeMirror 6 + xterm.js) plus the API. Same daemon, same sessions, so a
 browser tab can watch an agent run on the office workstation. A local account (ADR 0013)
 exchanges its password for a 15-minute JWT; until `acpilot auth init` the printed token is
-the bootstrap credential. OIDC and a browser login page are not built yet. Optional TLS
-termination, no cloud dependency. `--token <token>` picks the secret instead of generating
+the bootstrap credential. The browser signs in at `/login`, which exchanges the password
+(or a configured OIDC provider) for an `HttpOnly` refresh cookie; the page keeps only the
+short-lived access token. OIDC providers live in `<data>/auth.toml`, and an identity is
+linked locally with `acpilot auth link`. Optional TLS termination, no cloud dependency. `--token <token>` picks the secret instead of generating
 one, and it lives in a `0600` file either way.
 
 ### API — HTTP + SSE + WS

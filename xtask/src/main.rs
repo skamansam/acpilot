@@ -130,6 +130,22 @@ enum Task {
     Showcase,
     /// Write the published `agents.toml` JSON Schema.
     Schema,
+    /// Generate and sign the language-server catalog (ADR 0014).
+    ///
+    /// The input is the reviewed `lsp/*.toml`; the output is
+    /// `marketplace/lsp/index-v1.json` and its detached `.sig`. The signing key is
+    /// a 64-hex ed25519 seed, never read from a file in this repository.
+    LspIndex {
+        /// A 64-hex ed25519 seed. The same value the release job keeps as a secret.
+        #[arg(long, env = "ACPILOT_LSP_SIGNING_KEY")]
+        signing_key: Option<String>,
+        /// The directory of reviewed `<id>.toml` files.
+        #[arg(long, default_value = "lsp")]
+        input: PathBuf,
+        /// The generated JSON. Its `.sig` is written beside it.
+        #[arg(long, default_value = "marketplace/lsp/index-v1.json")]
+        output: PathBuf,
+    },
     /// Run the daemon and the web dev server together, watching `web/` for edits.
     ///
     /// The page comes from Vite rather than from the daemon's embedded copy: the
@@ -258,6 +274,11 @@ fn main() -> ExitCode {
         Task::DocsData => run_docs_data(),
         Task::Showcase => run_showcase(),
         Task::Schema => run_schema(),
+        Task::LspIndex {
+            signing_key,
+            input,
+            output,
+        } => run_lsp_index(signing_key.as_deref(), &input, &output),
         Task::Dev => run_dev(),
         Task::WebBuild => run_web_build(),
         Task::Dist {
@@ -2134,6 +2155,211 @@ fn run_schema() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// One reviewed `lsp/<id>.toml`.
+#[derive(Debug, serde::Deserialize)]
+struct LspSource {
+    schema_version: u32,
+    id: String,
+    name: String,
+    languages: Vec<String>,
+    license: String,
+    redistributable: bool,
+    #[allow(dead_code)]
+    source: String,
+    versions: Vec<LspSourceVersion>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LspSourceVersion {
+    version: String,
+    targets: std::collections::BTreeMap<String, LspSourceArtifact>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LspSourceArtifact {
+    url: String,
+    sha256: String,
+    size: u64,
+    executable: String,
+    #[serde(default)]
+    archive: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+/// Generate and sign the language-server catalog (ADR 0014).
+fn run_lsp_index(signing_key: Option<&str>, input: &Path, output: &Path) -> ExitCode {
+    let Some(signing_key) = signing_key else {
+        eprintln!(
+            "lsp-index: set ACPILOT_LSP_SIGNING_KEY to the catalog's 64-hex ed25519 seed; an \
+             unsigned catalog is not a published catalog"
+        );
+        return ExitCode::FAILURE;
+    };
+    let seed = match decode_hex(signing_key, 32) {
+        Ok(seed) => seed,
+        Err(error) => {
+            eprintln!("lsp-index: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes.copy_from_slice(&seed);
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+
+    let mut sources = Vec::new();
+    let entries = match fs::read_dir(input) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("lsp-index: cannot read {}: {error}", input.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("toml") {
+            continue;
+        }
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("lsp-index: cannot read {}: {error}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let source: LspSource = match toml::from_str(&text) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("lsp-index: {}: {error}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        if source.schema_version != 1 {
+            eprintln!(
+                "lsp-index: {}: schema_version is {} and this generator writes 1",
+                path.display(),
+                source.schema_version
+            );
+            return ExitCode::FAILURE;
+        }
+        sources.push(source);
+    }
+    sources.sort_by(|left, right| left.id.cmp(&right.id));
+    if sources.is_empty() {
+        eprintln!(
+            "lsp-index: no `*.toml` catalog sources in {}",
+            input.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let servers: Vec<serde_json::Value> = sources
+        .into_iter()
+        .map(|source| {
+            let mut versions: Vec<LspSourceVersion> = source.versions;
+            versions.sort_by(|left, right| left.version.cmp(&right.version));
+            serde_json::json!({
+                "id": source.id,
+                "name": source.name,
+                "languages": source.languages,
+                "license": source.license,
+                "redistributable": source.redistributable,
+                "versions": versions.into_iter().map(|version| {
+                    serde_json::json!({
+                        "version": version.version,
+                        "targets": version.targets.into_iter().map(|(target, artifact)| {
+                            (target, serde_json::json!({
+                                "url": artifact.url,
+                                "sha256": artifact.sha256,
+                                "size": artifact.size,
+                                "executable": artifact.executable,
+                                "archive": if artifact.archive.is_empty() { "tar.gz".to_owned() } else { artifact.archive },
+                                "args": artifact.args,
+                            }))
+                        }).collect::<std::collections::BTreeMap<_, _>>(),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let document = serde_json::json!({
+        "schema": 1,
+        "generated_at": jiff::Timestamp::now().to_string(),
+        "servers": servers,
+    });
+    let mut bytes = match serde_json::to_vec_pretty(&document) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("lsp-index: cannot encode the catalog: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    bytes.push(b'\n');
+
+    let signature = {
+        use ed25519_dalek::Signer as _;
+        key.sign(&bytes)
+    };
+    let detached = serde_json::json!({
+        "key": "acpilot-lsp",
+        "signature": encode_hex(&signature.to_bytes()),
+    });
+    let detached = match serde_json::to_vec_pretty(&detached) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("lsp-index: cannot encode the signature: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(parent) = output.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("lsp-index: cannot create {}: {error}", parent.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(error) = fs::write(output, &bytes) {
+        eprintln!("lsp-index: cannot write {}: {error}", output.display());
+        return ExitCode::FAILURE;
+    }
+    let signature_path = output.with_extension("json.sig");
+    if let Err(error) = fs::write(&signature_path, detached) {
+        eprintln!(
+            "lsp-index: cannot write {}: {error}",
+            signature_path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "wrote {} ({} bytes) and {}",
+        output.display(),
+        bytes.len(),
+        signature_path.display()
+    );
+    ExitCode::SUCCESS
+}
+
+fn decode_hex(hex: &str, length: usize) -> Result<Vec<u8>, String> {
+    let hex = hex.trim();
+    if hex.len() != length * 2 {
+        return Err(format!(
+            "expected {} hex characters and got {}",
+            length * 2,
+            hex.len()
+        ));
+    }
+    let mut bytes = Vec::with_capacity(length);
+    for pair in hex.as_bytes().chunks(2) {
+        let pair = std::str::from_utf8(pair).map_err(|error| format!("not hex: {error}"))?;
+        bytes.push(u8::from_str_radix(pair, 16).map_err(|error| format!("not hex: {error}"))?);
+    }
+    Ok(bytes)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

@@ -441,6 +441,20 @@ pub enum AuthCommand {
     },
     /// Say whether the daemon has an account, and whether bootstrap mode is over.
     Status,
+    /// Link an OIDC identity to the local account.
+    ///
+    /// The subject is the provider's stable `sub` for you, not your email. This is
+    /// a local act on purpose: an email can be reassigned at a provider, and an
+    /// automatic match would let the new holder of that address into the daemon.
+    Link {
+        /// Provider id from `<data>/auth.toml`.
+        provider: String,
+        /// The provider's `sub` claim.
+        subject: String,
+        /// Email to store for display only.
+        #[arg(long)]
+        email: Option<String>,
+    },
 }
 
 /// Everything under `acpilot lsp`.
@@ -3325,6 +3339,20 @@ fn run_auth(command: AuthCommand) -> u8 {
                 }
             }
         }
+        AuthCommand::Link {
+            provider,
+            subject,
+            email,
+        } => match acpilotd::oidc::link_local(&provider, &subject, email.as_deref()) {
+            Ok(user) => {
+                println!("linked {provider} identity {subject} to `{}`", user.name);
+                exit::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("acpilot auth link: {error}");
+                exit::FAILURE
+            }
+        },
         AuthCommand::Status => match accounts.status() {
             Ok(status) if status.accounts => {
                 println!(

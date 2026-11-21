@@ -1,7 +1,9 @@
 # D22 — the chat relay, and the trust model presence inherits
 
-Status: design, not code. This decides the shape of the relay and what a relay
-operator can read; it does not add a chat database, a server, or a route.
+Status: design plus the first server slice. `crates/acpilot-relay` implements
+group creation, signed invites and joins, roster/leave revocation, and ephemeral
+presence. Message append/history, cross-relay federation, E2EE and a client UI are
+not built; the envelope and storage shape below are what those routes will use.
 
 D21 asked where a group's messages live. D22 asks who carries them and what the
 carrier sees. The answer matters twice: chat is the obvious user, and presence

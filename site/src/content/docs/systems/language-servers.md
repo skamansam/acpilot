@@ -114,14 +114,17 @@ somebody approved. The refusal is local: a remote server's bytes are the host's 
 hash (P7-11). A server nobody has pinned still starts; requiring an answer before
 first use is the part of P7-12 still open.
 
-The catalog installer is built. `acpilot lsp search|install|list|remove` fetches
-`index-v1.json`, checks the detached signature with `ACPILOT_LSP_INDEX_PUBKEY`,
-verifies the archive's size and sha256, unpacks only regular files, and records the
-executable's digest under `<data>/lsp/<id>/<version>/<target>/`. The daemon resolves
-that install ahead of `PATH`. What is not built yet is the publication: no signed
-`index-v1.json` is served, so the command needs a mirror and a key until the first
-catalog ships. The install record is also not yet enforced as the per-language pin
-P7-12 asks for; a pinned program is still approved through
+The catalog installer is built and published. `acpilot lsp search|install|list|remove`
+fetches `index-v1.json` from `https://rudeboy.dev/acpilot/lsp/`, checks the detached
+signature with the built-in `acpilot-lsp` key (or `ACPILOT_LSP_INDEX_PUBKEY` for a
+mirror), verifies the archive's size and sha256, unpacks only regular files, and
+records the executable's digest under `<data>/lsp/<id>/<version>/<target>/`. The
+first reviewed entry is rust-analyzer's 2026-11-16 Linux builds; `lsp/*.toml` is
+the source and `cargo xtask lsp-index` regenerates the signed JSON. The daemon
+resolves a managed install ahead of `PATH`, and it now enforces that record as the
+P7-12 pin: a managed executable that no longer hashes to `install.json` is not
+started, and the daemon does not quietly fall back to a `PATH` binary instead.
+A server found on `PATH` still uses the existing approval route
 `POST /v1/lsp/servers/{language}/trust`.
 
 The rest of the engine arrives in the language intelligence phase (P7). The

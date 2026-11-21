@@ -52,6 +52,15 @@ const INDEX_ENV: &str = "ACPILOT_LSP_INDEX";
 /// The environment variable that carries the catalog's public key.
 const KEY_ENV: &str = "ACPILOT_LSP_INDEX_PUBKEY";
 
+/// The published catalog's ed25519 public key, as 64 hex characters.
+///
+/// Separate from the extension index's key and the release key (ADR 0014): a
+/// catalog review is a different duty from cutting a release, and rotating one
+/// must not invalidate the other. A mirror can add a key through the environment;
+/// it cannot replace this one.
+pub const MAINTAINER_PUBLIC_KEY: &str =
+    "19d3f6a87b2ea858b2e3024f1dd4fc3648c74f69d5cf052efb1743656a02bddf";
+
 /// One published catalog.
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
@@ -101,6 +110,9 @@ pub struct Artifact {
     pub size: u64,
     /// The executable to find inside the archive.
     pub executable: String,
+    /// `tar.gz`, `zip` or `gz`. Absent is `tar.gz`, the shape v1 first published.
+    #[serde(default)]
+    pub archive: String,
     /// Arguments the server needs, in order.
     #[serde(default)]
     pub args: Vec<String>,
@@ -146,15 +158,32 @@ pub fn run(command: LspCommand) -> u8 {
 /// Fetch and verify the catalog.
 fn catalog() -> Result<Catalog, String> {
     let url = std::env::var(INDEX_ENV).unwrap_or_else(|_| DEFAULT_INDEX.to_owned());
-    let key = std::env::var(KEY_ENV).map_err(|_| {
-        format!(
-            "set {KEY_ENV} to the catalog's 64-hex ed25519 public key; without it the index is \
-             only a JSON file somebody could have written"
-        )
-    })?;
     let bytes = release::get(&url)?;
     let signature = release::get(&format!("{url}.sig"))?;
-    verify(&bytes, &signature, &key)?;
+    // A mirror's key is added beside the maintainer's, never instead of it: a
+    // settings variable that could replace the built-in key would be a way to
+    // publish a catalog the binary did not choose to trust.
+    let extra = std::env::var(KEY_ENV).ok();
+    let mut keys = vec![MAINTAINER_PUBLIC_KEY];
+    if let Some(extra) = extra.as_deref()
+        && extra != MAINTAINER_PUBLIC_KEY
+    {
+        keys.push(extra);
+    }
+    let mut last_error = None;
+    let mut trusted = false;
+    for key in keys {
+        match verify(&bytes, &signature, key) {
+            Ok(()) => {
+                trusted = true;
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    if !trusted {
+        return Err(last_error.unwrap_or_else(|| "the catalog has no trusted signature".to_owned()));
+    }
     let catalog: Catalog = serde_json::from_slice(&bytes)
         .map_err(|error| format!("{url} is not a language-server catalog: {error}"))?;
     validate(&catalog)?;
@@ -240,6 +269,18 @@ fn validate(catalog: &Catalog) -> Result<(), String> {
                     return Err(format!(
                         "{} {} is {} bytes, past the {} byte ceiling",
                         server.id, version.version, artifact.size, MAX_ARCHIVE
+                    ));
+                }
+                if !matches!(artifact.archive.as_str(), "" | "tar.gz" | "zip" | "gz") {
+                    return Err(format!(
+                        "{} {} names an archive `{}`; expected tar.gz, zip or gz",
+                        server.id, version.version, artifact.archive
+                    ));
+                }
+                if artifact.archive == "gz" && artifact.executable.contains(['/', '\\']) {
+                    return Err(format!(
+                        "{} {} is a single gzip stream but names a path as its executable",
+                        server.id, version.version
                     ));
                 }
                 if !artifact.sha256.starts_with("sha256:")
@@ -440,7 +481,7 @@ fn install(id: &str, version: Option<&str>) -> u8 {
         return acpilot_core::error::exit::FAILURE;
     }
     let installed = (|| {
-        let executable = extract(&bytes, &staging, &artifact.executable)?;
+        let executable = extract(&bytes, &staging, &artifact.executable, &artifact.archive)?;
         acpilot_host::make_executable(&executable)
             .map_err(|error| format!("cannot make {} executable: {error}", executable.display()))?;
         let digest = Sha256::digest(
@@ -508,16 +549,42 @@ fn install(id: &str, version: Option<&str>) -> u8 {
 }
 
 /// Unpack `bytes` and return the executable's path inside `directory`.
-fn extract(bytes: &[u8], directory: &Path, executable: &str) -> Result<PathBuf, String> {
-    if bytes.starts_with(&[0x1f, 0x8b]) {
-        untar(bytes, directory)?;
-    } else if bytes.starts_with(b"PK\x03\x04") {
-        unzip(bytes, directory)?;
-    } else {
-        return Err("the download is neither a tar.gz nor a zip archive".to_owned());
+fn extract(
+    bytes: &[u8],
+    directory: &Path,
+    executable: &str,
+    archive: &str,
+) -> Result<PathBuf, String> {
+    match archive {
+        "gz" => gunzip(bytes, directory, executable)?,
+        "zip" => unzip(bytes, directory)?,
+        "" | "tar.gz" => untar(bytes, directory)?,
+        other => return Err(format!("the catalog names an unknown archive `{other}`")),
     }
     find_executable(directory, executable)
         .ok_or_else(|| format!("the archive holds no `{executable}`"))
+}
+
+/// Decompress one gzip stream into the executable the catalog names.
+fn gunzip(bytes: &[u8], directory: &Path, executable: &str) -> Result<(), String> {
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Err("the download is not a gzip stream".to_owned());
+    }
+    let path = directory.join(executable);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    let mut file = std::fs::File::create(&path)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    std::io::copy(
+        &mut flate2::read::GzDecoder::new(Cursor::new(bytes)),
+        &mut file,
+    )
+    .map_err(|error| format!("cannot decompress the executable: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    Ok(())
 }
 
 /// Unpack a gzip tarball, refusing any entry that is not a regular file inside.
@@ -759,6 +826,27 @@ mod tests {
     }"#;
 
     #[test]
+    fn the_published_catalog_is_signed_by_the_built_in_key() {
+        let catalog = include_bytes!("../../../marketplace/lsp/index-v1.json");
+        let signature = include_bytes!("../../../marketplace/lsp/index-v1.json.sig");
+        verify(catalog, signature, MAINTAINER_PUBLIC_KEY).expect("the published signature");
+        let parsed: Catalog = serde_json::from_slice(catalog).expect("the published catalog");
+        validate(&parsed).expect("the published catalog validates");
+    }
+
+    #[test]
+    fn a_single_gzip_stream_becomes_the_named_executable() {
+        use std::io::Write as _;
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"the server").expect("compress");
+        let bytes = encoder.finish().expect("gzip bytes");
+        let executable = extract(&bytes, directory.path(), "rust-analyzer", "gz")
+            .expect("the gzip stream is the executable");
+        assert_eq!(std::fs::read(executable).expect("read"), b"the server");
+    }
+
+    #[test]
     fn a_signed_catalog_verifies_and_a_changed_one_does_not() {
         let (key, hex) = key(7);
         let signature = sign(&key, CATALOG.as_bytes());
@@ -802,6 +890,7 @@ mod tests {
                             sha256: "nope".to_owned(),
                             size: 1,
                             executable: "x".to_owned(),
+                            archive: "gz".to_owned(),
                             args: Vec::new(),
                         },
                     )]),

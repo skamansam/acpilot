@@ -22,12 +22,12 @@
 //! token already makes. It is not in the database because a database copied for a
 //! backup should not be a database that can mint credentials.
 //!
-//! # What is deliberately absent
+//! # OIDC
 //!
-//! OIDC is the second way to obtain the same JWT, and it is not implemented here:
-//! it needs a browser round trip, a provider registry, and a JWKS cache whose
-//! failure modes are their own task. The local account is the whole bootstrap path,
-//! and the routes below are the seam an OIDC callback will use.
+//! OIDC is the second way to obtain the same JWT, and it lands in this store as
+//! an identity row: `(issuer, subject)` names the account, never an email. The
+//! browser round trip and JWKS verification live in [`crate::oidc`]; this module
+//! owns the pending `state` row, the link, and the session it issues.
 
 use std::path::{Path, PathBuf};
 
@@ -95,6 +95,31 @@ pub struct Session {
     pub user: User,
 }
 
+/// A browser session: the access token the page keeps in memory, without the
+/// refresh token, which stays in an `HttpOnly` cookie.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserSession {
+    /// The bearer token for API calls.
+    pub access_token: String,
+    /// Access-token lifetime in seconds.
+    pub expires_in: i64,
+    /// Who the tokens are for.
+    pub user: User,
+}
+
+/// A pending OIDC authorization, keyed by the `state` the provider returns.
+#[derive(Debug, Clone)]
+pub struct PendingOidc {
+    /// The configured provider id.
+    pub provider: String,
+    /// The nonce the ID token must carry.
+    pub nonce: String,
+    /// The PKCE verifier; the challenge was sent on the authorization request.
+    pub verifier: String,
+    /// When this row stops being accepted, Unix seconds.
+    pub expires_at: i64,
+}
+
 /// The claims this daemon reads out of an access token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthClaims {
@@ -147,6 +172,9 @@ pub enum AuthError {
     /// The refresh token was revoked by a logout or a password change.
     #[error("that refresh token has been revoked")]
     Revoked,
+    /// An OIDC identity is already linked to an account.
+    #[error("that provider identity is already linked")]
+    AlreadyLinked,
     /// A caller's input was outside the contract.
     #[error("{0}")]
     Invalid(String),
@@ -163,6 +191,7 @@ impl AuthError {
             Self::NoAccounts => "auth_not_initialized",
             Self::AlreadyInitialized => "auth_already_initialized",
             Self::InvalidCredentials => "invalid_credentials",
+            Self::AlreadyLinked => "identity_already_linked",
             Self::Expired => "token_expired",
             Self::Reused | Self::Revoked => "invalid_token",
             Self::Invalid(_) => "invalid_request",
@@ -179,6 +208,7 @@ impl AuthError {
             Self::InvalidCredentials | Self::Expired | Self::Reused | Self::Revoked => {
                 StatusCode::UNAUTHORIZED
             }
+            Self::AlreadyLinked => StatusCode::CONFLICT,
             Self::Invalid(_) => StatusCode::BAD_REQUEST,
             Self::State(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -384,15 +414,9 @@ impl Accounts {
         self.issue_in_family(user, &uuid::Uuid::now_v7().to_string())
     }
 
-    /// Mint a session whose refresh token belongs to `family`.
-    fn issue_in_family(&self, user: &User, family: &str) -> Result<Session, AuthError> {
-        let now = now();
+    /// Mint a fresh access token for `user` without creating a refresh token.
+    fn issue_access(&self, user: &User) -> Result<String, AuthError> {
         let connection = self.connection()?;
-        // A password change and the next login can land in the same second. The
-        // cutoff is seconds, so a token minted in that second would compare equal to
-        // the change and look old. Mint it one second past the cutoff instead: the
-        // verifier refuses `iat <= changed_at`, and a fresh login is never mistaken
-        // for one issued before the password changed.
         let epoch: i64 = connection
             .query_row(
                 "SELECT token_epoch FROM users WHERE id = ?1",
@@ -402,6 +426,7 @@ impl Accounts {
             .optional()
             .map_err(state)?
             .ok_or(AuthError::InvalidCredentials)?;
+        let now = now();
         let claims = AuthClaims {
             iss: ISSUER.to_owned(),
             sub: user.id.clone(),
@@ -411,7 +436,68 @@ impl Accounts {
             jti: uuid::Uuid::now_v7().to_string(),
             ver: epoch,
         };
-        let access_token = sign(&self.key, &claims)?;
+        sign(&self.key, &claims)
+    }
+
+    /// Exchange a still-valid refresh token for an access token, without rotating it.
+    ///
+    /// The browser's refresh token is in an `HttpOnly` cookie; the page gets only the
+    /// short-lived access token, which it keeps in memory. The token is not consumed
+    /// here because a page load is not a refresh rotation; `/v1/auth/refresh` is the
+    /// rotating path.
+    ///
+    /// # Errors
+    ///
+    /// Unknown, expired, revoked, or reused token; or the key could not be read.
+    pub fn access_for_refresh(&self, token: &str) -> Result<BrowserSession, AuthError> {
+        let connection = self.connection()?;
+        let now = now();
+        let row: Option<(String, i64, Option<i64>, Option<i64>)> = connection
+            .query_row(
+                "SELECT user_id, expires_at, used_at, revoked_at FROM refresh_tokens WHERE hash = ?1",
+                params![digest(token.trim())],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(state)?;
+        let Some((user_id, expires_at, used_at, revoked_at)) = row else {
+            return Err(AuthError::InvalidCredentials);
+        };
+        if used_at.is_some() {
+            return Err(AuthError::Reused);
+        }
+        if revoked_at.is_some() {
+            return Err(AuthError::Revoked);
+        }
+        if expires_at <= now {
+            return Err(AuthError::Expired);
+        }
+        let user: User = connection
+            .query_row(
+                "SELECT id, name FROM users WHERE id = ?1",
+                params![user_id],
+                |row| {
+                    Ok(User {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(state)?
+            .ok_or(AuthError::InvalidCredentials)?;
+        Ok(BrowserSession {
+            access_token: self.issue_access(&user)?,
+            expires_in: ACCESS_TTL_SECONDS,
+            user,
+        })
+    }
+
+    /// Mint a session whose refresh token belongs to `family`.
+    fn issue_in_family(&self, user: &User, family: &str) -> Result<Session, AuthError> {
+        let now = now();
+        let connection = self.connection()?;
+        let access_token = self.issue_access(user)?;
         let refresh_token = random_hex()?;
         let hash = digest(&refresh_token);
         connection
@@ -642,6 +728,157 @@ impl Accounts {
         Ok(claims)
     }
 
+    /// The account linked to an OIDC identity, when one is.
+    ///
+    /// # Errors
+    ///
+    /// The account store could not be read.
+    pub fn user_for_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<User>, AuthError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT users.id, users.name FROM identities
+                 JOIN users ON users.id = identities.user_id
+                 WHERE identities.issuer = ?1 AND identities.subject = ?2",
+                params![issuer, subject],
+                |row| {
+                    Ok(User {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(state)
+    }
+
+    /// Link an OIDC identity to the only local account.
+    ///
+    /// Linking is a local CLI act, not an automatic email match: an email can be
+    /// reassigned at a provider, so it is stored for display and never used as the
+    /// key.
+    ///
+    /// # Errors
+    ///
+    /// There is no account, the identity is already linked, or the write failed.
+    pub fn link_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+        email: Option<&str>,
+    ) -> Result<User, AuthError> {
+        let mut connection = self.connection()?;
+        let user: Option<User> = connection
+            .query_row("SELECT id, name FROM users LIMIT 1", [], |row| {
+                Ok(User {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            })
+            .optional()
+            .map_err(state)?;
+        let Some(user) = user else {
+            return Err(AuthError::NoAccounts);
+        };
+        let transaction = connection.transaction().map_err(state)?;
+        transaction
+            .execute(
+                "INSERT INTO identities (user_id, issuer, subject, email, linked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![user.id, issuer, subject, email, now()],
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(code, _)
+                    if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    AuthError::AlreadyLinked
+                }
+                other => state(other),
+            })?;
+        transaction
+            .execute(
+                "INSERT INTO auth_events (at, event, user_id, detail) VALUES (?1, 'linked', ?2, ?3)",
+                params![now(), user.id, format!("{issuer}#{subject}")],
+            )
+            .map_err(state)?;
+        transaction.commit().map_err(state)?;
+        Ok(user)
+    }
+
+    /// Remember one OIDC authorization request until its callback arrives.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn save_pending_oidc(
+        &self,
+        pending: &PendingOidc,
+        state_value: &str,
+    ) -> Result<(), AuthError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT INTO oidc_pending (state, provider, nonce, verifier, created_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    state_value,
+                    pending.provider,
+                    pending.nonce,
+                    pending.verifier,
+                    now(),
+                    pending.expires_at
+                ],
+            )
+            .map_err(state)?;
+        connection
+            .execute(
+                "DELETE FROM oidc_pending WHERE expires_at <= ?1",
+                params![now()],
+            )
+            .map_err(state)?;
+        Ok(())
+    }
+
+    /// Consume the pending authorization named by `state`.
+    ///
+    /// The row is deleted whether it is valid or expired, so a replayed callback
+    /// cannot use the same verifier twice.
+    ///
+    /// # Errors
+    ///
+    /// The store could not be read or written.
+    pub fn take_pending_oidc(&self, state_value: &str) -> Result<Option<PendingOidc>, AuthError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(state)?;
+        let pending: Option<PendingOidc> = transaction
+            .query_row(
+                "SELECT provider, nonce, verifier, expires_at FROM oidc_pending WHERE state = ?1",
+                params![state_value],
+                |row| {
+                    Ok(PendingOidc {
+                        provider: row.get(0)?,
+                        nonce: row.get(1)?,
+                        verifier: row.get(2)?,
+                        expires_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(state)?;
+        transaction
+            .execute(
+                "DELETE FROM oidc_pending WHERE state = ?1",
+                params![state_value],
+            )
+            .map_err(state)?;
+        transaction.commit().map_err(state)?;
+        Ok(pending.filter(|pending| pending.expires_at > now()))
+    }
+
     /// Revoke one access token by id, until the time it would have expired anyway.
     ///
     /// # Errors
@@ -702,6 +939,22 @@ CREATE TABLE IF NOT EXISTS auth_events (
     detail  TEXT
 );
 CREATE INDEX IF NOT EXISTS auth_events_at ON auth_events(at);
+CREATE TABLE IF NOT EXISTS identities (
+    user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    issuer    TEXT NOT NULL,
+    subject   TEXT NOT NULL,
+    email     TEXT,
+    linked_at INTEGER NOT NULL,
+    PRIMARY KEY (issuer, subject)
+);
+CREATE TABLE IF NOT EXISTS oidc_pending (
+    state      TEXT PRIMARY KEY,
+    provider   TEXT NOT NULL,
+    nonce      TEXT NOT NULL,
+    verifier   TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
 ";
 
 /// Trim and validate an account name.
@@ -1007,6 +1260,48 @@ mod tests {
             Err(AuthError::Revoked)
         ));
         assert!(accounts.refresh(&second.refresh_token).is_ok());
+    }
+
+    #[test]
+    fn an_identity_links_to_the_owner_and_finds_the_same_user() {
+        let (_directory, accounts) = accounts();
+        let owner = accounts
+            .create_owner("sam", "correct horse battery")
+            .expect("created");
+        let linked = accounts
+            .link_identity("https://id.example", "subject-1", Some("sam@example"))
+            .expect("linked");
+        assert_eq!(linked, owner);
+        assert_eq!(
+            accounts
+                .user_for_identity("https://id.example", "subject-1")
+                .expect("read")
+                .expect("found")
+                .id,
+            owner.id
+        );
+        assert!(
+            accounts
+                .user_for_identity("https://id.example", "somebody-else")
+                .expect("read")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_refresh_cookie_gets_an_access_token_without_being_used() {
+        let (_directory, accounts) = accounts();
+        let user = accounts
+            .create_owner("sam", "correct horse battery")
+            .expect("created");
+        let session = accounts.issue(&user).expect("issued");
+        let browser = accounts
+            .access_for_refresh(&session.refresh_token)
+            .expect("cookie session");
+        assert_eq!(browser.user.id, user.id);
+        assert!(accounts.verify_access(&browser.access_token).is_ok());
+        // The cookie token is still usable for a rotation; reading it was not a use.
+        assert!(accounts.refresh(&session.refresh_token).is_ok());
     }
 
     #[test]

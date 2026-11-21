@@ -117,6 +117,9 @@ pub struct Entry {
     pub args: Vec<String>,
     /// The extension that introduced the row, or `None` for this build's own.
     pub extension: Option<String>,
+    /// A managed install whose executable no longer hashes to the digest the
+    /// install recorded. It still outranks `PATH`, and it is not started.
+    pub untrusted: bool,
 }
 
 impl Entry {
@@ -126,6 +129,7 @@ impl Entry {
             program: program.to_owned(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             extension: None,
+            untrusted: false,
         }
     }
 }
@@ -150,9 +154,13 @@ fn built_in_entry(language: &str) -> Option<Entry> {
 /// a lexicographic choice within one id; it is stable and needs no version parser,
 /// and a catalog that publishes a version out of order is a review bug.
 fn managed_entry(language: &str) -> Option<Entry> {
-    let root = acpilot_profile::data_dir().join("lsp");
+    managed_entry_at(&acpilot_profile::data_dir().join("lsp"), language)
+}
+
+/// [`managed_entry`] against an explicit root, so a test names its own installs.
+fn managed_entry_at(root: &std::path::Path, language: &str) -> Option<Entry> {
     let mut newest: Option<(String, Entry)> = None;
-    let servers = std::fs::read_dir(&root).ok()?;
+    let servers = std::fs::read_dir(root).ok()?;
     for server in servers.flatten() {
         let versions = std::fs::read_dir(server.path()).ok();
         for version in versions.into_iter().flatten().flatten() {
@@ -195,11 +203,21 @@ fn managed_entry(language: &str) -> Option<Entry> {
                             .collect()
                     })
                     .unwrap_or_default();
+                // The install recorded the executable's digest. A file replaced
+                // after the install is a different program: the pin is what makes
+                // the install an approval of bytes rather than of a path.
+                let untrusted = record
+                    .get("sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|expected| {
+                        crate::trust::program_fingerprint(program).as_deref() != Some(expected)
+                    });
                 let entry = Entry {
                     language: language.to_owned(),
                     program: program.to_owned(),
                     args,
                     extension: None,
+                    untrusted,
                 };
                 if newest
                     .as_ref()
@@ -770,6 +788,13 @@ async fn running<'a>(
     let program = entry.program.as_str();
     let key = place.key(language);
     if !sessions.contains_key(&key) {
+        if entry.untrusted {
+            tracing::warn!(
+                server = program,
+                "refusing to start a managed language server whose bytes changed since the install"
+            );
+            return None;
+        }
         // The pin is the gate, and it is checked here rather than at each question so
         // no route can start a changed program by forgetting to ask. A remote server's
         // bytes are the host's to hash, so the check is local-only.
@@ -884,7 +909,7 @@ fn state_of(
             requests: running.requests,
         });
     ServerState {
-        installed: installed(&entry.program),
+        installed: !entry.untrusted && installed(&entry.program),
         language: entry.language,
         program: entry.program,
         extension: entry.extension,
@@ -1054,6 +1079,46 @@ mod tests {
             !pin_allows(program, Some(&approved)),
             "a file that changed under an approved name is a different program"
         );
+    }
+
+    #[test]
+    fn a_managed_install_whose_digest_changed_is_not_started() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let target = directory
+            .path()
+            .join("rust-analyzer")
+            .join("2026-11-16")
+            .join("test-target");
+        std::fs::create_dir_all(&target).expect("install directory");
+        let program = target.join("rust-analyzer");
+        std::fs::write(&program, b"the bytes the install verified").expect("write");
+        let digest = crate::trust::program_fingerprint(program.to_str().expect("utf-8"))
+            .expect("the file hashes");
+        std::fs::write(
+            target.join("install.json"),
+            serde_json::json!({
+                "schema": 1,
+                "id": "rust-analyzer",
+                "name": "rust-analyzer",
+                "version": "2026-11-16",
+                "target": "test-target",
+                "executable": program,
+                "args": [],
+                "languages": ["rust"],
+                "sha256": digest,
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let entry =
+            managed_entry_at(directory.path(), "rust").expect("the install names the language");
+        assert!(!entry.untrusted);
+
+        std::fs::write(&program, b"bytes nobody installed").expect("tamper");
+        let entry = managed_entry_at(directory.path(), "rust")
+            .expect("the install is still the selected row");
+        assert!(entry.untrusted, "a changed executable is not the install");
     }
 
     #[test]

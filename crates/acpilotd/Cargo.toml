@@ -86,6 +86,12 @@ rusqlite = { workspace = true }
 # Access tokens are Ed25519-signed, the same primitive the release and extension
 # indexes already use. A symmetric key would make every verifier a signer.
 ed25519-dalek = { workspace = true }
+# OIDC ID tokens are verified against the provider's JWKS, and the signing
+# algorithm comes from that key rather than from the token's header.
+jsonwebtoken = { workspace = true }
+# The authorization URL is assembled with a real URL parser, so a provider's
+# endpoint with a query already in it keeps its query.
+url = { workspace = true }
 # The pairing code and the salt are both drawn from the system source, the same one
 # `acpilot-host` uses for the daemon token; a code from a weaker source is a code
 # that can be guessed while it is being typed.

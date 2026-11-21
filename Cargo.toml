@@ -206,6 +206,11 @@ sha2 = "0.11"
 # release published it, because a party who can swap the archive can swap the
 # checksum beside it. Already in the tree through `ssh-key`, so this adds no build.
 ed25519-dalek = "3"
+# The OIDC ID token is a provider's JWT: its signature is checked against the
+# provider's JWKS, with the algorithm chosen from that key rather than from the
+# token's header. The extension/release keys are Ed25519; this is the one place a
+# provider may use RS256 or ES256.
+jsonwebtoken = "10"
 # `acpilot update` unpacks the archive it verified. The format is chosen from the
 # bytes (a gzip magic number or a zip one) rather than from this build's platform, so
 # a Windows archive is unpackable, and testable, on any machine.

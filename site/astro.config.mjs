@@ -74,6 +74,7 @@ export default defineConfig({
             { label: 'Programs as agents', link: '/systems/program-as-agent/' },
             { label: 'Profiles', link: '/systems/profiles/' },
             { label: 'Language servers', link: '/systems/language-servers/' },
+            { label: 'The relay', link: '/systems/relay/' },
             { label: 'Hosts: SSH and WSL', link: '/systems/hosts/' },
           ],
         },

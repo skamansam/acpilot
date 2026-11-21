@@ -768,9 +768,10 @@
         the permission prompts exist.
       </p>
       <p class="note">
-        Paste the daemon's token. It is written to
-        <code>$XDG_RUNTIME_DIR/acpilot/token</code> and logged at startup. The token
-        stays in this tab's session storage and travels only in an
+        <a href="/login">Sign in</a> with the local account or an OIDC provider, or
+        paste the daemon's token. The token is written to
+        <code>$XDG_RUNTIME_DIR/acpilot/token</code> and logged at startup. It stays
+        in this tab's session storage and travels only in an
         <code>Authorization</code> header.
       </p>
 

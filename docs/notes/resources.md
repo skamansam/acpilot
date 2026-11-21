@@ -16,11 +16,12 @@ before a second sample could take a delta, so memory is the only figure it has.
 
 | program | window | peak RSS | mean CPU | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
-| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 19.2 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
-| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 22.2 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
-| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 11.2 MiB | — | — | 1 |
+| `acpilotd` | idle: one `/v1/events` subscriber open for the window (drawing and waiting) | 18.4 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilotd + 1 session` | one idle session: created over the API, its mock agent running; the daemon's own process | 21.9 MiB | 0.00 % of one core | 0.00 % of one core | 32 |
+| `acpilot serve` | one page connected: the page fetched, one `/v1/events` subscriber open for the window | 19.3 MiB | 0.00 % of one core | 0.00 % of one core | 28 |
+| `acpilot doctor` | one-shot: reads PATH, the profile and the workspace; starts no daemon | 10.8 MiB | — | — | 1 |
 
-One idle session adds **3.1 MiB** to the daemon's own process — the session row's
+One idle session adds **3.5 MiB** to the daemon's own process — the session row's
 peak less the idle row's — against the table's 15 MB budget, which has no
 margin because it is a stated ceiling rather than a figure this harness
 discovered.
@@ -38,12 +39,15 @@ budget fails too: a row outside the list is one the gate quietly stopped checkin
 | --- | --- | --- | --- | --- |
 | `acpilotd` | peak RSS | 20.0 MiB | 50 % | 30.0 MiB |
 | `acpilotd` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilotd` | threads | 12 | 50 % | 18 |
+| `acpilotd` | threads | 28 (4 + 1/core) | 50 % | 42 |
 | `acpilotd + 1 session` | peak RSS | 24.0 MiB | 50 % | 36.0 MiB |
 | `acpilotd + 1 session` | mean CPU | 0.50 % | 100 % | 1.00 % |
-| `acpilotd + 1 session` | threads | 16 | 50 % | 24 |
+| `acpilotd + 1 session` | threads | 32 (8 + 1/core) | 50 % | 48 |
+| `acpilot serve` | peak RSS | 30.0 MiB | 50 % | 45.0 MiB |
+| `acpilot serve` | mean CPU | 0.50 % | 100 % | 1.00 % |
+| `acpilot serve` | threads | 30 (6 + 1/core) | 50 % | 45 |
 | `acpilot doctor` | peak RSS | 8.0 MiB | 50 % | 12.0 MiB |
-| `acpilot doctor` | threads | 2 | 50 % | 3 |
+| `acpilot doctor` | threads | 2 (2) | 50 % | 3 |
 
 The `acpilotd` rows are measured with the load named in theirs rather than at rest:
 one `/v1/events` subscriber open for the window, and the same daemon with one idle
@@ -53,15 +57,14 @@ one-shot CLI row is memory and threads only — a 170 ms process gives `sysinfo`
 few intervals for a percentage — so its CPU budget is `None` rather than zero. The
 budgets below are the medians a run on GitHub's `ubuntu-latest` measured, not this
 machine's: the table above is this machine, and the gate compares the runner with
-the runner. A box with more logical CPUs reports more threads, because the
-daemon's pool follows the core count, so `--gate` there trips the thread rows
-while `cargo xtask resources` still writes this note.
+the runner. A thread budget is a fixed cost plus one per logical CPU rather than
+a single number, because the runtime's pool follows the core count: a bare
+figure would be a budget for the machine it was measured on.
 
 ## What is not measured here, and why
 
 - `acpilot-tui` — needs a terminal it is allowed to put into raw mode (a window is P6's frame clock).
 - `acpilot-gui` — needs a display and the shell's `gui` feature (P10).
-- `acpilot serve` — needs a page connected, which is P11's row.
 - `language servers` — needs one installed; measured as the daemon's children once P7's mock server is the fixture.
 - `acpilotd-helper` — has no build on this host until P9.
 
@@ -73,10 +76,11 @@ attached workspace.
 
 ## Limitations
 
-- The budgets are one runner's medians, so a runner image whose kernel or CPU count
-differs can move the thread rows without a regression: re-measure with
+- The memory and CPU budgets are one runner's medians, so a runner image whose
+kernel differs can move a row without a regression: re-measure with
 `cargo xtask resources --gate` on the runner and take its figures rather than
-widening the margin.
+widening the margin. The thread budgets instead follow the logical CPU count, so
+the same constants describe the runner and a larger machine.
 - The session row's agent is this repository's fixture, not a real agent, and the row
 reads the daemon alone: a real agent's memory is its own program's, and the harness
 budgets the daemon's share of a session.

@@ -3282,13 +3282,25 @@ decision they settle is `docs/adr/0009-gui-framework.md`.
     sample, so a `doctor` run that exited inside 40 ms reported 0.0 MiB and passed every
     budget it was given. It now samples as soon as the process exists and does not count a
     zero reading, because a process that is gone is not a process that used no memory.
-  - Open: a long-lived CLI row needs `acpilot serve` or a `prompt` turn with the mock
-    agent; `acpilot doctor` has memory and threads but no CPU (a 170 ms process gives
-    `sysinfo` too few intervals for a percentage, which is why its CPU budget is `None`
-    and not zero); the session row's agent is the repository's fixture, so a real agent's
-    memory is still unmeasured; and the thread budgets follow the runner's logical CPU
-    count, so `--gate` on a larger box trips the thread rows by design while
-    `cargo xtask resources` still measures and writes the note there.
+  - Progress (2026-11-20): the server row, thread budgets that travel, and a lost event.
+    `acpilot serve` is measured with one page connected: the harness fetches the page (the
+    only route that answers without a token) and holds one `/v1/events` subscriber for the
+    window, which is what a browser costs the server; the tab's own memory stays out of
+    scope, as the note says. Thread budgets are now a fixed cost plus one per logical CPU
+    (`4 + 1/core` for the daemon, `8 + 1/core` with a session, `6 + 1/core` for `serve`), so
+    the same constants describe the 8 threads the runner measured and the 28 this machine
+    did: a bare number was a budget for whichever machine took it, and `--gate` would trip
+    on a machine with more cores without a regression to report. The stream had a bug the
+    same row work exposed: `GET /v1/sessions/{id}/events` read the ring and subscribed
+    afterwards, so an event recorded between the two was in neither the replay nor the
+    feed, and a reconnecting client waited for a turn that had already finished. It now
+    subscribes before the replay and drops the overlap by sequence, on both the SSE and
+    the WebSocket route.
+  - Open: a `prompt` turn as a CLI row is the one long-lived load still missing (the
+    `serve` row is in); `acpilot doctor` has memory and threads but no CPU (a 170 ms
+    process gives `sysinfo` too few intervals for a percentage, which is why its CPU
+    budget is `None` and not zero); and the session row's agent is the repository's
+    fixture, so a real agent's memory is still unmeasured.
 
 ### Security
 

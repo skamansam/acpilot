@@ -1587,6 +1587,12 @@ async fn serve_stream(state: AppState, id: String, after: u64, mut socket: WebSo
         return;
     };
 
+    // Subscribed before the ring is read, not after: the ring is written before the
+    // broadcast, so an event recorded between the replay's last read and a later
+    // subscription is in neither, and the reconnect waits for a turn that has already
+    // finished. The receiver queues what arrives during the replay, and the `seq <= last`
+    // check below drops the overlap.
+    let mut live = record.subscribe();
     let mut last = after;
     for event in record.replay_after(after) {
         last = event.seq;
@@ -1594,8 +1600,6 @@ async fn serve_stream(state: AppState, id: String, after: u64, mut socket: WebSo
             return;
         }
     }
-
-    let mut live = record.subscribe();
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -1691,6 +1695,11 @@ enum Step {
 }
 
 async fn pump(record: Arc<Record>, after: u64, sender: mpsc::Sender<Event>) {
+    // Subscribed before the ring is read, for the same reason the socket route does it:
+    // the ring is written before the broadcast, so an event landing between the replay's
+    // last read and a later subscription would be in neither. The `event.seq <= last`
+    // check below drops the one-event overlap the early subscription creates.
+    let mut live = record.subscribe();
     let mut last = after;
     for event in record.replay_after(after) {
         last = event.seq;
@@ -1698,8 +1707,6 @@ async fn pump(record: Arc<Record>, after: u64, sender: mpsc::Sender<Event>) {
             return;
         }
     }
-
-    let mut live = record.subscribe();
     let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 

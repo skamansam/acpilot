@@ -58,6 +58,8 @@ const IDLE_ROW: &str = "acpilotd";
 /// Not `acpilotd` again: the gate keys a figure by its row, and two rows under one
 /// name would let one of them stand in for the other.
 const SESSION_ROW: &str = "acpilotd + 1 session";
+/// `acpilot serve` with one page attached: the CLI's long-lived row.
+const SERVE_ROW: &str = "acpilot serve";
 /// The table's budget for one idle session: what a session may add to the daemon.
 ///
 /// A hard limit rather than a measured median, because it is a number the product
@@ -144,8 +146,11 @@ command = "acpilot-mock-agent"
         let session = repeat(repeats, || {
             daemon_with_session(&target.join(exe("acpilotd")), &profile, &workspace)
         })?;
+        let serve = repeat(repeats, || {
+            serve_row(&target.join(exe("acpilot")), &profile, &workspace)
+        })?;
         let doctor = repeat(repeats, || doctor(&target.join(exe("acpilot")), &workspace))?;
-        Ok(vec![daemon, session, doctor])
+        Ok(vec![daemon, session, serve, doctor])
     })();
     let _ = fs::remove_dir_all(&profile);
     let figures = measured?;
@@ -187,21 +192,39 @@ command = "acpilot-mock-agent"
 /// idle daemon — but the figure the runner the gate runs on measured, so the gate
 /// compares CI with CI rather than a developer's box with a hosted machine. A row that
 /// stops being measured is also a failure: a budget nobody checks is a promise nobody
-/// keeps. Thread counts follow the logical CPU count, so a machine with more cores than
-/// the runner legitimately reports more of them: `cargo xtask resources` measures and
-/// writes the note anywhere, and `--gate` is CI's shape of the question.
+/// keeps. Thread budgets are a fixed cost plus one per logical CPU rather than a single
+/// number, because the runtime's pool is sized from that count: the same constants then
+/// describe the runner, a container and a developer's box.
 const BUDGETS: &[Budget] = &[
     Budget {
-        row: "acpilotd",
+        row: IDLE_ROW,
         rss_peak_mib: 20.0,
         cpu_mean: Some(0.5),
-        threads: 12,
+        // The runner measured 8 threads on 4 logical CPUs; this machine 28 on 24.
+        threads: Threads {
+            base: 4,
+            per_core: 1,
+        },
     },
     Budget {
         row: SESSION_ROW,
         rss_peak_mib: 24.0,
         cpu_mean: Some(0.5),
-        threads: 16,
+        threads: Threads {
+            base: 8,
+            per_core: 1,
+        },
+    },
+    Budget {
+        row: SERVE_ROW,
+        // Provisional until a runner run reports the row; the constants take its median
+        // rather than this machine's, like every other memory budget here.
+        rss_peak_mib: 30.0,
+        cpu_mean: Some(0.5),
+        threads: Threads {
+            base: 6,
+            per_core: 1,
+        },
     },
     Budget {
         row: "acpilot doctor",
@@ -209,7 +232,10 @@ const BUDGETS: &[Budget] = &[
         // A one-shot row ends before `sysinfo` can take a delta, so it reports no CPU
         // and none is budgeted for it. The row has a budget for what it can measure.
         cpu_mean: None,
-        threads: 2,
+        threads: Threads {
+            base: 2,
+            per_core: 0,
+        },
     },
 ];
 
@@ -229,7 +255,43 @@ struct Budget {
     row: &'static str,
     rss_peak_mib: f64,
     cpu_mean: Option<f64>,
-    threads: u64,
+    threads: Threads,
+}
+
+/// A thread budget: a fixed cost plus a worker for each logical CPU.
+///
+/// The runtime builds its pool from the machine's logical CPU count, so a thread budget
+/// written as one number is a budget for the machine it was measured on. `base` is what
+/// the row costs whatever the host — the reactor, a socket per client, the blocking
+/// pool; `per_core` is the worker per CPU. The constants come from two runs: the
+/// runner's 8 threads on 4 CPUs and this machine's 28 on 24.
+#[derive(Debug, Clone, Copy)]
+struct Threads {
+    base: u64,
+    per_core: u64,
+}
+
+impl Threads {
+    /// The budget on a machine with `cores` logical CPUs.
+    fn on(self, cores: u64) -> u64 {
+        self.base + self.per_core * cores
+    }
+
+    /// The budget's shape, for a log line or a table: `4 + 1/core`.
+    fn text(self) -> String {
+        if self.per_core == 0 {
+            self.base.to_string()
+        } else {
+            format!("{} + {}/core", self.base, self.per_core)
+        }
+    }
+}
+
+/// The logical CPUs the runtime sizes its pool from, so the number a budget must follow:
+/// `available_parallelism` honors a cgroup quota and an affinity mask, which is why a
+/// container on a large host gets the workers — and threads — it will actually use.
+fn logical_cpus() -> u64 {
+    std::thread::available_parallelism().map_or(1, |count| count.get() as u64)
 }
 
 /// How one figure and its limit are written.
@@ -286,7 +348,7 @@ fn verdict(
 
 /// Every measured figure against its budget, in budget order, then every figure a
 /// budget does not name.
-fn compare(figures: &[Figure], budgets: &[Budget]) -> Vec<Verdict> {
+fn compare(figures: &[Figure], budgets: &[Budget], cores: u64) -> Vec<Verdict> {
     let mut verdicts = Vec::new();
     for budget in budgets {
         let Some(figure) = figures.iter().find(|figure| figure.row == budget.row) else {
@@ -326,14 +388,21 @@ fn compare(figures: &[Figure], budgets: &[Budget]) -> Vec<Verdict> {
                 }),
             }
         }
-        verdicts.push(verdict(
-            budget.row,
-            "threads",
-            figure.threads as f64,
-            budget.threads as f64,
-            THREAD_MARGIN,
-            Unit::Count,
-        ));
+        let allowed = budget.threads.on(cores) as f64;
+        let limit = allowed * (1.0 + THREAD_MARGIN);
+        verdicts.push(Verdict {
+            row: budget.row,
+            metric: "threads",
+            measured: Unit::Count.write(figure.threads as f64),
+            limit: format!(
+                "{} (budget {} = {} + {:.0} %)",
+                Unit::Count.write(limit),
+                Unit::Count.write(allowed),
+                budget.threads.text(),
+                THREAD_MARGIN * 100.0
+            ),
+            over: figure.threads as f64 > limit,
+        });
     }
     for figure in figures {
         if !budgets.iter().any(|budget| budget.row == figure.row) {
@@ -375,7 +444,7 @@ fn report(figures: &[Figure], release: bool, repeats: u32) -> bool {
         if release { "release" } else { "debug" },
         repeats.max(1)
     );
-    let verdicts = compare(figures, BUDGETS);
+    let verdicts = compare(figures, BUDGETS, logical_cpus());
     for verdict in &verdicts {
         println!(
             "    {:>4}  {:<18} {:<9} {:>12}  limit {:>34}",
@@ -405,10 +474,6 @@ const SKIPPED: &[(&str, &str)] = &[
     (
         "acpilot-gui",
         "needs a display and the shell's `gui` feature (P10)",
-    ),
-    (
-        "acpilot serve",
-        "needs a page connected, which is P11's row",
     ),
     (
         "language servers",
@@ -539,6 +604,78 @@ fn daemon(
     });
     stop(&mut child);
     measured
+}
+
+/// `acpilot serve` with one page connected: the CLI's long-lived row.
+///
+/// The load is a page that is really open, not a request per sample: the page is fetched
+/// (the one route that answers without a token) and then holds one `/v1/events`
+/// subscriber for the window, which is what a browser costs the server while somebody
+/// reads. The browser tab's own memory is not this row's — it is not the process under
+/// test, and the page renders in a sandbox the harness does not have.
+fn serve_row(binary: &Path, profile: &Path, workspace: &Path) -> Result<Figure, String> {
+    let port = free_port()?;
+    // Fixed rather than generated, so the harness knows the secret without parsing the
+    // panel, and written under the temporary runtime directory, so it is nobody's token.
+    let token = "acpilot-resources-serve";
+    let mut child = spawn(
+        Command::new(binary)
+            .arg("--profile")
+            .arg(profile)
+            .arg("serve")
+            .arg("--bind")
+            .arg(format!("127.0.0.1:{port}"))
+            .arg("--token")
+            .arg(token)
+            .arg("--workspace")
+            .arg(workspace)
+            // The token, the database and the discovered profiles are state: the row
+            // writes its own under the temporary profile rather than reading the
+            // machine's, the same way the daemon rows do it.
+            .env("XDG_RUNTIME_DIR", profile)
+            .env("ACPILOT_HOME", profile)
+            .env("XDG_CONFIG_HOME", profile)
+            .env("PATH", search_path(binary)),
+        binary,
+    )?;
+    let measured = wait_for_page(port, &mut child).and_then(|()| {
+        let subscriber = Subscriber::open(port, token)?;
+        let figure = measure(
+            &mut child,
+            SERVE_ROW,
+            "one page connected: the page fetched, one `/v1/events` subscriber open for \
+             the window",
+            IDLE_WINDOW,
+            false,
+            true,
+        );
+        subscriber.finish();
+        figure
+    });
+    stop(&mut child);
+    measured
+}
+
+/// Wait until `acpilot serve` answers its page, or say what it answered instead.
+fn wait_for_page(port: u16, child: &mut Child) -> Result<(), String> {
+    let deadline = Instant::now() + STARTUP;
+    let mut last = "no answer".to_owned();
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("acpilot serve exited before its page ({status})"));
+        }
+        let request = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        match request_once(port, request, Duration::from_secs(5)) {
+            Ok(response) if response.starts_with("HTTP/1.1 200") => return Ok(()),
+            Ok(response) => last = first_line(&response),
+            Err(error) => last = error,
+        }
+        sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "acpilot serve answered no page inside {}s: {last}",
+        STARTUP.as_secs()
+    ))
 }
 
 /// The fixture agent the session row starts: `cargo build -p acpilot-agent` writes it
@@ -1085,6 +1222,7 @@ fn render(figures: &[Figure], release: bool) -> String {
         ));
     }
 
+    let cpus = logical_cpus();
     note.push_str("## Budgets\n\n");
     note.push_str(
         "The first run set the budgets below and CI holds them: `cargo xtask resources --gate`\n\
@@ -1115,14 +1253,14 @@ fn render(figures: &[Figure], release: bool) -> String {
                 Unit::Percent,
             );
         }
-        budget_row(
-            &mut note,
-            budget,
-            "threads",
-            budget.threads as f64,
-            THREAD_MARGIN,
-            Unit::Count,
-        );
+        note.push_str(&format!(
+            "| `{}` | threads | {} ({}) | {:.0} % | {} |\n",
+            budget.row,
+            budget.threads.on(cpus),
+            budget.threads.text(),
+            THREAD_MARGIN * 100.0,
+            (budget.threads.on(cpus) as f64 * (1.0 + THREAD_MARGIN)).ceil() as u64
+        ));
     }
     note.push('\n');
     note.push_str(
@@ -1134,9 +1272,9 @@ fn render(figures: &[Figure], release: bool) -> String {
          few intervals for a percentage — so its CPU budget is `None` rather than zero. The\n\
          budgets below are the medians a run on GitHub's `ubuntu-latest` measured, not this\n\
          machine's: the table above is this machine, and the gate compares the runner with\n\
-         the runner. A box with more logical CPUs reports more threads, because the\n\
-         daemon's pool follows the core count, so `--gate` there trips the thread rows\n\
-         while `cargo xtask resources` still writes this note.\n\n",
+         the runner. A thread budget is a fixed cost plus one per logical CPU rather than\n\
+         a single number, because the runtime's pool follows the core count: a bare\n\
+         figure would be a budget for the machine it was measured on.\n\n",
     );
 
     note.push_str("## What is not measured here, and why\n\n");
@@ -1153,10 +1291,11 @@ fn render(figures: &[Figure], release: bool) -> String {
 
     note.push_str("## Limitations\n\n");
     note.push_str(
-        "- The budgets are one runner's medians, so a runner image whose kernel or CPU count\n\
-         differs can move the thread rows without a regression: re-measure with\n\
+        "- The memory and CPU budgets are one runner's medians, so a runner image whose\n\
+         kernel differs can move a row without a regression: re-measure with\n\
          `cargo xtask resources --gate` on the runner and take its figures rather than\n\
-         widening the margin.\n",
+         widening the margin. The thread budgets instead follow the logical CPU count, so\n\
+         the same constants describe the runner and a larger machine.\n",
     );
     note.push_str(
         "- The session row's agent is this repository's fixture, not a real agent, and the row\n\
@@ -1216,7 +1355,10 @@ mod tests {
             row,
             rss_peak_mib: rss,
             cpu_mean,
-            threads,
+            threads: Threads {
+                base: threads,
+                per_core: 0,
+            },
         }
     }
 
@@ -1232,6 +1374,7 @@ mod tests {
         let verdicts = compare(
             &[figure(20 * MIB, Some(1.0))],
             &[budget("test", 16.0, Some(1.0), 4)],
+            4,
         );
         assert!(verdicts.iter().all(|verdict| !verdict.over), "{verdicts:?}");
     }
@@ -1242,11 +1385,13 @@ mod tests {
         let inside = compare(
             &[figure(20 * MIB, Some(1.0))],
             &[budget("test", 16.0, Some(1.0), 4)],
+            4,
         );
         assert!(!inside[0].over, "{inside:?}");
         let past = compare(
             &[figure(40 * MIB, Some(1.0))],
             &[budget("test", 16.0, Some(1.0), 4)],
+            4,
         );
         assert!(past[0].over, "{past:?}");
     }
@@ -1255,7 +1400,11 @@ mod tests {
     fn a_budgeted_cpu_with_no_reading_is_a_breach() {
         // A one-shot row that grows a CPU budget would pass on memory alone, and the
         // missing percentage would read as a figure inside its limit.
-        let verdicts = compare(&[figure(10, None)], &[budget("test", 16.0, Some(2.0), 4)]);
+        let verdicts = compare(
+            &[figure(10, None)],
+            &[budget("test", 16.0, Some(2.0), 4)],
+            4,
+        );
         assert!(
             verdicts
                 .iter()
@@ -1266,11 +1415,11 @@ mod tests {
 
     #[test]
     fn an_ungated_row_and_a_rowless_budget_are_both_breaches() {
-        let rowless = compare(&[], &[budget("absent", 16.0, None, 4)]);
+        let rowless = compare(&[], &[budget("absent", 16.0, None, 4)], 4);
         assert_eq!(rowless.len(), 1, "{rowless:?}");
         assert!(rowless[0].over, "{rowless:?}");
 
-        let ungated = compare(&[named("stray", 10 * MIB)], &[]);
+        let ungated = compare(&[named("stray", 10 * MIB)], &[], 4);
         assert_eq!(ungated.len(), 1, "{ungated:?}");
         assert!(ungated[0].over, "{ungated:?}");
     }
@@ -1282,7 +1431,7 @@ mod tests {
             budget(SESSION_ROW, 32.0, None, 32),
         ];
         let figures = vec![named(IDLE_ROW, 25 * MIB), named(SESSION_ROW, 30 * MIB)];
-        let inside = compare(&figures, &budgets);
+        let inside = compare(&figures, &budgets, 4);
         assert!(
             inside
                 .iter()
@@ -1290,7 +1439,7 @@ mod tests {
             "{inside:?}"
         );
         let leaked = vec![named(IDLE_ROW, 25 * MIB), named(SESSION_ROW, 45 * MIB)];
-        let past = compare(&leaked, &budgets);
+        let past = compare(&leaked, &budgets, 4);
         assert!(
             past.iter()
                 .any(|verdict| verdict.metric == "added RSS" && verdict.over),
@@ -1307,5 +1456,38 @@ mod tests {
         let me = Pid::from_u32(std::process::id());
         assert!(descends_from(&system, me, me));
         assert!(!descends_from(&system, me, Pid::from_u32(u32::MAX)));
+    }
+
+    #[test]
+    fn a_thread_budget_follows_the_logical_cpu_count() {
+        // One worker per CPU and a fixed cost beside it: 12 threads fits 5 CPUs
+        // (9 budget, 13 limit) and does not fit 2 (6 budget, 9 limit).
+        let budgets = [Budget {
+            row: "test",
+            rss_peak_mib: 16.0,
+            cpu_mean: None,
+            threads: Threads {
+                base: 4,
+                per_core: 1,
+            },
+        }];
+        let figure = Figure {
+            threads: 12,
+            ..figure(10, None)
+        };
+        let small = compare(std::slice::from_ref(&figure), &budgets, 2);
+        assert!(
+            small
+                .iter()
+                .any(|verdict| verdict.metric == "threads" && verdict.over),
+            "{small:?}"
+        );
+        let large = compare(&[figure], &budgets, 5);
+        assert!(
+            large
+                .iter()
+                .any(|verdict| verdict.metric == "threads" && !verdict.over),
+            "{large:?}"
+        );
     }
 }

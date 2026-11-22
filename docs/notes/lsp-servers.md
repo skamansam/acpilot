@@ -281,3 +281,12 @@ ago. It is a map rather than a file on disk: problems are recomputed, so persist
 them would be persisting somebody's obsolete opinion. A file missing from it is not a
 clean file. It is a file nobody has asked about since this daemon came up, and
 opening it asks.
+
+## Decision (2026-11-22)
+
+[ADR 0015](../adr/0015-language-servers-stay-on-the-workspace-host.md) records the
+placement. Language servers run on the workspace host. The daemon owns them and
+shares one warm index with every UI. Grammars and highlighting run in the UI,
+because they run per keystroke. A client may cache grammar assets from a signed
+source. A remote client cannot run a server against files it cannot read. A local
+sidecar needs a measured case and the same trust pins.

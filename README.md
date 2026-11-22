@@ -126,7 +126,8 @@ from anywhere.
   `rust-analyzer` runs per workspace root, shared by every interface, where the code
   lives: local, SSH, or inside WSL. Diagnostics, completion, hover, rename, code actions
   and format-on-save therefore look the same in a terminal and in a browser tab. An
-  agent reads the same diagnostics the human sees.
+  agent reads the same diagnostics the human sees. [ADR 0015](docs/adr/0015-language-servers-stay-on-the-workspace-host.md)
+  records why the server stays with the workspace and the grammar stays with the UI.
 - **Keeps contexts apart.** Profiles — `work`, `personal`, `client-acme` — scope agents,
   credentials, language servers, permission policy, preferences and history. One daemon,
   several identities, no accidental key reuse.

@@ -59,15 +59,15 @@ that point the agent's newest conversation opens, or a new one starts, and the
 panel appears beside the editor. A profile with no `agents.toml` has no agents to
 list, so that row names `agents.toml` and `acpilot doctor` rather than opening an
 empty picker. A row whose program changed under its name says `not approved` and
-names the pack it came from, and `Enter` on it asks before it starts anything: the
-card names the agent, the pack and the exact command, `y` records the pin, and `n`
+names the pack it came from. `Enter` on it asks before it starts anything. The
+card names the agent, the pack and the exact command. `y` records the pin, and `n`
 writes nothing. **Session → Build an Agent in the Model Lab…** opens the lab page
-(P4.5-8): the recipe on the left, its corpus in the middle, and the answer and run
-history on the right. `Tab` moves between the three, `Enter` edits a field (or a
-run, which opens its record), `Space` flips a tool or the overflow strategy, `^S`
-writes the recipe back through the daemon's validation, and `^R` runs it with the
+(P4.5-8). The recipe is on the left, its corpus in the middle, and the answer and
+run history on the right. `Tab` moves between the three. `Enter` edits a field. On a
+run, `Enter` opens its record. `Space` flips a tool or the overflow strategy. `^S`
+writes the recipe back through the daemon's validation. `^R` Runs it with the
 prompt typed after `i`. `v` shows the effective request, `c` marks a run to
-compare against, and `r` reloads from the daemon. **Session → Close Assistant**
+compare against. `R` reloads from the daemon. **Session → Close Assistant**
 puts the panel away and leaves the document open. When the daemon reports no declared agents at all, a one-time
 **next** card names the two ways forward: **Session → Select Agent…** and
 `acpilot doctor`. The next key or click dismisses it. Nothing is written to
@@ -210,7 +210,7 @@ being read. The answer is rendered rather than dumped: headings, lists, quotes,
 fenced code and inline emphasis become styled lines. Every tool call is one row,
 `[completed] Edit src/app.rs`, whose result is folded away until `Enter` opens it
 under the copy cursor. The agent's thinking is a row of its own, styled softly
-ahead of the answer; `Enter` folds a long one to `thinking · 12 lines · Enter
+ahead of the answer. `Enter` folds a long one to `thinking · 12 lines · Enter
 opens it`, so the reply stays findable while the reasoning is still one key away. While the session is busy a cursor sits at the end of the
 newest line. The title says `streaming`, so a reply still arriving does not read
 as one that stopped.

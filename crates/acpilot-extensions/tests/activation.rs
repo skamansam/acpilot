@@ -494,7 +494,7 @@ fn a_blocked_active_extension_is_reported_and_invisible() {
     fs::write(&theme_path, original.replace("#e8edf6", "#121212")).unwrap();
 
     let profile_dir = TempDir::new();
-    // The file is written directly: activation via the CLI would refuse, but a
+    // The file is written directly: activation via the CLI would refuse. A
     // file edited by hand or left behind by an interrupted update must still be
     // treated as blocked rather than trusted.
     profile_dir.write(
@@ -520,7 +520,7 @@ fn a_blocked_active_extension_is_reported_and_invisible() {
 #[test]
 fn a_profile_may_use_the_whole_agent_manifest() {
     // The bug this replaces: the profile layer read `agents.toml` with a narrower
-    // parser that refused a PTY parser or an HTTP endpoint, so `ext why` reported
+    // parser that refused a PTY parser or an HTTP endpoint. `Ext why` reported
     // an error for a file the daemon loaded. One reader means one answer.
     let store_root = TempDir::new();
     let store = Store::new(store_root.path());

@@ -128,7 +128,7 @@ fn collect_refs(value: &Value, found: &mut Vec<String>) {
 #[test]
 fn the_types_are_types_a_toml_file_can_have() {
     let text = json_schema().to_string();
-    // TOML has no null and no `uint32`; publishing either would offer an editor a
+    // TOML has no null and no `uint32`. Publishing either would offer an editor a
     // value the file cannot hold.
     assert!(!text.contains("\"null\""), "a type mentions null");
     assert!(!text.contains("\"uint"), "{text}");
@@ -214,7 +214,7 @@ fn the_schema_accepts_what_the_loader_accepts() {
     assert_eq!(validate(&manifest("")), Ok(()), "the minimum manifest");
     assert_eq!(load(&manifest("")), Ok(()), "the minimum manifest");
 
-    // The optional keys a real pack uses, and every kind the loader knows: a kind
+    // The optional keys a real pack uses. Every kind the loader knows: a kind
     // the schema forgot would make a valid pack incomplete in an editor.
     let kinds = [
         "theme",
@@ -256,7 +256,7 @@ fn a_kind_the_loader_does_not_know_is_refused_by_both() {
 #[test]
 fn the_schema_requires_what_the_loader_requires() {
     // Read the requirement out of the schema, then ask the loader the same
-    // question both ways: the full file loads, and dropping each required key is
+    // question both ways: the full file loads. Dropping each required key is
     // the error that names it.
     let required: Vec<String> = schema()["required"]
         .as_array()

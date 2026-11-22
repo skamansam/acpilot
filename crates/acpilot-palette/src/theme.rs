@@ -19,7 +19,7 @@ use thiserror::Error;
 ///
 /// The file format is `#rrggbb` in lowercase or uppercase. No named colours, no
 /// alpha: a theme that needs translucency is asking the UI to invent a
-/// background, and the result is unreadable on somebody's terminal.
+/// background. The result is unreadable on somebody's terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Color {
     r: u8,

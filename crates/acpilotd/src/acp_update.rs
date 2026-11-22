@@ -23,13 +23,13 @@ use serde_json::Value;
 /// protocol spelling.
 ///
 /// `None` is deliberate: compaction and a changed command list have no ACP update in
-/// this schema version, and inventing a notice for them would tell a driver something
+/// this schema version. Inventing a notice for them would tell a driver something
 /// the protocol does not say.
 pub(crate) fn update(event: &SessionEvent) -> Option<SessionUpdate> {
     let payload = &event.payload;
     match event.kind {
         SessionEventKind::MessageChunk => {
-            // A driver wrote the prompt; echoing it back as an assistant chunk would
+            // A driver wrote the prompt. Echoing it back as an assistant chunk would
             // read as if the agent had said its own words.
             if payload.get("role").and_then(Value::as_str) != Some("assistant") {
                 return None;
@@ -74,7 +74,7 @@ fn chunk(payload: &Value) -> Option<String> {
 
 /// A tool call's announcement or its patch.
 ///
-/// The log marks a patch with `patch: true`; without that flag the same keys would be
+/// The log marks a patch with `patch: true`. Without that flag the same keys would be
 /// a full call, and a driver sent a patch-shaped `tool_call` would draw a row that
 /// forgot its title.
 fn tool_call(payload: &Value) -> Option<SessionUpdate> {
@@ -140,7 +140,7 @@ fn tool_call(payload: &Value) -> Option<SessionUpdate> {
 
 /// The notice, with the severity and description the log recorded.
 ///
-/// The description is in the payload under `message`; an earlier forwarder read
+/// The description is in the payload under `message`. An earlier forwarder read
 /// `description`, so every notice reached a driver as a bare title.
 fn notice(payload: &Value) -> Notice {
     let severity = payload
@@ -161,7 +161,7 @@ fn notice(payload: &Value) -> Notice {
 /// One payload key, deserialized into the protocol's own type.
 ///
 /// The log wrote these values from the ACP types, so the serde spelling is the same
-/// one the protocol reads; a value this build cannot spell is dropped rather than
+/// one the protocol reads. A value this build cannot spell is dropped rather than
 /// guessed at.
 fn parse<T: DeserializeOwned>(payload: &Value, key: &str) -> Option<T> {
     serde_json::from_value(payload.get(key)?.clone()).ok()
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(started["locations"][0]["path"], "/work/src/lib.rs");
 
         // The patch names only what changed: a driver merges it into the row it
-        // already drew, so the title it knows must not be blanked out.
+        // already drew. The title it knows must not be blanked out.
         let patched = update(&event(
             SessionEventKind::ToolCall,
             json!({

@@ -302,7 +302,7 @@ async fn a_refused_token_is_not_reported_as_no_daemon() {
 
 #[tokio::test]
 async fn an_unreachable_daemon_says_where_it_tried() {
-    // Port 1 on loopback is never a daemon; the point is the message, not the port.
+    // Port 1 on loopback is never a daemon. The point is the message, not the port.
     let client = Client::new("http://127.0.0.1:1");
     let error = client.health().await.expect_err("no daemon");
     assert!(matches!(error, ClientError::Transport { .. }));

@@ -2,13 +2,13 @@
 //!
 //! An endpoint is either a URL or a filesystem path, and what a filesystem path
 //! means is the one thing that differs: on unix it is a socket the HTTP client
-//! connects to; on Windows there is no unix socket at this pin, so the default
+//! connects to. On Windows there is no unix socket at this pin, so the default
 //! endpoint there is loopback HTTP and a path is a mistake that fails at connect.
 //!
 //! The branch lives in this directory, not in `lib.rs`, for the same reason the
 //! host crate's does: a `cfg(windows)` in the middle of the client compiles on one
 //! OS and silently never runs on the other. `acpilot-host` owns the platform rules
-//! that both sides share (the default endpoint, the runtime directory); this file
+//! that both sides share (the default endpoint, the runtime directory). This file
 //! owns only the transport this crate builds with them.
 
 #[cfg(unix)]
@@ -22,7 +22,7 @@ pub(crate) use unix::{http, socket};
 pub(crate) use windows::{http, socket};
 
 // The type a terminal attach hands the WebSocket handshake. Declared in
-// `terminal` because that is where the frames live; named here because opening
+// `terminal` because that is where the frames live. Named here because opening
 // the stream is the platform's half.
 pub(crate) use crate::terminal::Duplex;
 
@@ -30,8 +30,8 @@ pub(crate) use crate::terminal::Duplex;
 ///
 /// A daemon on this machine either answers at once or refuses, and a refusal is
 /// immediate. The case this bounds is the other one: a host that drops the SYN
-/// instead of rejecting it — a firewall, a wrong address on a network that does
-/// not answer — where the kernel waits out its own retry schedule and the caller
+/// instead of rejecting it. A firewall, a wrong address on a network that does
+/// not answer. Where the kernel waits out its own retry schedule and the caller
 /// waits with it. Two minutes of a pane with nothing in it is indistinguishable
 /// from a hung editor, and the endpoint was wrong all along. A local handshake
 /// that has not finished in two seconds is not going to.
@@ -44,11 +44,11 @@ pub(crate) fn is_url(endpoint: &str) -> bool {
 
 /// An HTTP client that carries the token it was given, if any.
 ///
-/// Only used for TCP: a socket's access control is the filesystem, and sending a
+/// Only used for TCP: a socket's access control is the filesystem. Sending a
 /// token down it would be a secret in a channel that never needed one. The token
-/// is a parameter rather than something this module looks up — an environment
+/// is a parameter rather than something this module looks up. An environment
 /// variable read here would make the same `Client::new` mean two things depending
-/// on the process it runs in, and a library is the wrong place to decide where a
+/// on the process it runs in. A library is the wrong place to decide where a
 /// secret comes from. `acpilot` resolves one and passes it.
 pub(crate) fn tcp_client(token: Option<&str>) -> reqwest::Client {
     let mut headers = reqwest::header::HeaderMap::new();

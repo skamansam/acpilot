@@ -26,7 +26,7 @@ const TOKEN: &str = "8f5b9d0c2a7e41f3b6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a
 /// machine.
 ///
 /// The two directories are returned rather than dropped: the auth layer reads the
-/// token file per request and the pane's `cwd` is the workspace, so either one
+/// token file per request and the pane's `cwd` is the workspace. Either one
 /// going away would leave the test measuring a different daemon.
 async fn serve() -> (tempfile::TempDir, tempfile::TempDir, std::net::SocketAddr) {
     let root = tempfile::tempdir().expect("workspace");
@@ -88,7 +88,7 @@ async fn a_browser_that_offers_the_token_as_a_protocol_gets_the_pane() {
         .await
         .expect("the handshake completes");
 
-    // The daemon names the protocol it chose; a browser refuses the connection when
+    // The daemon names the protocol it chose. A browser refuses the connection when
     // it offered protocols and the server names none. It must not be the token.
     assert_eq!(
         response
@@ -150,7 +150,7 @@ async fn a_socket_without_the_token_is_refused_before_the_upgrade() {
 async fn a_bearer_header_still_works_for_a_client_that_can_set_one() {
     // The page is the reason the protocol list exists, not a replacement for the
     // header every other client sends. A script opening the same socket with
-    // `Authorization` and no protocol names still attaches; it just gets no
+    // `Authorization` and no protocol names still attaches. It just gets no
     // `Sec-WebSocket-Protocol` back, which a non-browser client does not require.
     let (_root, _secret, address) = serve().await;
     let mut request = format!("ws://{address}/v1/terminals/t1/attach")

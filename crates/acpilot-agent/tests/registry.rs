@@ -160,7 +160,7 @@ fn a_manifest_that_does_not_validate_does_not_load_at_all() {
 fn a_missing_file_is_an_empty_registry_and_is_not_created() {
     // A profile with no manifest has no agents, which is the ordinary first-run
     // state. Promotion writes the first entry while the daemon runs, and removal
-    // of the last entry deletes the file, so both ends of that life have to read
+    // of the last entry deletes the file. Both ends of that life have to read
     // "no file" as "no agents" rather than as a failure.
     let dir = tempfile::tempdir().expect("tempdir");
     let registry =
@@ -227,7 +227,7 @@ fn a_broken_edit_keeps_the_last_good_snapshot_and_the_reason() {
 fn a_deleted_manifest_reloads_as_no_agents() {
     // Removal of the last promoted entry deletes the file, and the daemon that
     // promoted it has to stop listing the agent without a restart. That is the
-    // same answer a restart would give; the momentary absence in an editor's
+    // same answer a restart would give. The momentary absence in an editor's
     // write-then-rename is covered by `watching_survives_an_atomic_save`, which
     // settles on the file that arrives.
     let dir = tempfile::tempdir().expect("tempdir");

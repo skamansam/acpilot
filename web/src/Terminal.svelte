@@ -13,7 +13,7 @@
     onclose,
   }: { pane: TerminalSummary; token: string; onclose?: () => void } = $props();
 
-  // xterm is the program's screen; this component owns the DOM node it draws into
+  // xterm is the program's screen. This component owns the DOM node it draws into
   // and the socket that feeds it, and nothing else. The process belongs to the
   // daemon: detaching here leaves it running, which is the point of attaching.
   let host: HTMLDivElement;
@@ -26,7 +26,7 @@
 
     const terminal = new XTerm({
       // The page's palette, read rather than copied: a theme repaint is the page's
-      // job, and a terminal with its own hardcoded colours would be a fourth place
+      // job. A terminal with its own hardcoded colours would be a fourth place
       // a colour is written down.
       theme: {
         background: colour('--bg-panel', '#131c2e'),
@@ -46,7 +46,7 @@
     try {
       const webgl = new WebglAddon();
       // A lost context falls back to the DOM renderer rather than a blank pane: the
-      // screen is a shell's output, and losing it is worse than drawing it slowly.
+      // screen is a shell's output. Losing it is worse than drawing it slowly.
       webgl.onContextLoss(() => webgl.dispose());
       terminal.loadAddon(webgl);
     } catch {
@@ -84,7 +84,7 @@
       write: (bytes) => terminal.write(bytes),
       attached: () => {
         // The daemon replays the screen after this notice, so the cells from the
-        // previous socket go first — otherwise a reattach would draw the new
+        // previous socket go first. Otherwise a reattach would draw the new
         // screen on top of the old one.
         terminal.reset();
         status = 'open';
@@ -102,7 +102,7 @@
       },
     });
 
-    // A pane's size is its cells, and the fit addon reads them from the element;
+    // A pane's size is its cells, and the fit addon reads them from the element.
     // the program is told once, through the socket, because that is the only place
     // a live pane can say it.
     const observer =

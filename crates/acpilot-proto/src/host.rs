@@ -21,7 +21,7 @@ pub enum HostKind {
 /// What a host can actually do.
 ///
 /// Capabilities are discovered rather than assumed: a host that cannot spawn
-/// processes still edits files, and the UIs need to know that before offering an
+/// processes still edits files. The UIs need to know that before offering an
 /// agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct HostCapabilities {

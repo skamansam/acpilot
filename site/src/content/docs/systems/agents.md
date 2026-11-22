@@ -69,8 +69,8 @@ time a command is run, the daemon hashes it and pins it. If the binary changes,
 the agent shows as **untrusted** until you say otherwise. This is not paranoia.
 It is the same reason your shell asks before running a downloaded script. The TUI
 asks with it: **Session → Select Agent…** marks that row `not approved` and names
-the pack it came from, and `Enter` on it opens a card with the agent, the pack and
-the exact command. `y` records the pin; `n` writes nothing and the command does
+the pack it came from. `Enter` on it opens a card with the agent, the pack and
+the exact command. `y` records the pin. `n` writes nothing and the command does
 not run.
 
 ## What is built today

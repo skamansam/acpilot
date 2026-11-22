@@ -225,12 +225,12 @@ already running keeps the ones it started with. Naming a different profile or
 workspace is exit `4`. Showing one project's sessions under another project's
 name is worse than an error.
 
-`agents rm`, `models probe` and `recipes run` from that list are served today; the
+`agents rm`, `models probe` and `recipes run` from that list are served today. The
 other `recipes` and `runs` verbs are still the plan. `recipes run` streams the
-answer to stdout and prints the finished record's id on stderr, and `--json`
+answer to stdout and prints the finished record's id on stderr. `--json`
 replaces the text with the finished summary so `jq` has one object to read. A
-reasoning model's thinking goes to stderr as it arrives, before the answer: on a
-terminal a tight budget spent thinking is visible rather than an empty run, and a
+reasoning model's thinking goes to stderr as it arrives, before the answer. On a
+terminal a tight budget spent thinking is visible rather than an empty run. A
 redirect of stdout still holds only the answer.
 
 Scripting the lab is a first-class case, not a workaround. A corpus experiment

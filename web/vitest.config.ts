@@ -3,11 +3,11 @@ import { configDefaults, defineConfig } from 'vitest/config';
 import viteConfig from './vite.config.ts';
 
 // Tests share the build's plugins (so `.svelte` compiles the same way) and
-// differ only in where they run: happy-dom for a DOM, and an explicit include
+// differ only in where they run: happy-dom for a DOM. An explicit include
 // so `vite build` can never pick a test up as an entry point.
 //
 // This is a separate file rather than a `test` key in `vite.config.ts` because
-// that config is typed by Vite, which does not know the key — and a build
+// that config is typed by Vite, which does not know the key. And a build
 // config that imports the test runner is a build that needs the test runner.
 export default mergeConfig(
   viteConfig,
@@ -21,7 +21,7 @@ export default mergeConfig(
     test: {
       environment: 'happy-dom',
       include: ['src/**/*.test.ts'],
-      // `*.live.test.ts` is a test of the daemon too, and spawning one is what
+      // `*.live.test.ts` is a test of the daemon too. Spawning one is what
       // `npm run test:live` exists for: a unit run stays a run of things it can
       // start by itself.
       exclude: [...configDefaults.exclude, 'src/**/*.live.test.ts'],

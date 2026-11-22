@@ -1,5 +1,5 @@
 // The source-control pane against a mocked daemon: both diff halves, staging one
-// hunk, a generated draft, and the confirmation that stands between the composer
+// hunk, a generated draft. The confirmation that stands between the composer
 // and the one git write.
 
 import { mount, unmount } from 'svelte';

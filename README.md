@@ -344,9 +344,9 @@ accessibility. It talks to the daemon exactly as the TUI does.
 token in one startup panel. `--bind 0.0.0.0:7777` opens it to the LAN. The daemon serves a
 compiled SPA (CodeMirror 6 + xterm.js) plus the API. Same daemon, same sessions, so a
 browser tab can watch an agent run on the office workstation. A local account (ADR 0013)
-exchanges its password for a 15-minute JWT; until `acpilot auth init` the printed token is
+exchanges its password for a 15-minute JWT. Until `acpilot auth init` the printed token is
 the bootstrap credential. The browser signs in at `/login`, which exchanges the password
-(or a configured OIDC provider) for an `HttpOnly` refresh cookie; the page keeps only the
+(or a configured OIDC provider) for an `HttpOnly` refresh cookie. The page keeps only the
 short-lived access token. OIDC providers live in `<data>/auth.toml`, and an identity is
 linked locally with `acpilot auth link`. Optional TLS termination, no cloud dependency. `--token <token>` picks the secret instead of generating
 one, and it lives in a `0600` file either way.
@@ -422,7 +422,7 @@ as of **2026-10-20**.
 
 | Need | Choice | Notes |
 | --- | --- | --- |
-| ACP client & agent runtime | **`agent-client-protocol` 5.3** | Official Rust SDK. Versioned entry points (`Client.v1()` / `Agent.v1()`) with messages under `v1::schema`, JSON-RPC envelopes, transports (`Lines`, `ByteStreams`, `Channel`), typed v1 sessions. Enable features `process` + `stdio`. Protocol v1 is stable; v2 is behind `unstable_protocol_v2`. |
+| ACP client & agent runtime | **`agent-client-protocol` 5.3** | Official Rust SDK. Versioned entry points (`Client.v1()` / `Agent.v1()`) with messages under `v1::schema`, JSON-RPC envelopes, transports (`Lines`, `ByteStreams`, `Channel`), typed v1 sessions. Enable features `process` + `stdio`. Protocol v1 is stable. V2 is behind `unstable_protocol_v2`. |
 | Raw protocol types / schema | `agent-client-protocol-schema` | Same org. Use it when you need wire types without the runtime (e.g. a wasm web client). |
 | MCP bridge | `agent-client-protocol-rmcp` | Attaches MCP servers to sessions the way ACP `mcpServers` expects. |
 | Async runtime | `tokio` 1.54 | Multi-thread runtime for the daemon, current-thread for the CLI. |
@@ -570,7 +570,7 @@ them. None of them learns the protocol.
 | Wire types | **`gen-lsp-types` 0.11** (`url` feature) | Generated from the official LSP metamodel, so it tracks the spec and distinguishes `null` from absent. It deliberately leaves URI encoding to the consumer, so we pick `url::Url` — what servers actually send. `lsp-types` 0.97 is unmaintained and moved to `fluent-uri`, trading interoperability for purity (D8). Isolated behind `acpilot-lsp::wire`. |
 | Client loop | **our own** (~400 lines) | `Content-Length` framing, request table, `$/cancelRequest`, `$/progress`, server→client requests. ACP gives us the transport abstraction. LSP framing differs (headers, not newline-delimited), so only the transport is shared. `async-lsp` 0.2 is the fallback: real client support, but pinned to `lsp-types` and built around local stdio. |
 | Document store | `ropey` + our own position mapping | No crate fits: incremental sync, per-URI versions, and UTF-16↔UTF-8 conversion must run against the same buffer the UI edits. |
-| Servers | ~10 presets in `lsp.toml`, declared as data | rust-analyzer, typescript-language-server, gopls, pyright, clangd, lua-language-server, bash-language-server, taplo, yaml-language-server, marksman. Detect-only today; managed, checksummed downloads are the D12 direction (not built). |
+| Servers | ~10 presets in `lsp.toml`, declared as data | rust-analyzer, typescript-language-server, gopls, pyright, clangd, lua-language-server, bash-language-server, taplo, yaml-language-server, marksman. Detect-only today. Managed, checksummed downloads are the D12 direction (not built). |
 | Web transport | `@codemirror/lsp-client` 6.x over a WS bridge | First-party CodeMirror client (6.0, July 2025). Its `Transport` interface maps onto a daemon WebSocket, so the browser sees the same diagnostics as the TUI. |
 | MCP bridge | `agent-client-protocol-rmcp` | Exposes `lsp_diagnostics`/`lsp_hover`/`lsp_definition` to agents, so "what does the compiler say" is a tool call instead of a blind re-run of `cargo check`. |
 
@@ -700,7 +700,7 @@ so they are additive, not rewrites.
 ## 8. Non-goals for v0.1
 
 - Collaborative multi-user editing. Design for it, but do not ship CRDT in v0.1.
-- Being a language server. We do not ship our own. Detection is the default; a managed
+- Being a language server. We do not ship our own. Detection is the default. A managed
   download is explicit, checksummed and pinned (the D12 direction, not built). Extensions
   can carry a preset for a server you installed yourself, never the binary.
 - Synced or hosted profiles. A profile is a local identity, not an account.
@@ -765,15 +765,22 @@ cargo build --workspace
 
 That produces three programs: `acpilot` (CLI, TUI and GUI launcher), `acpilotd` (the
 daemon) and `acpilot-agent-lm` (a model recipe running as an ACP agent). A client looks
-for `acpilotd` beside its own executable, never on `PATH`; `ACPILOT_DAEMON` names one
+for `acpilotd` beside its own executable, never on `PATH`. `ACPILOT_DAEMON` names one
 somewhere else.
 
 ### Running tests
 
-`cargo xtask check` is the gate — the same commands CI runs: `cargo fmt --check`, clippy
-with `-D warnings`, the workspace nextest run, the `docs`-feature tests, the P0-5 probe,
-the web UI's checks and the desktop shell's build. `cargo xtask check --no-web` is the
-Rust-only loop when Node is not the point.
+`cargo xtask check` is the gate. It runs the same commands as CI:
+
+- `cargo fmt --check`
+- clippy with `-D warnings`
+- the workspace nextest run
+- the `docs`-feature tests
+- the P0-5 probe
+- the web UI's checks
+- the desktop shell's build
+
+`cargo xtask check --no-web` is the Rust-only loop when Node is not the point.
 
 ```bash
 cargo xtask check                 # everything
@@ -787,7 +794,7 @@ cargo test -p acpilotd --features docs       # CI's separate docs-feature job
 Unit tests sit in `#[cfg(test)]` modules beside the code. Anything crossing a process, a
 file or a wire boundary gets an integration suite under `crates/<crate>/tests/`. Tests
 that need a tool this machine may not have (`rust-analyzer`, a PTY agent, an SSH fixture)
-are `#[ignore]`d on purpose; see [CONTRIBUTING.md](CONTRIBUTING.md). The OpenAPI snapshot
+are `#[ignore]`d on purpose. See [CONTRIBUTING.md](CONTRIBUTING.md). The OpenAPI snapshot
 and `wire_contract.rs` are contracts, not coverage: regenerate the snapshot deliberately
 and review its diff.
 
@@ -812,7 +819,7 @@ On Windows the daemon listens on `127.0.0.1:7777` until the named pipe exists, s
 `Invoke-WebRequest` alias that rejects `-s`).
 
 If you change anything under `web/`, run `cargo xtask web-build` and commit the
-regenerated `crates/acpilot-web/assets/index.html` in the same change; CI compares the
+regenerated `crates/acpilot-web/assets/index.html` in the same change. CI compares the
 committed page with a fresh build. A pane, key or theme-token change also needs
 `cargo xtask showcase`, and its regenerated JSON belongs in the same commit.
 
@@ -828,16 +835,16 @@ once `acpilot auth init` creates the local account, the listener requires the JW
 without a restart, because the daemon reads the file per request.
 
 `acpilot serve` starts the daemon on a free loopback port and prints the page URL with
-its token; `--bind 0.0.0.0:7777` opens it to the LAN. The compiled SPA is embedded in the
+its token. `--bind 0.0.0.0:7777` opens it to the LAN. The compiled SPA is embedded in the
 daemon, so a release tarball has no asset directory to lose. `acpilot tui` needs no daemon
-at all — it runs the daemon's core in-process when nothing answers (P6-11) — but a daemon
+at all. It runs the daemon's core in-process when nothing answers (P6-11). But a daemon
 that *is* running is attached to first, because its sessions outlive the window.
 
 The docs site under [`site/`](site/) is Astro + Starlight and deploys to GitHub Pages at
-<https://rudeboy.dev/acpilot/>. Build it with `cd site && npm run build`; the release
+<https://rudeboy.dev/acpilot/>. Build it with `cd site && npm run build`. The release
 workflow rebuilds it from `main`.
 
-`cargo xtask dist` is the packaging path without a tag: it drives `cargo-dist` from
+`cargo xtask dist` is the packaging path without a tag. It drives `cargo-dist` from
 `dist-workspace.toml` and writes archives, checksums, the shell and PowerShell installers,
 a Homebrew formula and an SBOM per program into `target/distrib/`. It needs
 `cargo-dist` 0.32.0 and `cargo-cyclonedx` on `PATH`.
@@ -865,18 +872,18 @@ installs and CI use. Everything else is either a selector or the daemon's addres
 | `ACPILOT_HOME` | Moves the config and data root. Every test uses a temp one. |
 | `ACPILOT_PROFILE` | Selects the profile by name or directory. `--profile` wins over it. |
 | `ACPILOT_API_URL` | The daemon endpoint: an `http://…` URL or a unix-socket path. |
-| `ACPILOT_TOKEN` | The bootstrap bearer token for a TCP listener; refused after the first account exists. |
-| `ACPILOT_LSP_INDEX` | The language-server catalog URL; the published default is used when unset. |
-| `ACPILOT_LSP_INDEX_PUBKEY` | The catalog's 64-hex ed25519 public key; required by `acpilot lsp`. |
+| `ACPILOT_TOKEN` | The bootstrap bearer token for a TCP listener. Refused after the first account exists. |
+| `ACPILOT_LSP_INDEX` | The language-server catalog URL. The published default is used when unset. |
+| `ACPILOT_LSP_INDEX_PUBKEY` | The catalog's 64-hex ed25519 public key. Required by `acpilot lsp`. |
 | `ACPILOT_DAEMON` | The `acpilotd` to spawn when it is not beside the client. |
-| `ACPILOT_TAB_WIDTH` | An example preference override; `ACPILOT_PREFERENCES__TAB_WIDTH` is the namespaced spelling. |
+| `ACPILOT_TAB_WIDTH` | An example preference override. `ACPILOT_PREFERENCES__TAB_WIDTH` is the namespaced spelling. |
 | `ACPILOT_SSH`, `ACPILOT_WSL` | The transport programs, when they are not on `PATH`. |
 | `ACPILOT_HELPER_DIR` | Where the in-host helper is installed. |
 | `RUST_LOG` | The `tracing` filter for the daemon and the clients. |
 
 Agents and provider credentials are not environment files. They live in a profile's
 `agents.toml` and `providers.toml` as `keyring:<name>` references, resolved in that
-profile's namespace; the values never enter a config file or an HTTP answer. See §3 for
+profile's namespace. The values never enter a config file or an HTTP answer. See §3 for
 the manifest example and the profile rules.
 
 ## 12. Contributing
@@ -894,7 +901,7 @@ The short version:
 - Never `git commit --no-verify`: the same failure is waiting in CI.
 - A new dependency needs a sentence on why the existing ones do not do the job, plus a
   clean `cargo deny`. The version policy is latest stable, with the documented pins.
-- A wire change moves the OpenAPI snapshot in the same PR; a behaviour change moves
+- A wire change moves the OpenAPI snapshot in the same PR. A behaviour change moves
   `docs/api.md`, the site pages and `docs/notes/` with it.
 - Platform `cfg` goes only under a crate's `src/platform/`, one file per platform. The
   workspace forbids `unsafe`.
@@ -918,11 +925,11 @@ credential in your own keyring.
 any plain CLI wrapped in a PTY. One `agents.toml` entry describes each one.
 
 **Does Acpilot ship or host a model?** No. The model lab points at a provider you already
-run (LM Studio on day one, plus any OpenAI-compatible server), records runs, and can
+run (LM Studio on day one, plus any OpenAI-compatible server), records runs. Can
 promote a tuned recipe into an ordinary `acp-stdio` agent manifest.
 
 **Does it download language servers or extensions?** Not in v0.1. Language servers are
-detected where they are installed; extensions are declarative data installed from a
+detected where they are installed. Extensions are declarative data installed from a
 reviewed index, never a script.
 
 **Why does `acpilot tui` work with no daemon running?** When `GET /v1/health` goes
@@ -930,7 +937,7 @@ unanswered, it runs the daemon's core in the same process (P6-11), so nothing is
 and sessions end with the window. Run `acpilotd` (or a service manager) when they should
 not. `--no-spawn` means "attach or fail".
 
-**What about Windows?** Unix and macOS are built first; Windows and WSL are the Windows
+**What about Windows?** Unix and macOS are built first. Windows and WSL are the Windows
 phase (P9). Platform code lives under `src/platform/`, one file per platform, and CI
 cross-checks `acpilot-host` for Windows and macOS on every run.
 
@@ -963,7 +970,7 @@ The interface stands on [ratatui](https://ratatui.rs) and crossterm,
 [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [CodeMirror](https://codemirror.net) + [xterm.js](https://xtermjs.org).
 
-The docs site is [Astro](https://astro.build) + [Starlight](https://starlight.astro.build);
+The docs site is [Astro](https://astro.build) + [Starlight](https://starlight.astro.build).
 the badges are [Shields.io](https://shields.io).
 
 The README follows [Louis3797/awesome-readme-template](https://github.com/Louis3797/awesome-readme-template).

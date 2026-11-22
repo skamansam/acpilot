@@ -129,7 +129,7 @@ The strategy decides what happens when the conversation does not fit:
 | `refuse` | Fails the run and names how many tokens are over |
 
 A window that cannot hold the system prompt, the corpus, the tools and the reserved
-output fails under every strategy, because none of them shrinks those parts.
+output fails under every strategy. None of them shrinks those parts.
 
 Token counts are estimates of four bytes per token until the server reports `usage`. A
 hint of 25 percent either way is the plan, and a run record says whether a count was
@@ -141,13 +141,13 @@ Every run appends one line to the profile's `runs.jsonl`. The line is never rewr
 
 The line holds the request and the answer:
 
-- the prompt, and its `sha256:` digest;
-- the selectors, and the files they resolved to with their sizes;
-- the budget, and the sampling parameters actually sent;
+- the prompt, and its `sha256:` digest.
+- the selectors, and the files they resolved to with their sizes.
+- the budget, and the sampling parameters actually sent.
 - timings, first token, usage, stop reason and every warning.
 
 A page of runs is newest first. The cursor is a run id, not an offset, because a log
-only grows: an offset would repeat a line when something was appended between two
+only grows. An offset would repeat a line when something was appended between two
 pages. A cursor that names another recipe's run is refused.
 
 A replay re-sends the stored prompt and selectors as a new run with its own record,
@@ -166,7 +166,7 @@ run, `GET /v1/recipes/{id}/runs` pages them, `GET /v1/recipes/{id}/runs/{run}` r
 back, and `POST /v1/recipes/{id}/runs/{run}/replay` re-sends it. A recipe is a real file
 the API reads and writes. The agent that runs one is `acpilot-agent-lm` (P4.5-5), and
 `acpilot recipes run <id> "…"` prints a run's answer on stdout and its thinking
-on stderr, so a terminal shows a reasoning run that spent its budget thinking.
+on stderr. A terminal displays a reasoning run that spent its budget thinking.
 </Aside>
 
 ## Why files and not a database

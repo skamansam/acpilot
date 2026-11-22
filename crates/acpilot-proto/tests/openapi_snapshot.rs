@@ -22,7 +22,7 @@ fn openapi_document_is_unchanged() {
 /// `preserve_order` is a workspace-wide feature (an ACP dependency enables it),
 /// so `cargo test -p acpilot-proto` and `cargo test --workspace` otherwise
 /// produce the same document in two different orders and one of them fails.
-/// Ordering is not a wire property; the set of keys is.
+/// Ordering is not a wire property. The set of keys is.
 fn canonical(value: Value) -> Value {
     match value {
         Value::Object(map) => {

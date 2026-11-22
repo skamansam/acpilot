@@ -190,7 +190,7 @@ Extensions are still deliberately later.
 ## Remote drivers
 
 The bridge has two surfaces because it has two credentials. The cockpit's routes are on
-the daemon's listener and need the daemon token; the driver's routes are on the listener
+the daemon's listener and need the daemon token. The driver's routes are on the listener
 `[acp.bridge]` names and need the driver token a pairing code minted.
 
 | Route | Token | What it does |
@@ -198,15 +198,15 @@ the daemon's listener and need the daemon token; the driver's routes are on the 
 | `POST /v1/acp/pairings` | daemon | Issues a single-use code, two minutes. `grant_answer_permissions` is the person's decision. |
 | `GET /v1/acp/bridge` | daemon | Whether the driver listener is on, its bind, and the connected/known counts. |
 | `GET /v1/acp/drivers` | daemon | Every driver on record, revoked ones included. |
-| `POST /v1/acp/drivers/{id}/revoke` | daemon | Makes the driver's next call `401`; the row stays. |
+| `POST /v1/acp/drivers/{id}/revoke` | daemon | Makes the driver's next call `401`. The row stays. |
 | `POST /pair` | the code | Claims a code and returns the driver's row and its token, once. |
 | `POST /acp` | driver | JSON-RPC: `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/answer_permission`. |
 | `GET /acp/events` | driver | The driver's `session/update` and `session/request_permission` notifications. |
 
-The bridge is off unless `[acp.bridge] enabled = true` names a `bind`; an enabled bridge
+The bridge is off unless `[acp.bridge] enabled = true` names a `bind`. An enabled bridge
 with no address is a startup error rather than a listener nobody chose. The driver token
 is required even on loopback, and is kept in the profile's `drivers.toml` as an Argon2id
-hash, `0600`. Scopes are `observe`/`prompt`/`cancel` by default; `answer_permissions`
+hash, `0600`. Scopes are `observe`/`prompt`/`cancel` by default. `answer_permissions`
 needs the grant at issue, and without it a permission request stays on `GET /v1/permissions`
 for a person rather than reaching the driver. Driver ids are recorded on the ledger row,
 not yet on the store's session or audit rows.
@@ -229,18 +229,18 @@ contacted.
 
 `POST /v1/providers` writes the declaration to that file and probes it once. A
 failed probe still answers `201`: the row carries the reason in `detail`, and a
-`502` would leave nobody with a row to correct. A refused credential reads
+`502` would leave nobody with a row to fix. A refused credential reads
 `unauthorized`, because the fix differs from an unreachable host. One id is one
 provider, and a second declaration of that id is `409`. Replacing a row would move
 every recipe that names it to another server without saying so.
 
 `credential_ref` names a keyring entry in the profile's namespace. The daemon reads
 it at probe time and sends it as a bearer token. A reference that cannot be read
-answers `unauthorized` with the account to add, and nothing is sent, because an
+answers `unauthorized` with the account to add. Nothing is sent, because an
 anonymous request would let the server take the blame. The reference is returned as
 written and the token is never part of any answer. `acpilot models probe [id]` asks
 the same question from a terminal, with no daemon, using the same keyring and the
-same memory file, and exits `1` when a provider answers with a failure.
+same memory file. Exits `1` when a provider answers with a failure.
 
 ## Stats
 
@@ -280,18 +280,18 @@ conversation that stopped goes old on the bar. Without that, it would look fresh
 for as long as the roster can be read.
 
 A `provider` row per entry in `providers.toml` comes first, in declaration order.
-It has no conversation behind it, so it reports no `context`; it reports `credits`
+It has no conversation behind it, so it reports no `context`. It reports `credits`
 only when this build knows the provider's balance endpoint — today OpenRouter's
 `GET /api/v1/credits`. The read uses the declaration's `credential_ref`, is cached
 for a minute because the bar polls faster than a balance moves, and reports
 `used`, `remaining` and `limit` in USD with `source: server`. A provider with no
 such endpoint, a disabled one, or one whose read failed has no `credits` key
-rather than `0.00`; a credential that cannot be read sends nothing at all. The
+rather than `0.00`. A credential that cannot be read sends nothing at all. The
 row's `updated_at` is when the balance was read, or the last probe for a quiet
 row.
 
-Configured windows and plan ceilings have no field in `providers.toml` yet, so
-neither is invented here: `window_tokens` stays absent until an agent names a
+Configured windows and plan ceilings have no field in `providers.toml` yet.
+Neither is invented here. `window_tokens` stays absent until an agent names a
 window or a profile states one.
 
 `GET /app/stats` is the page's copy: the same rows with `fill`, `text` and
@@ -301,10 +301,15 @@ order, measured by `acpilot-stats`, the crate the TUI and the desktop app also
 draw. It is under `/app` because it is a rendering of the contract rather than
 part of it. It needs the token: an agent roster is not the page's own business.
 
-The page itself is served at `/` and `/app` with
-`Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline';
+The page itself is served at `/` and `/app` with this policy:
+
+```text
+Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline';
 style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src
-'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, plus
+'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+The response also carries
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
 `X-Frame-Options: DENY`. The bundle is one inline file, so its script and style
 are the only inline exceptions. Everything it may reach is its own origin. The
@@ -1114,27 +1119,27 @@ now would freeze transports that have not been measured.
 | Route | Answers |
 | --- | --- |
 | `GET /v1/models` | Every enabled provider asked once. `models` holds what answered, `problems` names the providers that did not |
-| `PATCH /v1/providers/{id}` | Edit the label, base URL, token or `enabled`; `404` for an unknown id |
-| `DELETE /v1/providers/{id}` | `204`; `409` while a recipe names the provider |
+| `PATCH /v1/providers/{id}` | Edit the label, base URL, token or `enabled`. `404` for an unknown id |
+| `DELETE /v1/providers/{id}` | `204`. `409` while a recipe names the provider |
 | `POST /v1/providers/{id}/probe` | Ask one provider now and keep `last_probed_at` and the model count |
 | `GET /v1/recipes` | Recipe summaries, in id order |
-| `POST /v1/recipes` | `201` with the stored recipe; `400` when validation fails |
-| `GET /v1/recipes/{id}` | The recipe as stored; `404` for an unknown id |
+| `POST /v1/recipes` | `201` with the stored recipe. `400` when validation fails |
+| `GET /v1/recipes/{id}` | The recipe as stored. `404` for an unknown id |
 | `PATCH /v1/recipes/{id}` | Replace only the named fields |
-| `DELETE /v1/recipes/{id}` | `204`; runs already recorded are left alone |
-| `POST /v1/recipes/{id}/runs` | Streams the run as SSE; `?root=` is required when `corpus` is not empty |
+| `DELETE /v1/recipes/{id}` | `204`. Runs already recorded are left alone |
+| `POST /v1/recipes/{id}/runs` | Streams the run as SSE. `?root=` is required when `corpus` is not empty |
 | `GET /v1/recipes/{id}/runs` | Newest first, `?cursor=` and `?limit=` |
-| `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, the budget it was assembled from, and the model's reasoning when the server reported any; `404` for a run the log does not hold, including another recipe's |
-| `POST /v1/recipes/{id}/runs/{run}/replay` | Re-send the stored prompt and selectors as a new run with its own record; `?root=` is required when the selectors are not empty, and `404` names a run the log does not hold. The corpus is read again, so the request is byte-identical while the workspace and recipe are unchanged |
-| `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent; `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
+| `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, the budget it was assembled from. The model's reasoning when the server reported any. `404` for a run the log does not hold, including another recipe's |
+| `POST /v1/recipes/{id}/runs/{run}/replay` | Re-send the stored prompt and selectors as a new run with its own record. `?root=` is required when the selectors are not empty, and `404` names a run the log does not hold. The corpus is read again. The request is byte-identical while the workspace and recipe are unchanged |
+| `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent. `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
 | `GET /v1/skills` | Every visible Agent Skill, in precedence order, with its instructions and source (`workspace`, `profile` or `extension`) |
-| `POST /v1/skills` | Validate and write one `SKILL.md` into the workspace or profile; `400` for a draft the skill parser refuses, `409` when the chosen destination has no root |
+| `POST /v1/skills` | Check and write one `SKILL.md` into the workspace or profile. `400` for a draft the skill parser refuses, `409` when the chosen destination has no root |
 
-A recipe's `skills` array names Agent Skills; their instructions are appended to the
+A recipe's `skills` array names Agent Skills. Their instructions are appended to the
 system prompt, after the master prompt, in the order the names are written. A name that
 neither the workspace, the profile nor an activated extension provides is a warning
 beside the run, not a refusal. `POST /v1/skills` takes the same name, description,
-instructions and destination the lab's editor holds; the parser runs before the write,
+instructions and destination the lab's editor holds. The parser runs before the write,
 so the file on disk is always one the model agent would accept.
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
@@ -1146,13 +1151,13 @@ event: model.run.delta      data: {"run_id":"…","text":"…"}
 event: model.run.finished   data: {"run_id":"…","status":"succeeded","usage":{…}}
 ```
 
-`thought` is the model's reasoning, which a reasoning model writes before its answer. It
-is never folded into `delta`: a client that drew it as the answer would be inventing one,
-and a run whose answer budget was spent thinking has a `delta`-free stream and a real
-`thought`. The record keeps it too, so a stored run says what the budget bought.
+`thought` is the model's reasoning, which a reasoning model writes before its answer.
+It is never folded into `delta`. A client that drew it as the answer would be inventing
+one. A run whose answer budget was spent thinking has a `delta`-free stream and a real
+`thought`. The record keeps it too. A stored run says what the budget bought.
 
 The record is appended to `runs.jsonl` before `finished` is sent. A failed run ends with
-`status` `failed` and a `message`; the stream still closes with `200` because the request
+`status` `failed` and a `message`. The stream still closes with `200` because the request
 was accepted. Closing the response abandons the run, and no record is written.
 
 ## Promotion
@@ -1174,13 +1179,13 @@ env = { ACPILOT_RECIPE_PROFILE = "work" }
 
 The entry is an ordinary agent from that moment: `GET /v1/agents` lists it and the
 session routes can start it. The comment is what makes the entry promotion's: the
-same id without it was written by hand, and the route answers `409` rather than
+same id without it was written by hand. The route answers `409` rather than
 replacing somebody's command, `restart` or environment. Promoting the same recipe
-twice replaces the block, so no second entry is appended. `acpilot agents rm <id>`
+twice replaces the block. No second entry is appended. `acpilot agents rm <id>`
 is the inverse, and removes the file when the entry was the last agent.
 
 The answer carries `warnings`, which never block the write. The tools probe is
-asked once, on the explicit action: a model that did not call the probe tool, or a
+asked once, on the explicit action. A model that did not call the probe tool, or a
 provider that could not be asked, is promoted with the reason attached. A recipe
 that exposes `tools.search` warns that ACP has no workspace-search callback, so
 the promoted agent does not offer it.
@@ -1194,7 +1199,7 @@ it is an ordinary ACP client — `initialize`, `session/new`, `session/prompt`,
 other.
 
 `session/new` takes a directory, not an agent. A profile that declares one agent
-needs no choice; one with several is refused with the list unless the request
+needs no choice. One with several is refused with the list unless the request
 names one in ACP's extension point:
 
 ```json
@@ -1208,10 +1213,10 @@ changes and the daemon's notices as `session/update`, and answers `end_turn`.
 Compaction and a changed command list have no ACP update in this schema version,
 so they are dropped rather than approximated.
 
-The remote transport is served too: ACP over HTTP/JSON-RPC at `/acp` on the
-listener `[acp.bridge]` names, with bearer tokens minted by a single-use pairing
+The remote transport is served too. ACP runs over HTTP/JSON-RPC at `/acp` on the
+listener `[acp.bridge]` names. It has bearer tokens minted by a single-use pairing
 code, scopes, revocation, a fixed 60 requests a minute per driver, and
 `GET /v1/acp/{bridge,drivers}` for the cockpit. A bridge is off unless
-`[acp.bridge] enabled = true` names a `bind`, and an enabled bridge with no bind is
+`[acp.bridge] enabled = true` names a `bind`. An enabled bridge with no bind is
 a startup error rather than a port chosen on the person's behalf. A token is
 required even on loopback.

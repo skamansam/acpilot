@@ -51,7 +51,7 @@ is committed.
    written to handle that and counted. It is not assumed away.
 3. **stderr stays out of the frame channel.** A probe that writes to both and
    exits 3 came back with `stdout "out"`, `stderr "err"`, and exit code **3**
-   intact. stderr arrives as `SSH_EXTENDED_DATA` with `ext = 1`, not as stdout
+   intact. Stderr arrives as `SSH_EXTENDED_DATA` with `ext = 1`, not as stdout
    noise. The probe fails the run if the agent writes anything on an extended
    stream. A frame stream polluted by a warning looks like a protocol bug.
 4. **A PTY survives the hop, resize included.** `request_pty` then
@@ -70,7 +70,7 @@ is committed.
 | exec probe (stdout+stderr+exit 3) | 5 | 44.7 / 44.8 / 48.5 / 48.8 / 49.8 ms |
 | STDOUT events for that probe | 5 | 1 (4 B). A small write can arrive whole |
 | PTY `stty size`, before → after resize | 5 | `40 100` → `50 120` every run |
-| PTY session incl. resize + `tty` | 1 | 97.9 ms |
+| PTY session incl. Resize + `tty` | 1 | 97.9 ms |
 | ACP: 103 frames (100 notifications) | 5 | 43.1 / 47.2 / 47.8 / 50.5 / 51.4 ms |
 | ACP: `DATA` events for 103 frames | 5 | 33 / 28 / 27 / 26 / 20 |
 | ACP: most frames in one event | 5 | 13 / 12 / 22 / 16 / 24 (37 on a later run) |
@@ -127,7 +127,7 @@ Built on the five points above rather than on how SSH is usually described:
   no fixed release. `cargo deny` fails the build on it. Rather than add a
   suppression for a crypto advisory, the `rsa` feature is disabled at the
   workspace dependency. A server offering only `ssh-rsa` therefore cannot be
-  reached. ed25519 and ECDSA, which this fixture and this user's keys use, are
+  reached. Ed25519 and ECDSA, which this fixture and this user's keys use, are
   unaffected.
   The remote-hosts phase's task P8-1 re-adds it with a written justification
   when a host needs it.

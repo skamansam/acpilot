@@ -1,7 +1,7 @@
 //! A deliberately small LSP client: spawn, request, notify, listen.
 //!
 //! The design phase's task P0-7 exists to find out what real servers do before the language-intelligence phase (P7) commits to a loop.
-//! `async-lsp` is the candidate library; this module is the control group, small
+//! `async-lsp` is the candidate library. This module is the control group, small
 //! enough to read in one sitting and generic enough that the language-intelligence phase (P7) can keep it if the
 //! library's transport abstraction turns out to cost more than it saves.
 //!
@@ -72,7 +72,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Where a server's bytes go.
 ///
 /// A server this process spawned writes to its `stdin`. A server on another machine
-/// writes into a pipe whose other end a bridge carries over a helper — the daemon's
+/// writes into a pipe whose other end a bridge carries over a helper. The daemon's
 /// transport, not this crate's, because a helper is a JSON-RPC line protocol and this
 /// is a byte stream. Everything above this enum is the same code either way.
 enum Output {
@@ -151,11 +151,11 @@ impl Server {
     ///
     /// The caller owns both ends: what it writes into `writer` arrives here as the
     /// server's stdout, and what this client writes comes out of the reader. The
-    /// daemon's bridge turns that into a helper's `lsp.write` and back — which is the
+    /// daemon's bridge turns that into a helper's `lsp.write` and back. Which is the
     /// only difference between a server on this machine and one on an SSH host.
     ///
     /// There is no child, so [`Server::try_wait`] answers "still running" and
-    /// [`Server::shutdown`] stops at the protocol's own exit; the caller closes its
+    /// [`Server::shutdown`] stops at the protocol's own exit. The caller closes its
     /// transport when the session is dropped, and that is what ends the process.
     pub fn attach(
         reader: impl tokio::io::AsyncBufRead + Unpin + Send + 'static,
@@ -228,7 +228,7 @@ impl Server {
         self.requests.try_recv().ok()
     }
 
-    /// Send a notification; there is no response to wait for.
+    /// Send a notification. There is no response to wait for.
     pub async fn notify(&mut self, method: &str, params: Value) -> Result<(), ClientError> {
         send(
             &self.stdin,
@@ -255,7 +255,7 @@ impl Server {
 
     /// Whether the server process has exited.
     ///
-    /// A server on another machine is not this process's child, so there is nothing to
+    /// A server on another machine is not this process's child. There is nothing to
     /// wait on: its end arrives as EOF from the pipe, which the pump reports.
     pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match &mut self.child {
@@ -276,7 +276,7 @@ impl Server {
         let _ = self.notify("exit", Value::Null).await;
 
         let Some(child) = &mut self.child else {
-            // The far side's owner closes the transport, which ends the process; this
+            // The far side's owner closes the transport, which ends the process. This
             // half did what the protocol asks and has nothing left to kill.
             return;
         };
@@ -327,7 +327,7 @@ async fn pump<R>(
                         }
                     }
                     (Some(_), None) => {
-                        // A closed UI is allowed to stop listening; the server
+                        // A closed UI is allowed to stop listening. The server
                         // is not allowed to block on it.
                         let _ = notifications.send(message);
                     }

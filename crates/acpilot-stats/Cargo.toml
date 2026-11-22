@@ -8,7 +8,7 @@ license.workspace = true
 
 # A leaf, like `acpilot-palette` and `acpilot-text`: it reads the wire contract and
 # draws nothing. The terminal, the window and the browser are three renderers of
-# one answer to "how full is this bar, and what do we say when nobody said".
+# one answer to "how full is this bar. What do we say when nobody said".
 [dependencies]
 # The fill arithmetic: an unknown denominator is `None`, an over-budget one clamps.
 acpilot-core = { workspace = true }

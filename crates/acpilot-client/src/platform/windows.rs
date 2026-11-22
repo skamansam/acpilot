@@ -2,10 +2,10 @@
 
 /// The URL requests are addressed to, and the client that sends them.
 ///
-/// ADR 0004's Windows endpoint is a named pipe; until that transport exists the
+/// ADR 0004's Windows endpoint is a named pipe. Until that transport exists the
 /// daemon listens on loopback (see `acpilot-host`'s platform file), so there is
 /// nothing for this client to do differently. A socket path passed here stays a
-/// path, and the request fails at connect naming the endpoint — which is the
+/// path, and the request fails at connect naming the endpoint. Which is the
 /// honest failure for a transport this platform does not have.
 pub(crate) fn http(endpoint: &str, token: Option<&str>) -> (String, reqwest::Client) {
     if super::is_url(endpoint) {

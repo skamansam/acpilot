@@ -1,6 +1,6 @@
 //! `acpilot ext` — the verbs that work without a daemon.
 //!
-//! Installing, verifying, and approving are filesystem operations; routing them
+//! Installing, verifying, and approving are filesystem operations. Routing them
 //! through `acpilotd` would mean an editor cannot be repaired when its daemon is
 //! the thing that is broken. Everything here calls the same library the daemon
 //! will, so there is one implementation, not a CLI copy of it.
@@ -25,7 +25,7 @@ use acpilot_extensions::theme_import::from_tmtheme;
 pub struct Paths {
     /// Extension store root.
     pub store_root: PathBuf,
-    /// Acpilot config root; profiles live under `<config>/profiles`.
+    /// Acpilot config root. Profiles live under `<config>/profiles`.
     pub config_root: PathBuf,
 }
 
@@ -167,7 +167,7 @@ pub fn why(paths: &Paths, profile: &str, id: &str) -> Result<String, ExtensionEr
 /// Convert a `.tmTheme` file into a theme extension and install it.
 ///
 /// The files are written to a temporary directory and installed through the
-/// same path as any other extension, so an imported theme is checksummed and can
+/// same path as any other extension. An imported theme is checksummed and can
 /// be blocked like anything else.
 pub fn import_theme(
     paths: &Paths,

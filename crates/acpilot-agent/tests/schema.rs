@@ -136,7 +136,7 @@ fn collect_refs(value: &Value, found: &mut Vec<String>) {
 fn the_types_are_types_a_toml_file_can_have() {
     let doc = schema();
     let mut problems: Vec<String> = Vec::new();
-    // TOML has no null and no `uint64`; a published schema should not offer
+    // TOML has no null and no `uint64`. A published schema should not offer
     // either, or an editor completes a value the file cannot hold.
     if json_schema().to_string().contains("\"null\"") {
         problems.push("a type mentions null".to_owned());
@@ -278,7 +278,7 @@ fn the_schema_accepts_what_the_loader_accepts() {
 #[test]
 fn the_schema_requires_what_the_loader_requires() {
     // Read the requirement out of the schema, then ask the loader the same
-    // question in both directions: the minimum file loads, and dropping each
+    // question in both directions: the minimum file loads. Dropping each
     // required key is the error that names it. A requirement added on one side
     // only cannot pass both.
     for branch in schema()["properties"]["agents"]["items"]["oneOf"]

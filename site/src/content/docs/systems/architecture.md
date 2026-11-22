@@ -12,7 +12,7 @@ second copy of it.
 
 That is the whole shape, and most of the rest of the manual is a consequence of
 it. The sections below are the three questions the shape raises: what talks to
-what, how a client finds the daemon, and who is allowed to cross which line.
+what, how a client finds the daemon. Who is allowed to cross which line.
 
 ## The map
 
@@ -62,14 +62,14 @@ flowchart LR
 ```
 
 Dashed is hangar: designed and recorded, not flown. The desktop shell and the web
-editor are later phases, and the helper is a design proven in the design phase
+editor are later phases. The helper is a design proven in the design phase
 rather than a shipped transport. The map draws them because leaving them out
 would make the architecture look smaller than it is.
 
 Two rules keep the picture from turning into a mesh:
 
 - **The daemon owns truth.** A UI owns its text buffer locally and applies edits
-  optimistically; the daemon owns the file on disk, the conversation, and every
+  optimistically. The daemon owns the file on disk, the conversation, and every
   decision. Agent writes reach a UI as events, not as a shared mutable document.
 - **The transport is a trait.** Spawn a process, read a file, run a PTY, watch a
   directory: a session asks the host for capabilities, and `LocalHost`,
@@ -123,8 +123,8 @@ ends up with two.
 
 A client that starts the daemon takes a lock first, because two windows opening
 at once is a normal login, not an attack. It starts `acpilotd` from beside its
-own executable, never from `PATH`, and detaches it into its own process group so
-closing the window that happened to launch it does not end every session. The
+own executable, never from `PATH`. Detaches it into its own process group so
+closing the window that happened to start it does not end every session. The
 daemon's output goes to a log beside the lock, because a process that dies four
 milliseconds after spawning otherwise leaves nothing to read.
 
@@ -153,22 +153,22 @@ flowchart LR
 
 | Boundary | Who may cross it | What proves it |
 | --- | --- | --- |
-| Unix socket | the same user | the runtime directory is `0700` and the socket `0600`; the filesystem is the access control, so no token is needed |
+| Unix socket | the same user | the runtime directory is `0700` and the socket `0600`. The filesystem is the access control, so no token is needed |
 | Loopback TCP | the holder of the bearer token | the token is generated at bind, written to a `0600` file beside the socket, and required on every request — including loopback |
-| ACP bridge | a paired driver | a single-use pairing code that expires in two minutes, then a bearer token kept only as an Argon2id hash, with scopes and a 60 request/minute limit |
-| Your TLS | whoever your tunnel or reverse proxy admits | not Acpilot's: the daemon does not terminate TLS in v0.1, and the docs say so instead of implying an `https` that is not there |
-| SSH or WSL helper | the daemon that uploaded it | the helper is embedded in `acpilotd`, written over the transport already open, and the handshake refuses a protocol number that is not the daemon's |
+| ACP bridge | a paired driver | a single-use pairing code that expires in two minutes. A bearer token is kept only as an Argon2id hash, with scopes and a 60 request/minute limit |
+| Your TLS | whoever your tunnel or reverse proxy admits | not Acpilot's: the daemon does not stop TLS in v0.1. The docs say so instead of implying an `https` that is not there |
+| SSH or WSL helper | the daemon that uploaded it | the helper is embedded in `acpilotd`, written over the transport already open. The handshake refuses a protocol number that is not the daemon's |
 
 The bridge is the only thing here that is off by default, and enabling it
 requires an explicit bind address. An enabled bridge with no bind is a startup
 error. A listener that is unauthenticated on one address is one config edit away
-from being unauthenticated on another, which is why the driver token is required
+from being unauthenticated on another. That is why the driver token is required
 even on loopback.
 
 The driver's default scopes are `observe`, `prompt` and `cancel`.
 `answer_permissions` is a separate decision made by the person when the pairing
 code is issued. Without it, a request raised by the driver's turn stays on the
-pending list for a human, and the driver is told once per turn that this is
+pending list for a human. The driver is told once per turn that this is
 what is happening. The bridge changes who is typing, not what is allowed. The
 full story is in [Remote control](../../flight-test/remote-control/).
 
@@ -185,11 +185,11 @@ string.
 | Daemon and API | flying | axum routes, SSE and WebSocket streams, permission broker, SQLite and JSONL history |
 | CLI | flying | every command is a typed call to the API, with `acpilot api` as the escape hatch |
 | TUI | flying | editor, transcript, terminals and permission prompts over the same API |
-| Embedded daemon | flying | `acpilot tui` with nothing installed; sessions end with the window |
+| Embedded daemon | flying | `acpilot tui` with nothing installed. Sessions end with the window |
 | ACP bridge | boarding | local `--acp` transport, HTTP driver transport, pairing, scopes, revocation |
-| Desktop | hangar | the shell crate builds; the daily-driver work is P10 |
-| Web | hangar | the daemon serves a status page; the editor is P11 |
-| SSH and WSL hosts | hangar | the helper round-trip and path translation were proven in P0; the transports are P8 and P9 |
+| Desktop | hangar | the shell crate builds. The daily-driver work is P10 |
+| Web | hangar | the daemon serves a status page. The editor is P11 |
+| SSH and WSL hosts | hangar | the helper round-trip and path translation were proven in P0. The transports are P8 and P9 |
 
 A page that claims more than this table is a bug, and the pill at the top is the
 short version of the table.

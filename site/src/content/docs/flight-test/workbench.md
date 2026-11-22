@@ -14,7 +14,7 @@ claim about today.
 <Aside type="note" title="Status">
 No pane exists yet. `POST /v1/recipes/{id}/runs` streams a run and appends its
 record, and `GET /v1/recipes/{id}/runs` pages them. The panes and the compare view
-are P4.5-8; promotion is P4.5-9.
+are P4.5-8. Promotion is P4.5-9.
 </Aside>
 
 ```mermaid

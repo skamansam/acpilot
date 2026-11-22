@@ -100,14 +100,14 @@ TCP, loopback included, needs a credential. Until `acpilot auth init` creates th
 local account, that is the bootstrap token: a random value in a `0600` file beside
 the socket, compared in constant time. Afterward it is the JWT from
 `POST /v1/auth/login` (or `acpilot auth login`), and the static token is refused.
-The account store is `users.sqlite` in the data root; passwords are Argon2id and
-only the hash is stored. A browser signs in at `/login`: the password form (or a
-configured OIDC provider) returns an `HttpOnly`, `SameSite=Strict` refresh cookie,
-and the page keeps only the 15-minute access token. OIDC providers are entries in
-`<data>/auth.toml`; the ID token is verified against the provider's JWKS, and its
+The account store is `users.sqlite` in the data root. Passwords are Argon2id and
+only the hash is stored. A browser signs in at `/login`. The password form (or a
+configured OIDC provider) returns an `HttpOnly`, `SameSite=Strict` refresh cookie.
+The page keeps only the 15-minute access token. OIDC providers are entries in
+`<data>/auth.toml`. The ID token is verified against the provider's JWKS. Its
 identity must be linked to the local account with `acpilot auth link <provider>
-<subject>` before it can sign in. Email is stored for display and never used as
-the key. The login page is open like the shell; every API call behind it still
+<subject>` before it can sign in. Email is stored to show and never used as
+the key. The login page is open like the shell. Every API call behind it still
 needs the session. In bootstrap mode the token field remains as the cold-start
 path. TLS termination is the deployment's job. The daemon does not pretend to be
 a web server fleet.

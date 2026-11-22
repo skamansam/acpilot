@@ -25,7 +25,7 @@ mod windows;
 
 /// Whether this platform compares paths case-insensitively.
 ///
-/// A policy glob has to fold case on Windows to be usable there, and must not
+/// A policy glob has to fold case on Windows to be usable there. Must not
 /// fold it on POSIX: folding both would let a rule about `/work/secret` match
 /// `/Work/Secret` on Linux, which is a rule the author never wrote. It is a
 /// constant rather than a function because the answer is a property of the

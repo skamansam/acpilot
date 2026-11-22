@@ -86,8 +86,8 @@ Limits are explicit. A local model with a broken tool-call format will otherwise
 loop until the context window catches fire:
 
 - **`max_steps`** from the recipe (1–50). At the cap the turn stops with ACP's
-  `max_turn_requests` and a notice carrying the number of steps. It does not hang or
-truncate silently.
+  `max_turn_requests` and a notice carrying the number of steps. It does not hang
+  or truncate silently.
 - **One repair attempt.** A tool call that does not parse gets one corrective
   message with the schema restated. A second failure becomes a visible notice and a
 failed tool call. Pretending progress is worse than admitting the format.
@@ -102,18 +102,18 @@ failed tool call. Pretending progress is worse than admitting the format.
 The route warns in its answer, before anybody starts the agent:
 
 - The model did not call the tools probe. It can still answer questions, but
-  nothing confirms it understands a tool schema, and the agent repairs a bad call
+  nothing confirms it understands a tool schema. The agent repairs a bad call
   once and then reports the failure rather than guessing an argument.
 - The provider could not be asked at all: unreachable, disabled, or a credential
   the daemon cannot read. The entry is still written, with the reason attached.
 - The recipe exposes `tools.search`, which the promoted agent does not offer: ACP
-  has no workspace-search callback, so the agent says so instead of running a
+  has no workspace-search callback. The agent says so instead of running a
   shell to fake it.
 
-Two checks the design wanted are not measured yet: tool-call validity across the
-last ten runs (the run log records model-only runs, which call no tools) and a
-window larger than the host's memory (nothing reports host memory yet). They are
-open in `TODO.md` rather than guessed at here.
+Two properties the design wanted are not measured yet. The first is tool-call validity
+across the last ten runs. The run log records model-only runs, which call no tools.
+The second is a window larger than the host's memory. Nothing reports host memory
+yet. Both are open in `TODO.md` rather than guessed at here.
 
 Warnings do not block. A workbench that refuses to let you try is not a workbench.
 But none of them are silent, and none of them hide in a log file.

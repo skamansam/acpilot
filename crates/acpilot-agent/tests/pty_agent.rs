@@ -1,6 +1,6 @@
 //! The PTY adapter against a real program on a real PTY.
 //!
-//! The unit tests in `pty_agent.rs` parse captured screens; these drive a
+//! The unit tests in `pty_agent.rs` parse captured screens. These drive a
 //! process. The fixture is `tests/fixtures/tui_agent.sh`, a shell script that
 //! does the one thing a TUI does and a shell does not do by accident: it takes
 //! its input row away while it works and puts it back when it is done.

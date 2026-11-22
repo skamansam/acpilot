@@ -16,13 +16,13 @@ use crate::{CONFIG_FILE, Profile};
 /// Files a profile owns and an export includes when present.
 ///
 /// This is an allow-list rather than a directory walk: a profile also holds its
-/// database, locks and files a newer binary wrote, and "export everything" is how
+/// database, locks and files a newer binary wrote. "Export everything" is how
 /// an unexpected file becomes somebody else's copy.
 pub const FILES: [&str; 8] = [
     CONFIG_FILE,
     PROFILE_SETTINGS_FILE,
     MANIFEST_FILE,
-    // `acpilot-extensions` owns the loader and the constant; this crate does not
+    // `acpilot-extensions` owns the loader and the constant. This crate does not
     // depend on it just to spell a file name that is part of the profile format.
     "activation.toml",
     "lsp.toml",

@@ -22,7 +22,7 @@ pub mod keyring;
 pub mod manifest;
 pub mod permission;
 pub mod promote;
-// Operating-system branches live here and nowhere else in the workspace; the
+// Operating-system branches live here and nowhere else in the workspace. The
 // rule is enforced by `acpilot-host/tests/platform_boundary.rs`.
 mod platform;
 pub mod pty_agent;

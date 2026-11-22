@@ -3,7 +3,7 @@
 // `openapi-fetch` hands the underlying fetch a `Request`, while a test that says
 // "this route answers that body" wants a path and an init it can read. Wrapping
 // the mock keeps every call site in the tests about the route, not about which
-// client made the call — and the client's real request still goes through the
+// client made the call. And the client's real request still goes through the
 // same fetch, so what is tested is still what ships.
 
 /** What a test's mock has always looked like. */
@@ -21,7 +21,7 @@ export function plainFetch(target: PlainFetch): typeof fetch {
       const url = new URL(input.url);
       route = url.pathname + url.search;
     } catch {
-      // A relative URL is legal here and not to `URL`; it is already the path.
+      // A relative URL is legal here and not to `URL`. It is already the path.
       route = input.url;
     }
 

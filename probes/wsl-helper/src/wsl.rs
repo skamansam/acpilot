@@ -7,11 +7,11 @@
 //!   the backslashes. `wsl -d D -e wslpath -u 'C:\Users'` printed the right
 //!   answer. The helper must be started with `-e`, or every Windows path it is
 //!   handed is silently mangled.
-//! * **`-l -q` is UTF-16LE with CRLF**, NUL-interleaved; a line reader that does
+//! * **`-l -q` is UTF-16LE with CRLF**, NUL-interleaved. A line reader that does
 //!   not decode it yields garbage (or one long name). `-l -v` is UTF-16LE too,
 //!   and its `VERSION` column is the only local way to tell WSL1 from WSL2.
 //! * **A helper is a long-lived process, not a call.** One spawn serves many JSON
-//!   lines; the per-message cost is then milliseconds, while the spawn is hundreds.
+//!   lines. The per-message cost is then milliseconds, while the spawn is hundreds.
 //! * **`--cd ~`** is the working-directory flag: without it the distro inherits
 //!   whatever `wsl.exe` decides the host cwd translates to.
 
@@ -56,7 +56,7 @@ pub fn wsl_exe() -> PathBuf {
     }
 }
 
-/// One `wsl.exe` listing, raw. `-l -q` and `-l -v` both write UTF-16LE; the
+/// One `wsl.exe` listing, raw. `-l -q` and `-l -v` both write UTF-16LE. The
 /// decoding and parsing live in `listing.rs` so they are tested on every OS.
 fn listing(args: &[&str]) -> Result<Vec<u8>> {
     let mut command = command(None);
@@ -210,7 +210,7 @@ pub fn default_distro() -> Result<String> {
     Ok(name)
 }
 
-/// Drives that actually exist under `/mnt`. `wslpath` translates only these;
+/// Drives that actually exist under `/mnt`. `wslpath` translates only these.
 /// everything else has no Linux path (see `paths.rs`).
 pub fn mounted_drives(distro: &str) -> Result<Vec<char>> {
     let run = run(Some(distro), "ls", &["-1", "/mnt"])?;
@@ -230,7 +230,7 @@ pub fn mounted_drives(distro: &str) -> Result<Vec<char>> {
 /// A helper process that answers one JSON line per line.
 pub struct Session {
     child: Child,
-    /// `Option` so `finish` can close the pipe and let the helper exit on EOF;
+    /// `Option` so `finish` can close the pipe and let the helper exit on EOF.
     /// a killed process never tests whether the helper's own loop is clean.
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
@@ -315,7 +315,7 @@ impl Session {
     }
 
     /// Close stdin and wait for the helper to exit on EOF. The helper's contract
-    /// says it does; this is how the probe proves it.
+    /// says it does. This is how the probe proves it.
     pub fn finish(&mut self) -> Result<()> {
         drop(self.stdin.take());
         let status = self.child.wait().context("wait for helper exit")?;
@@ -337,7 +337,7 @@ impl Session {
 /// The first run proved the point the hard way: nothing happened for 10 s, and
 /// the only bytes that came back were `ESC [ 6 n`, the cursor-position request.
 /// A bare ConPTY does not answer it, so `wsl.exe` waits before it starts the
-/// helper — the same terminal-query problem the design phase's task P0-2 hit with the TUIs. The probe now
+/// helper. The same terminal-query problem the design phase's task P0-2 hit with the TUIs. The probe now
 /// answers DSR and DA1 and records how many queries that took.
 pub struct ConPtyRun {
     pub bytes: Vec<u8>,

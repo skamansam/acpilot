@@ -4,7 +4,7 @@
 //! The same seam and the same [`Claim`] shape as Unix, so `main` reads the same
 //! on both platforms, and `Claim::Unavailable` says out loud that this launch got
 //! no channel instead of pretending it owns one. A named pipe
-//! (`\\.\pipe\acpilot-gui-<user>`) is the obvious implementation; it needs a
+//! (`\\.\pipe\acpilot-gui-<user>`) is the obvious implementation. It needs a
 //! second thread reading `ConnectNamedPipe` in a loop and a message shape, which
 //! is more than this slice is for — the device path it would cut is the same
 //! 320–411 ms recorded in `docs/notes/gui-bench.md`, so it is worth doing, not

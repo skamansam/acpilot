@@ -32,11 +32,11 @@ Every route except create and join requires a device-signed request:
 `X-Acpilot-Device`, `X-Acpilot-Timestamp`, and `X-Acpilot-Signature`. The
 signature covers the method, the path, the timestamp, and the SHA-256 of the
 body. A timestamp outside five minutes is refused, and the device must be on the
-group's active roster. The group id in the path is not a capability; it is
+group's active roster. The group id in the path is not a capability. It is
 checked against the roster before anything else.
 
 An invite is signed by a member's device key. The first invite is self-signed and
-creates the group; later invites name the inviting device, so a forwarded blob
+creates the group. Later invites name the inviting device, so a forwarded blob
 cannot be edited to point at another group. Joining records the inviter, which is
 the edge transitive membership follows later. Leaving is a revocation, not a
 delete: a revoked key can no longer post, read or publish presence. History is a

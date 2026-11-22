@@ -24,14 +24,15 @@ pub struct KeymapLayer {
 
 /// Parse a `keymap` contribution.
 ///
-/// The shape is the one `keymap.toml` uses, minus `preset`: a layer moves keys,
-/// it does not choose the editing model. A pack that could set `preset` would
+/// The shape is the one `keymap.toml` uses, minus `preset`. A layer moves keys.
+/// It does not choose the editing model. A pack that could set `preset` would
 /// silently turn a Vim user's modal editor modeless.
 ///
 /// # Errors
 ///
-/// The file is not TOML, is not a `[keys]` table of string lists, names a field
-/// a layer may not set, or binds nothing at all.
+/// The parser rejects a file in four cases. It is not TOML. It is not a `[keys]`
+/// table of string lists. It names a field a layer may not set. It binds nothing
+/// at all.
 pub fn parse_keymap_layer(
     path: &str,
     text: &str,

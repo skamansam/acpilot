@@ -249,7 +249,7 @@ pub const SUBJECT_LIMIT: usize = 72;
 /// Check and normalise a model's answer before it reaches `git commit`.
 ///
 /// A surrounding code fence is stripped because models add one despite being
-/// asked not to; everything else is a real failure. Being strict here is the
+/// asked not to. Everything else is a real failure. Being strict here is the
 /// point: a malformed subject is easier to fix in the editor than in `git log`.
 pub fn validate_suggestion(raw: &str) -> Result<CommitSuggestion, CommitError> {
     let text = strip_fence(raw).trim();

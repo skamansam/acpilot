@@ -4,13 +4,13 @@ use std::io::Read;
 use std::net::TcpStream;
 
 /// Reads one request: the head, then the body it declares. Answering before the
-/// body is read makes the close that follows a reset on some platforms, and a
-/// reset can discard the answer that was just written — that is the shape of the
+/// body is read makes the close that follows a reset on some platforms. A
+/// reset can discard the answer that was just written. That is the shape of the
 /// macOS 404 one CLI test produced. A daemon reads what the client sent anyway.
 pub fn read_request(stream: &mut TcpStream) -> Option<String> {
     // macOS and Windows hand out accepted sockets that inherit the listener's
-    // non-blocking flag, and a read of a body that has not arrived yet would then
-    // look like a broken request — so the fake would answer before the body, the
+    // non-blocking flag. A read of a body that has not arrived yet would then
+    // look like a broken request. So the fake would answer before the body, the
     // very race this reader exists to close.
     if stream.set_nonblocking(false).is_err() {
         return None;

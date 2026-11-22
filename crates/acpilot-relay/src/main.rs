@@ -15,7 +15,7 @@ struct Cli {
 enum Command {
     /// Serve groups, membership and presence over HTTP.
     Serve {
-        /// Address to bind. The relay serves plain HTTP; TLS is the deployment's job.
+        /// Address to bind. The relay serves plain HTTP. TLS Is the deployment's job.
         #[arg(long, default_value = "127.0.0.1:8787")]
         bind: String,
         /// Data root. One directory per group lives under it.

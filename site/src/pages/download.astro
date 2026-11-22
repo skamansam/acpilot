@@ -7,11 +7,11 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import pinned from '../data/releases.json';
 
 // Releases come from the GitHub API at build time, not from a file a workflow
-// commits: main only takes pull requests, so a bot commit after every release
+// commits: main only takes pull requests. A bot commit after every release
 // would either be blocked or need an exemption that also lets it change code. A
 // build-time fetch keeps the page current with no write access to the repository
-// at all — and `site/src/data/releases.json` is the fallback for the day the API
-// is rate-limited or unreachable, so the page degrades to the last pinned record
+// at all. And `site/src/data/releases.json` is the fallback for the day the API
+// is rate-limited or unreachable. The page degrades to the last pinned record
 // instead of to nothing.
 const REPO = 'skamansam/acpilot';
 const PLATFORMS = {
@@ -242,13 +242,13 @@ function megabytes(bytes) {
       platform = 'x86_64-pc-windows-msvc';
     } else if (probe.includes('mac')) {
       // `MacIntel` is what Apple silicon reports too, so the UA cannot tell the
-      // two apart; the arm64 build is the one most Macs want in 2026.
+      // two apart. The arm64 build is the one most Macs want in 2026.
       platform = 'aarch64-apple-darwin';
     } else if (probe.includes('aarch64') || probe.includes('arm64')) {
       platform = 'aarch64-unknown-linux-gnu';
     }
 
-    // The client archive is one of three rows per platform; the button wants it.
+    // The client archive is one of three rows per platform. The button wants it.
     const row = document.querySelector(
       `tr[data-platform="${platform}"][data-primary="true"]`,
     );

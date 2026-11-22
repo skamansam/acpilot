@@ -304,7 +304,7 @@ fn two_profiles_resolve_independently_and_at_the_same_time() {
         "schema_version = 1\n[preferences]\ntab_width = 5\n",
     );
 
-    // Spawned before either is waited on, so the two processes run together and a
+    // Spawned before either is waited on. The two processes run together and a
     // shared environment or working directory would show up as a crossed answer.
     let work = home.spawn(&["--profile", "work", "config", "explain", KEY]);
     let personal = home.spawn(&["--profile", "personal", "config", "explain", KEY]);

@@ -1,6 +1,6 @@
 //! `POST /v1/sessions/{id}/mode`, driven through the router and a real agent.
 //!
-//! The engine's own test proves the ACP call; what this covers is the route: the
+//! The engine's own test proves the ACP call. What this covers is the route: the
 //! daemon copies the modes an agent advertised at `session/new`, a switch reaches the
 //! agent and answers with the state it switched to, and an id the agent never offered
 //! is refused with the ones it did. The agent is the fixture process, so the modes are
@@ -49,7 +49,7 @@ async fn send(
 /// A daemon with the fixture agent as `mock`, a workspace and a broker: everything
 /// `POST /v1/sessions` needs to open one.
 ///
-/// The directory is returned because the workspace it holds is the session's cwd; a
+/// The directory is returned because the workspace it holds is the session's cwd. A
 /// temporary that dropped early would leave the agent pointing at nothing.
 fn daemon() -> (axum::Router, tempfile::TempDir) {
     let directory = tempfile::tempdir().expect("temp dir");

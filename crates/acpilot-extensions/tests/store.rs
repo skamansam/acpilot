@@ -449,7 +449,7 @@ fn a_linked_checkout_is_ready_and_edits_are_seen() {
         format!("link {}\n", linked.path.display())
     );
 
-    // The edit is what the store serves next; nothing has to be re-added.
+    // The edit is what the store serves next. Nothing has to be re-added.
     let theme = source.path().join("theme.toml");
     let original = fs::read_to_string(&theme).unwrap();
     fs::write(&theme, original.replace("#e8edf6", "#101010")).unwrap();

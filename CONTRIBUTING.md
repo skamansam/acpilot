@@ -82,7 +82,7 @@ sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
 
 and `libc` held at exactly 0.2.189. The crate manifest names both, and `README.md`
 §5.4 explains why the pin exists. The `xkbcommon-x11` half of that list is not
-avoidable from this workspace. gpui 0.2.2 asks its `xkbcommon` dependency for `x11`
+avoidable from this workspace. Gpui 0.2.2 asks its `xkbcommon` dependency for `x11`
 in its own manifest, and Cargo features only ever add (ADR 0009 §5).
 
 The web UI's half is a task of its own, `cargo xtask web-check`. It runs:
@@ -306,7 +306,7 @@ back. Every rule below prevents a state this repository has already been in.
 
 - **Merge `main` into your branch. Never rebase a branch you have pushed.** A rebase
   rewrites commits somebody else may have fetched, and the force push that follows is
-  history nobody can review. `git pull --merge` is the habit; set `pull.rebase false`
+  history nobody can review. `git pull --merge` is the habit. Set `pull.rebase false`
   if your copy defaults the other way.
 - **Never resolve a merge with `-s ours`, or with `-X ours` across a whole tree.** The
   result records the base as merged and drops its work. The base is then an ancestor,
@@ -314,14 +314,14 @@ back. Every rule below prevents a state this repository has already been in.
   lines of `main`, and the next real merge looked clean because of it.
 - **A merge commit must differ from both of its parents.** One that equals a parent
   dropped the other side, whatever the log says. The exception is a side that is
-  already an ancestor of the other: it had no commits of its own to drop, which is
+  already an ancestor of the other. It had no commits of its own to drop. That is
   the ordinary shape of merging a branch back into the base it started from.
 - **Do not merge a change the base already has.** A squash leaves the same patch under
-  a second hash, and the next merge carries it twice.
+  a second hash. The next merge carries it twice.
 - **`main` takes merge commits only.** Squash and rebase rewrite shared history, and
-  they are how one change gets two identities. The ruleset allows `merge` alone.
+  they are how one change has two identities. The ruleset allows `merge` alone.
 - **Never force push, on any branch.** `main` refuses it. Every other branch is
-  somebody's work in progress. To correct a commit, add a commit that corrects it.
+  somebody's work in progress. To fix a commit, add a commit that fixes it.
 
 `cargo xtask history-check` is the mechanical half. CI's `history` job runs it on every
 push and pull request:
@@ -349,19 +349,19 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
   `required checks (branch)`. The reason is measured. A push run and the pull request
   run of one branch share a concurrency group, so the pull request cancels the push.
   GitHub records a check run for every job of a cancelled run, with conclusion
-  `cancelled`, and that entry counts as not-success for a required check: #302 read
+  `cancelled`. That entry counts as not-success for a required check. #302 read
   `BLOCKED` with all thirteen jobs green and went `clean` only when its cancelled
-  push run was deleted. A job skipped by `if:` still publishes its name, so the gate
-  cannot be hidden on push; the run itself has to not exist. A branch pushed before
-  its pull request exists gets no checks until the pull request opens, or until
+  push run was removed. A job skipped by `if:` still publishes its name. The gate
+  cannot be hidden on push. The run itself has to not exist. A branch pushed before
+  its pull request exists receives no checks until the pull request opens, or until
   `workflow_dispatch` asks for them.
 
 ### One pull request per phase, and a stack under it
 
-A phase in `TODO.md` gets one pull request. That PR is the unit that matches a
+A phase in `TODO.md` receives one pull request. That PR is the unit that matches a
 phase in the roadmap project. Its body lists the tasks it closes.
 
-Each capability in that phase gets its own pull request. It targets the phase
+Each capability in that phase receives its own pull request. It targets the phase
 branch, not `main`. Merge it into the phase branch when its checks are green.
 The phase PR then reaches `main` once, and its history names every ticket it
 closed.
@@ -386,7 +386,7 @@ The rules that keep the stack traceable:
   the stack, and the phase PR then carries the same change twice.
 - The phase PR merges only after its capability PRs are in and
   `cargo xtask check` is green on the phase branch.
-- Delete a capability branch after its merge. The phase branch stays until the
+- Remove a capability branch after its merge. The phase branch stays until the
   phase PR merges.
 
 A merge that lands a phase is one commit on `main`, so a reader can see what a
@@ -542,31 +542,31 @@ other than the one the config pins, so a local build and a released one are the 
 tool's output. It needs two things on `PATH`: `cargo-dist` at that pinned version and
 `cargo-cyclonedx`. It prints the install command for whichever is missing.
 
-The workflow and `dist` package one shape, and it is dist's: the workflow runs
+The workflow and `dist` package one shape. It is dist's: the workflow runs
 `cargo xtask dist --artifacts local` on a runner per target and `--artifacts global`
 once for the installers, the formula and the SBOMs. A release is therefore one archive
-per program, named after the package and the target, installed side by side in the same
-bin directory, with a signature over every published checksum (ADR 0011). Nothing in
+per program, named after the package and the target. It installs side by side in the
+same bin directory, with a signature over every published checksum (ADR 0011). Nothing in
 the workflow edits an archive after dist made it.
 
 A formula nobody can install is caught before anything is published. The `homebrew` job
-installs `acpilot-cli.rb` and `acpilotd.rb` with Homebrew on a macOS runner and fails
+installs `acpilot-cli.rb` and `acpilotd.rb` with Homebrew on a macOS runner. It fails
 the release unless `acpilot update --check` reports `installed by brew` and a plain
-`acpilot update` refuses to write into the keg (ADR 0010), so the marker the formula
+`acpilot update` refuses to write into the keg (ADR 0010). The marker the formula
 writes is checked where Homebrew links it. Only the client's formula writes
-`bin/install.json`: it is one path in the prefix, and two kegs that both write it
+`bin/install.json`: it is one path in the prefix. Two kegs that both write it
 cannot be installed together.
 
 The `tap` job publishes the same formulae to `skamansam/homebrew-tap` before the release
 is created, so the tap never advertises a version whose archives were not published. It
 needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with `contents: write` on that
-repository; `GITHUB_TOKEN` cannot write to it. Make one and store it with
+repository. `GITHUB_TOKEN` cannot write to it. Make one and store it with
 `gh secret set HOMEBREW_TAP_TOKEN` — a release without it fails rather than publishing
 half a release.
 
 `cargo xtask dist --release-version X.Y.Z` is what makes those files point at the
-release. dist names a release after `Cargo.toml` and refuses a `--tag` that disagrees
-with it, so the task rewrites the tag in the generated installers and formulae after
+release. Dist names a release after `Cargo.toml` and refuses a `--tag` that disagrees
+with it. The task rewrites the tag in the generated installers and formulae after
 dist has written them. No archive, checksum or signature is touched.
 
 ## Decisions

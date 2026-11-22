@@ -85,9 +85,9 @@ impl Line {
 
 /// Render one entry's text.
 ///
-/// The number of lines returned is always the number of lines in `text`: a
-/// marker is rewritten in place rather than dropped or moved, which is what lets
-/// the pane count rows without rendering them.
+/// The number of lines returned is always the number of lines in `text`. A
+/// marker is rewritten in place rather than dropped or moved. That rule lets the
+/// pane count rows without rendering them.
 #[must_use]
 pub fn render(text: &str) -> Vec<Line> {
     let mut lines = Vec::new();
@@ -95,9 +95,9 @@ pub fn render(text: &str) -> Vec<Line> {
     for line in text.split('\n') {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
-            // The fence itself is drawn rather than hidden: a code block that
-            // began without a marker is indistinguishable from indented prose,
-            // and the language is the one useful thing the marker carries.
+            // The fence itself is drawn rather than hidden. A code block that
+            // began without a marker is indistinguishable from indented prose.
+            // The language is the one useful thing the marker carries.
             let marker = trimmed.trim_end();
             lines.push(Line::one(Segment {
                 text: format!("  {marker}"),

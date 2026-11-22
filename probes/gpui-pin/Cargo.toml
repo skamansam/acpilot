@@ -12,11 +12,11 @@ publish = false
 [dependencies]
 # Wayland only: the default features also enable X11, which links against
 # libxkbcommon-x11 and needs its -dev package. This box has WSLg's Wayland socket
-# and no reason to carry an X11 backend; on a desktop both are available.
+# and no reason to carry an X11 backend. On a desktop both are available.
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland"] }
 
 # Not used by this crate. It is the pin that makes gpui build at all: gpui 0.2.2
-# pulls zed-async-tar -> xattr 0.2.3, which uses `libc::ENOATTR`, and libc
+# pulls zed-async-tar -> xattr 0.2.3, which uses `libc::ENOATTR`. Libc
 # stopped exporting that on linux in 0.2.190. Without this line a fresh resolve
 # fails to compile on Linux before GPUI is even reached. See
 # docs/notes/gui-bench.md for the bisect.

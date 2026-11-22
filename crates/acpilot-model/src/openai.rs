@@ -6,7 +6,7 @@
 //!
 //! The consequence is visible in the product rather than hidden here. With no
 //! `max_context_length` the provider's window is `None` and the recipe must state
-//! one; with no `state` the load state is `None` rather than a confident "not
+//! one. With no `state` the load state is `None` rather than a confident "not
 //! loaded". Fewer gauges is the honest outcome of fewer facts.
 
 use acpilot_core::AcpilotError;

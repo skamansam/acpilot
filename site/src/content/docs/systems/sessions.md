@@ -7,7 +7,7 @@ description: One conversation in the daemon, several viewers, and a cursor that 
 
 A session is one ACP conversation: `session/new`, prompts, updates, tool calls and
 a stop reason. It lives in the daemon, not in a window. The TUI that started it
-can close, the desktop app can open it, and a paired driver can watch the same
+can close, the desktop app can open it. A paired driver can watch the same
 turn without any of them handing a file to another.
 
 That is what "sharing a session" means here. There is no session-sharing
@@ -37,27 +37,27 @@ Every event gets the next sequence number before anything else happens to it.
 The live feed is a broadcast channel: every subscriber receives every event, and
 none of them can consume another's copy. A subscriber that asks for `after=N`
 gets the ring's events with `seq > N`, then the live feed. The SSE route also
-reads `Last-Event-ID`, which is what an `EventSource` sends when it reconnects,
-so a browser tab that was asleep asks for the right place without any extra
+reads `Last-Event-ID`, which is what an `EventSource` sends when it reconnects.
+A browser tab that was asleep asks for the right place without any extra
 bookkeeping.
 
 The order is subscribe first, then read the ring. It looks like a detail and is
 actually the fix for a lost-event window: the ring is written before the
-broadcast, so an event landing between a replay and a later subscription would
-be in neither, and the reconnecting client would wait for a turn that had
-already finished. Subscribing early queues the event; a `seq <= last` check drops
+broadcast. An event landing between a replay and a later subscription would
+be in neither. The reconnecting client would wait for a turn that had
+already finished. Subscribing early queues the event. A `seq <= last` check drops
 the one-event overlap this creates.
 
 The ring holds 4 096 events. A client further behind than that is not silently
 given a transcript with a hole: it receives a `resync` frame carrying the latest
-sequence, and starts again from there. A heartbeat every 15 seconds proves the
-stream is alive; the WebSocket route uses a ping instead of a frame, because a
+sequence. Starts again from there. A heartbeat every 15 seconds proves the
+stream is alive. The WebSocket route uses a ping instead of a frame, because a
 client's `onmessage` should see events.
 
 A conversation the daemon did not start in this process is history, not a live
 session. Its stream replays the SQLite rows and then ends. That is the honest
-difference between a session and a transcript, and it is why the same reconnect
-that works mid-turn also works after a restart — with nothing further to wait
+difference between a session and a transcript. It is why the same reconnect
+that works mid-turn also works after a restart. With nothing further to wait
 for.
 
 ## A turn, end to end
@@ -87,7 +87,7 @@ sequenceDiagram
 ```
 
 A prompt returns `202` with a turn id rather than waiting for the agent. A
-retried prompt with the same `idempotency key` is the same turn; a second prompt
+retried prompt with the same `idempotency key` is the same turn. A second prompt
 while a turn is in flight is refused rather than queued, because two prompts
 racing in one conversation is not a feature.
 
@@ -115,13 +115,13 @@ flowchart LR
 
 The pending list is not a queue of notifications. A decision removes the entry
 before the answer is delivered, so the first resolve wins. Repeating the same
-answer is idempotent; a different one is `409`. The other windows are told the
+answer is idempotent. A different one is `409`. The other windows are told the
 question is settled so they can close a dialog nobody needs to read twice.
 
 Every decision is audited with who made it: `user`, `policy:<rule>`, `default`,
 `session`, `timeout` or `unattended`. The last two are refusals. If nothing is
 subscribed to the broker's announcements, a request that needs a person is
-refused as `unattended` instead of waiting for a viewer that does not exist. If a
+refused as `unattended`. It does not wait for a viewer that does not exist. If a
 viewer exists but says nothing for five minutes, the answer is `timeout`.
 
 | Actor | May watch | May prompt | May answer |
@@ -132,7 +132,7 @@ viewer exists but says nothing for five minutes, the answer is `timeout`.
 
 A driver owns the sessions it opened. Another driver's prompt, cancel or
 permission answer is refused rather than typed into a conversation it did not
-start. The default driver scopes are `observe`, `prompt` and `cancel`; the grant
+start. The default driver scopes are `observe`, `prompt` and `cancel`. The grant
 to answer is made by the person when the pairing code is issued, never by the
 driver asking for it. Without the grant, the request waits on the pending list
 for a human and the driver is told once per turn why it is waiting.
@@ -144,12 +144,12 @@ asked outside it, what a session grant covers — are in
 ## What is not here
 
 - **No collaborative editing.** Two people can watch one session and one of them
-  can type; they cannot edit the same buffer with CRDTs. That is a v0.1
+  can type. They cannot edit the same buffer with CRDTs. That is a v0.1
   non-goal, not an oversight.
 - **No cross-daemon session migration.** A session belongs to the daemon that
   opened it. Copying a live conversation to another machine would be a second
   implementation of the event log, which is exactly what this page exists to
   avoid.
 - **No replay of a live session after the daemon exits.** The transcript is
-  still there and still replays; the conversation is not resumed. Resume is on
+  still there and still replays. The conversation is not resumed. Resume is on
   the roadmap, and until it ships this page says so.

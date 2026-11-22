@@ -1,13 +1,13 @@
 //! `acpilot ext` against the signed index: search, add, update, remove, list, show.
 //!
-//! The index answers which version exists and which bytes it is; the store answers
+//! The index answers which version exists and which bytes it is. The store answers
 //! whether those bytes arrived and whether they still hash to what was recorded.
 //! This module is the seam between them, and it never writes until both answers
 //! agree.
 //!
 //! The default index is compiled into the binary ([`index::DEFAULT_INDEX`]), so a
 //! build's listings are the ones its release shipped with. `--index` names another
-//! file or URL for a private registry; it is verified against the maintainer's key
+//! file or URL for a private registry. It is verified against the maintainer's key
 //! plus `registry.trusted_keys`, which is read from the global config only — a
 //! workspace that could add a key could sign its own extensions.
 //!
@@ -94,7 +94,7 @@ fn is_url(source: &str) -> bool {
 
 /// One GET, for an index or an archive.
 ///
-/// The user agent is required by GitHub, not politeness; without it the answer is
+/// The user agent is required by GitHub, not politeness. Without it the answer is
 /// a refusal that reads like a network fault. A redirect is followed, which is
 /// what makes a `releases/download` URL answer with bytes.
 fn fetch(url: &str) -> Result<Vec<u8>, String> {

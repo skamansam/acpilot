@@ -1,6 +1,6 @@
 //! Agent Skills: list what this workspace and profile provide, and write one.
 //!
-//! A skill is a directory with a `SKILL.md`; the parser in `acpilot-skills` is the
+//! A skill is a directory with a `SKILL.md`. The parser in `acpilot-skills` is the
 //! only authority on whether one is valid. This module maps that parser to the
 //! wire shape and chooses where a saved skill goes — the workspace's
 //! `.acpilot/skills/` or the profile's `skills/` — so the lab never has to know

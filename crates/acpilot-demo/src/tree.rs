@@ -1,6 +1,6 @@
 //! The file tree, flattened.
 //!
-//! A tree is a walk wherever it is read from; what a pane needs is a list it can
+//! A tree is a walk wherever it is read from. What a pane needs is a list it can
 //! draw. Each node says how deep it sits and whether a directory's children follow
 //! it, so the renderer indents and never recurses — the same shape P6-6 has to
 //! produce from `ignore` and the filesystem, and therefore the same shape the
@@ -24,7 +24,7 @@ pub struct FileNode {
     /// How it differs from the last commit, or `None` when it does not.
     ///
     /// The wire's own type rather than a second enum with the same five states:
-    /// the daemon answers this per row, and a fixture that spelled it differently
+    /// the daemon answers this per row. A fixture that spelled it differently
     /// would be a design the listing could not produce.
     pub status: Option<FileChange>,
 }

@@ -52,7 +52,7 @@ pub struct SessionEvent {
     /// Kind-specific payload.
     ///
     /// A map of unknown values in the document, not a bare `object`: a bare object
-    /// is "no properties may be added", and a client generated from that refuses
+    /// is "no properties may be added". A client generated from that refuses
     /// every payload an adapter actually sends.
     #[schema(value_type = std::collections::BTreeMap<String, serde_json::Value>)]
     pub payload: serde_json::Value,

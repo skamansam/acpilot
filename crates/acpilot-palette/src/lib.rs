@@ -7,13 +7,13 @@
 //! two very different callers need the answer from the same code:
 //!
 //! * every surface in the product, through [`acpilot_extensions`]'s re-export, on
-//!   a machine with a terminal or a window;
+//!   a machine with a terminal or a window.
 //! * the site's showcase, compiled to WebAssembly, where a reader's own terminal
 //!   colours are solved into a palette in their browser by these same lines.
 //!
 //! What is deliberately absent is the file format. Parsing a `theme.toml`, walking
 //! an `extends` chain and refusing a hole are the loader's job and live with it in
-//! `acpilot-extensions`; a page does not load extensions, and a leaf that imported
+//! `acpilot-extensions`. A page does not load extensions, and a leaf that imported
 //! the loader would drag the daemon's whole dependency tree into a browser tab.
 
 pub mod contrast;

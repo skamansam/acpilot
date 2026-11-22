@@ -34,7 +34,7 @@ pub enum AcpilotError {
 
     /// The request is malformed: a value the endpoint cannot use, or one it does
     /// not accept. Distinct from [`Self::Conflict`], which means the request was
-    /// understood and the state refused it — retrying a `400` unchanged is
+    /// understood and the state refused it. Retrying a `400` unchanged is
     /// pointless, retrying a `409` after looking at the state may not be.
     #[error("invalid request: {what}")]
     InvalidRequest {
@@ -61,7 +61,7 @@ pub enum AcpilotError {
     /// A workspace belongs to another profile.
     ///
     /// Distinct from [`Self::Conflict`] because the client can fix it by naming
-    /// the owner or by asking explicitly to take the workspace over, and the
+    /// the owner or by asking explicitly to take the workspace over. The
     /// owner is worth carrying as a field rather than only in prose.
     #[error("profile mismatch: {what} belongs to profile {owner}")]
     ProfileMismatch {
@@ -79,7 +79,7 @@ pub enum AcpilotError {
     },
 
     /// A model provider could not be reached, refused the request, or answered
-    /// with something that is not a completion. The daemon is fine; the
+    /// with something that is not a completion. The daemon is fine. The
     /// inference server behind it is not.
     #[error("model unavailable ({provider}): {message}")]
     ModelUnavailable {

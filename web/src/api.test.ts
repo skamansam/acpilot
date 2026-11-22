@@ -1,7 +1,7 @@
 // Where the token is kept, and how it travels.
 //
-// These are the two facts the page's security rests on — the token lives in this
-// tab's session storage and leaves in an `Authorization` header — and neither is
+// These are the two facts the page's security rests on. The token lives in this
+// tab's session storage and leaves in an `Authorization` header. And neither is
 // visible in a type or a screenshot, which is why they are pinned here rather
 // than checked by hand with devtools open.
 
@@ -36,7 +36,7 @@ const SESSION = {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
-// A typed call goes out as a `Request`; the two hand-written routes still call
+// A typed call goes out as a `Request`. The two hand-written routes still call
 // `fetch(path, init)`. The helpers read both shapes so a test can say what it
 // means — the header and the path — without knowing which call made it.
 function request(call: number): Request {
@@ -128,13 +128,13 @@ describe('the token on the wire', () => {
     expect(path(0)).toBe('/v1/sessions');
     expect(authorization(0)).toBe('Bearer s3cret');
     expect(request(0).method).toBe('GET');
-    // A browser refuses `new Request('/v1/sessions')`; the client must hand it an
+    // A browser refuses `new Request('/v1/sessions')`. The client must hand it an
     // absolute URL, which is why the base URL is the page's own origin.
     expect(new URL(request(0).url).origin).toBe(location.origin);
   });
 
   it('a refusal is an error the page can act on, not a JSON parse failure', async () => {
-    // The daemon answers 401 with no useful body; a proxy may answer HTML. The
+    // The daemon answers 401 with no useful body. A proxy may answer HTML. The
     // status is the part that must survive.
     fetchMock.mockResolvedValueOnce(new Response('denied', { status: 401 }));
 

@@ -1,7 +1,7 @@
 //! Extensions: manifests, theme tokens, presets, and the loader that reads them.
 //!
 //! An extension is a directory with `extension.toml` and some assets. Installing
-//! it puts files on disk; activating it is a separate, per-profile decision
+//! it puts files on disk. Activating it is a separate, per-profile decision
 //! (ADR 0003). This crate owns the first half: parse the manifest, refuse
 //! anything that reaches outside its own directory, parse the assets with the
 //! same rules a user's own configuration follows, and hand back typed data.
@@ -36,7 +36,7 @@ pub mod theme_import;
 
 pub use acpilot_proto::extension::{ExtensionKind, ThemeAppearance};
 // The contrast gate and the terminal-following solver are `acpilot-palette`'s: a
-// surface asks for a palette and gets the same answer wherever it runs, and the
+// surface asks for a palette and gets the same answer wherever it runs. The
 // site's WebAssembly showcase runs those same lines in a browser tab. Re-exported
 // under the names the rest of the workspace already imports.
 pub use acpilot_palette::{contrast, follow};

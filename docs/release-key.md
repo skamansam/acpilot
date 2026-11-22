@@ -1,7 +1,7 @@
 # The release signing key
 
 `acpilot update` replaces the program it is running only when the release says who
-published it. A `.sha256` file proves a download arrived intact; the `.sig` beside it
+published it. A `.sha256` file proves a download arrived intact. The `.sig` beside it
 proves the release published that digest, and only a key that never travels with the
 release can say so (ADR 0011 D4).
 
@@ -30,10 +30,10 @@ openssl pkey -in acpilot-release.pem -pubout -outform DER \
 echo
 ```
 
-Set the secret to the PEM file's contents, `-----BEGIN PRIVATE KEY-----` line included,
-and the variable to the hex above. Then check the pair agrees before trusting it: build
-with `ACPILOT_RELEASE_PUBKEY` set to the hex, sign a file with the PEM, and
-`acpilot update` will accept that signature and refuse any other.
+Set the secret to the PEM file's contents, including the `-----BEGIN PRIVATE KEY-----`
+line. Set the variable to the hex above. Then check that the pair agrees before you
+trust it. Build with `ACPILOT_RELEASE_PUBKEY` set to the hex. Sign a file with the
+PEM. `acpilot update` will accept that signature and refuse any other.
 
 `openssl pkeyutl -sign -rawin -inkey acpilot-release.pem -in <file> -out <file>.sig`
 produces exactly the 64-byte signature the updater checks, which is what `release.yml`
@@ -48,13 +48,13 @@ The key is compiled into the binary, so a rotation is two releases and a window:
 2. Once that version is the oldest anyone is likely to run, sign with the new key and
    let the old one go.
 
-A single-key updater cannot verify two keys at once, which is the cost of not having a
-keyring; the window above is what keeps the transition from stranding a machine that
+A single-key updater cannot check two keys at once, which is the cost of not having a
+keyring. The window above is what keeps the transition from stranding a machine that
 skipped a release.
 
 ## What is not signed
 
 The installers and the formula are not signed, and `--from` is not checked at all. The
 installer's own trust is the transport that delivered it (`curl | sh` over TLS, or a
-tap); `--from` is a person carrying a binary to a machine that cannot download, and
+tap). `--from` is a person carrying a binary to a machine that cannot download, and
 that person is the one deciding. Neither claims to be a release.

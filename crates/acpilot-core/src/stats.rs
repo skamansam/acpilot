@@ -5,7 +5,7 @@
 //! bar renders as indeterminate), a missing numerator is derived from what was
 //! reported, and an over-budget value clamps instead of overflowing the track.
 //!
-//! Nothing here formats or colours anything; that is presentation.
+//! Nothing here formats or colours anything. That is presentation.
 
 /// Fraction of a context window in use, clamped to `0.0..=1.0`.
 ///
@@ -28,7 +28,7 @@ pub fn context_fill(used_tokens: u32, window_tokens: Option<u32>) -> Option<f32>
 ///
 /// The denominator is, in order of preference:
 ///
-/// 1. `limit`, when the plan reports one;
+/// 1. `limit`, when the plan reports one.
 /// 2. `used + remaining`, when both halves were reported.
 ///
 /// The numerator falls back to `limit - remaining` when only the balance was
@@ -37,7 +37,7 @@ pub fn context_fill(used_tokens: u32, window_tokens: Option<u32>) -> Option<f32>
 /// not finite, so no bar is drawn from numbers that cannot mean anything.
 #[must_use]
 pub fn credit_fill(used: Option<f64>, remaining: Option<f64>, limit: Option<f64>) -> Option<f32> {
-    // One corrupt figure invalidates the reading; do not average it away.
+    // One corrupt figure invalidates the reading. Do not average it away.
     if used.is_some_and(|value| !value.is_finite())
         || remaining.is_some_and(|value| !value.is_finite())
         || limit.is_some_and(|value| !value.is_finite())

@@ -224,8 +224,8 @@ async fn a_server_error_after_the_first_delta_is_an_error_not_a_partial_answer()
 async fn a_transport_that_breaks_mid_stream_is_an_error() {
     async fn broken() -> Response {
         // The error is delayed so the headers and the first frame reach the
-        // client: an immediate failure is a failed request, not a broken stream,
-        // and this test is about the latter.
+        // client. An immediate failure is a failed request, not a broken stream.
+        // This test is about the latter.
         let chunks = futures::stream::unfold(0u8, |state| async move {
             match state {
                 0 => Some((

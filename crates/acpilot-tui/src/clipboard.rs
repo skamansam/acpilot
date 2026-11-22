@@ -3,8 +3,8 @@
 //! Copy mode copies to the terminal a person is looking at, not to the machine
 //! the TUI runs on: over SSH those are two computers and there is no system
 //! clipboard in between. OSC 52 puts the text on the same stream the screen is
-//! drawn on and lets the far end turn it into its own clipboard. tmux forwards it
-//! when `set-clipboard` allows it; a terminal that ignores it ignores it
+//! drawn on and lets the far end turn it into its own clipboard. Tmux forwards it
+//! when `set-clipboard` allows it. A terminal that ignores it ignores it
 //! silently, which is why the status line also says the copy happened.
 
 /// The escape that puts `text` on the terminal's clipboard.
@@ -20,7 +20,7 @@ pub fn osc52(text: &str) -> String {
 /// Standard base64 with padding.
 ///
 /// Written here rather than pulled in as a dependency: OSC 52 needs one alphabet
-/// and nothing else, and a crate for twenty lines is a crate to keep current.
+/// and nothing else. A crate for twenty lines is a crate to keep current.
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);

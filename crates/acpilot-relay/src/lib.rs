@@ -2,7 +2,7 @@
 //!
 //! The relay is a separate process from the daemon, with its own data directory
 //! and one SQLite file per group. It does not run agents, read profiles, or know a
-//! workspace. A group is a UUID; a member is a device key and a display name.
+//! workspace. A group is a UUID. A member is a device key and a display name.
 //!
 //! # Trust
 //!
@@ -22,7 +22,7 @@
 //! ```
 //!
 //! A timestamp more than five minutes from the relay's clock is refused. The
-//! device must be in the group's active roster; a revoked key cannot post, read or
+//! device must be in the group's active roster. A revoked key cannot post, read or
 //! publish presence.
 
 use std::collections::HashMap;
@@ -553,7 +553,7 @@ pub struct UnsignedInvite {
     pub display_name: String,
     /// The joining device's 64-hex ed25519 public key.
     pub device: String,
-    /// The inviting device's key; equal to `device` for the first invite.
+    /// The inviting device's key. Equal to `device` for the first invite.
     pub inviter: String,
     /// When the invite was made, Unix seconds.
     pub issued_at: i64,
@@ -574,7 +574,7 @@ pub struct Member {
     pub inviter: String,
     /// When it joined, Unix seconds.
     pub joined_at: i64,
-    /// When it left, Unix seconds; `None` while active.
+/// When it left, Unix seconds. `None` while active.
     pub revoked_at: Option<i64>,
 }
 

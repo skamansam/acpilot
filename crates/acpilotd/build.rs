@@ -8,7 +8,7 @@
 //! turns that into `None`.
 //!
 //! `ACPILOT_HELPER_BIN` is the artifact. A release build points it at the static musl
-//! binary; a developer build leaves it unset and the daemon behaves exactly as before —
+//! binary. A developer build leaves it unset and the daemon behaves exactly as before —
 //! asking the host for `acpilotd-helper` on its `PATH`. A variable that names a file which
 //! is not there is a packaging mistake, so it fails the build instead of producing a daemon
 //! that silently cannot install what it promised.
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// The nearest ancestor of `start` whose `Cargo.toml` declares `[workspace]`.
 ///
-/// Looking for the table rather than counting `..` keeps working if this crate moves; a
+/// Looking for the table rather than counting `..` keeps working if this crate moves. A
 /// crate built outside a workspace gets `None` and the relative value means what it did
 /// before, which is the reading cargo itself gave it.
 fn workspace_root(start: &Path) -> Option<PathBuf> {

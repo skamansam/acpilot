@@ -22,7 +22,7 @@ use crate::{transport_error, unexpected};
 /// How long a balance read may take.
 ///
 /// Shorter than discovery on purpose: `/v1/stats` is polled while somebody
-/// watches, and a minute of stale credits is better than a stats request held
+/// watches. A minute of stale credits is better than a stats request held
 /// open behind a firewall.
 pub const BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,7 +32,7 @@ const OPENROUTER: &str = "openrouter.ai";
 /// `GET /api/v1/credits` for an OpenRouter base URL, and `None` for anything else.
 ///
 /// A hosted base is `https://openrouter.ai/api/v1`. A base without the `/v1` path
-/// is completed from the same host rather than appended to blindly, so a
+/// is completed from the same host rather than appended to blindly. A
 /// declaration that stops at the host still asks the endpoint the vendor
 /// documents.
 #[must_use]
@@ -118,7 +118,7 @@ struct Envelope {
 /// Map a balance body onto the contract.
 ///
 /// A body without `total_credits` reports nothing: the amount purchased is the
-/// only denominator OpenRouter states, and inventing one would turn a quiet
+/// only denominator OpenRouter states. Inventing one would turn a quiet
 /// account into a confident zero.
 fn reading(body: &Value) -> Option<CreditStats> {
     let envelope: Envelope = serde_json::from_value(body.clone()).ok()?;

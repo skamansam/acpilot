@@ -99,13 +99,13 @@ impl Pty {
 /// Start `command` on a new local PTY, the platform's way.
 ///
 /// unix: `forkpty` — the child is a session leader on a real `/dev/pts/N`.
-/// Windows: ConPTY — the child is attached to a pseudo-console, and three things
+/// Windows: ConPTY. The child is attached to a pseudo-console. Three things
 /// differ visibly from unix: input is echoed, `\n` arrives as `\r\n`, and a
 /// program that asks for the cursor position (`CSI 6 n`) blocks until something
 /// answers. The answer is the terminal pane's job (P2-5), not this function's.
 ///
 /// Shared rather than duplicated per platform because `portable-pty` already
-/// owns the difference; duplicating the body would be two copies of the same
+/// owns the difference. Duplicating the body would be two copies of the same
 /// code with a Windows comment on one of them.
 pub(crate) fn spawn(command: &ExecCommand, size: Size) -> Result<Pty, HostError> {
     let pair = portable_pty::native_pty_system()
@@ -136,7 +136,7 @@ pub(crate) fn spawn(command: &ExecCommand, size: Size) -> Result<Pty, HostError>
     // Holding the slave open would keep the terminal alive after the child
     // exits, and the reader would never see EOF. On Windows the slave is an
     // `Arc` clone of the pseudo-console, so dropping it here does not end the
-    // session; the master does that when the `Pty` drops.
+    // session. The master does that when the `Pty` drops.
     drop(pair.slave);
 
     let reader = pair

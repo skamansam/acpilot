@@ -50,7 +50,7 @@ impl Drop for TempDir {
 }
 
 fn acpilot(args: &[&str]) -> Output {
-    // The archive server is on loopback; a proxy inherited from the machine would
+    // The archive server is on loopback. A proxy inherited from the machine would
     // turn a local download into a CONNECT it cannot make. `NO_PROXY=*` is the same
     // hermeticity the tests already demand of `PATH`.
     Command::new(env!("CARGO_BIN_EXE_acpilot"))

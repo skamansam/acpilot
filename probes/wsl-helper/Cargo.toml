@@ -10,7 +10,7 @@ publish = false
 # nothing here can leak into the product. The lockfile is committed because the
 # point is to measure *these* versions.
 #
-# `portable-pty` is only used for the ConPTY probe; on Windows it is the
+# `portable-pty` is only used for the ConPTY probe. On Windows it is the
 # `CreatePseudoConsole` path, which is the half P0-2 could not reach.
 [dependencies]
 anyhow = "1"

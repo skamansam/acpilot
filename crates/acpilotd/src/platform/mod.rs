@@ -54,7 +54,7 @@ impl std::fmt::Display for Target {
 /// A listener that is up, reported before it accepts its first request.
 ///
 /// The bound address, not the requested one: `127.0.0.1:0` is a request for a
-/// port, and the only way to print the port a person can open is to ask the
+/// port. The only way to print the port a person can open is to ask the
 /// listener that got it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bound {
@@ -67,7 +67,7 @@ pub enum Bound {
 /// Bind `target` and serve until `shutdown` resolves, reporting the listener.
 ///
 /// The callback is called once, after a successful bind and before the first
-/// request, so a caller that wants to print an address cannot do it too early.
+/// request. A caller that wants to print an address cannot do it too early.
 /// It is `FnOnce` because a listener has one address.
 ///
 /// # Errors

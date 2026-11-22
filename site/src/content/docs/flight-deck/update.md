@@ -5,11 +5,11 @@ description: How this copy was installed, who may replace it, and the one comman
 
 <span class="pill pill--flying">flying</span> &nbsp; `acpilot update`, `--check`, `--from`
 
-A client refuses to talk to a daemon of a different version (ADR 0004), which is
-correct and, on its own, useless: you are told two version strings and nothing
+A client refuses to talk to a daemon of a different version (ADR 0004). That is
+correct and, on its own, useless. You are told two version strings and nothing
 about what to do. What to do depends on how acpilot arrived on the machine. A
 copy `apt` unpacked is `apt`'s to upgrade. A tarball somebody unzipped is theirs.
-Nothing in a binary can tell those apart, so the installation says so itself.
+Nothing in a binary can tell those apart. The installation says so itself.
 
 ## The marker
 
@@ -23,11 +23,11 @@ Every installation except a bare binary drop leaves one small file called
 `method` is the closed set `apt`, `dnf`, `pacman`, `brew`, `msi`, `script`,
 `tarball`, `appimage`, `cargo`. `version` is what the installer put there, so a
 marker left by an older package is recognisable rather than trusted. Any other
-field is informational; nothing branches on it.
+field is informational. Nothing branches on it.
 
 The marker is written by the package, not by the program. That is the whole
-point: a file in the `.deb` says "this came from apt" because apt put it there,
-and a binary that guessed from where it sits would guess wrong for exactly the
+point. A file in the `.deb` says "this came from apt" because apt put it there.
+A binary that guessed from where it sits would guess wrong for exactly the
 installations that matter.
 
 `acpilot update` looks in this order, and the first answer wins:
@@ -97,33 +97,33 @@ a daemon that is already running keeps the older binary until it is restarted
 That is five steps, and each one can stop the update:
 
 1. **The assets for this platform** are named from the release. A release is one
-   archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — named after the
-   package and the target triple, with the version in the tag rather than in the
+   archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui`. The archive is
+   named after the package and the target triple, with the version in the tag rather than in the
    file name. A platform the release does not build says so instead of fetching a
    404 page.
 2. **The signature is checked before the digest.** Every archive publishes
    `<asset>.sha256` and `<asset>.sha256.sig`: a detached ed25519 signature over the
    checksum file's bytes, made by the release key. A checksum with no valid
-   signature ends the update, because the digest on its own proves the download
-   arrived intact and says nothing about who published it.
+   signature ends the update. The digest on its own proves the download arrived
+   intact. It says nothing about who published it.
 3. **The bytes are checked** against that signed digest. A digest that differs ends
    the update and nothing is written. There is no `curl | sh` here.
 4. **The archives are unpacked** into a temporary directory, and only the program
-   names are read from it — never an entry's path, so an archive that contains
+   names are read from it. Never an entry's path. An archive that contains
    `../../etc/passwd` has nothing this command wants.
 5. **The programs are replaced** one at a time, each written beside its
    destination, made executable, and renamed over it. A failure halfway therefore
    leaves whole programs, not a half-written one. `acpilotd` and `acpilot-gui` are
    replaced only where they already exist: an update does not change which
-   programs arrived, and `acpilot` itself is written last so a failure leaves you
+   programs arrived. `acpilot` itself is written last so a failure leaves you
    a client you can still run.
 
 The marker is then rewritten with the version that is now on disk, keeping the
-method. The bytes changed; the way they arrived did not.
+method. The bytes changed. The way they arrived did not.
 
 The release public key is compiled in from `ACPILOT_RELEASE_PUBKEY`. A binary built
-without it cannot tell a release from a substitution, so it refuses to replace itself
-rather than falling back to the digest alone; the release workflow signs every
+without it cannot tell a release from a substitution. It refuses to replace itself
+rather than falling back to the digest alone. The release workflow signs every
 checksum with `ACPILOT_SIGNING_KEY` and fails when that secret is missing. The
 repository's `docs/release-key.md` covers generating and rotating the pair.
 
@@ -133,14 +133,14 @@ repository's `docs/release-key.md` covers generating and rotating the pair.
 | `--version <TAG>` | Install a named release (`v0.2.6` or `0.2.6`) instead of the latest |
 | `--from <PATH>` | Replace this `acpilot` with a binary you brought yourself |
 
-Exit codes are the CLI's usual ones: `0` when the copy is already the requested
-version or was replaced, `1` when it was not (a package manager owns it, no marker
-says it may be replaced, or a download or write failed), `2` for a bad invocation.
+Exit codes are the CLI's usual ones. `0` means the copy is already the requested
+version or was replaced. `1` means it was not: a package manager owns it, no marker
+says it may be replaced, or a download or write failed. `2` is a bad invocation.
 
 ## What it does not do
 
 - **It does not restart a daemon.** A running `acpilotd` keeps the binary it
-  started from until it is restarted; the command says so rather than killing a
+  started from until it is restarted. The command says so rather than killing a
   daemon that may be mid-turn.
 - **It does not check a signature for `--from`.** A downloaded release is verified:
 signature first, then the digest it covers. A binary carried to an air-gapped

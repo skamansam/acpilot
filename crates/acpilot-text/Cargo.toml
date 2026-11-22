@@ -21,13 +21,13 @@ tree-sitter-rust = { workspace = true }
 tree-sitter-toml-ng = { workspace = true }
 # How many cells a character takes in a terminal. A caret placed by counting
 # characters drifts left of the glyph the first time a line holds a `日` or a
-# combining mark, and the drift is invisible until somebody types next to one.
+# combining mark. The drift is invisible until somebody types next to one.
 unicode-width = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 # Only a test uses it: the reference implementation is the oracle the capture
-# walk is held to, so the runtime pays for one parse rather than two.
+# walk is held to. The runtime pays for one parse rather than two.
 tree-sitter-highlight = { workspace = true }
 
 [lints]

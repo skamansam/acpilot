@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 /// The mock agent, built on demand.
 ///
 /// `acpilot-mock-agent` is a `[[bin]]` with `test = false`, so `nextest` does not
-/// guarantee it is built before the tests that need it; building it here once is what
+/// guarantee it is built before the tests that need it. Building it here once is what
 /// makes a suite work from a clean `cargo nextest run` as well as from
 /// `cargo xtask check`, which builds the workspace first.
 pub fn mock_agent() -> &'static Path {

@@ -243,7 +243,7 @@ async fn activating_something_that_is_not_installed_is_a_404() {
 /// A source directory that contributes one agent pointing at `command`.
 ///
 /// The command is the shared mock agent rather than this test's own binary: trust
-/// fingerprints the program it names, and hashing a debug test executable would
+/// fingerprints the program it names. Hashing a debug test executable would
 /// cost more than the rest of the suite put together.
 fn agent_extension(root: &Path, command: &str) -> PathBuf {
     let source = root.join("source");
@@ -300,7 +300,7 @@ async fn an_activated_agent_preset_joins_the_roster_and_names_its_extension() {
     assert_eq!(agent["extension"], "acpilot.test-agents");
     assert_eq!(agent["status"], "available");
 
-    // The pin question names the pack that introduced the program, and the answer
+    // The pin question names the pack that introduced the program. The answer
     // carries the same provenance so a client does not have to join the two calls.
     let (status, trusted) = send(&app, "POST", "/v1/agents/test-agent/trust", None).await;
     assert_eq!(status, StatusCode::OK, "{trusted}");

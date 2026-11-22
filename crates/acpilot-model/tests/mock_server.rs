@@ -1,6 +1,6 @@
 //! The adapters against a loopback server, with the request body under a lens.
 //!
-//! A unit test of the body builder proves the map is built; these tests prove what
+//! A unit test of the body builder proves the map is built. These tests prove what
 //! actually leaves the process, what happens when a server refuses a knob, and what
 //! a provider that reports metadata fills in. Every handler records the body, so a
 //! parameter regression is a diff in an assertion rather than a mystery in a lab.

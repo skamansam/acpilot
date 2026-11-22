@@ -1,4 +1,4 @@
-// The gutter's arithmetic, without a browser: a mark is a position, and the
+// The gutter's arithmetic, without a browser: a mark is a position. The
 // question every test asks is which line that position is on after an edit.
 
 import { EditorState } from '@codemirror/state';

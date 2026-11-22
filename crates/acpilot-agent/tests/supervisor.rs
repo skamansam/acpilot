@@ -6,7 +6,7 @@
 //! developer machine has, and assert on what it printed and how it exited.
 //!
 //! The file is unix-only because the shell it uses is. The Windows path in
-//! `supervisor/platform/windows.rs` is type-checked by the CI target build; its
+//! `supervisor/platform/windows.rs` is type-checked by the CI target build. Its
 //! runtime behaviour needs a Windows runner, which is the engine phase's P2-2 remaining gap and is
 //! recorded in TODO.md rather than hidden behind a test that never runs.
 

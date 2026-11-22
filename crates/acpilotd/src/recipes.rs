@@ -171,7 +171,7 @@ impl Recipes {
         }
     }
 
-    /// The declarations a recipe is validated against.
+    /// The declarations a recipe is checked against.
     fn providers(&self) -> Result<ProvidersFile, ApiError> {
         let root = self.directory.parent().unwrap_or(&self.directory);
         ProvidersFile::load_in(root).map_err(invalid)
@@ -181,7 +181,7 @@ impl Recipes {
         self.directory.join(format!("{id}.toml"))
     }
 
-    /// Write a file that did not exist, removing it when it does not validate.
+    /// Write a file that did not exist, removing it when the check fails.
     fn write_new(&self, path: &Path, file: &RecipeFile) -> Result<(), ApiError> {
         std::fs::create_dir_all(&self.directory).map_err(io(&self.directory))?;
         let rendered = toml::to_string_pretty(file).map_err(|error| {
@@ -197,7 +197,7 @@ impl Recipes {
         Ok(())
     }
 
-    /// Write a replacement, putting `old` back when the new bytes do not validate.
+    /// Write a replacement, putting `old` back when the new bytes fail the check.
     fn write_replacing(&self, path: &Path, old: &str, file: &RecipeFile) -> Result<(), ApiError> {
         let rendered = toml::to_string_pretty(file).map_err(|error| {
             ApiError::new(AcpilotError::invalid(format!(

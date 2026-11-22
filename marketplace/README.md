@@ -1,6 +1,6 @@
 # The marketplace
 
-`index.json` is the marketplace: a reviewed list of extension versions, each naming the archive to download and the sha256 it must hash to, signed by the maintainer's key. It is a file, not a service: no accounts, no upload endpoint, no crawl, no auto-update. To be listed, open a pull request against this repository. `index.toml` is where a repository is proposed before it has a release archive to point at.
+`index.json` is the marketplace. It is a reviewed list of extension versions. Each entry names the archive to download and the sha256 it must hash to. The maintainer's key signs the list. It is a file, not a service: no accounts, no upload endpoint, no crawl, no auto-update. To be listed, open a pull request against this repository. `index.toml` is where a repository is proposed before it has a release archive to point at.
 
 ## Adding an entry
 
@@ -32,10 +32,10 @@ acpilot ext add acpilot.rust-pack --activate work
 ```
 
 `ext add` checks the archive's size and sha256 against the signed listing before
-unpacking, requires the manifest inside to name the same id, version and publisher,
-then hashes the installed directory and records that checksum. `ext verify --all`
-checks it again, and either mismatch is `Blocked` rather than a warning. The
-listing's size is the compressed download, so the unpacked tree has its own cap:
+unpacking. It requires the manifest inside to name the same id, version and
+publisher. It then hashes the installed directory and records that checksum. `ext verify --all`
+checks it again. Either mismatch is `Blocked` rather than a warning. The
+listing's size is the compressed download. The unpacked tree has its own cap:
 an archive that would write more than 64 MiB is refused whole.
 
 A checkout is still installable for development:
@@ -45,7 +45,7 @@ acpilot ext add --from /tmp/acpilot-pack/pack
 ```
 
 That copies the directory into the store rather than linking it, so it is
-checksummed like any other install; re-run it under a new version after an edit.
+checksummed like any other install. Re-run it under a new version after an edit.
 
 ## The signature
 
@@ -53,11 +53,11 @@ checksummed like any other install; re-run it under a new version after an edit.
 signature is `index.json.sig`: `{"key": "acpilot-release", "signature": "<128 hex>"}`.
 The public half is compiled into acpilot, so a listing signed by any other key is
 refused with that key's id named. A private registry adds its own key under
-`[[registry.trusted_keys]]` in the global `config.toml`; a workspace cannot add a
+`[[registry.trusted_keys]]` in the global `config.toml`. A workspace cannot add a
 trust root to itself.
 
 Editing the index means re-signing it. The signature covers the file's exact
-bytes, so a merge that changes a checksum without a new signature is refused by
+bytes. A merge that changes a checksum without a new signature is refused by
 every client rather than silently trusted. `acpilot ext search` on a build whose
 shipped index is stale is still a safe answer: the listings are the release's, not
 a background fetch's.
@@ -70,7 +70,7 @@ acpilot ext search --index https://example.invalid/acpilot/index.json
 
 ## Why a list in a repository
 
-A registry service needs hosting, a moderation interface, an account system, and a plan for the day an attacker compromises it. A git repository gets review, history, and a revert for free. A pull request that adds a malicious entry is also visible to everyone, not queued behind a dashboard.
+A registry service needs hosting, a moderation interface, an account system, and a plan for the day an attacker compromises it. A git repository has review, history, and a revert for free. A pull request that adds a malicious entry is also visible to everyone, not queued behind a dashboard.
 
 ## Other editors' extensions
 

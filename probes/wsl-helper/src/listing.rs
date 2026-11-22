@@ -1,7 +1,7 @@
 //! What `wsl.exe -l` prints, decoded and parsed.
 //!
 //! This lives outside `wsl.rs` on purpose. `wsl.rs` spawns `wsl.exe`, so it is
-//! `cfg(windows)` and its tests only run on Windows; a parsing bug that decided
+//! `cfg(windows)` and its tests only run on Windows. A parsing bug that decided
 //! whether a distro is WSL1 or WSL2 must not be able to hide behind that gate.
 //! Everything here is bytes in, structs out, and it is tested on both
 //! operating systems by the same `cargo test`.
@@ -15,7 +15,7 @@
 pub struct Distro {
     pub name: String,
     pub state: String,
-    /// 1 is the syscall-translation layer; 2 is a real Linux kernel in a VM.
+    /// 1 is the syscall-translation layer. 2 Is a real Linux kernel in a VM.
     pub version: u32,
 }
 
@@ -53,7 +53,7 @@ pub fn parse_verbose(bytes: &[u8]) -> Vec<Distro> {
 /// The gate the bench runs behind: WSL1 and WSL2 are different products, and a
 /// number measured on one does not describe the other.
 ///
-/// WSL1 translates Linux syscalls onto NT ones; WSL2 runs a real kernel in a
+/// WSL1 translates Linux syscalls onto NT ones. WSL2 Runs a real kernel in a
 /// Hyper-V VM. Startup, `/mnt` and PTY behaviour all differ, so a WSL1 run of
 /// the bench would produce a second, unrelated table rather than corroborate
 /// the WSL2 one. GitHub's standard hosted Windows runners have no nested

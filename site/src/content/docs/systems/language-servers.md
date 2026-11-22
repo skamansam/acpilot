@@ -40,7 +40,7 @@ network. Therefore:
   changes.
 - **No silent downloads.** Detection is the default. A managed install is an
   explicit `acpilot lsp install`, verified against a signed catalog and the
-  archive's checksum before it is unpacked (ADR 0014); no timer or startup path
+  archive's checksum before it is unpacked (ADR 0014). No timer or startup path
   fetches one.
 - **Restricted to the workspace root**, like agents.
 - **Timeouts everywhere**, plus `$/cancelRequest`, plus a crash-loop cap. A
@@ -84,46 +84,46 @@ away from the editor stops paying for an index nobody is reading.
 What that machinery is doing is a route rather than a rumour. `GET /v1/lsp/servers`
 answers one row per language this daemon can start: the four the build knows, and
 any an activated extension adds. A pack's preset for a language the build already
-knows replaces that row, because activation sits above the built-ins, and
-deactivating it puts the build's row back without a restart. The row says running
-or stopped, the encoding it negotiated, and the last `textDocument/references`
+knows replaces that row. Activation sits above the built-ins. Deactivating it
+puts the build's row back without a restart. The row says running
+or stopped, the encoding it negotiated. The last `textDocument/references`
 round trip in milliseconds. That is the answer, not the index. A language with no row
 has no server here, which is what a references list answered by the parse tree
 already said. The TUI prints those rows on its status line from the palette's
-**LSP status** row. That frontend has no `:` command line yet, so the palette's
+**LSP status** row. That frontend has no `:` command line yet. The palette's
 own query is where `lsp status` sits.
 
 A row that came from a pack can also be a question. The daemon pins a language
 server the way it pins an agent: `POST /v1/lsp/servers/{language}/trust` records the
-SHA-256 of that program's bytes, and the listing reports `untrusted` once the file
+SHA-256 of that program's bytes. The listing reports `untrusted` once the file
 no longer hashes to what was approved. It is keyed by language because a language is
-what a client lists and what a URL can hold, but the pin is stored against the
-program: `typescript-language-server` answers for both `typescript` and `javascript`,
+what a client lists and what a URL can hold. The pin is stored against the
+program. `typescript-language-server` answers for both `typescript` and `javascript`,
 and one approval covers both. The TUI asks on the palette's **LSP status** row when
-the list contains such a row, naming the program, the language and the pack —
-"trust rust-analyzer from acpilot.rust-pack?" — and approving leaves a sentence on
-the status line rather than claiming the server started, because a pin that is
+the list contains such a row. It names the program, the language and the pack. The
+question reads, "trust rust-analyzer from acpilot.rust-pack?". Approving leaves a
+sentence on the status line. It does not claim the server started. A pin that is
 recorded does not start a process. That question is why the row carries its pack id
 all the way to a client.
 
 An answer is enforced, not merely remembered. The daemon refuses to start a server
-whose bytes no longer hash to the pin it recorded, so references fall back to the
+whose bytes no longer hash to the pin it recorded. References fall back to the
 parse tree, diagnostics report that nobody checked, and formatting returns the
-buffer unchanged — rather than running a binary that changed under the name
+buffer unchanged. Rather than running a binary that changed under the name
 somebody approved. The refusal is local: a remote server's bytes are the host's to
-hash (P7-11). A server nobody has pinned still starts; requiring an answer before
+hash (P7-11). A server nobody has pinned still starts. Requiring an answer before
 first use is the part of P7-12 still open.
 
 The catalog installer is built and published. `acpilot lsp search|install|list|remove`
-fetches `index-v1.json` from `https://rudeboy.dev/acpilot/lsp/`, checks the detached
+fetches `index-v1.json` from `https://rudeboy.dev/acpilot/lsp/`. It checks the detached
 signature with the built-in `acpilot-lsp` key (or `ACPILOT_LSP_INDEX_PUBKEY` for a
-mirror), verifies the archive's size and sha256, unpacks only regular files, and
+mirror). It verifies the archive's size and sha256, unpacks only regular files, and
 records the executable's digest under `<data>/lsp/<id>/<version>/<target>/`. The
-first reviewed entry is rust-analyzer's 2026-11-16 Linux builds; `lsp/*.toml` is
+first reviewed entry is rust-analyzer's 2026-11-16 Linux builds. `lsp/*.toml` is
 the source and `cargo xtask lsp-index` regenerates the signed JSON. The daemon
-resolves a managed install ahead of `PATH`, and it now enforces that record as the
+resolves a managed install ahead of `PATH`. It now enforces that record as the
 P7-12 pin: a managed executable that no longer hashes to `install.json` is not
-started, and the daemon does not quietly fall back to a `PATH` binary instead.
+started. The daemon does not quietly fall back to a `PATH` binary instead.
 A server found on `PATH` still uses the existing approval route
 `POST /v1/lsp/servers/{language}/trust`.
 

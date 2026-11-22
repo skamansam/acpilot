@@ -2,8 +2,8 @@
 //!
 //! Three layers, lowest to highest:
 //!
-//! 1. the built-ins compiled into the binary;
-//! 2. extensions the profile has activated;
+//! 1. the built-ins compiled into the binary.
+//! 2. extensions the profile has activated.
 //! 3. the profile's own `lsp.toml` / `agents.toml`.
 //!
 //! Within a layer, two things claiming the same id is still an error: two

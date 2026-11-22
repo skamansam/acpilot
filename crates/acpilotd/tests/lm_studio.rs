@@ -10,7 +10,7 @@
 //! ```
 //!
 //! `ACPILOT_LM_STUDIO_URL` moves the server and `ACPILOT_LM_STUDIO_MODEL` names
-//! the model; without the latter the first model the server lists is used.
+//! the model. Without the latter the first model the server lists is used.
 
 use acpilot_profile::providers::ProvidersFile;
 use acpilotd::providers::Providers;
@@ -24,7 +24,7 @@ use tower::ServiceExt;
 
 /// The record inside the SSE body's `model.run.finished` payload.
 ///
-/// The frame wraps the summary in `run`, exactly as `acpilot-client` reads it;
+/// The frame wraps the summary in `run`, exactly as `acpilot-client` reads it.
 /// returning the envelope here made every field on the run a null.
 fn finished(body: &str) -> Value {
     let mut event = String::new();
@@ -67,7 +67,7 @@ async fn studio() -> (String, String) {
 /// A profile holding one LM Studio provider and one recipe over `model`.
 ///
 /// `sampling` is the recipe's `[sampling]` block, so a test can pin the output
-/// budget; empty means the agent-shaped defaults. It goes last because a TOML
+/// budget. Empty means the agent-shaped defaults. It goes last because a TOML
 /// table header owns every key after it, and `context` and `tools` are top-level.
 fn profile(base_url: &str, model: &str, sampling: &str) -> (tempfile::TempDir, Router, String) {
     let profile = tempfile::tempdir().expect("profile");
@@ -248,7 +248,7 @@ async fn a_tight_budget_spends_it_thinking_and_the_run_says_so() {
          than on the model's own stop: {summary}"
     );
 
-    // The finished frame carries the summary, which has no thinking in it; the
+    // The finished frame carries the summary, which has no thinking in it. The
     // record is what a pane reads back for a run it did not watch.
     let id = summary["id"].as_str().expect("the summary names the run");
     let response = app

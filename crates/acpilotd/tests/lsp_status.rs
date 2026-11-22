@@ -2,7 +2,7 @@
 //!
 //! The route is the registry's report: one row per language this build can start,
 //! because "no server for this language" is exactly what a references list answered by
-//! the parse tree means. Two of the tests need no server at all; the third needs
+//! the parse tree means. Two of the tests need no server at all. The third needs
 //! `rust-analyzer` and says so.
 
 use std::fs;
@@ -266,8 +266,8 @@ async fn a_server_nobody_has_asked_is_stopped_and_starts_again() {
     let question = format!("/v1/files/references?q=dup&path=src/lib.rs&offset={offset}");
 
     // The first question starts the server, and pays for its index. How many rows
-    // come back is the index's business — a cold server can answer with the
-    // definition before it has found the call — so one row is enough to say it
+    // come back is the index's business. A cold server can answer with the
+    // definition before it has found the call. So one row is enough to say it
     // answered at all, which is what this test is about.
     let (status, body) = get(state.clone(), &question).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -320,7 +320,7 @@ async fn a_server_nobody_has_asked_is_stopped_and_starts_again() {
     );
 
     // And the next question starts a fresh one rather than finding a hole: the entry
-    // was removed, so this is the same path the first question took. The session is
+    // was removed. This is the same path the first question took. The session is
     // the evidence rather than the row count, which the new index is still deciding.
     let (status, body) = get(state.clone(), &question).await;
     assert_eq!(status, StatusCode::OK, "{body}");

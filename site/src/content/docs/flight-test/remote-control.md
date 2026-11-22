@@ -6,7 +6,7 @@ description: A remote driver — Devin, a CI job, another editor — can fly ses
 <span class="pill pill--hangar">hangar</span> &nbsp; Models phase (P4.5-10)
 
 <Aside type="note" title="Status">
-Both transports are built. `acpilotd --acp` serves ACP over stdin/stdout for one profile;
+Both transports are built. `acpilotd --acp` serves ACP over stdin/stdout for one profile.
 a pairing code and a driver token open the HTTP listener for a driver that is not in this
 process. The remote half serves `POST /acp` (JSON-RPC), `GET /acp/events` (notifications) and
 `POST /pair`, with the cockpit's pairing and revocation routes on the daemon's own listener.
@@ -49,7 +49,7 @@ was not told to. The daemon serves the listener on the profile it was started
 with, and the cockpit routes are on the daemon's own listener.
 
 The driver token is required even on loopback. The ticket allowed skipping it
-there; this build does not offer that half-decision, because a listener that is
+there. This build does not offer that half-decision. A listener that is
 unauthenticated on one address is one config edit away from being unauthenticated
 on another.
 
@@ -69,11 +69,11 @@ One secret is handed out, once, and kept only as a hash:
 
 `POST /v1/acp/pairings` takes `{"grant_answer_permissions": false}` by default.
 A driver cannot grant itself that scope by asking for it: the code was issued
-with the person's answer, and the pair response says what it actually holds.
+with the person's answer. The pair response says what it actually holds.
 
 The ledger is the profile's `drivers.toml`, `0600`, and it holds an Argon2id hash
 of each token rather than the token. A revoked driver's hash is cleared, so its
-next request is `401`; the row stays, because an audit trail that deletes itself
+next request is `401`. The row stays, because an audit trail that deletes itself
 is a suggestion.
 
 ## Handshake
@@ -95,7 +95,7 @@ sees. That is the point: there is no bespoke "remote agent API" to document twic
 
 While `session/prompt` is open, the turn's chunks arrive on `GET /acp/events` as
 `session/update` notifications, in the schema ACP already defines. A driver that
-never opens the stream still gets `end_turn` at the end; it reads the turn as one
+never opens the stream still gets `end_turn` at the end. It reads the turn as one
 silence.
 
 A driver owns the sessions it opened. Another driver's `session/prompt`,
@@ -112,7 +112,7 @@ conversation it did not start.
 | `answer_permissions` | **not granted** | Answer permission requests |
 
 The last one is the important one. Without it, a permission request raised by a
-driver-started turn stays on the daemon's pending list — `GET /v1/permissions`,
+driver-started turn stays on the daemon's pending list. `GET /v1/permissions`,
 and the TUI, desktop and browser that read it — and the person at the machine
 answers. The driver's stream receives a `notice` explaining that a human must
 answer, once per turn, so it is never a mysterious hang. The prompt stays open
@@ -127,7 +127,7 @@ the grant is answered `-32003`, naming the missing scope.
 > The tower clears. The passenger does not.
 
 "A cloud agent approved its own write at 02:14" is a sentence somebody may need to
-find later, which is why the grant is a separate decision at pairing time.
+find later. That is why the grant is a separate decision at pairing time.
 
 ## What the daemon records
 
@@ -135,7 +135,7 @@ find later, which is why the grant is a separate decision at pairing time.
   scopes, session and prompt counts, and last seen. `GET /v1/acp/drivers` is the
   connection panel's data, revoked rows included.
 - Which driver opened a session, so another driver cannot drive it. The store's
-  session and audit rows do not carry the driver id yet; that is on P4.5-10's open
+  session and audit rows do not carry the driver id yet. That is on P4.5-10's open
   list rather than implied by a column nobody writes.
 - `POST /v1/acp/drivers/{id}/revoke` clears the hash and keeps the row.
 

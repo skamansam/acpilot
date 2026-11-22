@@ -94,7 +94,7 @@ impl LmStudio {
     /// `POST /api/v0/chat/completions` with `stream: true`.
     ///
     /// LM Studio streams the same frames as the OpenAI-compatible surface, so the
-    /// decoding is shared; only the URL differs.
+    /// decoding is shared. Only the URL differs.
     pub async fn chat_stream(
         &self,
         request: &ChatRequest,
@@ -154,7 +154,7 @@ impl ModelRow {
             model_type,
             architecture: self.arch,
             quantization: self.quantization,
-            // `state` is `loaded` or `not-loaded`; anything else is not a claim we
+            // `state` is `loaded` or `not-loaded`. Anything else is not a claim we
             // are willing to make on the server's behalf.
             loaded: self.state.as_deref().map(|state| state == "loaded"),
             context_window: self.max_context_length,

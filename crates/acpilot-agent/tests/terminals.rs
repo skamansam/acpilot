@@ -8,7 +8,7 @@
 //! Unix only, and in `tests/` rather than the module's own test block: these
 //! spawn `/bin/sh`, and the workspace's rule is that a branch naming an operating
 //! system lives in a platform file — `acpilot-host/tests/platform_boundary.rs`
-//! enforces it. Windows gets the same code through ConPTY; the compile there is
+//! enforces it. Windows gets the same code through ConPTY. The compile there is
 //! what CI checks today.
 
 #![cfg(unix)]

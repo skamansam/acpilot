@@ -1948,9 +1948,14 @@ v0.1 (D18).
   - **Progress (2026-11-21):** the snippet loader is in. A `snippets` contribution is parsed from
     per-language JSON — `language`, and `snippets[]` with `prefix`, `body` lines and an optional
     `description` — into a `SnippetSet`. The loader rejects malformed JSON, empty bodies, empty or
-    spaced prefixes and duplicate prefixes before activation. **Open:** there is still no editor
-    insertion engine, so tab stops and `${1:name}` expansion remain unimplemented and the loader
-    has no key to feed.
+    spaced prefixes and duplicate prefixes before activation.
+  - **Progress (2026-11-22):** the editor can insert a snippet. `:snippet <prefix>` resolves the
+    active pack's template for the open file's language. The expander handles `$1`, `${1:name}`
+    and `$0`. It selects the first default. `Tab` and `Shift-Tab` walk the stops. Either key falls
+    back to indent when no snippet is active. The body is one undo step. Moving the caret or a
+    non-text edit ends the session. Tests cover the expander, the pane's stops and the command
+    path. **Open:** there is no picker or completion trigger, no `${1|a,b|}` choices, and a changed
+    activation list does not reload the snippet set until the next launch.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

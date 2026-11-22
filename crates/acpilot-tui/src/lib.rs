@@ -157,6 +157,13 @@ pub fn run(
             Vec::new()
         }
     };
+    let snippets = match extension_snippets(files.profile.as_deref()) {
+        Ok(snippets) => snippets,
+        Err(error) => {
+            eprintln!("acpilot tui: extension snippets not applied · {error}");
+            Vec::new()
+        }
+    };
     let profile_dir = files.profile.clone();
     let worker = backend::spawn(
         daemon.to_owned(),
@@ -168,6 +175,7 @@ pub fn run(
     // A launch is an editor: the assistant's panes are the answer to choosing an
     // agent, not the surface the command opens on.
     let mut app = App::editor_first(daemon);
+    app.set_snippets(snippets);
     for grammar in grammars {
         if !app.grammars.register_wasm(
             &grammar.name,
@@ -445,6 +453,48 @@ pub fn extension_grammars(
         .collect();
     grammars.sort_by(|a, b| a.extension.cmp(&b.extension));
     Ok(grammars)
+}
+
+/// The snippets this profile's activated extensions contribute.
+///
+/// Sorted by extension id, so two packs that claim one language resolve the same
+/// way on every machine. A profile with nothing activated reads no store.
+///
+/// # Errors
+///
+/// The activation file does not parse, or the store cannot resolve it.
+pub fn extension_snippets(
+    profile: Option<&std::path::Path>,
+) -> Result<Vec<acpilot_extensions::SnippetSet>, String> {
+    let Some(directory) = profile else {
+        return Ok(Vec::new());
+    };
+    let activation = acpilot_extensions::Activation::load(
+        &directory.join(acpilot_extensions::activation::ACTIVATION_FILE),
+    )
+    .map_err(|error| error.to_string())?;
+    if activation.active.is_empty() {
+        return Ok(Vec::new());
+    }
+    let store = acpilot_extensions::Store::open_default().map_err(|error| error.to_string())?;
+    let active = store.resolve_active(&activation.active).map_err(|errors| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    let mut snippets: Vec<acpilot_extensions::SnippetSet> = active
+        .extensions
+        .iter()
+        .flat_map(|extension| extension.contributions.iter())
+        .filter_map(|contribution| match contribution {
+            acpilot_extensions::Contribution::Snippets(snippets) => Some(snippets.clone()),
+            _ => None,
+        })
+        .collect();
+    snippets.sort_by(|a, b| a.extension.cmp(&b.extension));
+    Ok(snippets)
 }
 
 /// Watch the activation list and send the grammars it names.

@@ -137,12 +137,20 @@ pub struct PaintedRow {
     pub width: usize,
 }
 
+/// The tab stops of the snippet being filled.
+#[derive(Clone, Debug)]
+struct SnippetSession {
+    stops: Vec<Range<usize>>,
+    current: usize,
+}
+
 /// The editor pane: one document, a viewport, and the question it is asking.
 pub struct EditorPane {
     path: String,
     language: String,
     document: Document,
     highlights: Option<Highlights>,
+    snippet: Option<SnippetSession>,
     viewport: Viewport,
     marks: LineChanges,
     /// What a language server last said is wrong with this file.
@@ -246,6 +254,7 @@ impl EditorPane {
             language: label,
             document: Document::new(Buffer::from_text(text)),
             highlights,
+            snippet: None,
             viewport: Viewport::new(0, 0),
             preferences: acpilot_profile::prefs::defaults().expect("the shipped defaults load"),
             marks,
@@ -357,6 +366,114 @@ impl EditorPane {
         self.highlights.is_some()
     }
 
+    /// Insert a snippet at the caret, or over the selection.
+    ///
+    /// The first default is selected, so typing replaces it. `$0` is the final
+    /// caret. The pane stays in insert mode.
+    pub fn insert_snippet(&mut self, body: &str, now: Instant) -> bool {
+        let template = acpilot_text::snippet::expand(body);
+        let range = self.document.selections().primary().range();
+        let start = range.start;
+        let edited = self.document.insert(&template.text, now);
+        let stops = template
+            .stops
+            .iter()
+            .map(|stop| (start + stop.start)..(start + stop.end))
+            .collect();
+        self.snippet = Some(SnippetSession { stops, current: 0 });
+        self.set_mode(Mode::Insert);
+        if edited {
+            self.settle();
+        }
+        self.select_stop(0);
+        let count = self
+            .snippet
+            .as_ref()
+            .map_or(0, |snippet| snippet.stops.len());
+        self.message = format!("snippet · 1/{count}");
+        edited || !template.text.is_empty()
+    }
+
+    /// Move to the next or previous snippet stop.
+    ///
+    /// Returns `false` when no snippet is active, so the caller can indent
+    /// instead. A forward move past the last stop ends the snippet.
+    pub fn snippet_next(&mut self, forward: bool) -> bool {
+        let next = match &self.snippet {
+            None => return false,
+            Some(snippet) if forward && snippet.current + 1 >= snippet.stops.len() => None,
+            Some(snippet) if !forward && snippet.current == 0 => return true,
+            Some(snippet) => Some(if forward {
+                snippet.current + 1
+            } else {
+                snippet.current - 1
+            }),
+        };
+        let Some(next) = next else {
+            self.snippet = None;
+            self.message = "snippet done".to_owned();
+            return true;
+        };
+        if let Some(snippet) = &mut self.snippet {
+            snippet.current = next;
+        }
+        self.select_stop(next);
+        let count = self
+            .snippet
+            .as_ref()
+            .map_or(0, |snippet| snippet.stops.len());
+        self.message = format!("snippet · {}/{count}", next + 1);
+        true
+    }
+
+    /// Whether a snippet still has stops to walk.
+    #[must_use]
+    pub fn in_snippet(&self) -> bool {
+        self.snippet.is_some()
+    }
+
+    /// Select one stop, or put the caret at an empty one.
+    fn select_stop(&mut self, index: usize) {
+        let Some(range) = self
+            .snippet
+            .as_ref()
+            .and_then(|snippet| snippet.stops.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        self.anchor = None;
+        if range.is_empty() {
+            self.document.set_caret(range.start);
+        } else {
+            self.document.set_selections(Selections::new(
+                vec![Selection::new(range.start, range.end)],
+                0,
+            ));
+        }
+        self.rebuild();
+    }
+
+    /// Shift stops after an insertion, and reshape the stop the insertion covered.
+    fn adjust_snippet(&mut self, start: usize, removed: usize, inserted: usize) {
+        let Some(snippet) = &mut self.snippet else {
+            return;
+        };
+        let end = start + removed;
+        for stop in &mut snippet.stops {
+            if stop.end <= start {
+                continue;
+            }
+            if stop.start >= end {
+                stop.start = stop.start - removed + inserted;
+                stop.end = stop.end - removed + inserted;
+            } else {
+                stop.start = start;
+                stop.end = start + inserted;
+            }
+        }
+    }
+
     /// Re-resolve the grammar after the active packs change.
     ///
     /// The document, the caret and the marks stay. A new grammar replaces the
@@ -456,6 +573,7 @@ impl EditorPane {
     /// Used by a save-time rewrite (trailing whitespace): the person can still undo
     /// it, and the buffer the daemon writes is the buffer on screen.
     pub fn replace_all(&mut self, text: &str, now: Instant) -> bool {
+        self.snippet = None;
         let len = self.document.buffer().char_len();
         let edited = self.document.apply_at(Edit::replace(0..len, text), now);
         if edited {
@@ -813,6 +931,7 @@ impl EditorPane {
 
     /// Delete what visual mode selected, in one undo step.
     pub fn delete_selection(&mut self, now: Instant) -> bool {
+        self.snippet = None;
         if !self.has_selection() {
             self.message = "nothing selected".to_owned();
             return false;
@@ -877,6 +996,7 @@ impl EditorPane {
     /// The Esc key: leave a visual run, or leave the keys to the text when this
     /// pane is modeless.
     pub fn escape(&mut self) {
+        self.snippet = None;
         if self.vim_mode {
             self.set_mode(Mode::Normal);
         } else {
@@ -908,8 +1028,10 @@ impl EditorPane {
     /// yesterday's colours over today's text.
     pub fn type_text(&mut self, text: &str, now: Instant) -> bool {
         self.anchor = None;
+        let range = self.document.selections().primary().range();
         let edited = self.document.insert(text, now);
         if edited {
+            self.adjust_snippet(range.start, range.len(), text.chars().count());
             self.settle();
         }
         edited
@@ -918,6 +1040,7 @@ impl EditorPane {
     /// Take the character before the caret out, or the selection covering it.
     pub fn backspace(&mut self, now: Instant) -> bool {
         self.anchor = None;
+        self.snippet = None;
         let edited = self.document.delete_backward(now);
         if edited {
             self.settle();
@@ -928,6 +1051,7 @@ impl EditorPane {
     /// Take the character after the caret out — `Delete`, and `x` in normal mode.
     pub fn delete_forward(&mut self, now: Instant) -> bool {
         self.anchor = None;
+        self.snippet = None;
         let edited = self.document.delete_forward(now);
         if edited {
             self.settle();
@@ -941,6 +1065,7 @@ impl EditorPane {
     /// spaces-or-tabs answer come from the settings cascade (P4-7). A pane that
     /// read a config file would be a pane the browser cannot use.
     pub fn indent(&mut self, mode: IndentMode, style: IndentStyle, now: Instant) -> bool {
+        self.snippet = None;
         let edited = self.document.indent(mode, style, now);
         if edited {
             self.settle();
@@ -976,6 +1101,7 @@ impl EditorPane {
     /// An undo that left a highlight behind would be a pane still asking a
     /// question about text that is no longer there.
     pub fn undo(&mut self) -> bool {
+        self.snippet = None;
         let undone = self.document.undo();
         if undone {
             self.anchor = None;
@@ -987,6 +1113,7 @@ impl EditorPane {
 
     /// Put the last undone step back.
     pub fn redo(&mut self) -> bool {
+        self.snippet = None;
         let redone = self.document.redo();
         if redone {
             self.anchor = None;
@@ -1023,6 +1150,7 @@ impl EditorPane {
     /// across the `place` calls in a walk.
     fn place(&mut self, at: LineColumn) {
         let offset = self.offset(at);
+        self.snippet = None;
         self.anchor = None;
         self.document.set_caret(offset);
         self.rebuild();
@@ -1436,6 +1564,36 @@ mod tests {
             EditorPane::from_text("NOTES", "prose", LineChanges::default(), &mut grammars);
         assert_eq!(unknown.language(), "no grammar", "and the badge says so");
         assert_eq!(unknown.document().text(), "prose", "and it still opens");
+    }
+
+    #[test]
+    fn a_snippet_selects_its_default_and_walks_its_stops() {
+        let mut grammars = Grammars::new();
+        let mut pane =
+            EditorPane::from_text("src/main.rs", "", LineChanges::default(), &mut grammars);
+        assert!(pane.insert_snippet("fn ${1:name}() {\n    $0\n}", Instant::now()));
+        assert_eq!(pane.document().text(), "fn name() {\n    \n}");
+        assert_eq!(pane.selection(), Some(3..7));
+        assert!(pane.in_snippet());
+
+        pane.type_text("main", Instant::now());
+        assert_eq!(pane.document().text(), "fn main() {\n    \n}");
+        assert!(pane.snippet_next(true));
+        assert_eq!(pane.caret_offset(), 16);
+        assert!(pane.snippet_next(true));
+        assert!(!pane.in_snippet());
+    }
+
+    #[test]
+    fn a_shorter_default_moves_the_final_stop() {
+        let mut grammars = Grammars::new();
+        let mut pane =
+            EditorPane::from_text("src/main.rs", "", LineChanges::default(), &mut grammars);
+        pane.insert_snippet("${1:name} $0", Instant::now());
+        pane.type_text("x", Instant::now());
+        assert_eq!(pane.document().text(), "x ");
+        pane.snippet_next(true);
+        assert_eq!(pane.caret_offset(), 2);
     }
 
     #[test]

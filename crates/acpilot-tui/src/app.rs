@@ -22,6 +22,7 @@ use crate::keymap::{Action, Context, Keymap};
 use crate::lab::{FIELDS, Lab, Pane};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
+use std::collections::BTreeMap;
 
 /// How long the open buffer has to stop changing before its problems are asked about.
 ///
@@ -1928,6 +1929,11 @@ pub struct App {
     /// the expensive half of highlighting, and a second editor tab on a `.rs`
     /// file should reuse the first one's.
     pub grammars: Grammars,
+    /// The snippets active packs provide, by language id.
+    ///
+    /// The pane names a prefix. The app resolves it against the file's language.
+    /// Duplicate prefixes keep the first pack in extension order.
+    pub snippets: BTreeMap<String, Vec<acpilot_extensions::Snippet>>,
     /// The diff the permission card previews, and the review opens on.
     pub diff: Option<Diff>,
     /// The diff review, when one is up.
@@ -2750,6 +2756,7 @@ impl App {
             diagnostics_due: None,
             editor: None,
             grammars: Grammars::new(),
+            snippets: BTreeMap::new(),
             diff: None,
             review: None,
             grep: None,
@@ -2900,6 +2907,24 @@ impl App {
     /// someone knows.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// Install the snippets the active extensions contribute.
+    ///
+    /// Sets arrive sorted by extension id. A prefix claimed twice keeps the first
+    /// contribution, so the same profile resolves the same template everywhere.
+    pub fn set_snippets(&mut self, sets: Vec<acpilot_extensions::SnippetSet>) {
+        self.snippets.clear();
+        for set in sets {
+            self.snippets
+                .entry(set.language)
+                .or_default()
+                .extend(set.snippets);
+        }
+        for snippets in self.snippets.values_mut() {
+            snippets.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+            snippets.dedup_by(|a, b| a.prefix == b.prefix);
+        }
     }
 
     /// Recolour, and say which theme it became.
@@ -5437,10 +5462,49 @@ impl App {
                     Some(Request::OpenFile(path.to_owned()))
                 }
             }
+            _ if command.starts_with("snippet ") => {
+                let prefix = command
+                    .strip_prefix("snippet ")
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if prefix.is_empty() {
+                    self.notice(":snippet needs a prefix");
+                } else {
+                    self.insert_snippet(prefix);
+                }
+                None
+            }
             _ => {
                 self.notice(&format!("not a command: :{command}"));
                 None
             }
+        }
+    }
+
+    /// Insert the active pack's template for a prefix into the open buffer.
+    fn insert_snippet(&mut self, prefix: &str) {
+        let Some(editor) = self.editor.as_ref() else {
+            self.notice("no file is open · nothing to insert into");
+            return;
+        };
+        let language = self.grammars.language_for_path(editor.path());
+        let Some(snippet) = self
+            .snippets
+            .get(&language)
+            .and_then(|snippets| snippets.iter().find(|snippet| snippet.prefix == prefix))
+            .cloned()
+        else {
+            self.notice(&format!("no snippet `{prefix}` for {language}"));
+            return;
+        };
+        let body = snippet.body.join("\n");
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        if editor.insert_snippet(&body, std::time::Instant::now()) {
+            self.status = editor.message().to_owned();
+        } else {
+            self.status = format!("snippet `{prefix}` inserted nothing");
         }
     }
 
@@ -5545,6 +5609,13 @@ impl App {
                 }
                 KeyCode::Delete => {
                     editor.delete_forward(std::time::Instant::now());
+                }
+                // A live snippet owns Tab: it walks its stops before it indents.
+                KeyCode::Tab if editor.in_snippet() => {
+                    editor.snippet_next(true);
+                }
+                KeyCode::BackTab if editor.in_snippet() => {
+                    editor.snippet_next(false);
                 }
                 // One level is four spaces because nothing in this build reads a
                 // tab width yet; the settings cascade's answer is P4-7's.
@@ -10215,6 +10286,47 @@ mod tests {
 
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.editor.as_ref().expect("a buffer").mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn a_colon_snippet_command_inserts_the_active_packs_template() {
+        let mut app = App::new("daemon");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: String::new(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_snippets(vec![acpilot_extensions::SnippetSet {
+            language: "rust".to_owned(),
+            extension: "acpilot.test".to_owned(),
+            snippets: vec![acpilot_extensions::Snippet {
+                prefix: "fn".to_owned(),
+                body: vec![
+                    "fn ${1:name}() {".to_owned(),
+                    "    $0".to_owned(),
+                    "}".to_owned(),
+                ],
+                description: None,
+            }],
+        }]);
+        app.ex_command("snippet fn");
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.document().text(), "fn name() {\n    \n}");
+        assert!(editor.in_snippet());
+
+        app.handle_key(key(KeyCode::Tab));
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(editor.caret_offset(), 16, "Tab reached the final caret");
+        assert!(editor.in_snippet());
+
+        app.handle_key(key(KeyCode::BackTab));
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert_eq!(
+            editor.selection(),
+            Some(3..7),
+            "BackTab returned to the name"
+        );
     }
 
     #[test]

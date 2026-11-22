@@ -218,7 +218,7 @@ impl StoredExtension {
             } else {
                 ExtensionStatus::Active
             },
-            // A version the store installed has a checksum record; a linked
+            // A version the store installed has a checksum record. A linked
             // checkout and a directory somebody pointed the store at do not.
             source: if self.recorded.is_some() {
                 ExtensionSource::Registry
@@ -235,7 +235,7 @@ impl StoredExtension {
     /// Everything this version contributes, named as a profile will see it.
     ///
     /// Empty for a blocked version: a manifest that does not load has nothing a
-    /// reader can be shown, and inventing contribution names from paths would be
+    /// reader can be shown. Inventing contribution names from paths would be
     /// a second opinion about a file the loader refused.
     #[must_use]
     pub fn contributions(&self) -> Vec<acpilot_proto::extension::ExtensionContribution> {
@@ -280,6 +280,20 @@ impl StoredExtension {
                         kind: ExtensionKind::Skills,
                         id: path.clone(),
                         summary: "skills directory".to_owned(),
+                    });
+                }
+                crate::loader::Contribution::Grammar(grammar) => {
+                    rows.push(ExtensionContribution {
+                        kind: ExtensionKind::Grammars,
+                        id: grammar.name.clone(),
+                        summary: format!("{} extensions", grammar.extensions.len()),
+                    });
+                }
+                crate::loader::Contribution::Snippets(snippets) => {
+                    rows.push(ExtensionContribution {
+                        kind: ExtensionKind::Snippets,
+                        id: snippets.language.clone(),
+                        summary: format!("{} snippets", snippets.snippets.len()),
                     });
                 }
                 crate::loader::Contribution::Unloaded { kind, path, reason } => {
@@ -358,9 +372,10 @@ impl Store {
 
     /// Install a directory: validate, copy atomically, hash, record.
     ///
-    /// The source is read twice on purpose — once to learn the id and version,
-    /// once from the staging copy — so a file changing during install cannot
-    /// produce a record that describes bytes nobody validated.
+    /// The source is read twice on purpose. The first read learns the id and
+    /// version. The second read comes from the staging copy. A file changing
+    /// during install cannot produce a record that describes bytes nobody
+    /// validated.
     pub fn install_from_dir(
         &self,
         source: impl AsRef<Path>,
@@ -400,7 +415,7 @@ impl Store {
 
         // If this fails, the version now exists unrecorded, which every scan
         // reports as blocked. Leaving it is safer than deleting bytes that might
-        // be the only copy; the error names the record path that could not be
+        // be the only copy. The error names the record path that could not be
         // written.
         write_record(&self.record_path(&id, &version), &checksum)?;
 
@@ -417,13 +432,14 @@ impl Store {
 
     /// Link a checkout instead of copying it.
     ///
-    /// The version's record names the checkout, and everything that reads the
-    /// extension — `ext list`, activation, the daemon's registries — loads that
-    /// directory as it is at that moment, so an edit is visible without re-adding.
+    /// The version's record names the checkout. Everything that reads the
+    /// extension, from `ext list` to activation and the daemon's registries,
+    /// loads that directory as it is at that moment. An edit is visible without
+    /// re-adding.
     ///
-    /// A link is deliberately not hashed: a checksum that changed under the store's
-    /// feet would block every edit, which is the opposite of what a link is for. It
-    /// is reported as a path source and never claims a checksum.
+    /// A link is deliberately not hashed. A checksum that changed under the
+    /// store's feet would block every edit, which is the opposite of what a link
+    /// is for. It is reported as a path source and never claims a checksum.
     ///
     /// # Errors
     ///
@@ -470,25 +486,26 @@ impl Store {
 
     /// Install an archive the signed index named.
     ///
-    /// Two hashes are checked, and they answer different questions. The archive's
+    /// Two hashes are compared, and they answer different questions. The archive's
     /// sha256 is compared with the listing's before anything is unpacked, so bytes
-    /// that are not the published archive never become files; then the unpacked
+    /// that are not the published archive never become files. Then the unpacked
     /// tree is hashed and recorded the way every store install is, so the store
     /// can still refuse a directory somebody edited afterwards.
     ///
-    /// The manifest is the authority on what was installed: an archive that
-    /// unpacks to a different id, version, or publisher than the listing named is
-    /// a mislabeled download, and nothing is written.
+    /// The manifest is the authority on what was installed. An archive that
+    /// unpacks to a different id, version, or publisher than the listing named
+    /// is a mislabeled download. Nothing is written.
     ///
-    /// The archive's size is the *compressed* bytes, so it cannot bound what they
-    /// expand to; the unpacked tree is capped at
-    /// [`crate::archive::MAX_UNPACKED_BYTES`] as it is written.
+    /// The archive's size is the *compressed* bytes, so it cannot bound the
+    /// unpacked tree. That tree is capped at [`crate::archive::MAX_UNPACKED_BYTES`]
+    /// as it is written.
     ///
     /// # Errors
     ///
-    /// The archive's size or checksum differs from the index, it does not unpack,
+    /// The archive's size or checksum differs from the index. It does not unpack,
     /// holds no single extension or more than one, or its manifest disagrees with
-    /// the listing. The destination already existing is [`ExtensionError::AlreadyInstalled`].
+    /// the listing. The destination already existing is
+    /// [`ExtensionError::AlreadyInstalled`].
     pub fn install_from_archive(
         &self,
         bytes: &[u8],
@@ -582,7 +599,7 @@ impl Store {
         Ok(self.inspect(id, version, &path))
     }
 
-    /// Verify every version in the store.
+    /// Scan every version in the store.
     ///
     /// A missing store is an empty store, not an error: a machine that has never
     /// installed an extension should not look broken.
@@ -680,7 +697,7 @@ impl Store {
         }
         fs::remove_dir_all(&path).map_err(|source| io_error(&path, source))?;
         let _ = fs::remove_file(self.record_path(id, version));
-        // Only succeeds when empty; a non-empty id directory still has versions.
+        // Only succeeds when empty. A non-empty id directory still has versions.
         let _ = fs::remove_dir(self.root.join(id));
         Ok(())
     }
@@ -689,7 +706,7 @@ impl Store {
     ///
     /// A version is removable when no profile activates it **and** it is not the
     /// newest version of its id. The floor is deliberate: pruning a store where
-    /// nothing has been activated yet must not delete the only copy of an
+    /// nothing has been activated yet must not drop the only copy of an
     /// extension somebody just installed. `keep` exists for pinned older
     /// versions once activation can name one.
     pub fn plan_prune(
@@ -718,7 +735,7 @@ impl Store {
 
     /// Newest ready version of every id in a scan.
     ///
-    /// Activation names an id, not a version; when several versions are
+    /// Activation names an id, not a version. When several versions are
     /// installed the newest verified one wins. `ext prune` keeps exactly these.
     #[must_use]
     pub fn newest_ready<'a>(
@@ -742,8 +759,8 @@ impl Store {
 
     /// Resolve an activation list into loadable extensions.
     ///
-    /// Newest verified version per id; blocked versions are reported and never
-    /// loaded; ids with nothing on disk are reported as missing. The caller
+    /// Newest verified version per id. Blocked versions are reported and never
+    /// loaded. Ids with nothing on disk are reported as missing. The caller
     /// decides whether a missing extension is an error for its purposes.
     pub fn resolve_active(&self, ids: &[String]) -> Result<ActiveSet, Vec<ExtensionError>> {
         let scan = self.scan().map_err(|error| vec![error])?;
@@ -903,7 +920,7 @@ impl Store {
     /// Decide a linked version by reading the checkout its record names.
     ///
     /// There is no checksum to compare: the record *is* the claim that this
-    /// checkout is the extension, so the answer is whether the checkout is there
+    /// checkout is the extension. The answer is whether the checkout is there
     /// and still says the id and version the store filed it under.
     fn inspect_link(
         &self,
@@ -1139,7 +1156,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), ExtensionError> {
 /// The directory inside an unpacked archive that holds `extension.toml`.
 ///
 /// Release archives are usually wrapped in one directory named after the project
-/// and its version, so both shapes are accepted: the manifest at the root, or one
+/// and its version. Both shapes are accepted: the manifest at the root, or one
 /// directory holding it. Two candidates are ambiguous, and picking one by sort
 /// order would make which extension you install depend on the alphabet.
 fn extension_root(staging: &Path) -> Result<PathBuf, ExtensionError> {

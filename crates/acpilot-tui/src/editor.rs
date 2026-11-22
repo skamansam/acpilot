@@ -234,11 +234,16 @@ impl EditorPane {
     /// highlighter already gives for an unknown language.
     #[must_use]
     pub fn from_text(path: &str, text: &str, marks: LineChanges, grammars: &mut Grammars) -> Self {
-        let language = language_for(path).to_owned();
+        let language = grammars.language_for_path(path);
         let highlights = grammars.get(&language).map(Highlights::new);
+        let label = if highlights.is_none() && grammars.failure(&language).is_some() {
+            "grammar missing".to_owned()
+        } else {
+            language
+        };
         let mut pane = Self {
             path: path.to_owned(),
-            language,
+            language: label,
             document: Document::new(Buffer::from_text(text)),
             highlights,
             viewport: Viewport::new(0, 0),
@@ -336,13 +341,13 @@ impl EditorPane {
         self.path.rsplit('/').next().unwrap_or(&self.path)
     }
 
-    /// The language the pane highlights with, or `no grammar` when it has none.
+    /// The language the pane highlights with, or a reason it has none.
     #[must_use]
     pub fn language(&self) -> &str {
-        if self.has_grammar() {
-            &self.language
-        } else {
+        if self.language.is_empty() {
             "no grammar"
+        } else {
+            &self.language
         }
     }
 
@@ -350,6 +355,21 @@ impl EditorPane {
     #[must_use]
     pub fn has_grammar(&self) -> bool {
         self.highlights.is_some()
+    }
+
+    /// Re-resolve the grammar after the active packs change.
+    ///
+    /// The document, the caret and the marks stay. A new grammar replaces the
+    /// highlighter, and the buffer parses again against it.
+    pub fn reload_grammar(&mut self, grammars: &mut Grammars) {
+        let language = grammars.language_for_path(&self.path);
+        self.highlights = grammars.get(&language).map(Highlights::new);
+        self.language = if self.highlights.is_none() && grammars.failure(&language).is_some() {
+            "grammar missing".to_owned()
+        } else {
+            language
+        };
+        self.settle();
     }
 
     /// The document itself, for reading.

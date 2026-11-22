@@ -1920,6 +1920,17 @@ v0.1 (D18).
     lazy load — are the rest of this task.
   - Progress (2026-11-21): the visible fallback is in. A file with no grammar says `no grammar`
     in the editor's language badge. Plain text is an explained fallback, not a silent one.
+  - Progress (2026-11-21): wasm grammar loading is in. `acpilot-extensions` reads a grammar
+    directory's `manifest.toml`, `grammar.wasm`, `highlights.scm` and optional `indents.scm` into
+    a `GrammarAsset`; `acpilot-text` compiles it lazily on the first file of that language through
+    tree-sitter's `wasm` feature and a `WasmStore`. A 50 ms budget is checked after the parse, and
+    an over-budget tree is discarded so the file stays plain. `acpilot-tui` registers a profile's
+    grammar contributions at launch, and the editor resolves a path through the registry before
+    falling back to the built-in suffix table. A failed wasm load says `grammar missing`; a path
+    with no grammar says `no grammar`. A second watcher follows the activation list and replaces
+    the extension set, so activating or dropping a pack re-resolves the open file without a
+    restart. **Open:** no real grammar `.wasm` fixture was exercised, so the compile and highlight
+    path is compiled but unverified end to end.
 
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one
@@ -1933,8 +1944,12 @@ v0.1 (D18).
     same table and prints it, so the command and the screen cannot disagree. The client watches
     the profile's `extensions.toml` as well as `keymap.toml`, so activating or dropping a pack
     changes the keys on that save rather than waiting for a keymap edit nobody made.
-  - **Open:** snippets are not implemented — the editor has no snippet engine to feed, so the
-    "existing JSON format" this task names does not exist yet, and that half needs its own task.
+  - **Progress (2026-11-21):** the snippet loader is in. A `snippets` contribution is parsed from
+    per-language JSON — `language`, and `snippets[]` with `prefix`, `body` lines and an optional
+    `description` — into a `SnippetSet`. The loader rejects malformed JSON, empty bodies, empty or
+    spaced prefixes and duplicate prefixes before activation. **Open:** there is still no editor
+    insertion engine, so tab stops and `${1:name}` expansion remain unimplemented and the loader
+    has no key to feed.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

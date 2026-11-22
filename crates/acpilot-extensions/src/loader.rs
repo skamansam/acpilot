@@ -9,16 +9,18 @@
 use acpilot_proto::extension::ExtensionKind;
 
 use crate::error::ExtensionError;
+use crate::grammar::{GrammarAsset, parse_grammar};
 use crate::keymap::{KeymapLayer, parse_keymap_layer};
 use crate::manifest::{MANIFEST_FILE, Manifest, kind_name};
 use crate::preset::{AgentPreset, LanguageServerPreset, parse_agents, parse_language_servers};
+use crate::snippet::{SnippetSet, parse_snippets};
 use crate::source::{AssetSource, DirSource, EmbeddedSource};
 use crate::theme::Theme;
 
 /// A manifest and everything it successfully loaded.
 #[derive(Debug, Clone)]
 pub struct LoadedExtension {
-    /// The validated manifest.
+    /// The parsed manifest.
     pub manifest: Manifest,
     /// `true` when the files came out of the binary rather than the store.
     pub built_in: bool,
@@ -44,9 +46,13 @@ pub enum Contribution {
     },
     /// Key overrides the client applies beneath the person's own `keymap.toml`.
     Keymap(KeymapLayer),
+    /// A prebuilt tree-sitter grammar and its queries.
+    Grammar(GrammarAsset),
+    /// Per-language snippets.
+    Snippets(SnippetSet),
     /// A kind the manifest may declare but this build cannot read yet.
     ///
-    /// The path is still checked; the file is not parsed. Saying so out loud is
+    /// The path is still checked. The file is not parsed. Saying so out loud is
     /// better than a contribution that appears installed and does nothing.
     Unloaded {
         /// The declared kind.
@@ -68,6 +74,8 @@ impl Contribution {
             Self::Agents(_) => ExtensionKind::Agents,
             Self::Skills { .. } => ExtensionKind::Skills,
             Self::Keymap(_) => ExtensionKind::Keymap,
+            Self::Grammar(_) => ExtensionKind::Grammars,
+            Self::Snippets(_) => ExtensionKind::Snippets,
             Self::Unloaded { kind, .. } => *kind,
         }
     }
@@ -119,7 +127,7 @@ pub fn load(source: &dyn AssetSource) -> Result<LoadedExtension, ExtensionError>
                 )?));
             }
             ExtensionKind::Skills => {
-                // The directory is data; its `SKILL.md` files are parsed by the
+                // The directory is data. Its `SKILL.md` files are parsed by the
                 // skills loader when a profile asks for them, not at install.
                 contributions.push(Contribution::Skills {
                     path: entry.path.clone(),
@@ -133,17 +141,19 @@ pub fn load(source: &dyn AssetSource) -> Result<LoadedExtension, ExtensionError>
                     &manifest.id,
                 )?));
             }
-            kind @ (ExtensionKind::Grammars
-            | ExtensionKind::Snippets
-            | ExtensionKind::TranscriptParser) => {
-                let reason = match kind {
-                    ExtensionKind::TranscriptParser => {
-                        "transcript parsers are Tier 2 and not in v0.1 (decision D18)"
-                    }
-                    ExtensionKind::Grammars => "grammar loading arrives in P4.6-8",
-                    ExtensionKind::Snippets => "snippet loading arrives in P4.6-9",
-                    _ => unreachable!("the match arm only covers the deferred kinds"),
-                };
+            ExtensionKind::Grammars => contributions.push(Contribution::Grammar(parse_grammar(
+                source,
+                &entry.path,
+                &manifest.id,
+            )?)),
+            ExtensionKind::Snippets => contributions.push(Contribution::Snippets(parse_snippets(
+                source,
+                &entry.path,
+                &manifest.id,
+            )?)),
+            ExtensionKind::TranscriptParser => {
+                let kind = ExtensionKind::TranscriptParser;
+                let reason = "transcript parsers are Tier 2 and not in v0.1 (decision D18)";
                 warnings.push(format!(
                     "{} {}: installed but not read — {reason}",
                     kind_name(kind),

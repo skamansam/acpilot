@@ -30,6 +30,15 @@ pub enum ExtensionError {
         message: String,
     },
 
+    /// A JSON file did not parse, or carried a key the schema does not know.
+    #[error("{path}: {message}")]
+    Json {
+        /// Path, relative to the extension root.
+        path: String,
+        /// The parser's message, which names the line and column.
+        message: String,
+    },
+
     /// The file was written for a schema this build does not speak.
     #[error("{path}: schema_version {found} is not supported (this build speaks {expected})")]
     SchemaVersion {
@@ -115,7 +124,7 @@ pub enum ExtensionError {
     /// An `agents.toml` the agent manifest reader refused.
     ///
     /// The message is the reader's own, because there is one reader: it already
-    /// names the file or the agent, and re-wording it here would make the same
+    /// names the file or the agent. Re-wording it here would make the same
     /// mistake read differently in `ext add` and in the registry.
     #[error("{message}")]
     AgentManifest {
@@ -125,9 +134,9 @@ pub enum ExtensionError {
 
     /// An extension's agent asked for a credential.
     ///
-    /// Only the profile's own `agents.toml` may do that: an extension that could
-    /// name `keyring:work/token` would be able to have another profile's secret
-    /// handed to a process it also chose.
+    /// Only the profile's own `agents.toml` may do that. An extension that could
+    /// name `keyring:work/token` could have another profile's secret handed to a
+    /// process it also chose.
     #[error(
         "{path}: agent {agent:?} sets {field}, which an extension may not; \
          put it in the profile's own agents.toml"

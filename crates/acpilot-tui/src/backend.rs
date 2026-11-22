@@ -476,6 +476,11 @@ pub enum Update {
     PreferencesError(String),
     /// `keymap.toml` changed and parsed.
     Keymap(Keymap),
+    /// The profile's active packs changed, and this is their whole grammar set.
+    ///
+    /// A list rather than one grammar: a deactivated pack has to remove what it
+    /// contributed, so the client replaces the set instead of adding to it.
+    Grammars(Vec<acpilot_extensions::GrammarAsset>),
     /// A turn was accepted.
     Prompted {
         /// Session id.

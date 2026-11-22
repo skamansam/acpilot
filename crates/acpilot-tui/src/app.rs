@@ -4106,6 +4106,32 @@ impl App {
                 self.apply_vim_mode();
                 self.status = format!("keymap · {} · keys reloaded", self.keymap.preset_name());
             }
+            Update::Grammars(grammars) => {
+                self.grammars.clear_wasm();
+                let mut applied = 0;
+                let mut skipped = 0;
+                for grammar in grammars {
+                    if self.grammars.register_wasm(
+                        &grammar.name,
+                        &grammar.extensions,
+                        grammar.wasm,
+                        grammar.highlights,
+                        grammar.indents,
+                    ) {
+                        applied += 1;
+                    } else {
+                        skipped += 1;
+                    }
+                }
+                if let Some(editor) = &mut self.editor {
+                    editor.reload_grammar(&mut self.grammars);
+                }
+                self.status = if skipped == 0 {
+                    format!("grammars · {applied} active")
+                } else {
+                    format!("grammars · {applied} active · {skipped} skipped")
+                };
+            }
             Update::Theme(theme) => {
                 // A settings file this client could read itself changed. Once the
                 // daemon has said what the preferences are, this is the weaker of
@@ -8294,6 +8320,39 @@ mod tests {
         let mut app = App::new("daemon");
         app.apply(Update::Theme(theme("acpilot.paper")));
         assert_eq!(app.theme.name(), "Paper");
+    }
+
+    #[test]
+    fn a_grammar_update_replaces_the_extension_set_and_the_open_file() {
+        let mut app = App::new("daemon");
+        app.apply(Update::File {
+            path: "src/view.astro".to_owned(),
+            text: "<h1>{name}</h1>\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        assert_eq!(
+            app.editor.as_ref().expect("editor").language(),
+            "no grammar"
+        );
+
+        app.apply(Update::Grammars(vec![acpilot_extensions::GrammarAsset {
+            name: "astro".to_owned(),
+            extension: "acpilot.astro".to_owned(),
+            extensions: vec!["astro".to_owned()],
+            wasm: b"not a wasm module".to_vec(),
+            highlights: "(identifier) @variable".to_owned(),
+            indents: None,
+        }]));
+        let editor = app.editor.as_ref().expect("editor");
+        assert_eq!(editor.language(), "grammar missing");
+        assert!(!editor.has_grammar());
+
+        app.apply(Update::Grammars(Vec::new()));
+        assert_eq!(
+            app.editor.as_ref().expect("editor").language(),
+            "no grammar"
+        );
     }
 
     fn agent(id: &str, name: &str) -> AgentSummary {

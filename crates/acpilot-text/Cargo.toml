@@ -12,7 +12,7 @@ license.workspace = true
 acpilot-palette = { workspace = true }
 ropey = { workspace = true }
 thiserror = { workspace = true }
-tree-sitter = { workspace = true }
+tree-sitter = { workspace = true, features = ["wasm"] }
 # The grammars that ship with the binary. Which file is which language is the
 # registry's question, not this table's.
 tree-sitter-json = { workspace = true }

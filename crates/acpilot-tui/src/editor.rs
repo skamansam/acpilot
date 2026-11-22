@@ -1,9 +1,9 @@
 //! The editor pane: a real document, its parse, and what a key does to it.
 //!
-//! The design pass drew the editor from a mock (`acpilot_demo::editor`); this is
-//! the pane behind that drawing, and the shape it draws is unchanged — a tab, a
-//! gutter with line numbers and git markers, a current line, a caret — because
-//! the mock was designed to be replaced by exactly this.
+//! The design pass drew the editor from a mock (`acpilot_demo::editor`). This is
+//! the pane behind that drawing. The shape it draws is unchanged: a tab, a
+//! gutter with line numbers and git markers, a current line, a caret. The mock
+//! was designed to be replaced by exactly this.
 //!
 //! What it holds is [`acpilot_text::Document`]: a rope, a caret set and an undo
 //! history, the same one the desktop app and the browser will hold. Scrolling,
@@ -30,9 +30,9 @@
 
 use acpilot_demo::EditorBuffer;
 use acpilot_git::{LineChange, LineChanges};
-// The theme's token set, not this crate's: a run names a token and the theme
-// decides the colour, exactly as a theme file and the highlighter already agree
-// to. `acpilot-extensions` re-exports the palette's, so this is the same type
+// The theme's token set, not this crate's. A run names a token, and the theme
+// decides the colour. A theme file and the highlighter already agree on that.
+// `acpilot-extensions` re-exports the palette's. This is the same type
 // `Highlights` answers with.
 use acpilot_extensions::theme::SyntaxToken;
 use acpilot_text::buffer::Buffer;
@@ -45,12 +45,12 @@ use std::time::Instant;
 
 /// Which mode the pane's keys are in.
 ///
-/// Three, because one is not enough: a pane that is always insert cannot move with
-/// `hjkl`, a pane that is always normal cannot be typed into, and a pane with no
-/// visual mode cannot say which run a command is about. Which spelling the
-/// commands take — Vim's, or a modeless editor's — is the keymap layer's question,
-/// which is the half of P6-5 still open; what the pane knows is only that one
-/// mode's keys are text and the others' are commands.
+/// Three, because one is not enough. A pane that is always insert cannot move
+/// with `hjkl`, and one that is always normal cannot be typed into. A pane with
+/// no visual mode cannot say which run a command is about. The keymap layer
+/// decides which spelling the commands take: Vim's or a modeless editor's. That
+/// layer is the half of P6-5 still open. The pane knows only that one mode's
+/// keys are text and the others' are commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     /// Keys are commands: motion, search, and the way into the others.
@@ -132,7 +132,7 @@ pub struct PaintedRow {
     pub line: usize,
     /// Its runs, left to right.
     pub runs: Vec<Run>,
-    /// How many cells the runs cover, so a pane can paint the rest of the row
+    /// How many cells the runs cover. A pane can paint the rest of the row
     /// with the current-line background instead of stopping at the last glyph.
     pub width: usize,
 }
@@ -148,7 +148,7 @@ pub struct EditorPane {
     /// What a language server last said is wrong with this file.
     ///
     /// Beside the git marks rather than mixed into them: a change and a problem are
-    /// two facts about a line, and either can be true without the other.
+    /// two facts about a line. Either can be true without the other.
     problems: Vec<acpilot_proto::file::Diagnostic>,
     find: Find,
     prompt: Option<Prompt>,
@@ -157,24 +157,24 @@ pub struct EditorPane {
     bracket: Option<(usize, usize)>,
     /// Where a drag started, while one is in progress.
     ///
-    /// Held as an offset rather than as a `Selection` because the selection itself
-    /// lives in the document, where an edit would move it: the anchor is the one end
-    /// that must not move, and the caret is the other.
+    /// Held as an offset rather than as a `Selection`, because the selection
+    /// itself lives in the document, where an edit would move it. The anchor is
+    /// the one end that must not move. The caret is the other.
     anchor: Option<usize>,
     /// Which mode the keys are in.
     mode: Mode,
     /// Whether the pane is modal at all.
     ///
-    /// `Mode` says which set of keys is live; this says whether there is another
+    /// `Mode` says which set of keys is live. This says whether there is another
     /// set to move to. A modeless pane is always in [`Mode::Insert`], and `Esc`
     /// clears a selection instead of taking the keys away from the text.
     vim_mode: bool,
     /// The column a run of Up and Down keeps trying to reach.
     ///
-    /// A property of the key sequence rather than of the caret: Vim and every
-    /// pointer editor remember the column you were on so that a walk through a
-    /// short line does not put you at its end and leave you there. Cleared by any
-    /// horizontal motion or non-motion command, because the next vertical walk
+    /// A property of the key sequence rather than of the caret. Vim and every
+    /// pointer editor remember the column you were on. A walk through a short
+    /// line does not put you at its end and leave you there. Any horizontal
+    /// motion or non-motion command clears it, because the next vertical walk
     /// starts from wherever that put the caret.
     goal: Option<usize>,
     /// A `:` command Enter accepted, waiting for the app to run it.
@@ -184,9 +184,9 @@ pub struct EditorPane {
     command: Option<String>,
     /// The token the file was read with, so a save can say which version it replaces.
     ///
-    /// Absent for a buffer that did not come from the daemon — the design pass's seed,
-    /// and a term where the file has been deleted underneath the pane — and a save of
-    /// one is refused rather than guessed at.
+    /// Absent for a buffer that did not come from the daemon. That covers the
+    /// design pass's seed, and a term where the file has been deleted underneath
+    /// the pane. A save of one is refused rather than guessed at.
     etag: Option<String>,
     /// The editor preferences this pane applies.
     preferences: acpilot_proto::profile::Preferences,
@@ -194,9 +194,8 @@ pub struct EditorPane {
 
 /// A pane's debug shape: the file, the caret and the window.
 ///
-/// Hand-written because a parse tree and a query cursor are not printable, and
-/// because the two lines that *are* worth printing in a bug report are the ones
-/// here.
+/// Hand-written because a parse tree and a query cursor are not printable. The
+/// two lines that *are* worth printing in a bug report are the ones here.
 impl std::fmt::Debug for EditorPane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EditorPane")
@@ -215,9 +214,9 @@ impl EditorPane {
     ///
     /// The seed is the demo's: the same file, the same lines and the same cursor
     /// the design pass was argued with. What changed is that the text is now a
-    /// rope the pane can edit rather than strings the pane drew, and that the
-    /// gutter's markers are passed in — they are git's answer about a diff, not
-    /// the buffer's opinion about itself.
+    /// rope the pane can edit rather than strings the pane drew. The gutter's
+    /// markers are passed in because they are git's answer about a diff, not the
+    /// buffer's opinion about itself.
     #[must_use]
     pub fn seeded(seed: &EditorBuffer, marks: LineChanges, grammars: &mut Grammars) -> Self {
         let mut pane = Self::from_text(&seed.path, &seed.lines.join("\n"), marks, grammars);
@@ -229,9 +228,9 @@ impl EditorPane {
 
     /// A pane over a file the daemon sent, with the caret at its start.
     ///
-    /// The language is read off the path, so the caller does not have to know which
-    /// grammar a file wants: an extension this build ships no grammar for draws
-    /// plain text rather than refusing the file, which is the same answer the
+    /// The language is read off the path. The caller does not have to know which
+    /// grammar a file wants. An extension this build ships no grammar for draws
+    /// plain text rather than refusing the file. That is the same answer the
     /// highlighter already gives for an unknown language.
     #[must_use]
     pub fn from_text(path: &str, text: &str, marks: LineChanges, grammars: &mut Grammars) -> Self {
@@ -278,7 +277,7 @@ impl EditorPane {
     /// Remember the version the buffer now matches.
     ///
     /// Called when a file is opened and again after a save answers with the new
-    /// token: the next save has to name the version it is replacing, and the one the
+    /// token. The next save has to name the version it is replacing. The one the
     /// read returned is no longer it.
     pub fn set_etag(&mut self, etag: impl Into<String>) {
         self.etag = Some(etag.into());
@@ -299,7 +298,7 @@ impl EditorPane {
     /// Replace what the language server says about this file.
     ///
     /// No rebuild: problems are gutter letters and a status line, neither of which is
-    /// measured into a row, so a frame that repaints is all a fresh answer needs.
+    /// measured into a row. A frame that repaints is all a fresh answer needs.
     pub fn set_problems(&mut self, problems: Vec<acpilot_proto::file::Diagnostic>) {
         self.problems = problems;
     }
@@ -337,10 +336,20 @@ impl EditorPane {
         self.path.rsplit('/').next().unwrap_or(&self.path)
     }
 
-    /// The language the pane highlights with, or claims to.
+    /// The language the pane highlights with, or `no grammar` when it has none.
     #[must_use]
     pub fn language(&self) -> &str {
-        &self.language
+        if self.has_grammar() {
+            &self.language
+        } else {
+            "no grammar"
+        }
+    }
+
+    /// Whether this buffer has a grammar to highlight with.
+    #[must_use]
+    pub fn has_grammar(&self) -> bool {
+        self.highlights.is_some()
     }
 
     /// The document itself, for reading.
@@ -401,7 +410,7 @@ impl EditorPane {
         self.viewport.caret(self.document.buffer(), self.caret())
     }
 
-    /// Apply the editor preferences a launch or a `prefs` frame resolved.
+    /// Apply the editor preferences resolved by a start or a `prefs` frame.
     ///
     /// A width change re-measures the rows, because a tab is a number of cells
     /// rather than a character: the same text occupies a different window.
@@ -438,7 +447,7 @@ impl EditorPane {
     /// Strip spaces and tabs at the end of every line, as one undo step.
     ///
     /// A save-time rule, not an editing one: a person watching the buffer change
-    /// under the caret before the write would be a surprise, so the caller asks
+    /// under the caret before the write would be a surprise. The caller asks
     /// only when it is about to save.
     pub fn trim_trailing_whitespace(&mut self, now: Instant) -> bool {
         let text = self.document.text();
@@ -486,15 +495,15 @@ impl EditorPane {
 
     /// Tell the pane how much room it has.
     ///
-    /// The text width is the pane's width minus the gutter, because the gutter is
-    /// the pane's own furniture: a long line clipped at the pane's edge rather
-    /// than at the gutter's would hide two columns behind the numbers.
+    /// The text width is the pane's width minus the gutter. The gutter is the
+    /// pane's own furniture. A long line clipped at the pane's edge rather than
+    /// at the gutter's would hide two columns behind the numbers.
     pub fn resize(&mut self, rows: usize, cols: usize) {
         let text = cols.saturating_sub(self.gutter()).max(1);
         let rows = rows.max(1);
-        // Every frame calls this, and a frame that changed nothing should not
+        // Every frame calls this. A frame that changed nothing should not
         // rebuild forty rows of cells: the size is the only thing a resize is
-        // about, and a caret that moved has already built its own.
+        // about. A caret that moved has already built its own.
         if self.viewport.rows() == rows && self.viewport.cols() == text {
             return;
         }
@@ -524,9 +533,9 @@ impl EditorPane {
 
     /// The caret's offset in the buffer.
     ///
-    /// The pane moves by line and column, and a search that reads the text as one
-    /// string needs the offset instead: asking for both is what keeps the references
-    /// search from counting the newlines itself.
+    /// The pane moves by line and column. A search that reads the text as one
+    /// string needs the offset instead. Asking for both is what keeps the
+    /// references search from counting the newlines itself.
     #[must_use]
     pub fn caret_offset(&self) -> usize {
         self.document.selections().primary().head.at
@@ -534,11 +543,11 @@ impl EditorPane {
 
     /// Move the caret, clamped to the text, and scroll the least that shows it.
     ///
-    /// A column past the end of the line lands at the line's end: arrows in a
+    /// A column past the end of the line lands at the line's end. Arrows in a
     /// terminal editor move the caret, they do not add spaces. A vertical move
-    /// remembers the column it started from, so walking through a short line and
+    /// remembers the column it started from. Walking through a short line and
     /// back out returns to the column the walk began on instead of the short
-    /// line's end; a horizontal move forgets it.
+    /// line's end. A horizontal move forgets it.
     pub fn move_caret(&mut self, rows: i32, cols: i32) {
         let goal = self.goal_for(rows, cols);
         let at = self.moved(rows, cols, goal);
@@ -581,7 +590,7 @@ impl EditorPane {
     /// Scroll the window without moving the caret, which is what a wheel does.
     ///
     /// Answers whether the view moved: the top of a file is a scroll that cannot
-    /// happen, and a drag held against it should not be redrawing for it.
+    /// happen. A drag held against it should not be redrawing for it.
     pub fn scroll(&mut self, lines: i32) -> bool {
         let moved = self
             .viewport
@@ -592,17 +601,17 @@ impl EditorPane {
 
     /// Put the caret where a click landed, and anchor a selection there.
     ///
-    /// `row` and `cell` are in the pane's own coordinates — the lines the viewport
-    /// is showing and the cells the text was drawn in — because the border and the
-    /// gutter are the pane's furniture and a caret placed from the window's
-    /// coordinates is off by both. The column is the character under the cell, so
-    /// a click inside a tab or a wide glyph lands on its left edge.
+    /// `row` and `cell` are in the pane's own coordinates: the lines the viewport
+    /// is showing and the cells the text was drawn in. The border and the gutter
+    /// are the pane's furniture, so a caret placed from the window's coordinates
+    /// is off by both. The column is the character under the cell, so a click
+    /// inside a tab or a wide glyph lands on its left edge.
     ///
-    /// A press is also the anchor a drag grows from, so the selection this starts is
+    /// A press is also the anchor a drag grows from. The selection this starts is
     /// empty until the pointer moves: a click that selected nothing leaves no
-    /// highlight behind, and a drag that wandered off resume where it began.
+    /// highlight behind. A drag that wandered off resumes where it began.
     ///
-    /// Ignored while a prompt is up: the box has the keyboard, and a click that
+    /// Ignored while a prompt is up: the box has the keyboard. A click that
     /// moved the caret out from under the query being typed would be a pane
     /// arguing with itself.
     pub fn click(&mut self, row: usize, cell: usize) {
@@ -624,9 +633,9 @@ impl EditorPane {
     /// Extend a selection to a Shift-click, anchoring it at the caret when there is
     /// no selection yet.
     ///
-    /// The anchor is the existing selection's start rather than its moving end, so
-    /// several Shift-clicks grow one run instead of restarting from where the last
-    /// one stopped.
+    /// The anchor is the existing selection's start rather than its moving end.
+    /// Several Shift-clicks grow one run instead of restarting from where the
+    /// last one stopped.
     pub fn extend_click(&mut self, row: usize, cell: usize) {
         if self.prompt.is_some() {
             return;
@@ -645,10 +654,11 @@ impl EditorPane {
 
     /// Grow the selection to the cell under the pointer.
     ///
-    /// The head follows the pointer and the anchor stays where the press put it, so
-    /// a drag can go back and forth over the same line and the selection follows it
-    /// rather than accumulating. A drag that has left the pane is clamped to the edge
-    /// it left by, which is what a pointer that has gone somewhere else should do.
+    /// The head follows the pointer, and the anchor stays where the press put it.
+    /// A drag can go back and forth over the same line, and the selection follows
+    /// it rather than accumulating. A drag that has left the pane is clamped to
+    /// the edge it left by. That is what a pointer that has gone somewhere else
+    /// should do.
     pub fn extend_to(&mut self, row: usize, cell: usize) {
         let Some(anchor) = self.anchor else {
             return;
@@ -682,7 +692,7 @@ impl EditorPane {
         let start = buffer.line_column(range.start).line;
         let mut end = buffer.line_column(range.end).line;
         // A selection that stops at the very start of a line does not touch that
-        // line: the newline before it is the last character selected, and a newline
+        // line: the newline before it is the last character selected. A newline
         // belongs to the line above it.
         if end > start && buffer.line_range(end).start == range.end {
             end -= 1;
@@ -704,9 +714,10 @@ impl EditorPane {
     /// Copy what a drag selected, and say how much went.
     ///
     /// The text is the buffer's own slice, so the characters copied are the ones the
-    /// frame painted — no cell arithmetic, no reconstruction from tabs and widths.
-    /// The selection is dropped afterwards: what was copied is on the clipboard, and
-    /// a highlight that stays after the copy is a pane still asking a question.
+    /// frame painted. There is no cell arithmetic and no reconstruction from tabs
+    /// and widths. The selection is dropped afterwards: what was copied is on the
+    /// clipboard. A highlight that stays after the copy is a pane still asking a
+    /// question.
     pub fn yank(&mut self) -> Option<String> {
         let range = self.selection()?;
         let text = self.document.buffer().slice(range);
@@ -800,9 +811,9 @@ impl EditorPane {
 
     /// The character offset a pane cell names.
     ///
-    /// One place, because a click and a drag land by the same arithmetic: the row is
-    /// counted from the top of the window, and the cell from the left of the text
-    /// (the horizontal scroll is the viewport's, not the pane's).
+    /// One place, because a click and a drag land by the same arithmetic. The row
+    /// is counted from the top of the window, and the cell from the left of the
+    /// text. The horizontal scroll is the viewport's, not the pane's.
     fn offset_at(&self, row: usize, cell: usize) -> usize {
         let position = self.viewport.position_at(self.document.buffer(), row, cell);
         self.offset(position)
@@ -822,10 +833,10 @@ impl EditorPane {
 
     /// Put the pane in the editing model the keymap preset names.
     ///
-    /// The mode is the pane's, but whether there is a normal mode at all is the
-    /// preset's: a buffer opened under `vscode` starts typing immediately, and a
+    /// The mode is the pane's. Whether there is a normal mode at all is the
+    /// preset's: a buffer opened under `vscode` starts typing immediately. A
     /// buffer opened under `vim` starts with commands. Called when the keymap is
-    /// read and when a file opens, so the two cannot disagree about the model.
+    /// read and when a file opens. The two cannot disagree about the model.
     pub fn set_vim_mode(&mut self, vim: bool) {
         self.vim_mode = vim;
         if vim {
@@ -855,7 +866,7 @@ impl EditorPane {
 
     /// Change mode, and say so.
     ///
-    /// Said out loud because the two modes take the same keys differently, and a
+    /// Said out loud because the two modes take the same keys differently. A
     /// mode change nobody noticed is a pane whose keyboard appears to have stopped
     /// working: the status line says `insert`, and so does the pane's title.
     pub fn set_mode(&mut self, mode: Mode) {
@@ -873,7 +884,7 @@ impl EditorPane {
     /// Type text at the caret, replacing whatever is selected.
     ///
     /// The one path every inserted character takes, so the parse and the caret are
-    /// brought up to date in one place — an edit that did not settle would paint
+    /// brought up to date in one place. An edit that did not settle would paint
     /// yesterday's colours over today's text.
     pub fn type_text(&mut self, text: &str, now: Instant) -> bool {
         self.anchor = None;
@@ -907,7 +918,7 @@ impl EditorPane {
     /// Indent the lines the selection touches, or the caret's line.
     ///
     /// The style is the caller's, not a setting read here: the tab width and the
-    /// spaces-or-tabs answer come from the settings cascade (P4-7), and a pane that
+    /// spaces-or-tabs answer come from the settings cascade (P4-7). A pane that
     /// read a config file would be a pane the browser cannot use.
     pub fn indent(&mut self, mode: IndentMode, style: IndentStyle, now: Instant) -> bool {
         let edited = self.document.indent(mode, style, now);
@@ -927,8 +938,8 @@ impl EditorPane {
         self.set_mode(Mode::Insert);
     }
 
-    /// Put an empty line above the caret's, and leave the caret on *it*: the
-    /// newline lands at the line's start, which pushes the old line down, so the
+    /// Put an empty line above the caret's line. Leave the caret on *it*: the
+    /// newline lands at the line's start, which pushes the old line down. The
     /// caret has to walk back up one to be on the new one.
     pub fn open_line_above(&mut self, now: Instant) {
         self.line_edge(false);
@@ -941,9 +952,9 @@ impl EditorPane {
 
     /// Take the last step back.
     ///
-    /// A motion collapses a selection on the way, the same as any other motion: an
-    /// undo that left a highlight behind would be a pane still asking a question
-    /// about text that is no longer there.
+    /// A motion collapses a selection on the way, the same as any other motion.
+    /// An undo that left a highlight behind would be a pane still asking a
+    /// question about text that is no longer there.
     pub fn undo(&mut self) -> bool {
         let undone = self.document.undo();
         if undone {
@@ -967,10 +978,10 @@ impl EditorPane {
 
     /// Whether the buffer holds edits that are not in the file.
     ///
-    /// Read off the history rather than kept as a flag: the history started empty
-    /// when the file was opened, so "there is a step to take back" is exactly "this
-    /// text is not the text that was opened" — including after undoing all the way
-    /// back to it, which a flag would get wrong.
+    /// Read off the history rather than kept as a flag. The history started empty
+    /// when the file was opened. "There is a step to take back" means "this text
+    /// is not the text that was opened". That stays true after undoing all the
+    /// way back to it. A flag would get that wrong.
     #[must_use]
     pub fn dirty(&self) -> bool {
         self.document.can_undo()
@@ -987,7 +998,7 @@ impl EditorPane {
     /// Put the caret somewhere and show it.
     ///
     /// A motion collapses a selection rather than extending it: a drag and visual
-    /// mode are how this pane selects, and a bare motion is how a selection is
+    /// mode are how this pane selects. A bare motion is how a selection is
     /// abandoned. The goal column is the caller's, because a vertical move keeps it
     /// across the `place` calls in a walk.
     fn place(&mut self, at: LineColumn) {
@@ -1010,7 +1021,7 @@ impl EditorPane {
     ///
     /// The answer a jump list gives: a row names a line, and the file arrives after
     /// the row was chosen. A line past the end lands on the last one rather than
-    /// refusing — the file may have changed since the search read it, and the end of
+    /// refusing. The file may have changed since the search read it, and the end of
     /// it is a more useful place to be than nowhere.
     pub fn goto_line(&mut self, line: u32) {
         let last = self.document.buffer().line_count().saturating_sub(1);
@@ -1056,7 +1067,7 @@ impl EditorPane {
     /// Type a character into the open prompt.
     ///
     /// A find box searches as it is typed, which is the only version of `/` that
-    /// is worth having: the matches are on screen before Enter is pressed, so a
+    /// is worth having. The matches are on screen before Enter is pressed. A
     /// query that finds nothing says so while it is still being fixed.
     pub fn prompt_insert(&mut self, character: char) {
         let Some(prompt) = &mut self.prompt else {
@@ -1128,7 +1139,7 @@ impl EditorPane {
     /// Close the prompt and undo what it did.
     ///
     /// `Esc` in a find box puts the caret back where it started, because a search
-    /// that was abandoned should not have moved anything — the box is a
+    /// that was abandoned should not have moved anything. The box is a
     /// question, and "no" is an answer.
     pub fn prompt_cancel(&mut self) {
         let Some(prompt) = self.prompt.take() else {
@@ -1175,10 +1186,10 @@ impl EditorPane {
 
     /// Paint the rows on screen.
     ///
-    /// The parse is asked for the bytes of the visible lines only, then each cell
-    /// is given its token, its match state and its bracket state and neighbours
-    /// with the same answer are joined into one [`Run`]. A frame therefore costs
-    /// what the screen costs, not what the file costs.
+    /// The parse is asked for the bytes of the visible lines only. Each cell is
+    /// given its token, its match state and its bracket state. Neighbours with
+    /// the same answer are joined into one [`Run`]. A frame therefore costs what
+    /// the screen costs, not what the file costs.
     pub fn paint(&mut self) -> Vec<PaintedRow> {
         let Some(highlights) = &mut self.highlights else {
             return self.plain();
@@ -1237,9 +1248,9 @@ impl EditorPane {
 
 /// The language a path's extension names, as the grammar registry spells it.
 ///
-/// The registry is the authority on which grammars exist, and it is in `acpilot-text`
+/// The registry is the authority on which grammars exist. It is in `acpilot-text`
 /// rather than here for the reason the grammars are: the daemon's references search
-/// reads the same table, and two copies would be two answers about what a `.rs` is. An
+/// reads the same table. Two copies would be two answers about what a `.rs` is. An
 /// unknown suffix is `""`, which [`Grammars::get`] answers with `None`.
 #[must_use]
 pub fn language_for(path: &str) -> &'static str {
@@ -1259,7 +1270,7 @@ fn rank(severity: acpilot_proto::file::DiagnosticSeverity) -> u8 {
 }
 
 /// Strip spaces and tabs at the end of every line, keeping the line endings.
-/// The buffer's text is `\n` throughout; the file's own line ending is applied on
+/// The buffer's text is `\n` throughout. The file's own line ending is applied on
 /// save, so this only has to strip before the `\n` it sees.
 fn trim_lines(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -1310,7 +1321,7 @@ fn appearance(
     selection: Option<&Range<usize>>,
     ruler: bool,
 ) -> (Option<SyntaxToken>, State) {
-    // A blank past the end of a line belongs to no character, so it cannot be part
+    // A blank past the end of a line belongs to no character. It cannot be part
     // of a selection: dragging over the end of a line copies the line's text, which
     // is what a selection means.
     let Some(at) = cell.at else {
@@ -1362,7 +1373,7 @@ mod tests {
     use super::*;
     use acpilot_git::line_changes;
 
-    /// A patch that replaces line 2 of the test file, which is the line the
+    /// A patch that replaces line 2 of the test file. That is the line the
     /// helper's gutter has to mark: the marks are the diff's, not the buffer's.
     const PATCH: &str = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -2,1 +2,1 @@\n-old\n+new\n";
 
@@ -1395,6 +1406,7 @@ mod tests {
         assert_eq!(pane.path(), "src/main.rs");
         assert_eq!(pane.tab(), "main.rs");
         assert_eq!(pane.language(), "rust");
+        assert!(pane.has_grammar());
         assert_eq!(pane.document().text(), "fn main() {}");
         assert_eq!(pane.position(), (1, 1), "a file opens at its start");
         assert!(!pane.dirty(), "nothing has been done to it yet");
@@ -1402,7 +1414,7 @@ mod tests {
         let mut grammars = Grammars::new();
         let unknown =
             EditorPane::from_text("NOTES", "prose", LineChanges::default(), &mut grammars);
-        assert_eq!(unknown.language(), "", "no extension, no grammar");
+        assert_eq!(unknown.language(), "no grammar", "and the badge says so");
         assert_eq!(unknown.document().text(), "prose", "and it still opens");
     }
 
@@ -1486,9 +1498,9 @@ mod tests {
 
     #[test]
     fn the_gutter_marks_are_gits_answer_about_the_diff() {
-        // A patch that adds two lines and removes one, read for the file it names:
-        // one removal paired with one addition is a change, the addition left
-        // over is new, and the file the patch is about is the only one it answers
+        // A patch that adds two lines and deletes one, read for the file it names.
+        // One deletion paired with one addition is a change. The addition left
+        // over is new. The file the patch is about is the only one it answers
         // for.
         let patch =
             "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,2 +1,3 @@\n one\n-two\n+TWO\n+three\n";
@@ -1553,13 +1565,13 @@ mod tests {
     #[test]
     fn a_click_puts_the_caret_on_the_cell_it_landed_on() {
         let mut pane = pane(&["\tlet x = 1;", "short"], (0, 0));
-        // A cell inside the tab is the tab's own character, so the caret lands on
+        // A cell inside the tab is the tab's own character. The caret lands on
         // its left edge: a click is a cell and a caret is a character.
         pane.click(0, 2);
         assert_eq!(pane.caret(), LineColumn::new(0, 0));
         pane.click(0, 4);
         assert_eq!(pane.caret(), LineColumn::new(0, 1), "the `l` of `let`");
-        // Past the end of a line is the end of the line, and a row past the last
+        // Past the end of a line is the end of the line. A row past the last
         // line is the last line: a click is never a panic.
         pane.click(1, 40);
         assert_eq!(pane.caret(), LineColumn::new(1, 5));
@@ -1570,7 +1582,7 @@ mod tests {
     #[test]
     fn a_click_is_a_cell_of_the_text_not_of_the_pane() {
         // The pane is scrolled right, so the cells it was given start at the
-        // column the window does — a click placed from the window's own column
+        // column the window does. A click placed from the window's own column
         // would put the caret two cells left of the glyph under the pointer.
         let long = "0123456789".repeat(12);
         let mut pane = pane(&[long.as_str(), "short"], (0, 0));
@@ -1919,7 +1931,7 @@ mod tests {
         assert_eq!(text(&buffer), "one  \ntwo\t\nthree");
 
         // A Windows file keeps its CRLF on disk: the buffer is `\n` throughout and
-        // the line ending is applied on save, so trimming must not flatten it.
+        // the line ending is applied on save. Trimming must not flatten it.
         let mut grammars = Grammars::new();
         let mut windows = EditorPane::from_text(
             "src/main.rs",
@@ -1972,6 +1984,8 @@ mod tests {
             cursor: (0, 0),
         };
         let mut pane = EditorPane::seeded(&seed, LineChanges::default(), &mut grammars);
+        assert!(!pane.has_grammar(), "the registry has no make grammar");
+        assert_eq!(pane.language(), "no grammar");
         pane.resize(4, 40);
         let painted = pane.paint();
         assert_eq!(painted.len(), 2, "the seeded line held a newline");

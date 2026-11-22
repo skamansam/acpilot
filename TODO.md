@@ -1916,8 +1916,10 @@ v0.1 (D18).
     `elixir`, `html`, `css`, `json`, `yaml`, `toml`, `sql`, `bash` and `markdown` join the four
     the build ships a server for. A language with no row still answers from the parse tree rather
     than being refused here, so the table can grow ahead of the servers. A test pins that every
-    built-in `SERVERS` id has a routable extension. The grammars themselves — wasm, queries,
-    lazy load, the visible fallback — are the rest of this task.
+    built-in `SERVERS` id has a routable extension. The grammars themselves — wasm, queries and
+    lazy load — are the rest of this task.
+  - Progress (2026-11-21): the visible fallback is in. A file with no grammar says `no grammar`
+    in the editor's language badge. Plain text is an explained fallback, not a silent one.
 
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one

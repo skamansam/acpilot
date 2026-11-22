@@ -1929,8 +1929,9 @@ v0.1 (D18).
     falling back to the built-in suffix table. A failed wasm load says `grammar missing`; a path
     with no grammar says `no grammar`. A second watcher follows the activation list and replaces
     the extension set, so activating or dropping a pack re-resolves the open file without a
-    restart. **Open:** no real grammar `.wasm` fixture was exercised, so the compile and highlight
-    path is compiled but unverified end to end.
+    restart. A committed `simple` wasm fixture now drives `Grammar::from_wasm` through a parse and
+    a highlight query, so the compile path has an end-to-end test. **Open:** the fixture is a
+    minimal grammar, not a real language pack, and a changed store still needs a restart.
 
 - [ ] **P4.6-9 · Snippets and keymap layers** (0.5d)
   - Snippets in the editor's existing JSON format; keymap layers applied above the built-in one

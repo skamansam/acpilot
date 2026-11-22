@@ -1,0 +1,2 @@
+(word) @variable
+(number) @number

@@ -4157,6 +4157,15 @@ impl App {
                     format!("grammars · {applied} active · {skipped} skipped")
                 };
             }
+            Update::Snippets(snippets) => {
+                self.set_snippets(snippets);
+                let languages = self.snippets.len();
+                self.status = match languages {
+                    0 => "snippets · none active".to_owned(),
+                    1 => "snippets · 1 language active".to_owned(),
+                    count => format!("snippets · {count} languages active"),
+                };
+            }
             Update::Theme(theme) => {
                 // A settings file this client could read itself changed. Once the
                 // daemon has said what the preferences are, this is the weaker of
@@ -8424,6 +8433,30 @@ mod tests {
             app.editor.as_ref().expect("editor").language(),
             "no grammar"
         );
+    }
+
+    #[test]
+    fn a_snippet_update_replaces_the_active_set() {
+        let mut app = App::new("daemon");
+        app.apply(Update::Snippets(vec![acpilot_extensions::SnippetSet {
+            language: "rust".to_owned(),
+            extension: "acpilot.test".to_owned(),
+            snippets: vec![acpilot_extensions::Snippet {
+                prefix: "fn".to_owned(),
+                body: vec![
+                    "fn ${1:name}() {".to_owned(),
+                    "    $0".to_owned(),
+                    "}".to_owned(),
+                ],
+                description: None,
+            }],
+        }]));
+        assert_eq!(app.snippets["rust"].len(), 1);
+        assert_eq!(app.status, "snippets · 1 language active");
+
+        app.apply(Update::Snippets(Vec::new()));
+        assert!(app.snippets.is_empty());
+        assert_eq!(app.status, "snippets · none active");
     }
 
     fn agent(id: &str, name: &str) -> AgentSummary {

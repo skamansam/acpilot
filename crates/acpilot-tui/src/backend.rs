@@ -481,6 +481,11 @@ pub enum Update {
     /// A list rather than one grammar: a deactivated pack has to remove what it
     /// contributed, so the client replaces the set instead of adding to it.
     Grammars(Vec<acpilot_extensions::GrammarAsset>),
+    /// The profile's active packs changed, and this is their whole snippet set.
+    ///
+    /// A list rather than one language's set: a deactivated pack has to remove
+    /// what it contributed, so the client replaces the set instead of adding.
+    Snippets(Vec<acpilot_extensions::SnippetSet>),
     /// A turn was accepted.
     Prompted {
         /// Session id.

@@ -128,7 +128,7 @@ pub fn run(
     let (updates, inbox) = tokio::sync::mpsc::unbounded_channel();
     let changes = updates.clone();
     let keymap_updates = updates.clone();
-    let grammar_updates = updates.clone();
+    let asset_updates = updates.clone();
     // A profile's `keymap.toml` is the one the launch should use. The global file
     // is the fallback for a profile that has not written one. The daemon's
     // preferences live in `profile.toml`. A key table can be large and has a
@@ -200,7 +200,7 @@ pub fn run(
         eprintln!("acpilot tui: {error} · starting on the default keys");
     }
     watch_keymap(keymap_path, profile_dir.clone(), keymap_updates);
-    watch_grammars(profile_dir, grammar_updates);
+    watch_extension_assets(profile_dir, asset_updates);
     app.set_theme(theme);
     // The answer arrives as `Update::File`, which puts the keyboard in the editor
     // and says which file was opened. Until it does, the window is already an
@@ -497,11 +497,12 @@ pub fn extension_snippets(
     Ok(snippets)
 }
 
-/// Watch the activation list and send the grammars it names.
+/// Watch the activation list and send the grammars and snippets it names.
 ///
 /// The key watcher also reads this file because a pack's keys change with it.
-/// This watcher sends the grammar set, so a deactivated pack stops claiming files.
-fn watch_grammars(
+/// This watcher sends the asset sets, so a deactivated pack stops claiming files
+/// and stops offering its templates.
+fn watch_extension_assets(
     profile: Option<std::path::PathBuf>,
     updates: tokio::sync::mpsc::UnboundedSender<Update>,
 ) {
@@ -524,6 +525,23 @@ fn watch_grammars(
                     if updates
                         .send(Update::Status(format!(
                             "extension grammars not applied · {error}"
+                        )))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            match extension_snippets(profile.as_deref()) {
+                Ok(snippets) => {
+                    if updates.send(Update::Snippets(snippets)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    if updates
+                        .send(Update::Status(format!(
+                            "extension snippets not applied · {error}"
                         )))
                         .is_err()
                     {

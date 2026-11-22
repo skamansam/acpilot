@@ -1953,9 +1953,9 @@ v0.1 (D18).
     active pack's template for the open file's language. The expander handles `$1`, `${1:name}`
     and `$0`. It selects the first default. `Tab` and `Shift-Tab` walk the stops. Either key falls
     back to indent when no snippet is active. The body is one undo step. Moving the caret or a
-    non-text edit ends the session. Tests cover the expander, the pane's stops and the command
-    path. **Open:** there is no picker or completion trigger, no `${1|a,b|}` choices, and a changed
-    activation list does not reload the snippet set until the next launch.
+    non-text edit ends the session. A save of the profile's activation list reloads the set without
+    a restart. Tests cover the expander, the pane's stops and the command path. **Open:** there is
+    no picker or completion trigger, and no `${1|a,b|}` choices.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

@@ -32,7 +32,9 @@
 //! forgetting the one fact somebody needed. That file is derived data, so a copy
 //! that will not parse is forgotten rather than failing a startup.
 //!
-//! Nothing removes a provider yet.
+//! A provider can be edited, probed again and removed. Removal is refused while a
+//! recipe names it: deleting the server would leave a recipe that cannot run and
+//! no clue why.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -42,13 +44,16 @@ use acpilot_core::AcpilotError;
 use acpilot_model::{Backend, Provider};
 use acpilot_profile::providers::{DeclaredProvider, ProvidersError, ProvidersFile, ProvidersState};
 use acpilot_proto::ErrorBody;
-use acpilot_proto::model::{AddProviderRequest, ProviderStatus, ProviderSummary};
+use acpilot_proto::model::{
+    AddProviderRequest, ModelCatalogue, ModelProblem, ProviderStatus, ProviderSummary,
+    UpdateProviderRequest,
+};
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, patch, post};
 use utoipa::openapi::path::{HttpMethod, Operation};
 
 use crate::{ApiError, AppState};
@@ -76,6 +81,10 @@ pub struct Refusal {
 pub enum Declined {
     /// The id is already declared.
     Taken,
+    /// No declaration has that id.
+    Missing,
+    /// A recipe names the id, so removing it would leave a recipe that cannot run.
+    Referenced(Vec<String>),
     /// The declaration could not be read back or written.
     File(ProvidersError),
 }
@@ -84,6 +93,10 @@ impl std::fmt::Display for Declined {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Taken => formatter.write_str("the id is already declared"),
+            Self::Missing => formatter.write_str("no provider has that id"),
+            Self::Referenced(recipes) => {
+                write!(formatter, "recipes still name it: {}", recipes.join(", "))
+            }
             Self::File(error) => write!(formatter, "{error}"),
         }
     }
@@ -250,6 +263,118 @@ impl Providers {
         Ok(())
     }
 
+    /// Every declaration, in file order.
+    #[must_use]
+    pub fn declarations(&self) -> Vec<DeclaredProvider> {
+        let Some(path) = &self.file else {
+            return Vec::new();
+        };
+        ProvidersFile::load(path)
+            .map(|file| file.providers)
+            .unwrap_or_default()
+    }
+
+    /// One declaration, in file order.
+    #[must_use]
+    pub fn declaration(&self, id: &str) -> Option<DeclaredProvider> {
+        self.declarations().into_iter().find(|row| row.id == id)
+    }
+
+    /// Replace a declaration and its row.
+    ///
+    /// # Errors
+    ///
+    /// No such declaration, or the file cannot be written.
+    pub fn replace(
+        &self,
+        declaration: DeclaredProvider,
+        row: ProviderSummary,
+    ) -> Result<(), Declined> {
+        let Some(path) = &self.file else {
+            return Err(Declined::Missing);
+        };
+        let mut file = ProvidersFile::load(path).map_err(Declined::File)?;
+        let Some(slot) = file
+            .providers
+            .iter_mut()
+            .find(|row| row.id == declaration.id)
+        else {
+            return Err(Declined::Missing);
+        };
+        *slot = declaration.clone();
+        file.save(path).map_err(Declined::File)?;
+        let mut known = self.lock();
+        if let Some(slot) = known.iter_mut().find(|existing| existing.id == row.id) {
+            *slot = row.clone();
+        } else {
+            known.push(row.clone());
+        }
+        drop(known);
+        self.remember_answer(&declaration, &row);
+        Ok(())
+    }
+
+    /// Remove a declaration, its row and its remembered answer.
+    ///
+    /// # Errors
+    ///
+    /// No such declaration, a recipe names it, or the file cannot be written.
+    pub fn remove(&self, id: &str) -> Result<(), Declined> {
+        let Some(path) = &self.file else {
+            return Err(Declined::Missing);
+        };
+        if let Some(directory) = path.parent() {
+            let recipes = acpilot_profile::recipes::Recipes::dir_in(directory);
+            let named: Vec<String> = std::fs::read_dir(&recipes)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|entry| {
+                            let text = std::fs::read_to_string(entry.path()).ok()?;
+                            let recipe: acpilot_profile::recipes::RecipeFile =
+                                toml::from_str(&text).ok()?;
+                            (recipe.provider_id == id).then_some(recipe.id)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !named.is_empty() {
+                return Err(Declined::Referenced(named));
+            }
+        }
+
+        let mut file = ProvidersFile::load(path).map_err(Declined::File)?;
+        let before = file.providers.len();
+        file.providers.retain(|row| row.id != id);
+        if file.providers.len() == before {
+            return Err(Declined::Missing);
+        }
+        file.save(path).map_err(Declined::File)?;
+        self.lock().retain(|row| row.id != id);
+        if let Some(state) = &self.state {
+            let mut remembered = ProvidersState::load(state);
+            remembered.probes.retain(|record| record.id != id);
+            if let Err(error) = remembered.save(state) {
+                tracing::warn!(%error, "the removed provider's answer was not forgotten");
+            }
+        }
+        Ok(())
+    }
+
+    fn remember_answer(&self, declaration: &DeclaredProvider, row: &ProviderSummary) {
+        if let Some(state) = &self.state {
+            let mut remembered = ProvidersState::load(state);
+            if row.status == ProviderStatus::Disabled {
+                remembered.probes.retain(|record| record.id != row.id);
+            } else {
+                remembered.record(declaration, row);
+            }
+            if let Err(error) = remembered.save(state) {
+                tracing::warn!(%error, "the probe answer was not remembered");
+            }
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<ProviderSummary>> {
         self.known.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -257,7 +382,11 @@ impl Providers {
 
 /// The provider routes.
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/v1/providers", get(list).post(create))
+    Router::new()
+        .route("/v1/providers", get(list).post(create))
+        .route("/v1/providers/{id}", patch(update).delete(remove))
+        .route("/v1/providers/{id}/probe", post(probe_one))
+        .route("/v1/models", get(models))
 }
 
 async fn list(State(state): State<AppState>) -> Json<Vec<ProviderSummary>> {
@@ -297,13 +426,164 @@ async fn create(
     match state.providers().insert(row.clone(), declaration) {
         Ok(()) => Ok((StatusCode::CREATED, Json(row))),
         // Two adds of one id raced; the first one recorded is the answer.
-        Err(Declined::Taken) => Err(duplicate(&request.id)),
+        Err(Declined::Taken | Declined::Missing | Declined::Referenced(_)) => {
+            Err(duplicate(&request.id))
+        }
         Err(Declined::File(error)) => Err(ApiError::new(AcpilotError::Io(std::io::Error::other(
             format!(
                 "`{}` answered but the declaration was not written: {error}",
                 request.id
             ),
         )))),
+    }
+}
+
+/// `PATCH /v1/providers/{id}` — change a declaration and ask it again.
+///
+/// Every change that can move a request is followed by one probe: a row that
+/// described the old URL would be a claim about a server nobody asked.
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Result<Json<UpdateProviderRequest>, JsonRejection>,
+) -> Result<Json<ProviderSummary>, ApiError> {
+    let Json(patch) = body.map_err(|rejection| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the body is not a provider patch: {rejection}"
+        )))
+    })?;
+    let Some(mut declaration) = state.providers().declaration(&id) else {
+        return Err(missing(&id));
+    };
+    if let Some(label) = patch.label {
+        declaration.label = Some(label);
+    }
+    if let Some(base_url) = patch.base_url {
+        declaration.base_url = base_url;
+    }
+    if let Some(credential_ref) = patch.credential_ref {
+        declaration.credential_ref = Some(credential_ref);
+    }
+    if let Some(enabled) = patch.enabled {
+        declaration.enabled = enabled;
+    }
+    let request = declaration.request();
+    if let Some(refusal) = refuse(&request) {
+        return Err(ApiError::new(AcpilotError::invalid(refusal.message))
+            .with_detail(refusal.field, refusal.detail));
+    }
+    let credential = Credential::resolve(state.providers().resolver(), &request);
+    let row = probe(&request, credential).await;
+    state
+        .providers()
+        .replace(declaration, row.clone())
+        .map_err(declined)?;
+    Ok(Json(row))
+}
+
+/// `DELETE /v1/providers/{id}`.
+async fn remove(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.providers().remove(&id).map_err(declined)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/providers/{id}/probe` — ask it again, and keep the answer.
+async fn probe_one(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderSummary>, ApiError> {
+    let Some(declaration) = state.providers().declaration(&id) else {
+        return Err(missing(&id));
+    };
+    let request = declaration.request();
+    let credential = Credential::resolve(state.providers().resolver(), &request);
+    let row = probe(&request, credential).await;
+    state
+        .providers()
+        .replace(declaration, row.clone())
+        .map_err(declined)?;
+    Ok(Json(row))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ModelsQuery {
+    provider: Option<String>,
+}
+
+/// `GET /v1/models` — what the declared providers report right now.
+///
+/// One server that cannot answer does not hide the others: its reason is beside
+/// the list. A named provider that is disabled is reported rather than contacted,
+/// because the declaration is the decision.
+async fn models(
+    State(state): State<AppState>,
+    Query(query): Query<ModelsQuery>,
+) -> Result<Json<ModelCatalogue>, ApiError> {
+    let declarations = match query.provider {
+        Some(id) => vec![
+            state
+                .providers()
+                .declaration(&id)
+                .ok_or_else(|| missing(&id))?,
+        ],
+        None => state.providers().declarations(),
+    };
+    let mut catalogue = ModelCatalogue {
+        models: Vec::new(),
+        problems: Vec::new(),
+    };
+    for declaration in declarations {
+        if !declaration.enabled {
+            catalogue.problems.push(ModelProblem {
+                provider_id: declaration.id.clone(),
+                message: "disabled, so nothing was sent".to_owned(),
+            });
+            continue;
+        }
+        let request = declaration.request();
+        let token = match Credential::resolve(state.providers().resolver(), &request) {
+            Credential::None => None,
+            Credential::Bearer(token) => Some(token),
+            Credential::Unusable(reason) => {
+                catalogue.problems.push(ModelProblem {
+                    provider_id: declaration.id.clone(),
+                    message: format!("nothing was sent: {reason}"),
+                });
+                continue;
+            }
+        };
+        let provider = Provider::new(request.id, request.kind, request.base_url).with_token(token);
+        let answer = match Backend::new(provider) {
+            Ok(backend) => backend.models().await,
+            Err(error) => Err(error),
+        };
+        match answer {
+            Ok(mut rows) => catalogue.models.append(&mut rows),
+            Err(error) => catalogue.problems.push(ModelProblem {
+                provider_id: declaration.id.clone(),
+                message: error.to_string(),
+            }),
+        }
+    }
+    Ok(Json(catalogue))
+}
+
+fn missing(id: &str) -> ApiError {
+    ApiError::new(AcpilotError::not_found(format!("no provider `{id}`")))
+}
+
+fn declined(error: Declined) -> ApiError {
+    match error {
+        Declined::Missing => missing("that id"),
+        Declined::Taken | Declined::Referenced(_) => {
+            ApiError::new(AcpilotError::conflict(error.to_string()))
+        }
+        Declined::File(error) => {
+            ApiError::new(AcpilotError::Io(std::io::Error::other(error.to_string())))
+        }
     }
 }
 
@@ -528,6 +808,26 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
             HttpMethod::Post,
             <__path_create_doc as utoipa::Path>::operation(),
         ),
+        (
+            "/v1/providers/{id}",
+            HttpMethod::Patch,
+            <__path_update_doc as utoipa::Path>::operation(),
+        ),
+        (
+            "/v1/providers/{id}",
+            HttpMethod::Delete,
+            <__path_remove_doc as utoipa::Path>::operation(),
+        ),
+        (
+            "/v1/providers/{id}/probe",
+            HttpMethod::Post,
+            <__path_probe_one_doc as utoipa::Path>::operation(),
+        ),
+        (
+            "/v1/models",
+            HttpMethod::Get,
+            <__path_models_doc as utoipa::Path>::operation(),
+        ),
     ]
 }
 
@@ -559,6 +859,67 @@ fn list_doc() {}
     )
 )]
 fn create_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    patch,
+    operation_id = "update_provider",
+    path = "/v1/providers/{id}",
+    tag = "providers",
+    summary = "Change a provider declaration, then ask it again",
+    description = "Only the fields present move. The declaration is written to `providers.toml` and probed once, so the row describes the server that is declared now rather than the one it replaced.",
+    request_body = UpdateProviderRequest,
+    responses(
+        (status = 200, description = "The provider, with the answer it gave or the reason it did not", body = ProviderSummary),
+        (status = 400, description = "A URL or label this build cannot use", body = ErrorBody),
+        (status = 404, description = "No such provider", body = ErrorBody)
+    )
+)]
+fn update_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    delete,
+    operation_id = "delete_provider",
+    path = "/v1/providers/{id}",
+    tag = "providers",
+    summary = "Remove a provider declaration",
+    description = "Removes the row from `providers.toml` and forgets its last answer. A recipe that still names it makes this `409`: deleting the server would leave a recipe with no clue why it cannot run.",
+    responses(
+        (status = 204, description = "The declaration is gone"),
+        (status = 404, description = "No such provider", body = ErrorBody),
+        (status = 409, description = "A recipe still names it", body = ErrorBody)
+    )
+)]
+fn remove_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    operation_id = "probe_provider",
+    path = "/v1/providers/{id}/probe",
+    tag = "providers",
+    summary = "Ask one provider what it has, and keep the answer",
+    description = "The only route that contacts a server without a declaration changing. A disabled provider is reported as disabled and is not contacted. A refused credential is `unauthorized`, not `unreachable`.",
+    responses(
+        (status = 200, description = "The provider, with the answer it gave", body = ProviderSummary),
+        (status = 404, description = "No such provider", body = ErrorBody)
+    )
+)]
+fn probe_one_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    get,
+    operation_id = "list_models",
+    path = "/v1/models",
+    tag = "providers",
+    summary = "What the declared providers report right now",
+    description = "Asks every enabled provider, or the one named by `?provider=`. A provider that cannot answer is listed in `problems` beside the models the others returned, because a list that quietly omitted a server would look like a server with no models.",
+    params(("provider" = Option<String>, Query, description = "Only this provider id")),
+    responses((status = 200, description = "Models and the providers that could not answer", body = ModelCatalogue))
+)]
+fn models_doc() {}
 
 #[cfg(test)]
 mod tests {

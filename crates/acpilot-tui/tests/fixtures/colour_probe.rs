@@ -36,7 +36,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     // What the query came back with, before anything is solved from it: the test
-    // asserts this against the pair it answered with, so a parsing bug shows up as
+    // asserts this against the pair it answered with. A parsing bug shows up as
     // a wrong colour rather than as a plausible-looking theme.
     println!("terminal {} {}", colours.background, colours.foreground);
 
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
 /// A token as the `#rrggbb` the theme file would have written it as.
 ///
 /// `Color::Reset` prints as itself rather than as a hex string: a followed palette
-/// must not fall back to the terminal's own colours, and the test can see that in
+/// must not fall back to the terminal's own colours. The test can see that in
 /// one line instead of by matching every token.
 fn hex(color: Color) -> String {
     match color {

@@ -63,7 +63,7 @@ pub const RETENTION_DAYS: i64 = 30;
 /// Bumped with every entry in [`MIGRATIONS`]. A database written by a newer daemon
 /// is refused rather than read: the columns a newer build added are the ones this
 /// one would try to write past.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The schema, in order, as `(version, sql)`.
 ///
@@ -77,6 +77,8 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_agent_pins.sql")),
     (3, include_str!("../migrations/0003_session_profile.sql")),
+    (4, include_str!("../migrations/0004_driver_identity.sql")),
+    (5, include_str!("../migrations/0005_lsp_server_pins.sql")),
 ];
 
 /// A profile's conversations, sessions and decisions.
@@ -305,6 +307,52 @@ impl Store {
         Ok(pins)
     }
 
+    /// Record that a person approved this language-server program.
+    ///
+    /// Keyed by the program, not the language: one `typescript-language-server`
+    /// answers for two languages, and a second approval would be an answer to a
+    /// question nobody asked twice. A pin is replaced rather than accumulated, for
+    /// the reason [`Store::save_agent_pin`] gives.
+    ///
+    /// # Errors
+    ///
+    /// The row could not be written.
+    pub fn save_lsp_server_pin(&self, program: &str, fingerprint: &str) -> Result<(), StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "INSERT INTO lsp_server_pins (program, fingerprint, trusted_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (program) DO UPDATE SET fingerprint = excluded.fingerprint,
+             trusted_at = excluded.trusted_at",
+            params![program, fingerprint, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Every language-server pin a person has recorded, oldest first.
+    ///
+    /// Ordered by `rowid` for the reason [`Store::agent_pins`] documents; a
+    /// re-approved program keeps its place while `trusted_at` moves.
+    ///
+    /// # Errors
+    ///
+    /// A row could not be read.
+    pub fn lsp_server_pins(&self) -> Result<Vec<LspServerPin>, StoreError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT program, fingerprint FROM lsp_server_pins ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| {
+            Ok(LspServerPin {
+                program: row.get(0)?,
+                fingerprint: row.get(1)?,
+            })
+        })?;
+        let mut pins = Vec::new();
+        for row in rows {
+            pins.push(row?);
+        }
+        Ok(pins)
+    }
+
     /// Write a session's current shape, creating the row or replacing it.
     ///
     /// The whole summary is written rather than a field at a time: the daemon's
@@ -326,13 +374,15 @@ impl Store {
         )?;
         connection.execute(
             "INSERT INTO sessions
-                 (id, profile, workspace_id, agent_id, title, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 (id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                  driver_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (id) DO UPDATE SET
                  profile = excluded.profile,
                  title = excluded.title,
                  status = excluded.status,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at,
+                 driver_id = excluded.driver_id",
             params![
                 summary.id,
                 summary.profile,
@@ -342,6 +392,7 @@ impl Store {
                 status_text(&summary.status),
                 summary.created_at,
                 summary.updated_at,
+                summary.driver_id,
             ],
         )?;
         Ok(())
@@ -397,7 +448,8 @@ impl Store {
         let connection = self.lock();
         let row = connection
             .query_row(
-                "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
+                "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                        driver_id
                  FROM sessions WHERE id = ?1",
                 params![id],
                 |row| {
@@ -410,6 +462,7 @@ impl Store {
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -432,7 +485,8 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<SessionSummary>, StoreError> {
         let connection = self.lock();
         let mut statement = connection.prepare(
-            "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at
+            "SELECT id, profile, workspace_id, agent_id, title, status, created_at, updated_at,
+                    driver_id
              FROM sessions ORDER BY rowid",
         )?;
         let rows = statement.query_map([], |row| {
@@ -445,6 +499,7 @@ impl Store {
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })?;
         let mut summaries = Vec::new();
@@ -551,8 +606,9 @@ impl Store {
     pub fn record_grant(&self, grant: &Grant) -> Result<(), StoreError> {
         let connection = self.lock();
         connection.execute(
-            "INSERT INTO grants (session_id, seq, at, at_unix_ms, tool, decision, decided_by)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO grants
+                 (session_id, seq, at, at_unix_ms, tool, decision, decided_by, driver_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (session_id, seq) DO NOTHING",
             params![
                 grant.session_id,
@@ -566,6 +622,7 @@ impl Store {
                 grant.tool,
                 grant.decision,
                 grant.decided_by,
+                grant.driver_id,
             ],
         )?;
         Ok(())
@@ -579,7 +636,7 @@ impl Store {
     pub fn grants(&self, session: &str) -> Result<Vec<Grant>, StoreError> {
         let connection = self.lock();
         let mut statement = connection.prepare(
-            "SELECT session_id, seq, at, tool, decision, decided_by
+            "SELECT session_id, seq, at, tool, decision, decided_by, driver_id
              FROM grants WHERE session_id = ?1 ORDER BY seq",
         )?;
         let rows = statement.query_map(params![session], |row| {
@@ -590,6 +647,7 @@ impl Store {
                 tool: row.get(3)?,
                 decision: row.get(4)?,
                 decided_by: row.get(5)?,
+                driver_id: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1044,6 +1102,15 @@ pub struct AgentPin {
     pub fingerprint: String,
 }
 
+/// A language-server program a person approved, as the database keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspServerPin {
+    /// The program the approval belongs to, as the preset spells it.
+    pub program: String,
+    /// SHA-256 of the program's bytes when it was approved.
+    pub fingerprint: String,
+}
+
 /// One permission decision, as the database keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -1059,10 +1126,12 @@ pub struct Grant {
     pub decision: String,
     /// Who decided: `policy:<rule>` or `client:<session>`.
     pub decided_by: String,
+    /// Driver whose turn asked, when it came through the bridge.
+    pub driver_id: Option<String>,
 }
 
 fn summary_from(
-    (id, profile, workspace_id, agent_id, title, status, created_at, updated_at): (
+    (id, profile, workspace_id, agent_id, title, status, created_at, updated_at, driver_id): (
         String,
         String,
         String,
@@ -1071,6 +1140,7 @@ fn summary_from(
         String,
         String,
         String,
+        Option<String>,
     ),
 ) -> SessionSummary {
     SessionSummary {
@@ -1080,6 +1150,7 @@ fn summary_from(
         agent_id,
         title,
         status: status_from(&status),
+        driver_id,
         created_at,
         updated_at,
     }
@@ -1178,6 +1249,7 @@ mod tests {
             agent_id: "mock".into(),
             title: "a conversation".into(),
             status: SessionStatus::Idle,
+            driver_id: None,
             created_at: "2026-11-03T10:00:00Z".into(),
             updated_at: "2026-11-03T10:00:00Z".into(),
         }
@@ -1366,6 +1438,7 @@ mod tests {
                 tool: "shell".into(),
                 decision: "allow-workspace".into(),
                 decided_by: "policy:allow-workspace".into(),
+                driver_id: None,
             })
             .expect("an old decision");
 
@@ -1573,6 +1646,35 @@ mod tests {
     }
 
     #[test]
+    fn a_language_server_pin_belongs_to_the_program_not_the_language() {
+        let store = Store::in_memory().expect("open");
+        store
+            .save_lsp_server_pin("typescript-language-server", "aaa")
+            .expect("first");
+        // Approving the same program again is one approval, moved to the new bytes.
+        store
+            .save_lsp_server_pin("typescript-language-server", "bbb")
+            .expect("second");
+        let pins = store.lsp_server_pins().expect("read");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].program, "typescript-language-server");
+        assert_eq!(pins[0].fingerprint, "bbb");
+
+        // A second program is a second row, in the order it was approved.
+        store
+            .save_lsp_server_pin("rust-analyzer", "ccc")
+            .expect("third");
+        let pins = store.lsp_server_pins().expect("read");
+        assert_eq!(
+            pins.iter()
+                .map(|pin| pin.program.as_str())
+                .collect::<Vec<_>>(),
+            ["typescript-language-server", "rust-analyzer"],
+            "first recorded first"
+        );
+    }
+
+    #[test]
     fn a_grant_keeps_the_rule_that_decided_it() {
         let store = Store::in_memory().expect("open");
         store.save_session(&summary("s1")).expect("session");
@@ -1584,6 +1686,7 @@ mod tests {
                 tool: "cargo test".into(),
                 decision: "allow-workspace".into(),
                 decided_by: "policy:allow-workspace".into(),
+                driver_id: None,
             })
             .expect("grant");
         let grants = store.grants("s1").expect("read");

@@ -153,7 +153,7 @@ async fn a_keystroke_reaches_the_program_and_the_exit_ends_the_socket() {
         .expect("the daemon sent a frame");
     assert_eq!(exit, TerminalEvent::Exit { code: Some(0) });
 
-    // The daemon closes after `exit`; that is the end of the stream, not a fault.
+    // The daemon closes after `exit`. That is the end of the stream, not a fault.
     let closed = timeout(PATIENCE, terminal.next())
         .await
         .expect("the close arrives")

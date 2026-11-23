@@ -7,38 +7,42 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import pinned from '../data/releases.json';
 
 // Releases come from the GitHub API at build time, not from a file a workflow
-// commits: main only takes pull requests, so a bot commit after every release
+// commits: main only takes pull requests. A bot commit after every release
 // would either be blocked or need an exemption that also lets it change code. A
 // build-time fetch keeps the page current with no write access to the repository
-// at all — and `site/src/data/releases.json` is the fallback for the day the API
-// is rate-limited or unreachable, so the page degrades to the last pinned record
+// at all. And `site/src/data/releases.json` is the fallback for the day the API
+// is rate-limited or unreachable. The page degrades to the last pinned record
 // instead of to nothing.
 const REPO = 'skamansam/acpilot';
 const PLATFORMS = {
-  'linux-x86_64': ['Linux', 'x86_64'],
-  'linux-aarch64': ['Linux', 'aarch64'],
-  'macos-aarch64': ['macOS', 'Apple silicon'],
-  'macos-x86_64': ['macOS', 'Intel'],
-  'windows-x86_64': ['Windows', 'x86_64'],
+  'x86_64-unknown-linux-gnu': ['Linux', 'x86_64'],
+  'aarch64-unknown-linux-gnu': ['Linux', 'aarch64'],
+  'aarch64-apple-darwin': ['macOS', 'Apple silicon'],
+  'x86_64-apple-darwin': ['macOS', 'Intel'],
+  'x86_64-pc-windows-msvc': ['Windows', 'x86_64'],
 };
 
-// `acpilot-0.1.0-linux-x86_64.tar.gz` → `linux-x86_64`
+// `acpilot-cli-x86_64-unknown-linux-gnu.tar.gz` → `acpilot-cli` on that target.
 //
-// Matched on the platform half rather than on the version, so a pre-release
-// version with a hyphen in it parses like any other.
-function platformOf(name) {
-  const match = name.match(/^acpilot-.*-(linux|macos|windows)-(x86_64|aarch64)\.(?:tar\.gz|zip)$/);
-  return match ? `${match[1]}-${match[2]}` : null;
+// A release is one archive per program (ADR 0011), named after the package and the
+// target triple, with the version in the tag rather than the file name. The
+// `acpilot-cli` archive is the one a person downloads first: it holds `acpilot`.
+function assetOf(name) {
+  const match = name.match(/^(acpilot-cli|acpilotd|acpilot-gui)-(.+)\.(?:tar\.gz|zip)$/);
+  if (!match || !(match[2] in PLATFORMS)) return null;
+  return { program: match[1], triple: match[2] };
 }
 
 function fromGitHub(release) {
   const assets = (release.assets ?? []).flatMap((asset) => {
-    const platform = platformOf(asset.name);
-    if (!platform) return [];
-    const [label, arch] = PLATFORMS[platform] ?? [platform, ''];
+    const parsed = assetOf(asset.name);
+    if (!parsed) return [];
+    const [label, arch] = PLATFORMS[parsed.triple] ?? [parsed.triple, ''];
     return [
       {
-        platform,
+        platform: parsed.triple,
+        program: parsed.program,
+        primary: parsed.program === 'acpilot-cli',
         label,
         arch,
         file: asset.name,
@@ -149,7 +153,7 @@ function megabytes(bytes) {
           </thead>
           <tbody>
             {latest.assets.map((asset) => (
-              <tr data-platform={asset.platform}>
+              <tr data-platform={asset.platform} data-primary={asset.primary ? 'true' : undefined}>
                 <td>
                   <a href={asset.url}>{asset.label}</a>
                 </td>
@@ -172,8 +176,11 @@ function megabytes(bytes) {
           </tbody>
         </table>
         <p class="hint">
-          Every archive holds <code>acpilot</code> (CLI, TUI and GUI launcher) and
-          <code>acpilotd</code> (the daemon).          Each archive's checksum is published beside it; verify with
+          Each program ships in its own archive: <code>acpilot-cli</code> holds
+          <code>acpilot</code> (CLI and TUI), <code>acpilotd</code> the daemon and
+          <code>acpilot-gui</code> the desktop app. Install the CLI and the daemon
+          side by side. Each archive's checksum is published beside it, with a
+          signature over the checksum; verify with
           <code>sha256sum -c &lt;file&gt;.sha256</code>, or
           <code>shasum -a 256 -c</code> on macOS.
         </p>
@@ -202,7 +209,7 @@ function megabytes(bytes) {
             </ul>
             {(release.assets ?? []).length ? (
               <p class="platforms">
-                {(release.assets ?? []).map((asset) => (
+                {(release.assets ?? []).filter((asset) => asset.primary).map((asset) => (
                   <a href={asset.url}>{asset.arch ? `${asset.label} · ${asset.arch}` : asset.label}</a>
                 ))}
               </p>
@@ -230,18 +237,21 @@ function megabytes(bytes) {
       navigator.userAgent ||
       '';
     const probe = String(raw).toLowerCase();
-    let platform = 'linux-x86_64';
+    let platform = 'x86_64-unknown-linux-gnu';
     if (probe.includes('win')) {
-      platform = 'windows-x86_64';
+      platform = 'x86_64-pc-windows-msvc';
     } else if (probe.includes('mac')) {
       // `MacIntel` is what Apple silicon reports too, so the UA cannot tell the
-      // two apart; the arm64 build is the one most Macs want in 2026.
-      platform = 'macos-aarch64';
+      // two apart. The arm64 build is the one most Macs want in 2026.
+      platform = 'aarch64-apple-darwin';
     } else if (probe.includes('aarch64') || probe.includes('arm64')) {
-      platform = 'linux-aarch64';
+      platform = 'aarch64-unknown-linux-gnu';
     }
 
-    const row = document.querySelector(`tr[data-platform="${platform}"]`);
+    // The client archive is one of three rows per platform. The button wants it.
+    const row = document.querySelector(
+      `tr[data-platform="${platform}"][data-primary="true"]`,
+    );
     if (!row) return; // a build for another machine: leave the release link alone
 
     const link = row.querySelector('a');

@@ -11,9 +11,9 @@ use super::{Bound, Target};
 /// Loopback HTTP, derived from the endpoint `acpilot-host` names.
 ///
 /// ADR 0004 §3 asks for `\\.\pipe\acpilot-<user>` with an ACL to the owning user.
-/// That transport is not built yet (P10-5's named pipe), and binding a pipe this
+/// That transport is not built yet (P10-5's named pipe). Binding a pipe this
 /// client cannot reach would be worse than binding a socket it can. The API is
-/// the same either way; only the address changes.
+/// the same either way. Only the address changes.
 pub(crate) fn default_target() -> Target {
     Target::Tcp(
         acpilot_host::default_endpoint()
@@ -41,7 +41,7 @@ pub(crate) fn executable_names(program: &str) -> Vec<PathBuf> {
 
 /// Whether something is listening on `target` right now.
 ///
-/// Only the TCP half can answer here: the named pipe is P10-5, so a socket target is
+/// Only the TCP half can answer here: the named pipe is P10-5. A socket target is
 /// a configuration this platform refuses to serve rather than one it can hold.
 pub(crate) fn endpoint_answers(target: &Target) -> bool {
     match target {
@@ -96,7 +96,7 @@ where
     // without the named pipe there is no filesystem boundary to inherit.
     let path = acpilot_host::token::path();
     // Created before the bind: without the named pipe there is no filesystem
-    // boundary to inherit, so the token is the only thing between the port and
+    // boundary to inherit. The token is the only thing between the port and
     // whoever can reach it. The layer re-reads the file per request, so a rotation
     // needs no restart.
     acpilot_host::token::load_or_create(&path)?;

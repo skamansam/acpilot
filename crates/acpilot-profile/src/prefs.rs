@@ -11,8 +11,9 @@ use crate::settings::{Settings, SettingsError};
 
 /// The preferences the shipped defaults produce.
 ///
-/// A caller that needs a value before a launch has resolved one (a demo, a test,
-/// a window with no daemon) gets the same answer every other surface would.
+/// A caller sometimes needs a value before a launch resolves one: a demo, a
+/// test, a window with no daemon. That caller gets the same answer every other
+/// surface would.
 ///
 /// # Errors
 ///

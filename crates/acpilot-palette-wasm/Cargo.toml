@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-# An artefact, not a library: nothing in the workspace links it, and the only
+# An artefact, not a library: nothing in the workspace links it. The only
 # consumers are a `<script>` on the site and the `xtask` task that copies it there.
 publish = false
 
@@ -22,10 +22,10 @@ acpilot-palette = { workspace = true }
 serde_json = { workspace = true }
 
 # Not `workspace = true`, and for one reason: the workspace forbids `unsafe` code
-# outright, and a C ABI is the one place it cannot be avoided — a WebAssembly import
+# outright, and a C ABI is the one place it cannot be avoided. A WebAssembly import
 # needs the symbol name a script asks for, and `#[unsafe(no_mangle)]` is the only
 # way to give one. The allowance is scoped to this crate, which contains no unsafe
-# block, no pointer arithmetic and no unchecked access; everything it exports is
+# block, no pointer arithmetic and no unchecked access. Everything it exports is
 # `acpilot-palette`'s safe API.
 [lints.rust]
 unsafe_code = "allow"

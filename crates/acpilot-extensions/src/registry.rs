@@ -1,6 +1,6 @@
 //! The registries an extension contributes to.
 //!
-//! Everything here is derived from loaded extensions; nothing is written back.
+//! Everything here is derived from loaded extensions. Nothing is written back.
 //! Collisions are errors, not precedence: two things claiming `rust-analyzer` is
 //! a bug in one of them, and picking a winner by sort order would make which bug
 //! you see depend on the alphabet.
@@ -215,7 +215,7 @@ pub(crate) fn resolve_themes(
 
 /// Compute the palette for one theme, following `extends`.
 ///
-/// `asking` is the theme whose manifest named this one, so the error message can
+/// `asking` is the theme whose manifest named this one. The error message can
 /// name the file to edit rather than only the base that is missing.
 fn palette_for(
     id: &str,

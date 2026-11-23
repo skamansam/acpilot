@@ -51,12 +51,14 @@ export default defineConfig({
             { label: 'Flight status', link: '/status/' },
             { label: 'Installation', link: '/ground-school/installation/' },
             { label: 'First flight', link: '/ground-school/first-flight/' },
+            { label: 'Design principles', link: '/ground-school/design/' },
           ],
         },
         {
           label: 'Flight deck',
           items: [
             { label: 'CLI', link: '/flight-deck/cli/' },
+            { label: 'Updating', link: '/flight-deck/update/' },
             { label: 'TUI', link: '/flight-deck/tui/' },
             { label: 'Desktop', link: '/flight-deck/desktop/' },
             { label: 'Web', link: '/flight-deck/web/' },
@@ -66,10 +68,13 @@ export default defineConfig({
         {
           label: 'Systems',
           items: [
+            { label: 'Architecture', link: '/systems/architecture/' },
+            { label: 'Sessions', link: '/systems/sessions/' },
             { label: 'Agents and ACP', link: '/systems/agents/' },
             { label: 'Programs as agents', link: '/systems/program-as-agent/' },
             { label: 'Profiles', link: '/systems/profiles/' },
             { label: 'Language servers', link: '/systems/language-servers/' },
+            { label: 'The relay', link: '/systems/relay/' },
             { label: 'Hosts: SSH and WSL', link: '/systems/hosts/' },
           ],
         },

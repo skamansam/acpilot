@@ -86,11 +86,11 @@ fn theme_json(theme: &ResolvedTheme) -> Value {
 
 /// The palettes [`follow`] solves for the terminals the gallery shows.
 ///
-/// Two, and deliberately the two ends of the ramp: a black terminal with white ink
-/// is what most people are looking at, and a cream one with dark ink is the case
+/// Two. Deliberately the two ends of the ramp: a black terminal with white ink
+/// is what most people are looking at. A cream one with dark ink is the case
 /// that proves the solver reads polarity from the pair instead of assuming a dark
 /// theme. Both are solved here, when the data is generated, by the function the TUI
-/// calls at launch — a picture of a palette the setting would not produce is exactly
+/// calls at launch. A picture of a palette the setting would not produce is exactly
 /// what generating this file is meant to prevent.
 fn followed_json() -> Vec<Value> {
     sample_terminals()

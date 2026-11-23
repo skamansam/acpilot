@@ -30,7 +30,7 @@ const SCHEMA_VERSION: u32 = 1;
 ///
 /// With `with_secrets`, every local keyring reference named by the profile's
 /// agents is resolved into a `secrets` map keyed by its account. A cross-profile
-/// reference fails the export; it belongs to the other profile.
+/// reference fails the export. It belongs to the other profile.
 pub fn document(
     profile: &Profile,
     with_secrets: bool,

@@ -1,0 +1,4 @@
+{
+  "key": "acpilot-release",
+  "signature": "fadc523a3b7d5f08f0f147cf628f466e5f08f5ba6cd8111b85087362916b73ead2f97e198cee24ae965557a93c8632442385458ca5cb2db600f7f89689f6600b"
+}

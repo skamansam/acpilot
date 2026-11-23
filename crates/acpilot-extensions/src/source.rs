@@ -112,7 +112,7 @@ impl AssetSource for DirSource {
 
 /// Files compiled into the binary.
 ///
-/// Only whole files: the embedded source has no directories, so a built-in that
+/// Only whole files: the embedded source has no directories. A built-in that
 /// points at a missing asset fails at build time via `include_str!` and at load
 /// time via the same `exists` check as anything else.
 #[derive(Debug, Clone, Copy)]

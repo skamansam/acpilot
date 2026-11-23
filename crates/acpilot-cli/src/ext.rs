@@ -1,6 +1,6 @@
 //! `acpilot ext` — the verbs that work without a daemon.
 //!
-//! Installing, verifying, and approving are filesystem operations; routing them
+//! Installing, verifying, and approving are filesystem operations. Routing them
 //! through `acpilotd` would mean an editor cannot be repaired when its daemon is
 //! the thing that is broken. Everything here calls the same library the daemon
 //! will, so there is one implementation, not a CLI copy of it.
@@ -17,7 +17,7 @@ use acpilot_extensions::activation::{
 };
 use acpilot_extensions::error::ExtensionError;
 use acpilot_extensions::manifest::validate_segment;
-use acpilot_extensions::store::{Store, StoreStatus};
+use acpilot_extensions::store::{Store, StoreStatus, StoredExtension};
 use acpilot_extensions::theme_import::from_tmtheme;
 
 /// Where the store and profiles live for one command.
@@ -25,7 +25,7 @@ use acpilot_extensions::theme_import::from_tmtheme;
 pub struct Paths {
     /// Extension store root.
     pub store_root: PathBuf,
-    /// Acpilot config root; profiles live under `<config>/profiles`.
+    /// Acpilot config root. Profiles live under `<config>/profiles`.
     pub config_root: PathBuf,
 }
 
@@ -61,22 +61,29 @@ impl Paths {
     }
 }
 
-/// Install a directory, printing what landed.
-pub fn add(paths: &Paths, from: &Path) -> Result<String, ExtensionError> {
-    let installed = paths.store().install_from_dir(from)?;
-    Ok(format!(
-        "installed {} ({}), checksum {}",
-        installed.label(),
-        installed.path.display(),
-        installed.recorded.unwrap_or_default()
-    ))
+/// Link a checkout, returning what landed.
+///
+/// The store names the checkout instead of copying it, so the next reader loads the
+/// checkout as the developer left it.
+pub fn add(paths: &Paths, from: &Path) -> Result<StoredExtension, ExtensionError> {
+    paths.store().link_from_dir(from)
 }
 
-/// Rehash every installed version. Returns whether all of them are ready.
-pub fn verify_all(paths: &Paths) -> Result<(bool, Vec<String>), ExtensionError> {
+/// Rehash every installed version. Returns whether all of them are ready, the
+/// rows a `--json` caller wants, and the lines a terminal prints.
+pub fn verify_all(
+    paths: &Paths,
+) -> Result<
+    (
+        bool,
+        Vec<acpilot_proto::extension::ExtensionSummary>,
+        Vec<String>,
+    ),
+    ExtensionError,
+> {
     let scan = paths.store().scan()?;
     if scan.is_empty() {
-        return Ok((true, vec!["no extensions installed".to_owned()]));
+        return Ok((true, Vec::new(), vec!["no extensions installed".to_owned()]));
     }
 
     let mut lines = Vec::new();
@@ -84,7 +91,11 @@ pub fn verify_all(paths: &Paths) -> Result<(bool, Vec<String>), ExtensionError> 
     let mut blocked = 0;
     for stored in &scan {
         match &stored.status {
-            StoreStatus::Ready => lines.push(format!("ok      {}", stored.label())),
+            StoreStatus::Ready => lines.push(if stored.is_linked() {
+                format!("ok      {} (linked)", stored.label())
+            } else {
+                format!("ok      {}", stored.label())
+            }),
             StoreStatus::Blocked(reason) => {
                 all_ready = false;
                 blocked += 1;
@@ -99,55 +110,33 @@ pub fn verify_all(paths: &Paths) -> Result<(bool, Vec<String>), ExtensionError> 
             if scan.len() == 1 { "" } else { "s" }
         ));
     }
-    Ok((all_ready, lines))
+    let rows = scan.iter().map(|stored| stored.summary(&[])).collect();
+    Ok((all_ready, rows, lines))
 }
 
 /// Remove versions no profile activates. With `dry_run`, only report them.
-pub fn prune(paths: &Paths, dry_run: bool) -> Result<Vec<String>, ExtensionError> {
+pub fn prune(paths: &Paths, dry_run: bool) -> Result<Vec<(String, String)>, ExtensionError> {
     let keep = keep_set(paths)?;
     let store = paths.store();
     if dry_run {
-        let doomed = store.plan_prune(&keep)?;
-        if doomed.is_empty() {
-            return Ok(vec!["nothing to prune".to_owned()]);
-        }
-        return Ok(doomed
-            .into_iter()
-            .map(|(id, version)| format!("would remove {id}@{version}"))
-            .collect());
-    }
-    let removed = store.prune(&keep)?;
-    if removed.is_empty() {
-        return Ok(vec!["nothing to prune".to_owned()]);
-    }
-    Ok(removed
-        .into_iter()
-        .map(|(id, version)| format!("removed {id}@{version}"))
-        .collect())
-}
-
-/// Approve an extension for one profile.
-pub fn activate(paths: &Paths, profile: &str, id: &str) -> Result<String, ExtensionError> {
-    validate_segment("profile", profile)?;
-    let mut extensions = ProfileExtensions::open(paths.store(), paths.profile(profile)?)?;
-    let changed = extensions.activate(id)?;
-    if changed {
-        Ok(format!("activated {id} in profile {profile}"))
+        store.plan_prune(&keep)
     } else {
-        Ok(format!("{id} was already active in profile {profile}"))
+        store.prune(&keep)
     }
 }
 
-/// Withdraw approval from one profile.
-pub fn deactivate(paths: &Paths, profile: &str, id: &str) -> Result<String, ExtensionError> {
+/// Approve an extension for one profile. Returns whether the file changed.
+pub fn activate(paths: &Paths, profile: &str, id: &str) -> Result<bool, ExtensionError> {
     validate_segment("profile", profile)?;
     let mut extensions = ProfileExtensions::open(paths.store(), paths.profile(profile)?)?;
-    let changed = extensions.deactivate(id)?;
-    if changed {
-        Ok(format!("deactivated {id} in profile {profile}"))
-    } else {
-        Ok(format!("{id} was not active in profile {profile}"))
-    }
+    extensions.activate(id)
+}
+
+/// Withdraw approval from one profile. Returns whether the file changed.
+pub fn deactivate(paths: &Paths, profile: &str, id: &str) -> Result<bool, ExtensionError> {
+    validate_segment("profile", profile)?;
+    let mut extensions = ProfileExtensions::open(paths.store(), paths.profile(profile)?)?;
+    extensions.deactivate(id)
 }
 
 /// Explain how a preset resolves for one profile.
@@ -178,7 +167,7 @@ pub fn why(paths: &Paths, profile: &str, id: &str) -> Result<String, ExtensionEr
 /// Convert a `.tmTheme` file into a theme extension and install it.
 ///
 /// The files are written to a temporary directory and installed through the
-/// same path as any other extension, so an imported theme is checksummed and can
+/// same path as any other extension. An imported theme is checksummed and can
 /// be blocked like anything else.
 pub fn import_theme(
     paths: &Paths,

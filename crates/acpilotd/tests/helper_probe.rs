@@ -2,7 +2,7 @@
 
 //! The daemon's half of the helper handshake, against programs that answer for it.
 //!
-//! `acpilotd-helper` itself is tested where it lives; what this covers is the other
+//! `acpilotd-helper` itself is tested where it lives. What this covers is the other
 //! end — that a helper which shakes hands is believed, one that speaks another
 //! protocol is refused by number, and one that says nothing is a failure rather than
 //! an empty success — and then what a kept connection can ask it: a request is
@@ -91,12 +91,12 @@ fn a_helper_that_says_nothing_is_a_failure() {
 fn a_second_test_of_the_same_host_asks_the_helper_that_answered_the_first() {
     // The stand-in answers every hello it reads, but exits silently if it is
     // started a second time. Reuse is therefore the only way the second call can
-    // succeed, and a daemon that dialled again would fail with "answered
+    // succeed. A daemon that dialled again would fail with "answered
     // nothing" rather than pass for the wrong reason.
     let directory = tempfile::tempdir().expect("temp dir");
     let marker = directory.path().join("dialled");
     // The stand-in answers each handshake with the id it was asked: the daemon checks
-    // the id now, so a fixed one would be a refused answer rather than a reuse.
+    // the id now. A fixed one would be a refused answer rather than a reuse.
     let answer = r#"{"jsonrpc":"2.0","id":%s,"result":{"protocol":1}}"#;
     let script = format!(
         "if [ -e '{marker}' ]; then exit 0; fi\n: > '{marker}'\n\

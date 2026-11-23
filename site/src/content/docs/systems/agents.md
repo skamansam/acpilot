@@ -67,7 +67,11 @@ transcript, same audit. That was the entire reason to build it that way.
 An agent is an arbitrary program with your repository and your network. The first
 time a command is run, the daemon hashes it and pins it. If the binary changes,
 the agent shows as **untrusted** until you say otherwise. This is not paranoia.
-It is the same reason your shell asks before running a downloaded script.
+It is the same reason your shell asks before running a downloaded script. The TUI
+asks with it: **Session → Select Agent…** marks that row `not approved` and names
+the pack it came from. `Enter` on it opens a card with the agent, the pack and
+the exact command. `y` records the pin. `n` writes nothing and the command does
+not run.
 
 ## What is built today
 
@@ -82,8 +86,9 @@ wrapper, when a session closes.
 `GET /v1/agents` lists what the daemon was given, in declaration order, with
 `available` or `missing` from a `PATH` lookup on the daemon's host. That status
 costs no process: listing agents cannot start one. A handshake-dependent
-`unhealthy` or a trust-pinned `untrusted` arrives with sessions and trust storing,
-not before.
+`unhealthy` is reported by the session routes rather than by this list. `untrusted`
+is reported here, once the program no longer matches the pin a person recorded,
+and `POST /v1/agents/{id}/trust` is the only thing that answers it.
 
 A session is the client side of the protocol. It takes the supervisor's two pipes
 and speaks ACP over them, so the same code serves a child process, an SSH host,

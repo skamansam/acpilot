@@ -1,0 +1,69 @@
+---
+source: crates/acpilot-model/tests/wire_snapshot.rs
+expression: "Value::Array(bodies.into_iter().map(canonical).collect())"
+---
+[
+  {
+    "messages": [
+      {
+        "content": "Call the ping tool with value \"pong\".",
+        "role": "user"
+      }
+    ],
+    "model": "qwen2-7b-instruct",
+    "stream": false,
+    "temperature": 0.0,
+    "tools": [
+      {
+        "function": {
+          "description": "Echo a value back. Use it whenever the user asks you to ping.",
+          "name": "ping",
+          "parameters": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ],
+    "top_p": 0.949999988079071
+  },
+  {
+    "messages": [
+      {
+        "content": "Reply with a JSON object with one key, \"ok\", set to true.",
+        "role": "user"
+      }
+    ],
+    "model": "qwen2-7b-instruct",
+    "response_format": {
+      "json_schema": {
+        "name": "answer",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "json_schema"
+    },
+    "stream": false,
+    "temperature": 0.0,
+    "top_p": 0.949999988079071
+  }
+]

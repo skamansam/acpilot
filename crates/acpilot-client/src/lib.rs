@@ -254,6 +254,25 @@ impl Client {
         self.get("/v1/agents").await
     }
 
+    /// `POST /v1/agents/{id}/trust`: record the binary a person approved.
+    ///
+    /// The answer is the agent's own summary, so a caller that just cleared the
+    /// question reads the new state from the reply instead of listing again.
+    pub async fn trust_agent(&self, id: &str) -> Result<AgentSummary, ClientError> {
+        let path = format!("/v1/agents/{id}/trust");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
+    }
+
+    /// `GET /v1/themes`: every theme a surface can draw with, resolved.
+    ///
+    /// Resolved by the daemon, not here: `extends` chains and the profile's
+    /// activation list are the daemon's answers, and a window that cannot read its
+    /// files still gets the palette an activated extension ships.
+    pub async fn themes(&self) -> Result<Vec<acpilot_proto::extension::ThemeSummary>, ClientError> {
+        self.get("/v1/themes").await
+    }
+
     /// `GET /v1/profiles`.
     pub async fn profiles(&self) -> Result<Vec<ProfileSummary>, ClientError> {
         self.get("/v1/profiles").await
@@ -430,6 +449,20 @@ impl Client {
         &self,
     ) -> Result<Vec<acpilot_proto::lsp::LspServerSummary>, ClientError> {
         self.get("/v1/lsp/servers").await
+    }
+
+    /// `POST /v1/lsp/servers/{language}/trust`: record the program a person approved.
+    ///
+    /// Keyed by language, because a language is what a client lists; the daemon stores
+    /// the pin against the program, so approving `typescript` also approves
+    /// `javascript` when one server answers for both.
+    pub async fn trust_language_server(
+        &self,
+        language: &str,
+    ) -> Result<acpilot_proto::lsp::LspServerSummary, ClientError> {
+        let path = format!("/v1/lsp/servers/{language}/trust");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
     }
 
     /// Where the name is used in code.
@@ -701,6 +734,174 @@ impl Client {
     ///
     /// `None` lists every terminal the daemon owns, which is what a debugger
     /// wants; a pane asks for the ones its session opened.
+    /// `GET /v1/skills`: what the workspace, profile and packs provide.
+    pub async fn skills(&self) -> Result<Vec<acpilot_proto::skills::SkillSummary>, ClientError> {
+        self.get("/v1/skills").await
+    }
+
+    /// `POST /v1/skills`: create or replace one skill.
+    pub async fn save_skill(
+        &self,
+        draft: &acpilot_proto::skills::SkillDraft,
+    ) -> Result<acpilot_proto::skills::SkillSummary, ClientError> {
+        let request = self.http.post(self.request_url("/v1/skills")).json(draft);
+        self.send(request, "/v1/skills").await
+    }
+
+    /// `POST /v1/acp/pairings`: mint a one-time code for a remote driver.
+    ///
+    /// `grant_answer_permissions` is the person's decision, not the driver's:
+    /// without it the driver's turns wait for a human at the machine.
+    pub async fn pair_driver(
+        &self,
+        grant_answer_permissions: bool,
+    ) -> Result<acpilot_proto::bridge::PairingCode, ClientError> {
+        let path = "/v1/acp/pairings";
+        let body = acpilot_proto::bridge::CreatePairingRequest {
+            grant_answer_permissions,
+        };
+        let request = self.http.post(self.request_url(path)).json(&body);
+        self.send(request, path).await
+    }
+
+    /// `GET /v1/acp/bridge`: whether the driver listener is on and who is paired.
+    pub async fn acp_bridge(&self) -> Result<acpilot_proto::bridge::AcpBridgeSummary, ClientError> {
+        self.get("/v1/acp/bridge").await
+    }
+
+    /// `GET /v1/acp/drivers`: every driver on record, revoked ones included.
+    pub async fn acp_drivers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::bridge::AcpDriverSummary>, ClientError> {
+        self.get("/v1/acp/drivers").await
+    }
+
+    /// `POST /v1/acp/drivers/{id}/revoke`: stop the next request with the old token.
+    pub async fn revoke_driver(
+        &self,
+        id: &str,
+    ) -> Result<acpilot_proto::bridge::AcpDriverSummary, ClientError> {
+        let path = format!("/v1/acp/drivers/{id}/revoke");
+        let request = self.http.post(self.request_url(&path));
+        self.send(request, &path).await
+    }
+
+    /// `GET /v1/providers`: the declarations, with their last probe answer.
+    pub async fn providers(
+        &self,
+    ) -> Result<Vec<acpilot_proto::model::ProviderSummary>, ClientError> {
+        self.get("/v1/providers").await
+    }
+
+    /// `GET /v1/models`: what every enabled provider reports, and who did not answer.
+    pub async fn models(&self) -> Result<acpilot_proto::model::ModelCatalogue, ClientError> {
+        self.get("/v1/models").await
+    }
+
+    /// `GET /v1/recipes`: every recipe in the profile, in file order.
+    pub async fn recipes(&self) -> Result<Vec<acpilot_proto::model::ModelRecipe>, ClientError> {
+        self.get("/v1/recipes").await
+    }
+
+    /// `GET /v1/recipes/{id}`.
+    pub async fn recipe(&self, id: &str) -> Result<acpilot_proto::model::ModelRecipe, ClientError> {
+        self.get(&format!("/v1/recipes/{id}")).await
+    }
+
+    /// `PATCH /v1/recipes/{id}`. Only the fields present move.
+    pub async fn patch_recipe(
+        &self,
+        id: &str,
+        patch: &acpilot_proto::model::RecipePatch,
+    ) -> Result<acpilot_proto::model::ModelRecipe, ClientError> {
+        let path = format!("/v1/recipes/{id}");
+        let request = self.http.patch(self.request_url(&path)).json(patch);
+        self.send(request, &path).await
+    }
+
+    /// `POST /v1/recipes/{id}/promote`: write the entry, read the caveats.
+    ///
+    /// The warnings are the answer as much as the agent is: a model whose tools
+    /// probe did not call anything is promoted anyway, and a caller that shows
+    /// only the success hides the reason to reconsider.
+    pub async fn promote_recipe(
+        &self,
+        id: &str,
+        request: &acpilot_proto::model::PromoteRecipeRequest,
+    ) -> Result<acpilot_proto::model::PromotedAgent, ClientError> {
+        let path = format!("/v1/recipes/{id}/promote");
+        let request = self.http.post(self.request_url(&path)).json(request);
+        self.send(request, &path).await
+    }
+
+    /// `GET /v1/recipes/{id}/runs`: one page of summaries, newest first.
+    pub async fn runs(&self, id: &str) -> Result<acpilot_proto::model::RunPage, ClientError> {
+        self.get(&format!("/v1/recipes/{id}/runs")).await
+    }
+
+    /// `GET /v1/recipes/{id}/runs/{run}`: the record, including what the run read.
+    pub async fn run_record(
+        &self,
+        id: &str,
+        run: &str,
+    ) -> Result<acpilot_proto::model::RunRecordView, ClientError> {
+        self.get(&format!("/v1/recipes/{id}/runs/{run}")).await
+    }
+
+    /// Start a run and follow its frames.
+    ///
+    /// The stream is the run: there is no job to poll. `root` is the workspace the
+    /// corpus selectors resolve against, and is refused by the daemon when a run
+    /// has selectors and names none.
+    pub fn run_recipe(
+        &self,
+        id: &str,
+        root: Option<&str>,
+        request: &acpilot_proto::model::RunRequest,
+    ) -> BoxStream<'static, Result<ModelRunStream, ClientError>> {
+        let client = self.clone();
+        let id = id.to_owned();
+        let query = root.map(|root| format!("?root={}", query_value(root)));
+        let request = request.clone();
+        stream::once(async move { client.open_run(&id, query.as_deref(), &request).await })
+            .then(|opened| async move {
+                match opened {
+                    Ok(frames) => frames,
+                    Err(error) => Box::pin(stream::once(async move { Err(error) })),
+                }
+            })
+            .flatten()
+            .boxed()
+    }
+
+    async fn open_run(
+        &self,
+        id: &str,
+        query: Option<&str>,
+        request: &acpilot_proto::model::RunRequest,
+    ) -> Result<BoxStream<'static, Result<ModelRunStream, ClientError>>, ClientError> {
+        let path = match query {
+            Some(query) => format!("/v1/recipes/{id}/runs{query}"),
+            None => format!("/v1/recipes/{id}/runs"),
+        };
+        let response = self
+            .http
+            .post(self.request_url(&path))
+            .json(request)
+            .send()
+            .await
+            .map_err(|source| self.transport(&path, source))?;
+        if !response.status().is_success() {
+            return Err(self.api_error(response, &path).await);
+        }
+        Ok(Box::pin(response.bytes_stream().eventsource().map(
+            |frame| match frame {
+                Ok(frame) => model_run_frame(&frame),
+                Err(error) => Err(ClientError::Stream(error.to_string())),
+            },
+        )))
+    }
+
     pub async fn terminals(
         &self,
         session: Option<&str>,
@@ -959,6 +1160,85 @@ fn query_value(value: &str) -> String {
 
 fn status_code(status: StatusCode) -> &'static str {
     status.canonical_reason().unwrap_or("unknown")
+}
+
+/// One frame of a recipe run's stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelRunStream {
+    /// The run exists; the frames after this one carry its id.
+    Started {
+        /// Run identifier, which the record is fetched by.
+        run_id: String,
+    },
+    /// Answer text, as the provider produced it. A provider that ignores
+    /// `stream: true` sends one frame carrying the whole answer.
+    Delta {
+        /// Run identifier.
+        run_id: String,
+        /// The text.
+        text: String,
+    },
+    /// The model's thinking, which a reasoning model writes before its answer.
+    ///
+    /// A separate frame rather than a flag on `Delta`: thinking is not the
+    /// answer, and a client that drew it in the answer's place would be inventing
+    /// one.
+    Thought {
+        /// Run identifier.
+        run_id: String,
+        /// The thinking.
+        text: String,
+    },
+    /// The run ended, and its record is written before this frame.
+    Finished(Box<acpilot_proto::model::RunSummary>),
+    /// A frame this build does not know, kept so the stream is not silently short.
+    Other {
+        /// The event name.
+        event: String,
+        /// Its data, unparsed.
+        data: String,
+    },
+}
+
+fn model_run_frame(frame: &eventsource_stream::Event) -> Result<ModelRunStream, ClientError> {
+    let value = |data: &str| -> Result<serde_json::Value, ClientError> {
+        serde_json::from_str(data)
+            .map_err(|error| ClientError::Stream(format!("a run frame did not parse: {error}")))
+    };
+    match frame.event.as_str() {
+        "model.run.started" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Started {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.delta" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Delta {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+                text: value["text"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.thought" => {
+            let value = value(&frame.data)?;
+            Ok(ModelRunStream::Thought {
+                run_id: value["run_id"].as_str().unwrap_or_default().to_owned(),
+                text: value["text"].as_str().unwrap_or_default().to_owned(),
+            })
+        }
+        "model.run.finished" => {
+            let value = value(&frame.data)?;
+            serde_json::from_value(value["run"].clone())
+                .map(|run| ModelRunStream::Finished(Box::new(run)))
+                .map_err(|error| {
+                    ClientError::Stream(format!("a finished run did not parse: {error}"))
+                })
+        }
+        other => Ok(ModelRunStream::Other {
+            event: other.to_owned(),
+            data: frame.data.clone(),
+        }),
+    }
 }
 
 fn session_frame(frame: &eventsource_stream::Event) -> Result<SessionStream, ClientError> {

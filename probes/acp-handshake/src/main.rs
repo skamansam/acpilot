@@ -220,7 +220,7 @@ usage: acp-handshake [--agent claude|opencode] [--command 'CMD ARGS'] \\
                         }
                     }
                     _ => {
-                        // stdin frames are what *we* sent; stdout is the agent.
+                        // stdin frames are what *we* sent. Stdout is the agent.
                         let dir = match direction {
                             LineDirection::Stdin => "stdin",
                             _ => "stdout",
@@ -322,7 +322,7 @@ usage: acp-handshake [--agent claude|opencode] [--command 'CMD ARGS'] \\
             )
             .connect_with(agent, move |connection: ConnectionTo<Agent>| {
                 // The report still owns the original handle after the
-                // connection returns; this is the connection's own clone.
+                // connection returns. This is the connection's own clone.
                 let run = connection_run;
                 async move {
                     let initialize = InitializeRequest::new(ProtocolVersion::V1)
@@ -387,7 +387,7 @@ usage: acp-handshake [--agent claude|opencode] [--command 'CMD ARGS'] \\
                     }
 
                     // A session is born with whatever model and mode the agent
-                    // prefers; choosing another one is part of the handshake, and
+                    // prefers. Choosing another one is part of the handshake, and
                     // the agent may refuse the write without failing the session.
                     for (id, value) in configs {
                         let request = SetSessionConfigOptionRequest::new(

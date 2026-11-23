@@ -173,11 +173,12 @@ Milliseconds. Three runs agreed within ~10%. The table is one saved report
 | helper message on a warm session | 30 | 0.077 | 0.107 | 0.142 | 0.193 |
 | 1 MiB request line on the warm session | 1 | — | 1.34 | — | — |
 
-A second session on the same box, run from a plain `C:\Users\SamTyler` cwd
-instead of the UNC checkout, reproduced the shape. It gave list 66.3/76.2, one
-call 166.3/182.6 and one-shot 127.8/134.3. Exit took 172.6/191.3 ms (p50/p90), a
-warm message took 0.1 ms, and a 1 MiB line arrived intact in 1.5 ms. Differences from the table above are
-within ±15% and do not change any ordering or conclusion.
+A second session on the same box used a plain `C:\Users\SamTyler` cwd instead of
+the UNC checkout. It reproduced the shape. The listing gave 66.3/76.2. One
+call gave 166.3/182.6, and one-shot gave 127.8/134.3. Exit took 172.6/191.3 ms
+(p50/p90). A warm message took 0.1 ms. A 1 MiB line arrived intact in 1.5 ms.
+Differences from the table above are within ±15%. They do not change any ordering
+or conclusion.
 
 * `Command::spawn` itself is ~6 ms. The other ~133 ms is the WSL relay starting
   the distro-side process. That is the number a session pays once, not the
@@ -342,7 +343,7 @@ product, which builds from a normal Windows path.
 | `~` in the program path | not expanded by `-e`, but `--cd ~` is. |
 | failed exec message | `<3>WSL (4062 - Relay) ERROR: CreateProcessCommon:818: execvpe(...) failed: No such file or directory` on stderr. |
 | exit codes | `7` → 7, `3` → 3 through `-e`, and a missing binary is 1, not 127. |
-| stdout/stderr | separate and clean. stderr carries only the program's own output and relay errors. |
+| stdout/stderr | separate and clean. Stderr carries only the program's own output and relay errors. |
 | stdin | byte-exact and streamed per line, 1 MiB intact, with no extra newline. |
 | cwd | translated from the host automatically (UNC → the Linux path, `C:\x` → `/mnt/c/x`). Pass `--cd` for determinism. |
 | default distro | `printenv WSL_DISTRO_NAME` via a bare `wsl.exe` is the reliable answer. `-l -q` also lists `docker-desktop`, which is not a general-purpose distro. |

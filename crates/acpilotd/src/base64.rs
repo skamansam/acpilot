@@ -2,7 +2,7 @@
 //!
 //! Two callers, two shapes: the install script puts a whole binary on a shell's
 //! stdin, where a line long enough to be a problem is worth wrapping at 76
-//! characters; the PTY channel puts one chunk of output inside a JSON string,
+//! characters. The PTY channel puts one chunk of output inside a JSON string,
 //! where a newline costs an escape in every frame. So the codec is the same and
 //! the wrapping is the caller's.
 //!
@@ -59,7 +59,7 @@ fn push(bytes: &[u8], out: &mut String, columns: usize) {
 /// # Errors
 ///
 /// A character outside the alphabet. A refusal rather than a skipped byte: a wrong
-/// keystroke in a terminal is worse than a reported one, and the caller's message
+/// keystroke in a terminal is worse than a reported one. The caller's message
 /// names the character.
 pub(crate) fn decode(text: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);

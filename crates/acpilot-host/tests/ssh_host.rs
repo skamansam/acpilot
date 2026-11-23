@@ -20,8 +20,8 @@
 //! wrong reason.
 //!
 //! What is asserted is what the design phase's task P0-4 measured, from the other side of the seam: exec
-//! keeps stderr out of the frame stream and preserves the exit code; a PTY is a
-//! terminal and takes a resize mid-run; and a hundred lines written one at a time
+//! keeps stderr out of the frame stream and preserves the exit code. A PTY is a
+//! terminal and takes a resize mid-run. And a hundred lines written one at a time
 //! arrive as a byte stream the caller has to frame.
 
 #![cfg(feature = "ssh")]
@@ -198,7 +198,7 @@ fn a_hundred_lines_arrive_as_a_byte_stream_the_caller_frames() {
     assert_eq!(lines.first().copied(), Some("line 0"));
     assert_eq!(lines.last().copied(), Some("line 99"));
     assert!(exit.success, "{exit:?}");
-    // Loopback, so this is a floor; it exists to catch a per-line round trip.
+    // Loopback, so this is a floor. It exists to catch a per-line round trip.
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "100 lines took {:?}",

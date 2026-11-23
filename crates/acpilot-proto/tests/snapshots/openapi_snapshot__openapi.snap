@@ -39,7 +39,7 @@ expression: canonical(document)
             ]
           },
           "require_token": {
-            "description": "Whether a bearer token is required. Loopback-only endpoints may disable\nit; anything else may not.",
+            "description": "Whether a bearer token is required. Loopback-only endpoints may disable\nit. Anything else may not.",
             "type": "boolean"
           },
           "transports": {
@@ -96,7 +96,7 @@ expression: canonical(document)
             "type": "string"
           },
           "prompt_turns": {
-            "description": "Turns this driver has prompted; the audit trail at a glance.",
+            "description": "Turns this driver has prompted. The audit trail at a glance.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -186,6 +186,13 @@ expression: canonical(document)
           "command": {
             "description": "Command that will be spawned, for display and debugging.",
             "type": "string"
+          },
+          "extension": {
+            "description": "Extension that provided this agent, when it came from one.\n\nA client asking to trust the binary can name the pack — \"trust\nrust-analyzer from acpilot.rust-pack?\" — instead of asking about a bare\npath nobody recognizes.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/String",
@@ -481,6 +488,85 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "CreatePairingRequest": {
+        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests. A driver cannot grant itself one by asking.",
+        "properties": {
+          "grant_answer_permissions": {
+            "description": "Allow the paired driver to answer permission requests for the turns it\nstarts. Off by default, and off is the safe answer.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "CreateRecipeRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `POST /v1/recipes`.\n\nThe same fields a recipe file has, without `updated_at`: the file's mtime is\nthe timestamp, and a client that supplied one would be writing a claim about a\nfile it does not own.",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "Context plan."
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Identifier, also the file name under `recipes/`."
+          },
+          "label": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "model_id": {
+            "description": "Model identifier to send.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "What this recipe is for, and what it is bad at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider to call."
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/SamplingParams",
+            "description": "Sampling knobs. Absent means the agent-shaped defaults."
+          },
+          "schema_version": {
+            "description": "Schema version; this build reads 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_prompt": {
+            "description": "The master prompt.",
+            "type": "string"
+          },
+          "tools": {
+            "$ref": "#/components/schemas/ToolExposure",
+            "description": "Tool ceiling for the promoted agent."
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "label",
+          "provider_id",
+          "model_id",
+          "system_prompt",
+          "context",
+          "tools"
+        ],
+        "type": "object"
+      },
       "CreateSessionRequest": {
         "description": "Request body for `POST /v1/sessions`.",
         "properties": {
@@ -489,7 +575,7 @@ expression: canonical(document)
             "description": "Agent to run."
           },
           "title": {
-            "description": "Optional title; the first prompt supplies one otherwise.",
+            "description": "Optional title. The first prompt supplies one otherwise.",
             "type": [
               "string",
               "null"
@@ -781,7 +867,7 @@ expression: canonical(document)
         "type": "string"
       },
       "ErrorBody": {
-        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`; `message` is for humans and may be reworded.",
+        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`. `message` is for humans and may be reworded.",
         "properties": {
           "code": {
             "description": "Stable identifier for the failure class.",
@@ -820,6 +906,29 @@ expression: canonical(document)
         "required": [
           "field",
           "message"
+        ],
+        "type": "object"
+      },
+      "ExtensionAction": {
+        "description": "What an activation request changed.",
+        "properties": {
+          "changed": {
+            "description": "`false` when the list already said what it was now asked to say.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "profile": {
+            "description": "Profile the approval was written to, or withdrawn from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "changed"
         ],
         "type": "object"
       },
@@ -863,6 +972,13 @@ expression: canonical(document)
             },
             "type": "array"
           },
+          "listed": {
+            "description": "Versions the signed index offers for this id.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionListing"
+            },
+            "type": "array"
+          },
           "manifest": {
             "description": "The manifest as written, for reviewing before enabling.",
             "type": "string"
@@ -870,6 +986,13 @@ expression: canonical(document)
           "summary": {
             "$ref": "#/components/schemas/ExtensionSummary",
             "description": "The same summary the list endpoint returns."
+          },
+          "versions": {
+            "description": "Every installed version, oldest first. The newest is [`Self::summary`].",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -886,12 +1009,81 @@ expression: canonical(document)
           "theme",
           "language_servers",
           "agents",
+          "skills",
           "grammars",
           "snippets",
           "keymap",
           "transcript_parser"
         ],
         "type": "string"
+      },
+      "ExtensionListing": {
+        "description": "One version a signed index offers, as shown beside what is installed.",
+        "properties": {
+          "checksum": {
+            "description": "`sha256:<64 hex characters>` over the archive's bytes.",
+            "type": "string"
+          },
+          "download": {
+            "description": "Where the archive is downloaded from.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExtensionKind",
+            "description": "The registry the listing is filed under."
+          },
+          "min_acpilot": {
+            "description": "Oldest acpilot that can load it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publisher": {
+            "description": "Who published it.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The archive's length in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Semantic version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "kind",
+          "publisher",
+          "checksum",
+          "size",
+          "download"
+        ],
+        "type": "object"
+      },
+      "ExtensionRemoval": {
+        "description": "What a removal deleted.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Namespaced identifier."
+          },
+          "versions": {
+            "description": "Versions removed, oldest first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "versions"
+        ],
+        "type": "object"
       },
       "ExtensionSource": {
         "description": "How the extension got here.",
@@ -914,6 +1106,13 @@ expression: canonical(document)
       "ExtensionSummary": {
         "description": "An extension as returned by `GET /v1/extensions`.",
         "properties": {
+          "active_profiles": {
+            "description": "Profiles that activate this id. Empty when none does.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "checksum": {
             "description": "SHA-256 of the installed directory, verified against the index.",
             "type": [
@@ -980,6 +1179,27 @@ expression: canonical(document)
           "kinds",
           "status",
           "source"
+        ],
+        "type": "object"
+      },
+      "ExtensionVerify": {
+        "description": "The result of rehashing every installed version of one id.",
+        "properties": {
+          "extensions": {
+            "description": "The versions, with their verdicts.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummary"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "description": "Whether every version still matches its recorded checksum.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "extensions"
         ],
         "type": "object"
       },
@@ -1518,7 +1738,7 @@ expression: canonical(document)
         "type": "object"
       },
       "HostCapabilities": {
-        "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files, and the UIs need to know that before offering an\nagent.",
+        "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files. The UIs need to know that before offering an\nagent.",
         "properties": {
           "filesystem": {
             "description": "Can the daemon read and write files here?",
@@ -1597,12 +1817,19 @@ expression: canonical(document)
         "description": "Request body for `POST /v1/extensions`.\n\nExactly one of `version` (registry) or `path` (local directory) is used;\n`path` wins when both are present, because a developer typing a path means it.",
         "properties": {
           "activate": {
-            "description": "Activate it in the profile named by `X-Acpilot-Profile` after verifying.",
+            "description": "Activate it in the daemon's profile after verifying.",
             "type": "boolean"
           },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Identifier from the index, or the manifest's id for a path install."
+          },
+          "index": {
+            "description": "A different index: an https URL or a file. The one this build ships when\nabsent.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "path": {
             "description": "Directory to link instead of downloading.",
@@ -1620,8 +1847,7 @@ expression: canonical(document)
           }
         },
         "required": [
-          "id",
-          "activate"
+          "id"
         ],
         "type": "object"
       },
@@ -1719,7 +1945,8 @@ expression: canonical(document)
           "ready",
           "indexing",
           "crashed",
-          "stopped"
+          "stopped",
+          "untrusted"
         ],
         "type": "string"
       },
@@ -1741,6 +1968,13 @@ expression: canonical(document)
               }
             ]
           },
+          "extension": {
+            "description": "The extension that introduced this row, absent for this build's own.\n\nA client that asks the person to trust a command has to name where the\ncommand came from. \"Rust-analyzer from acpilot.rust-pack\" is a question\nabout a pin, while a bare path is a question about nothing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Server identifier."
@@ -1753,7 +1987,7 @@ expression: canonical(document)
             "type": "array"
           },
           "round_trip_ms": {
-            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once, and a figure that mixed the two would make every report\nread as slow when only the first question was.",
+            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once. A figure that mixed the two would make every report\nread as slow when only the first question was.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -1867,6 +2101,48 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "ModelCatalogue": {
+        "description": "One model list, with the providers that could not answer.\n\nThe two halves are beside each other on purpose: a list that quietly omitted a\nserver would look like a server with no models.",
+        "properties": {
+          "models": {
+            "description": "Models from every provider that answered, in provider declaration order.",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredModel"
+            },
+            "type": "array"
+          },
+          "problems": {
+            "description": "Providers that did not answer, and why.",
+            "items": {
+              "$ref": "#/components/schemas/ModelProblem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "ModelProblem": {
+        "description": "A provider that could not answer a model list.",
+        "properties": {
+          "message": {
+            "description": "Why it did not answer.",
+            "type": "string"
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/String",
+            "description": "Provider id."
+          }
+        },
+        "required": [
+          "provider_id",
+          "message"
+        ],
+        "type": "object"
+      },
       "ModelRecipe": {
         "description": "A tuned configuration for one model, as returned by `GET /v1/recipes`.",
         "properties": {
@@ -1906,6 +2182,13 @@ expression: canonical(document)
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "skills": {
+            "description": "Skills whose instructions are part of this recipe's system prompt.\n\nEmpty means none. A name that is not present is reported when the run\nstarts rather than silently omitted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "system_prompt": {
             "description": "The master prompt. The whole point of the lab is editing this and seeing\nwhat changes.",
@@ -1967,6 +2250,24 @@ expression: canonical(document)
           "code",
           "name",
           "requested_scopes"
+        ],
+        "type": "object"
+      },
+      "PairedDriver": {
+        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else. The ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
+        "properties": {
+          "driver": {
+            "$ref": "#/components/schemas/AcpDriverSummary",
+            "description": "The driver, as the cockpit will list it."
+          },
+          "token": {
+            "description": "The bearer token every later request carries.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "driver",
+          "token"
         ],
         "type": "object"
       },
@@ -2085,7 +2386,7 @@ expression: canonical(document)
         "type": "object"
       },
       "PositionEncoding": {
-        "description": "Position encoding negotiated with a server.\n\nLSP defaults to UTF-16, while the editor buffers are UTF-8 bytes; the daemon\nnegotiates explicitly and records what was agreed rather than assuming.",
+        "description": "Position encoding negotiated with a server.\n\nLSP defaults to UTF-16, while the editor buffers are UTF-8 bytes. The daemon\nnegotiates explicitly and records what was agreed rather than assuming.",
         "enum": [
           "utf8",
           "utf16"
@@ -2518,7 +2819,7 @@ expression: canonical(document)
         "type": "object"
       },
       "PromptAccepted": {
-        "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE; this only acknowledges that it started.",
+        "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE. This only acknowledges that it started.",
         "properties": {
           "first_seq": {
             "description": "Sequence number the client should use as `Last-Event-ID` when reconnecting.",
@@ -2642,6 +2943,141 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "RecipePatch": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/recipes/{id}`.\n\nOnly the fields present move. A recipe id is not editable: the file name is the\nidentity a run record and an agent manifest refer to.",
+        "properties": {
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextBudget",
+                "description": "New context plan."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "description": "New model identifier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "description": "New note.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "New provider."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampling": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SamplingParams",
+                "description": "New sampling knobs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills": {
+            "description": "New skill selection. `Some(vec![])` clears it; `None` leaves it alone.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "system_prompt": {
+            "description": "New master prompt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolExposure",
+                "description": "New tool ceiling."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RecordedRunRequest": {
+        "description": "The request half of a run record.\n\nThis is what the run sent, not what the recipe would send now: the recipe may\nhave been edited since, and the lab's point is to show the run that happened.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/ContextBudget",
+            "description": "The budget the assembly planned against."
+          },
+          "corpus": {
+            "description": "Selectors in the order the run used them.",
+            "items": {
+              "$ref": "#/components/schemas/CorpusSelector"
+            },
+            "type": "array"
+          },
+          "files": {
+            "description": "The files they resolved to, in prompt order.",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedCorpusFile"
+            },
+            "type": "array"
+          },
+          "prompt": {
+            "description": "The user message, unchanged.",
+            "type": "string"
+          },
+          "prompt_sha256": {
+            "description": "`sha256:` and the hex digest of the prompt.",
+            "type": "string"
+          },
+          "system_prompt_sha256": {
+            "description": "The master prompt's digest, when the recipe had one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prompt",
+          "prompt_sha256",
+          "corpus",
+          "files",
+          "budget"
+        ],
+        "type": "object"
+      },
       "Reference": {
         "description": "One use of an identifier, for the references panel.\n\n`column` is a character column rather than a byte offset: a pane places a caret on\nthe glyph, and a byte column drifts left of it the first time a line holds a `日`.\nThe line's text travels with the row for the same reason a content search's does —\na list of `src/app.rs:12` cannot be chosen from without opening every one.",
         "properties": {
@@ -2714,11 +3150,97 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "ResolvedCorpusFile": {
+        "description": "One file a corpus selector resolved to, as the run recorded it.\n\nRecorded rather than re-derived: the lab shows the files a run actually read,\nwith their sizes, and a replay must not depend on the workspace still looking\nthe way it did.",
+        "properties": {
+          "bytes": {
+            "description": "Bytes read from disk.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Path relative to the workspace root, with `/` separators.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Tokens the file was estimated at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "RunPage": {
+        "description": "One page of a recipe's runs, newest first.",
+        "properties": {
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/String",
+                "description": "Pass back as `before` for the next page. Absent at the end."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "description": "The runs.",
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "RunRecordView": {
+        "description": "One run's record: what it answered, and what it was asked.",
+        "properties": {
+          "reasoning": {
+            "description": "What the model thought before it answered, when the server reported any.\n\nAbsent for a model that does not think out loud. A reasoning model with a\ntight answer budget can spend all of it here and return no `content`, so\nthis is what tells a person the run worked and the budget was short.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request": {
+            "$ref": "#/components/schemas/RecordedRunRequest",
+            "description": "The request that produced it."
+          },
+          "schema_version": {
+            "description": "Schema version of the stored line.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunSummary",
+            "description": "The run, as the page also returns it."
+          }
+        },
+        "required": [
+          "schema_version",
+          "summary",
+          "request"
+        ],
+        "type": "object"
+      },
       "RunRequest": {
         "description": "Request body for `POST /v1/recipes/{id}/runs`.",
         "properties": {
           "corpus": {
-            "description": "Corpus pulled from the current workspace, in order.",
+            "description": "Corpus pulled from the current workspace, in order. Absent means none.",
             "items": {
               "$ref": "#/components/schemas/CorpusSelector"
             },
@@ -2737,8 +3259,7 @@ expression: canonical(document)
           }
         },
         "required": [
-          "prompt",
-          "corpus"
+          "prompt"
         ],
         "type": "object"
       },
@@ -2921,7 +3442,7 @@ expression: canonical(document)
           },
           "payload": {
             "additionalProperties": {},
-            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\", and a client generated from that refuses\nevery payload an adapter actually sends.",
+            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\". A client generated from that refuses\nevery payload an adapter actually sends.",
             "propertyNames": {
               "type": "string"
             },
@@ -3006,12 +3527,19 @@ expression: canonical(document)
             "description": "RFC 3339 timestamp of creation.",
             "type": "string"
           },
+          "driver_id": {
+            "description": "Driver that opened this session, when it came through the ACP bridge.\n\nAbsent for a session a person opened at the machine. The id is the one\n`GET /v1/acp/drivers` lists, so a transcript can answer who asked after\nthe connection ended.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "$ref": "#/components/schemas/String",
             "description": "Session identifier."
           },
           "profile": {
-            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router; it is carried so a stored row and a live\nsummary say the same thing.",
+            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router. It is carried so a stored row and a live\nsummary say the same thing.",
             "type": "string"
           },
           "status": {
@@ -3053,6 +3581,85 @@ expression: canonical(document)
         },
         "required": [
           "mode"
+        ],
+        "type": "object"
+      },
+      "SkillDestination": {
+        "description": "Where a saved skill is written.",
+        "enum": [
+          "workspace",
+          "profile"
+        ],
+        "type": "string"
+      },
+      "SkillDraft": {
+        "additionalProperties": false,
+        "description": "A create-or-replace request from the lab.",
+        "properties": {
+          "description": {
+            "description": "One-line description, at most 1024 characters.",
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/SkillDestination",
+            "description": "Workspace or profile."
+          },
+          "instructions": {
+            "description": "Instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "destination"
+        ],
+        "type": "object"
+      },
+      "SkillSource": {
+        "description": "Where a skill was found.",
+        "enum": [
+          "workspace",
+          "profile",
+          "extension"
+        ],
+        "type": "string"
+      },
+      "SkillSummary": {
+        "description": "One skill, including its instructions for preview.",
+        "properties": {
+          "description": {
+            "description": "One-line description used by the picker.",
+            "type": "string"
+          },
+          "instructions": {
+            "description": "The instructions after the frontmatter.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Lowercase hyphenated name, also the directory name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute directory containing `SKILL.md`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SkillSource",
+            "description": "Which layer provided it."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions",
+          "source",
+          "path"
         ],
         "type": "object"
       },
@@ -3181,6 +3788,33 @@ expression: canonical(document)
           "name": {
             "description": "Display name.",
             "type": "string"
+          },
+          "selected": {
+            "description": "Surfaces whose settings name this theme right now.",
+            "items": {
+              "$ref": "#/components/schemas/ThemeSurface"
+            },
+            "type": "array"
+          },
+          "syntax": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every syntax token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "ui": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Every UI token, resolved, as `#rrggbb`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "required": [
@@ -3190,6 +3824,15 @@ expression: canonical(document)
           "built_in"
         ],
         "type": "object"
+      },
+      "ThemeSurface": {
+        "description": "Which frontend is asking for a theme.\n\nThe theme is one setting per surface rather than one for all of them, because a\nterminal is not a window: a person may want a light editor on the desktop and a\ndark prompt in the terminal beside it. Every surface falls back to\n[`Preferences::theme`] when its own key is unset, so the usual answer — one\ntheme, everywhere — stays one line of settings.",
+        "enum": [
+          "tui",
+          "gui",
+          "web"
+        ],
+        "type": "string"
       },
       "TokenUsage": {
         "description": "Token counts for a run, and whether they are trustworthy.",
@@ -3253,6 +3896,41 @@ expression: canonical(document)
         ],
         "type": "object"
       },
+      "UpdateProviderRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `PATCH /v1/providers/{id}`.\n\nAn omitted field is unchanged. Changing where the provider lives is a new\nquestion, so the route probes again; changing only a label does not.",
+        "properties": {
+          "base_url": {
+            "description": "New base URL.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_ref": {
+            "description": "New keyring reference.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether the provider may be contacted.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "description": "New display label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "WorkspaceOpenRequest": {
         "description": "Request body for `POST /v1/workspaces`.\n\nOpening is idempotent: the same `host_id` + `root` pair resolves to the same\nworkspace, so a client can call this on every launch.",
         "properties": {
@@ -3298,7 +3976,7 @@ expression: canonical(document)
             "type": "string"
           },
           "profile": {
-            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path; the owner is what makes one\nprofile's workspace id unacceptable in another's request.",
+            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path. The owner is what makes one\nprofile's workspace id unacceptable in another's request.",
             "type": "string"
           },
           "root": {

@@ -387,17 +387,18 @@ async fn a_profiles_agents_are_served_beside_its_policy() {
 }
 
 #[test]
-fn a_profile_without_an_agents_file_has_no_registry_rather_than_an_empty_one() {
+fn a_profile_without_an_agents_file_has_an_empty_registry_and_writes_nothing() {
+    // The registry exists so promotion can add the first agent to a running
+    // daemon and have `GET /v1/agents` show it without a restart. Existing is not
+    // creating: opening a profile for serving still writes no file.
     let profile = tempfile::tempdir().expect("temp dir");
     let workspace = tempfile::tempdir().expect("temp dir");
     std::fs::write(profile.path().join("config.toml"), "schema_version = 1\n")
         .expect("write the profile");
 
     let state = state_for_profile(profile.path(), workspace.path()).expect("the profile loads");
-    assert!(
-        state.registry().is_none(),
-        "the daemon does not invent an agents.toml"
-    );
+    let registry = state.registry().expect("an empty registry, not none");
+    assert!(registry.agents().is_empty());
     assert!(
         !profile.path().join("agents.toml").exists(),
         "opening a profile for serving does not write into it"

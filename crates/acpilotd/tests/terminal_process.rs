@@ -36,7 +36,7 @@ fn spawn(program: &str, args: &[&str]) -> std::sync::Arc<Terminal> {
 /// The screen once it contains `needle`, or a panic that shows what it held.
 ///
 /// Polling the replay rather than reading the stream is deliberate: that is
-/// exactly what a pane attaching late does, so the test exercises the path the
+/// exactly what a pane attaching late does. The test exercises the path the
 /// feature exists for.
 fn wait_for(terminal: &Terminal, needle: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -87,7 +87,7 @@ fn a_pane_that_arrives_late_sees_what_the_terminal_already_drew() {
 #[test]
 fn typed_bytes_reach_the_program() {
     let terminal = spawn("sh", &["-c", "read line; printf 'got:%s' \"$line\""]);
-    // No newline is added by the daemon; the `\r` here is the key a terminal
+    // No newline is added by the daemon. The `\r` here is the key a terminal
     // sends, and the program sees the difference.
     terminal.write(b"hello\r").expect("write");
     wait_for(&terminal, "got:hello");

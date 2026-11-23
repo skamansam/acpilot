@@ -1,7 +1,7 @@
 /*
  * The night-flight palette the TUI and the desktop app draw with, so a person
  * switching cockpits does not have to re-learn which colour means "muted".
- * Values are the same ones the theme extension ships; the SPA cannot read the
+ * Values are the same ones the theme extension ships. The SPA cannot read the
  * theme file, so they are repeated here on purpose and changed with it.
  */
 :root {

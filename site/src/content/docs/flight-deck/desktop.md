@@ -93,7 +93,7 @@ sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
 ```
 
 `libxkbcommon-x11-dev` is neither a mistake nor optional, and it is worth knowing
-why. gpui 0.2.2 declares its `xkbcommon` dependency with
+why. Gpui 0.2.2 declares its `xkbcommon` dependency with
 `features = ["wayland", "x11"]` in its own manifest, and Cargo features only ever
 add. Nothing a consumer writes can turn one of them off. Even a Wayland-only run
 therefore links `libxkbcommon-x11`. Without the dev package's `.so` symlink, the
@@ -104,7 +104,7 @@ not replace the shared library a binary already linked against. The remaining
 options are a fork of gpui or of `xkbcommon`, which trades one `apt install` for
 a vendored framework. ADR 0009 §5 records that and keeps the package.
 
-`libc` must also stay at exactly `0.2.189` on Linux. gpui 0.2.2 pulls `xattr`
+`libc` must also stay at exactly `0.2.189` on Linux. Gpui 0.2.2 pulls `xattr`
 0.2.3, which uses `libc::ENOATTR`, and `0.2.190` removed it. `cargo update` breaks
 that silently, and the error a developer sees is `xattr`'s. The fix is `cargo
 update -p libc --precise 0.2.189`. CI asserts the pin before it builds.

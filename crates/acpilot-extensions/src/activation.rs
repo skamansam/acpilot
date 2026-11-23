@@ -1,6 +1,6 @@
 //! Activation: what one profile is allowed to see.
 //!
-//! Installing is global; activating is per profile. The activation file is a
+//! Installing is global. Activating is per profile. The activation file is a
 //! list of ids and nothing else, deliberately — activation never rewrites your
 //! `config.toml`, `lsp.toml`, or `agents.toml`, so `profile diff` can still name
 //! the file that produced every value.

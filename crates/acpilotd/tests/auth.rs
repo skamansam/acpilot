@@ -97,7 +97,7 @@ async fn the_right_token_is_let_through() {
 #[tokio::test]
 async fn the_docs_page_answers_without_a_token_so_it_can_ask_for_one() {
     // The route only exists with the `docs` feature, so a build without it answers
-    // 404 — which is still the assertion: a 401 here would mean the page that asks
+    // 404. Which is still the assertion: a 401 here would mean the page that asks
     // for the token was itself behind the token.
     let (status, _) = status_of("/docs", None).await;
     assert_ne!(status, StatusCode::UNAUTHORIZED);
@@ -140,7 +140,7 @@ async fn the_root_is_the_page_and_needs_no_token() {
 #[tokio::test]
 async fn the_palette_stream_is_open_because_an_eventsource_has_no_header() {
     // The alternative would be the token in the stream's query string, where it
-    // lands in a log line, a history entry and any `Referer` — and it would be a
+    // lands in a log line, a history entry and any `Referer`. And it would be a
     // token spent protecting colours the page already serves inline.
     let (_directory, router) = guarded();
     let response = router

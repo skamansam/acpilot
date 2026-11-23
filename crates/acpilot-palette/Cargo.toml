@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 # `ThemeAppearance` is a protocol type: a theme says light or dark in a file the
-# daemon and the browser both read it from, so the shared colour type uses that
+# daemon and the browser both read it from. The shared colour type uses that
 # enum rather than keeping a second one in step with it.
 acpilot-proto = { workspace = true }
 serde = { workspace = true }

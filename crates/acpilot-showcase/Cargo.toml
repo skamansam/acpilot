@@ -15,13 +15,13 @@ acpilot-demo = { workspace = true }
 # The version the desktop shell's About row reports, so the page cannot name a
 # build the tarball does not.
 acpilot-core = { workspace = true }
-# The tokens, so a capture names a token rather than a colour: the page recolours
+# The tokens. A capture names a token rather than a colour: the page recolours
 # a frame by asking the theme what the token is now.
 acpilot-extensions = { workspace = true }
 # The desktop shell's keymap and command table, which compile without gpui.
 acpilot-gui = { workspace = true }
 # The painter itself. Every pixel-group on the showcase page came out of
-# `acpilot_tui::ui::draw`, so a layout change is a diff in the captured frames
+# `acpilot_tui::ui::draw`. A layout change is a diff in the captured frames
 # rather than a page that describes a screen nobody has seen since.
 acpilot-tui = { workspace = true }
 # The keys the capture presses are the keys the client presses: the same

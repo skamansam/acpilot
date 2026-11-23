@@ -75,6 +75,18 @@ impl Context {
             Self::Visual => "visual",
         }
     }
+
+    /// Every context, for a caller that lists the table.
+    pub const ALL: [Self; 8] = [
+        Self::App,
+        Self::Files,
+        Self::Sessions,
+        Self::Prompt,
+        Self::Permission,
+        Self::Copy,
+        Self::Editor,
+        Self::Visual,
+    ];
 }
 
 /// What a keystroke means.
@@ -407,7 +419,7 @@ impl Action {
     pub const fn what_in(self, context: Context) -> &'static str {
         match (self, context) {
             (Self::Activate, Context::Files | Context::Sessions) => "open",
-            (Self::Activate, Context::Copy) => "open the tool call",
+            (Self::Activate, Context::Copy) => "open / fold",
             (Self::Find, Context::Copy) => "find in what is above",
             (Self::Visual, Context::Copy) => "select",
             (Self::Yank, Context::Copy) => "copy and leave",
@@ -976,11 +988,31 @@ impl Keymap {
     /// holds a key that does not exist, or binds one key to two verbs in one
     /// context.
     pub fn load(path: &Path) -> Result<Self, String> {
+        Self::load_with(path, &[])
+    }
+
+    /// Read `keymap.toml` with a pack's layers beneath it.
+    ///
+    /// A layer sits above the preset and below this file: the pack moves a key,
+    /// and the person at the keyboard still has the last word. Each layer is
+    /// checked as it lands, so a conflict names the pack that caused it rather
+    /// than the merged table it disappeared into.
+    ///
+    /// # Errors
+    ///
+    /// See [`Keymap::load`], plus any layer whose verb or key this build does not
+    /// know.
+    pub fn load_with(
+        path: &Path,
+        layers: &[acpilot_extensions::KeymapLayer],
+    ) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => {
-                Self::from_toml(&text).map_err(|error| format!("{}: {error}", path.display()))
+            Ok(text) => Self::from_toml_and_layers(&text, layers)
+                .map_err(|error| format!("{}: {error}", path.display())),
+            // No file is a first launch, not a reason to lose the packs' keys.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Self::default().layers(layers)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(format!("{}: {error}", path.display())),
         }
     }
@@ -991,6 +1023,19 @@ impl Keymap {
     ///
     /// See [`Keymap::load`].
     pub fn from_toml(text: &str) -> Result<Self, String> {
+        Self::from_toml_and_layers(text, &[])
+    }
+
+    /// Read the file's text with a pack's layers beneath it.
+    ///
+    /// # Errors
+    ///
+    /// The file does not parse, names a preset or a verb this build does not
+    /// know, or leaves one key meaning two verbs in a context.
+    pub fn from_toml_and_layers(
+        text: &str,
+        layers: &[acpilot_extensions::KeymapLayer],
+    ) -> Result<Self, String> {
         #[derive(Deserialize)]
         struct File {
             preset: Option<String>,
@@ -1004,25 +1049,49 @@ impl Keymap {
             Some(name) => Preset::from_name(name)
                 .ok_or_else(|| format!("not a preset: {name} (vim or vscode)"))?,
         };
-        let mut keymap = Self::preset(preset);
-        for (name, keys) in &file.keys {
+        let mut keymap = Self::preset(preset).layers(layers)?;
+        keymap.apply(&file.keys)?;
+        keymap.check()?;
+        Ok(keymap)
+    }
+
+    /// Apply a pack's layers over this table, checking each one as it lands.
+    ///
+    /// # Errors
+    ///
+    /// A layer names a verb or a key this build does not know, or leaves one key
+    /// meaning two verbs in a context; the message starts with the extension.
+    pub fn layers(mut self, layers: &[acpilot_extensions::KeymapLayer]) -> Result<Self, String> {
+        for layer in layers {
+            self.apply(&layer.keys)
+                .map_err(|error| format!("{}: {error}", layer.extension))?;
+            self.check()
+                .map_err(|error| format!("{}: {error}", layer.extension))?;
+        }
+        Ok(self)
+    }
+
+    /// Apply one layer's overrides.
+    ///
+    /// An override means "these are the keys for this verb", so it applies to
+    /// every context the verb is live in. Replaced where it stands, so a file does
+    /// not reshuffle the list.
+    fn apply(&mut self, keys: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+        for (name, keys) in keys {
             let action =
                 Action::from_name(name).ok_or_else(|| format!("not a keymap action: {name}"))?;
             let mut chords = Vec::with_capacity(keys.len());
             for text in keys {
                 chords.push(Chord::parse(text).map_err(|error| format!("{name}: {error}"))?);
             }
-            // An override means "these are the keys for this verb", so it applies
-            // to every context the verb is live in. Replaced where it stands, so a
-            // file does not reshuffle the list.
             for context in action.contexts() {
-                match keymap
+                match self
                     .bindings
                     .iter_mut()
                     .find(|binding| binding.action == action && binding.context == *context)
                 {
                     Some(binding) => binding.chords.clone_from(&chords),
-                    None => keymap.bindings.push(Binding {
+                    None => self.bindings.push(Binding {
                         action,
                         context: *context,
                         chords: chords.clone(),
@@ -1030,8 +1099,7 @@ impl Keymap {
                 }
             }
         }
-        keymap.check()?;
-        Ok(keymap)
+        Ok(())
     }
 
     /// The preset the table came from.
@@ -1107,16 +1175,7 @@ impl Keymap {
     /// override can *free* a key as well as take one: binding `palette` away from
     /// `Ctrl-P` and `quit` to it is not a conflict, it is a swap.
     fn check(&self) -> Result<(), String> {
-        for context in [
-            Context::App,
-            Context::Files,
-            Context::Sessions,
-            Context::Prompt,
-            Context::Permission,
-            Context::Copy,
-            Context::Editor,
-            Context::Visual,
-        ] {
+        for context in Context::ALL {
             let mut seen: Vec<(Chord, Action)> = Vec::new();
             for binding in &self.bindings {
                 if binding.context != context {
@@ -1162,6 +1221,54 @@ mod tests {
         assert!(written.matches(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)));
         assert!(written.matches(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)));
         assert_eq!(written.to_string(), "shift-tab");
+    }
+
+    #[test]
+    fn a_pack_layer_sits_under_the_users_file() {
+        let layer = acpilot_extensions::KeymapLayer {
+            extension: "acpilot.vim-keys".to_owned(),
+            keys: BTreeMap::from([("palette".to_owned(), vec!["f7".to_owned()])]),
+        };
+        let keymap = Keymap::from_toml_and_layers("[keys]\npalette = [\"f8\"]\n", &[layer])
+            .expect("a keymap");
+        assert_eq!(
+            keymap.action(Context::App, key(KeyCode::F(8))),
+            Some(Action::Palette),
+            "the person's file is the last word"
+        );
+        assert_eq!(
+            keymap.action(Context::App, key(KeyCode::F(7))),
+            None,
+            "the layer's key was replaced, not added"
+        );
+        let packed = Keymap::from_toml_and_layers(
+            "",
+            &[acpilot_extensions::KeymapLayer {
+                extension: "acpilot.vim-keys".to_owned(),
+                keys: BTreeMap::from([("palette".to_owned(), vec!["f7".to_owned()])]),
+            }],
+        )
+        .expect("a keymap");
+        assert_eq!(
+            packed.action(Context::App, key(KeyCode::F(7))),
+            Some(Action::Palette),
+            "with no file, the pack's key is in force"
+        );
+    }
+
+    #[test]
+    fn a_pack_that_takes_a_key_names_both_verbs_and_itself() {
+        let layer = acpilot_extensions::KeymapLayer {
+            extension: "acpilot.takeover".to_owned(),
+            keys: BTreeMap::from([("quit".to_owned(), vec!["ctrl-p".to_owned()])]),
+        };
+        let error = Keymap::from_toml_and_layers("", &[layer]).expect_err("a conflict");
+        assert!(error.contains("acpilot.takeover"), "{error}");
+        assert!(error.contains("ctrl-p"), "{error}");
+        assert!(
+            error.contains("quit") && error.contains("palette"),
+            "both verbs are named: {error}"
+        );
     }
 
     #[test]

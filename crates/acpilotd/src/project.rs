@@ -1,7 +1,7 @@
 //! The project map: the document the agent writes about what the workspace is for.
 //!
 //! The tree answers "what files are here" and the outline answers "what is in this
-//! file"; neither says which directory owns which idea or what that idea leans on.
+//! file". Neither says which directory owns which idea or what that idea leans on.
 //! That is the map, and it belongs to the agent: a walk of the tree and a read of the
 //! README is its input, so the map is written by the thing that read those.
 //!
@@ -38,7 +38,7 @@ use crate::{ApiError, AppState};
 /// Where the map lives, relative to the workspace root.
 ///
 /// One constant rather than a setting: the agent is told to write here, the panel
-/// reads from here, and a configurable path would be a third place to disagree.
+/// reads from here. A configurable path would be a third place to disagree.
 pub const MAP_PATH: &str = ".acpilot/project-map.toml";
 
 /// `GET /v1/project/map?workspace=`.
@@ -59,7 +59,7 @@ async fn map(
 /// The map file's shape, as the agent writes it.
 ///
 /// A separate type from [`ProjectMap`] because the wire type says `written` and
-/// carries `path`, and neither is something the file should have to repeat: the file
+/// carries `path`. Neither is something the file should have to repeat: the file
 /// is the map, and where it sits is the route's business.
 #[derive(Debug, Deserialize)]
 struct Written {
@@ -74,7 +74,7 @@ struct Written {
 struct WrittenArea {
     name: String,
     /// Optional, because a map of a repository that is not split up is one area for
-    /// the whole workspace, and `.` is the spelling nobody should have to type.
+    /// the whole workspace. `.` Is the spelling nobody should have to type.
     #[serde(default)]
     path: String,
     summary: String,

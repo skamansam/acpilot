@@ -1,7 +1,7 @@
 //! Extensions: manifests, theme tokens, presets, and the loader that reads them.
 //!
 //! An extension is a directory with `extension.toml` and some assets. Installing
-//! it puts files on disk; activating it is a separate, per-profile decision
+//! it puts files on disk. Activating it is a separate, per-profile decision
 //! (ADR 0003). This crate owns the first half: parse the manifest, refuse
 //! anything that reaches outside its own directory, parse the assets with the
 //! same rules a user's own configuration follows, and hand back typed data.
@@ -17,15 +17,20 @@
 //! terminal.
 
 pub mod activation;
+pub mod archive;
 pub mod builtin;
 pub mod docs;
 pub mod effective;
 pub mod error;
+pub mod grammar;
+pub mod index;
+pub mod keymap;
 pub mod loader;
 pub mod manifest;
 pub mod preset;
 pub mod registry;
 pub mod schema;
+pub mod snippet;
 pub mod source;
 pub mod store;
 pub mod theme;
@@ -33,18 +38,22 @@ pub mod theme_import;
 
 pub use acpilot_proto::extension::{ExtensionKind, ThemeAppearance};
 // The contrast gate and the terminal-following solver are `acpilot-palette`'s: a
-// surface asks for a palette and gets the same answer wherever it runs, and the
+// surface asks for a palette and gets the same answer wherever it runs. The
 // site's WebAssembly showcase runs those same lines in a browser tab. Re-exported
 // under the names the rest of the workspace already imports.
 pub use acpilot_palette::{contrast, follow};
 pub use activation::{Activation, ProfileExtensions, Resolution};
 pub use effective::{EffectiveRegistry, Layer, ProfileLayer, Trace};
 pub use error::ExtensionError;
+pub use grammar::{GrammarAsset, parse_grammar};
+pub use index::{Index, IndexEntry, TrustedKey};
+pub use keymap::{KeymapLayer, parse_keymap_layer};
 pub use loader::{Contribution, LoadedExtension, load, load_dir, load_embedded};
 pub use manifest::{MANIFEST_FILE, Manifest, SCHEMA_VERSION};
 pub use preset::{AgentPreset, LanguageServerPreset};
 pub use registry::Registry;
 pub use schema::{SCHEMA_PATH, SCHEMA_URL, json_schema, schema_json_text};
+pub use snippet::{Snippet, SnippetSet, parse_snippets};
 pub use source::{AssetSource, DirSource, EmbeddedSource};
 pub use store::{ActiveSet, BlockReason, Store, StoreStatus, StoredExtension};
 pub use theme::{

@@ -85,19 +85,24 @@ fn recolour_on_settings(
     cx: &mut App,
     shells: Arc<Mutex<Vec<Entity<Shell>>>>,
     changed: std::sync::mpsc::Receiver<GuiTheme>,
+    latest: Arc<Mutex<GuiTheme>>,
 ) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
-            let mut latest: Option<GuiTheme> = None;
+            let mut newest: Option<GuiTheme> = None;
             while let Ok(theme) = changed.try_recv() {
-                latest = Some(theme);
+                newest = Some(theme);
             }
-            let Some(theme) = latest else {
+            let Some(theme) = newest else {
                 continue;
             };
+            // A window opened from now on starts with this theme, not the one the
+            // process launched with: opening a window is not a reason to undo a
+            // save that already recoloured the others.
+            *latest.lock().unwrap_or_else(PoisonError::into_inner) = theme.clone();
             let windows = shells
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -245,6 +250,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The newest theme any window should open with. A forwarded launch is a new
+    // window in this process, not a new process, so it reads this rather than the
+    // launch theme.
+    let latest_theme = Arc::new(Mutex::new(theme.clone()));
 
     // The daemon's answer is the live one: the launch theme above is what the
     // window opens with, and a `prefs` frame replaces it. A daemon that is not
@@ -307,7 +316,7 @@ fn main() -> ExitCode {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(opened);
-        recolour_on_settings(cx, Arc::clone(&shells), changed);
+        recolour_on_settings(cx, Arc::clone(&shells), changed, Arc::clone(&latest_theme));
         measure_on_stats(cx, Arc::clone(&shells), stats_changed);
         apply_git_updates(cx, Arc::clone(&shells), git_changed);
 
@@ -318,7 +327,10 @@ fn main() -> ExitCode {
         cx.spawn(async move |cx| {
             while requests.next().await.is_some() {
                 let profiles = profiles.clone();
-                let theme = theme.clone();
+                let theme = latest_theme
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
                 // `activate` matters: a forwarded launch is a person asking for
                 // the window *now*, and opening it behind a terminal would look
                 // like the second launch did nothing.

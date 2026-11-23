@@ -90,8 +90,8 @@ async fn a_terminal_resizes_and_then_ends() {
 
     let (status, _) = send(&app, "DELETE", "/v1/terminals/t1", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    // `kill` signals the child; `alive` flips when the reader thread reaches EOF.
-    // That is not guaranteed to happen before the 204 comes back, so wait for the
+    // `kill` signals the child. `alive` flips when the reader thread reaches EOF.
+    // That is not guaranteed to happen before the 204 comes back. Wait for the
     // process to end instead of assuming it ended before the response.
     let deadline = Instant::now() + Duration::from_secs(5);
     while terminal.summary().alive {

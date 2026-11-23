@@ -138,7 +138,7 @@ async fn testing_the_local_host_reports_what_it_can_do() {
 
 #[tokio::test]
 async fn testing_an_unreachable_host_reports_the_transport_that_failed() {
-    // `.invalid` is reserved by RFC 2606, so no resolver anywhere answers it: the
+    // `.invalid` is reserved by RFC 2606. No resolver anywhere answers it: the
     // test is about the refusal, not about whether this machine has an ssh agent.
     let app = app();
     let (status, _) = send(

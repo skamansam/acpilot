@@ -52,9 +52,10 @@ async fn send(
 async fn a_remote_root_is_checked_by_asking_the_helper() {
     let directory = tempfile::tempdir().expect("temp dir");
     let helper = directory.path().join("helper.sh");
-    // The daemon's first request on a host is the test route's `hello` (id 1), and
-    // the workspace open is the next one (id 2): a stand-in that answered with a fixed
-    // id would be refused, because the daemon checks which request an answer belongs to.
+    // The daemon's first request on a host is the test route's `hello` (id 1).
+    // The workspace open is the next one (id 2). A stand-in that answered with a
+    // fixed id would be refused, because the daemon checks which request an
+    // answer belongs to.
     std::fs::write(
         &helper,
         "#!/bin/sh\n\

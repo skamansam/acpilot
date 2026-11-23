@@ -45,11 +45,11 @@ pub enum BridgeTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DriverStatus {
-    /// A pairing code was issued; nothing is connected yet.
+    /// A pairing code was issued. Nothing is connected yet.
     PendingPairing,
     /// Connected and handshaken.
     Connected,
-    /// Was connected, is not now; the record stays for the audit trail.
+    /// Was connected, is not now. The record stays for the audit trail.
     Disconnected,
     /// Pairing or token was revoked by the user.
     Revoked,
@@ -69,7 +69,7 @@ pub struct AcpBridgeSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
     /// Whether a bearer token is required. Loopback-only endpoints may disable
-    /// it; anything else may not.
+    /// it. Anything else may not.
     pub require_token: bool,
     /// Connected drivers.
     pub connected: u32,
@@ -102,7 +102,7 @@ pub struct AcpDriverSummary {
     pub last_seen_at: Option<String>,
     /// Sessions this driver has open.
     pub sessions: u32,
-    /// Turns this driver has prompted; the audit trail at a glance.
+    /// Turns this driver has prompted. The audit trail at a glance.
     pub prompt_turns: u32,
 }
 
@@ -119,6 +119,30 @@ pub struct PairingCode {
     /// Where the driver should connect, when the bridge is exposed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handshake_url: Option<String>,
+}
+
+/// Ask for a code, from the cockpit.
+///
+/// The person issuing the code decides whether the driver may answer permission
+/// requests. A driver cannot grant itself one by asking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CreatePairingRequest {
+    /// Allow the paired driver to answer permission requests for the turns it
+    /// starts. Off by default, and off is the safe answer.
+    #[serde(default)]
+    pub grant_answer_permissions: bool,
+}
+
+/// What a driver gets when it claims a pair: its row, and the token once.
+///
+/// The token is in this response and nowhere else. The ledger keeps an Argon2id
+/// hash of it, so a driver that loses it asks for another code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PairedDriver {
+    /// The driver, as the cockpit will list it.
+    pub driver: AcpDriverSummary,
+    /// The bearer token every later request carries.
+    pub token: String,
 }
 
 /// Request the driver sends over the bridge to claim a pair.

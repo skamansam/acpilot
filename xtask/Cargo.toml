@@ -15,10 +15,23 @@ acpilot-extensions = { workspace = true }
 # `acpilot-proto` alone would produce components with no operations in them.
 acpilotd = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+# The catalog is signed by the maintainer's separate ed25519 key; the task refuses
+# to write an unsigned index, because a JSON file nobody signed is not the thing
+# the daemon verifies.
+ed25519-dalek = { workspace = true }
+toml = { workspace = true }
+jiff = { workspace = true }
 # The capture the site's showcase renders: the TUI's own frames and the desktop
 # shell's tables, from the crates that own them rather than from a transcription.
 acpilot-showcase = { workspace = true }
 clap = { workspace = true }
+# XT-4's sampling: cross-platform CPU, RSS and thread counts for a process tree,
+# without an `unsafe` block in this workspace.
+sysinfo = { workspace = true }
+# The TUI row needs a terminal to start in: a client that cannot put stdin into raw
+# mode refuses to launch, so the harness opens a real pty rather than mocking one.
+portable-pty = { workspace = true }
 
 [lints]
 workspace = true

@@ -49,6 +49,13 @@ pub struct AgentSummary {
     pub status: AgentStatus,
     /// Command that will be spawned, for display and debugging.
     pub command: String,
+    /// Extension that provided this agent, when it came from one.
+    ///
+    /// A client asking to trust the binary can name the pack — "trust
+    /// rust-analyzer from acpilot.rust-pack?" — instead of asking about a bare
+    /// path nobody recognizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
     /// Protocol version reported by the last handshake, when there was one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,

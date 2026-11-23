@@ -81,7 +81,7 @@ because it bounds what the comparison can claim:
   frame's view. `interval` is still start-to-start pacing, and `build` is still
   the view body. But **there is no "paint" number**. A `tick - view end` delta
   would measure the gap to a request issued immediately after the previous
-  present, i.e. 0.00 ms, and about nothing. iced's public API has no "frame
+  present, i.e. 0.00 ms, and about nothing. Iced's public API has no "frame
   presented" callback, and a screenshot fence would perturb the frame it
   measured. `edit_to_view` is reported instead: the edit to the view that
   responds to it, which is the app-side half of keystroke→paint.
@@ -202,12 +202,12 @@ What the numbers do support:
    fallback is strictly worse on the only budget that is missed.
 2. **A first-paint budget on a desktop framework needs a stated machine state.**
    It also needs a target that is not 150 ms. No native framework measured here
-   paints in that time from a process start. gpui's own 277 ms is already 1.9×. If
+   paints in that time from a process start. Gpui's own 277 ms is already 1.9×. If
    150 ms is a product requirement, it is a requirement about *how the app
    starts*: pre-warmed process, persisted window, splash. It is not about the
    framework, and it should be written in `TODO.md` §Perf that way.
 3. **The remaining lever is window/device creation, not the view.** The 100k-row
-   list costs ~0 ms per frame in both. iced's own split reports where the time
+   list costs ~0 ms per frame in both. Iced's own split reports where the time
    goes: 51 ms to boot, then 750–800 ms to a window. A profile of that phase
    (DirectX/wgpu device creation and pipeline compilation) is the next useful
    measurement. It is the one thing that could move the number at all.
@@ -288,7 +288,7 @@ platforms, in a third of the time.
   keystroke→paint latency are not in this comparison. Only pacing and app-side
   work are.
 - iced's shaping probe times `Paragraph::with_text`, which is shaping **and**
-  layout. gpui's times `TextSystem::shape_line`. The iced figure is therefore an
+  layout. Gpui's times `TextSystem::shape_line`. The iced figure is therefore an
   upper bound on a like-for-like comparison, not a like-for-like one.
 - 50 visible rows, not 3 000. The 3k figure in the spec is about a highlight
   cache, which is unmeasured.
@@ -298,7 +298,7 @@ platforms, in a third of the time.
   both fixes.
 - First paint was only attributed down to `CreateDevice` on Windows. The split
   inside it (pipeline compilation, adapter features, WDDM) is not measured.
-- No macOS paint numbers for either framework. iced *does* paint on this WSL2
-  box: 275 ms to first frame, on a 60 Hz software path. gpui's Vulkan-only
+- No macOS paint numbers for either framework. Iced *does* paint on this WSL2
+  box: 275 ms to first frame, on a 60 Hz software path. Gpui's Vulkan-only
   renderer has no ICD for the physical GPU. That is a portability data point, not
   a comparable measurement.

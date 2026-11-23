@@ -38,7 +38,7 @@ impl Context {
     }
 }
 
-/// What a keystroke means. These are the shell's verbs; the gpui action types are
+/// What a keystroke means. These are the shell's verbs. The gpui action types are
 /// generated from them in [`crate::app`], so the table and the handler cannot
 /// disagree about the name of a thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn the_palette_can_be_opened_and_closed_from_anywhere() {
-        // The first thing a user tries, and the one binding that has to survive
+        // The first thing a user tries. The one binding that has to survive
         // a mode change: the palette is how you get out of the palette.
         for context in [Shell, Palette] {
             assert!(

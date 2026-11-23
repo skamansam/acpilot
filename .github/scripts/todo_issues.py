@@ -21,8 +21,9 @@ checkbox list.
 Re-running is safe: an issue whose title already exists is not created again, so
 a `TODO.md` edit adds what is new and never duplicates. A re-run also reconciles
 what already exists: a box ticked since its issue was opened closes the issue,
-and a box unticked reopens it. The tracker mirrors `TODO.md`; it is not a second
-plan that can drift.
+and a box unticked reopens it. The **ACPilot Roadmap** project is the source of
+truth for a ticket's state, and this script keeps `TODO.md` and the issues saying
+the same thing, so neither becomes a second plan that can drift.
 
     python3 .github/scripts/todo_issues.py --dry-run          # what it would do
     python3 .github/scripts/todo_issues.py --apply            # create the issues

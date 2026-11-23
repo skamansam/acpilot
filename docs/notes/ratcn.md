@@ -71,7 +71,7 @@ handling in `app.rs`. The parts ratcn has no answer for are the parts that make
 this UI. They include draggable dividers with mouse hit-testing read back from the
 drawing code, and a menu bar with `Alt` mnemonics. They also include a `vt100`
 grid pane that types and resizes, a command palette, which-key hints, and copy
-mode. A permission card containing a diff is another. ratcn's first-class pieces are buttons, inputs, lists,
+mode. A permission card containing a diff is another. Ratcn's first-class pieces are buttons, inputs, lists,
 selects, tabs, dialogs, toasts, tooltips, checkboxes and progress. That is the
 settings-and-dialog layer, not the cockpit.
 
@@ -129,7 +129,7 @@ component, not as a general policy.
 2. **`adaptive`, in our token space.** `theme_follow_terminal` solves the whole
    token set from the terminal's own `OSC 11`/`10` pair
    (`acpilot_extensions::follow`). It validates the result with the same audit
-   and returns [`None`] rather than showing a palette that fails. ratcn's version
+   and returns [`None`] rather than showing a palette that fails. Ratcn's version
    returns a terminal-only `Color` palette, which the desktop app and the page
    could not draw.
 3. **Deepening a mid-ramp background.** White ink on a panel lifted off `#808080`

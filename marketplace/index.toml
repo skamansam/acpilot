@@ -6,10 +6,11 @@ schema_version = 1
 # changed only by pull request to this repository. There is no marketplace
 # service, no publisher account, and no crawl.
 #
-# An entry is added once the extension is public, licensed, has no install-time
-# script, and its manifest passes `acpilot ext add --from <checkout>`. Until the
-# signed index lands (P4.6-4), installing from an entry means checking the
-# repository out and running `acpilot ext add --from <dir>`.
+# This file proposes a repository. `index.json` is what clients read: a signed
+# list of released versions with archive checksums (P4.6-4). An entry moves there
+# once the extension is public, licensed, has no install-time script, and its
+# release archive installs through `acpilot ext add`. Until then, installing means
+# checking the repository out and running `acpilot ext add --from <dir>`.
 #
 # [[extensions]]
 # id = "acpilot.rust-pack"

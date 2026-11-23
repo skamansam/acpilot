@@ -90,7 +90,7 @@ async fn send(
     )
 }
 
-/// A daemon whose `ssh` is the stand-in, a tested host on it, and one workspace opened on
+/// A daemon whose `ssh` is the stand-in, a tested host on it. One workspace opened on
 /// that host: the state the file routes are then asked about.
 async fn remote_workspace() -> (Router, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().expect("temp dir");

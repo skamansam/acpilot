@@ -24,6 +24,7 @@ pub mod permission;
 pub mod profile;
 pub mod project;
 pub mod session;
+pub mod skills;
 pub mod stats;
 pub mod terminal;
 pub mod workspace;
@@ -138,6 +139,15 @@ pub const API_PREFIX: &str = "/v1";
         model::RunStatus,
         model::TokenUsage,
         model::RunSummary,
+        model::CreateRecipeRequest,
+        model::RecipePatch,
+        model::UpdateProviderRequest,
+        model::ModelCatalogue,
+        model::ModelProblem,
+        model::RunPage,
+        model::ResolvedCorpusFile,
+        model::RecordedRunRequest,
+        model::RunRecordView,
         model::PromoteRecipeRequest,
         model::PromotedAgent,
         stats::IntegrationKind,
@@ -152,15 +162,25 @@ pub const API_PREFIX: &str = "/v1";
         bridge::AcpDriverSummary,
         bridge::PairingCode,
         bridge::PairDriverRequest,
+        bridge::CreatePairingRequest,
+        bridge::PairedDriver,
         extension::ExtensionKind,
         extension::ExtensionSource,
         extension::ExtensionStatus,
         extension::ExtensionSummary,
         extension::ExtensionContribution,
         extension::ExtensionDetail,
+        extension::ExtensionListing,
+        extension::ExtensionAction,
+        extension::ExtensionRemoval,
+        extension::ExtensionVerify,
         extension::InstallExtensionRequest,
         extension::ThemeAppearance,
-        extension::ThemeSummary
+        extension::ThemeSummary,
+        skills::SkillSummary,
+        skills::SkillDraft,
+        skills::SkillSource,
+        skills::SkillDestination
     )),
     modifiers(&BearerToken)
 )]
@@ -261,6 +281,11 @@ mod tests {
             "AcpBridgeSummary",
             "AcpDriverSummary",
             "ExtensionSummary",
+            "ExtensionDetail",
+            "ExtensionListing",
+            "ExtensionAction",
+            "ExtensionRemoval",
+            "ExtensionVerify",
             "ThemeSummary",
         ] {
             assert!(schemas.contains_key(name), "{name} missing from components");

@@ -3,7 +3,7 @@
 //! A job object is the right long-term answer — it is the only way to guarantee
 //! that a grandchild cannot escape between the kill and the next spawn — but
 //! assigning one needs the `windows` crate's `unsafe` calls, and this workspace
-//! forbids unsafe code. `taskkill /T /F` reaches the same tree with a safe API;
+//! forbids unsafe code. `taskkill /T /F` reaches the same tree with a safe API.
 //! The engine phase's task P2-5 owns replacing it when the terminal layer needs the stronger guarantee.
 //!
 //! `CREATE_NO_WINDOW` is spelled as a number rather than imported so this crate
@@ -14,7 +14,7 @@ use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// Do not allocate a console for the child. An agent speaks ACP over pipes; a
+/// Do not allocate a console for the child. An agent speaks ACP over pipes. A
 /// console window would flash on every spawn.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 

@@ -565,6 +565,7 @@ async fn diagnostics(
             }
         },
     };
+    state.refresh_language_servers().await;
     let connections = std::sync::Arc::clone(state.hosts().connections());
     let Some(answer) = state
         .language_servers()
@@ -574,7 +575,7 @@ async fn diagnostics(
         return Ok(Json(nothing_asked()));
     };
     tracing::debug!(
-        server = answer.program,
+        server = %answer.program,
         "diagnostics from a language server"
     );
     let problems = FileDiagnostics {
@@ -632,6 +633,7 @@ async fn format(
     let (tab_width, insert_spaces) = preferences.map_or((4, true), |preferences| {
         (preferences.tab_width, preferences.insert_spaces)
     });
+    state.refresh_language_servers().await;
     let connections = std::sync::Arc::clone(state.hosts().connections());
     let Some(formatted) = state
         .language_servers()
@@ -662,7 +664,7 @@ async fn format(
             reason: Some("the formatter returned an edit this daemon could not place".to_owned()),
         }));
     };
-    tracing::debug!(server = formatted.program, "formatted by a language server");
+    tracing::debug!(server = %formatted.program, "formatted by a language server");
     Ok(Json(FileFormat {
         path: request.path,
         text,
@@ -947,6 +949,7 @@ async fn ask_server(
             }
         },
     };
+    state.refresh_language_servers().await;
     let connections = std::sync::Arc::clone(state.hosts().connections());
     let Some(answer) = state
         .language_servers()
@@ -955,7 +958,7 @@ async fn ask_server(
     else {
         return Ok(None);
     };
-    tracing::debug!(server = answer.program, "references from a language server");
+    tracing::debug!(server = %answer.program, "references from a language server");
     match source {
         Source::Local(root) => Ok(Some(rows_from(root, &answer))),
         Source::Remote { host, root, .. } => {
@@ -2936,7 +2939,7 @@ mod tests {
 
         let text = "fn main(){}\n";
         let formatted = crate::lsp::Formatted {
-            program: "test",
+            program: "test".to_owned(),
             encoding: PositionEncoding::Utf8,
             edits: vec![
                 FormatEdit {
@@ -2964,7 +2967,7 @@ mod tests {
         use acpilot_lsp::session::FormatEdit;
 
         let formatted = crate::lsp::Formatted {
-            program: "test",
+            program: "test".to_owned(),
             encoding: PositionEncoding::Utf8,
             edits: vec![FormatEdit {
                 start: Position::new(9, 0),

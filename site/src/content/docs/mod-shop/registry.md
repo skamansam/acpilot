@@ -8,8 +8,8 @@ description: A checksummed store, a curated list, and an approval that belongs t
 Two verbs, deliberately separate:
 
 ```bash
-acpilot ext add --from ~/src/acpilot-pack   # install: copy, verify, record
-acpilot ext activate acpilot.rust-pack      # approve: this profile may use it
+acpilot ext add --from ~/src/acpilot-pack --activate work
+# install: link, verify, record; approve: this profile may use it
 ```
 
 Installing changes the disk. Activating changes what one profile's loaders see.

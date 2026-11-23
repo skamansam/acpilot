@@ -72,16 +72,16 @@ Every fixture puts the call site after `"😀 日本語 e\u{301}";` on the same 
 the requested column differs between UTF-8 and UTF-16 by six bytes. The
 declaration name `日本語の関数` makes the returned end column differ too.
 
-| server | requested position (encoding) | returned range | start byte | end byte | expected start |
+| server | requested position (encoding) | returned range | first byte | last byte | expected offset |
 | --- | --- | --- | --- | --- | --- |
 | rust-analyzer | line 9, char 34 (UTF-8) | line 4, char 7→25 | 111 | 129 | 111 ✅ |
 | typescript-language-server | line 5, char 37 (UTF-16) | line 0, char 16→22 | 16 | 34 | 16 ✅ |
 | pyright-langserver | line 5, char 33 (UTF-16) | line 0, char 4→10 | 4 | 22 | 4 ✅ |
 | typescript-language-server, path with space + `ü` | line 5, char 37 (UTF-16) | line 0, char 16→22 | 16 | 34 | 16 ✅ |
 
-The end byte is the check that catches a client that decodes the *start* with one
+The end byte is the check that catches a client that decodes the *first byte* with one
 width and the *end* with another. 22 UTF-16 units becomes 34 bytes, because the six
-CJK characters take three bytes each. rust-analyzer's 25 UTF-8 bytes becomes 129.
+CJK characters take three bytes each. Rust-analyzer's 25 UTF-8 bytes becomes 129.
 `LineIndex::offset` accepted both, and the declaration byte ranges match the source
 exactly.
 
@@ -112,7 +112,7 @@ only that code.
 | pyright-langserver | 0 | — | — | — | — |
 
 `rust-analyzer` begins more work than it ends before the first diagnostics arrive,
-so the client must not treat "no matching end yet" as a bug. pyright reports work
+so the client must not treat "no matching end yet" as a bug. Pyright reports work
 through `window/logMessage`/`showMessage` instead.
 
 ## Conversion cost
@@ -186,7 +186,7 @@ TypeScript installation" when the workspace has no `node_modules/typescript`. It
 needs either a local install or `initializationOptions.tsserver.path`. The run
 above used an existing TypeScript 6.0.3 installation by absolute path. A real
 Acpilot install must either vendor/require a TypeScript version or surface that
-error as a readable diagnostic instead of a failed start.
+error as a readable diagnostic instead of a failed probe.
 
 ## Limitations
 
@@ -205,7 +205,7 @@ error as a readable diagnostic instead of a failed start.
 Asked before the daemon spawned servers on first use, so the numbers are the ones
 the startup path actually has.
 
-**Launching spawns nothing.** The registry is empty until a request names a language. Measured to the first
+**Daemon startup spawns nothing.** The registry is empty until a request names a language. Measured to the first
 successful connect, ten samples each:
 
 | workspace | min | median | max | children at startup |
@@ -217,8 +217,12 @@ The earlier baseline was 4.6 ms, and both medians sit inside the spread of both
 samples: linking `acpilot-lsp` into the daemon costs the startup path nothing.
 
 **The first question pays for the index.** A fresh daemon, a five-line crate and
-`rust-analyzer` on `PATH`. The first references request took 2,260 ms, the second
-2.2 ms, the third 2.1 ms. That 2.26 s is spawn plus index, paid once per language per daemon. It is why
+`rust-analyzer` on `PATH`. The first references request took 2,260 ms:
+
+- the second request took 2.2 ms
+- the third request took 2.1 ms
+
+That 2.26 s is spawn plus index, paid once per language per daemon. It is why
 the session is kept at all. It is also why `IDLE_TIMEOUT` is five minutes rather
 than seconds. Throwing the index away after a short pause would pay it again.
 
@@ -245,8 +249,8 @@ checked" are different claims. The TUI draws problems as gutter letters (`E`, `W
 `I`, `H`, worst on the line) in the cell the git mark uses. It also counts errors
 and warnings in the status line, with `checking` beside them while a question is in
 flight. The first question waits until a server and its index are ready, which
-takes seconds. It asks when a file opens, when one is saved, and once the buffer
-has been still for 480 ms. That pause is measured on the event loop's clock, so a
+takes seconds. It asks when a file opens, when one is saved. Once the buffer
+has been still for 480 ms. That pause is measured on the event loop's clock. A
 sentence of typing is one request, and every edit restarts the pause. The key that types never
 sends anything, which is the rule the phase opens with. A question that nothing
 answers ends the same way. The status line carries what went wrong, and the problems
@@ -270,10 +274,19 @@ the publish the timer drained. The other is the answer that
 `POST /v1/files/diagnostics` served.
 So the newest problems per file survive the client that asked for them.
 `GET /v1/events` sends that store as `diagnostics` frames on connect. So a reconnect
-starts from what the server already said, not from an empty gutter. A reconnect is
+begins from what the server already said, not from an empty gutter. A reconnect is
 the laptop that woke, or the second window opened a minute later. The store is capped at
 `DIAGNOSTICS_SNAPSHOT` files (64), and it drops the file whose problems moved longest
 ago. It is a map rather than a file on disk: problems are recomputed, so persisting
 them would be persisting somebody's obsolete opinion. A file missing from it is not a
 clean file. It is a file nobody has asked about since this daemon came up, and
 opening it asks.
+
+## Decision (2026-11-22)
+
+[ADR 0015](../adr/0015-language-servers-stay-on-the-workspace-host.md) records the
+placement. Language servers run on the workspace host. The daemon owns them and
+shares one warm index with every UI. Grammars and highlighting run in the UI,
+because they run per keystroke. A client may cache grammar assets from a signed
+source. A remote client cannot run a server against files it cannot read. A local
+sidecar needs a measured case and the same trust pins.

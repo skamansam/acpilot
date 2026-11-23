@@ -102,11 +102,140 @@ pub const SERVERS: &[(&str, &str, &[&str])] = &[
     ("javascript", "typescript-language-server", &["--stdio"]),
 ];
 
+/// One server this daemon may start: the build's, or an activated extension's.
+///
+/// Owned rather than `&'static str` because a preset arrives from disk: its command,
+/// arguments and languages are read from an `lsp.toml` in a pack, and a table that
+/// could only hold constants could not show what a profile activated.
+#[derive(Debug, Clone)]
+pub struct Entry {
+    /// The LSP language id, which is also the key a session is kept under.
+    pub language: String,
+    /// The program to spawn.
+    pub program: String,
+    /// Arguments, in order.
+    pub args: Vec<String>,
+    /// The extension that introduced the row, or `None` for this build's own.
+    pub extension: Option<String>,
+    /// A managed install whose executable no longer hashes to the digest the
+    /// install recorded. It still outranks `PATH`, and it is not started.
+    pub untrusted: bool,
+}
+
+impl Entry {
+    fn built_in(language: &str, program: &str, args: &[&str]) -> Self {
+        Self {
+            language: language.to_owned(),
+            program: program.to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            extension: None,
+            untrusted: false,
+        }
+    }
+}
+
+/// The build's row for `language`, when it has one.
+fn built_in_entry(language: &str) -> Option<Entry> {
+    SERVERS
+        .iter()
+        .find(|(id, _, _)| *id == language)
+        .map(|(id, program, args)| Entry::built_in(id, program, args))
+}
+
+/// A server `acpilot lsp install` placed under `<data>/lsp`, when it answers
+/// `language`.
+///
+/// Managed installs outrank `PATH` (ADR 0014): a person who asked for a specific
+/// checked archive meant that binary, and a different program under the same name
+/// on `PATH` would silently replace it. The executable is an absolute path, so the
+/// resolver does not search for it at all.
+///
+/// The newest version directory wins. Version strings are the project's, so this is
+/// a lexicographic choice within one id; it is stable and needs no version parser,
+/// and a catalog that publishes a version out of order is a review bug.
+fn managed_entry(language: &str) -> Option<Entry> {
+    managed_entry_at(&acpilot_profile::data_dir().join("lsp"), language)
+}
+
+/// [`managed_entry`] against an explicit root, so a test names its own installs.
+fn managed_entry_at(root: &std::path::Path, language: &str) -> Option<Entry> {
+    let mut newest: Option<(String, Entry)> = None;
+    let servers = std::fs::read_dir(root).ok()?;
+    for server in servers.flatten() {
+        let versions = std::fs::read_dir(server.path()).ok();
+        for version in versions.into_iter().flatten().flatten() {
+            let targets = std::fs::read_dir(version.path()).ok();
+            for target in targets.into_iter().flatten().flatten() {
+                let manifest = target.path().join("install.json");
+                let Ok(text) = std::fs::read_to_string(&manifest) else {
+                    continue;
+                };
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let answers = record
+                    .get("languages")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|languages| {
+                        languages
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .any(|named| named == language)
+                    });
+                if !answers {
+                    continue;
+                }
+                let Some(program) = record.get("executable").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(version) = record.get("version").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let args = record
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|args| {
+                        args.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // The install recorded the executable's digest. A file replaced
+                // after the install is a different program: the pin is what makes
+                // the install an approval of bytes rather than of a path.
+                let untrusted = record
+                    .get("sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|expected| {
+                        crate::trust::program_fingerprint(program).as_deref() != Some(expected)
+                    });
+                let entry = Entry {
+                    language: language.to_owned(),
+                    program: program.to_owned(),
+                    args,
+                    extension: None,
+                    untrusted,
+                };
+                if newest
+                    .as_ref()
+                    .is_none_or(|(known, _)| version > known.as_str())
+                {
+                    newest = Some((version.to_owned(), entry));
+                }
+            }
+        }
+    }
+    newest.map(|(_, entry)| entry)
+}
+
 /// What a server answered, and the encoding its columns are counted in.
 #[derive(Debug)]
 pub struct Answer {
     /// The command that answered, for a log line or a status line.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Answer::locations`] is counted in.
     pub encoding: PositionEncoding,
     /// Where the name is used, in the server's own spelling.
@@ -130,7 +259,7 @@ pub struct FormatOptions {
 #[derive(Debug)]
 pub struct Formatted {
     /// The command that answered.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every position in [`Formatted::edits`] is counted in.
     pub encoding: PositionEncoding,
     /// The edits, in the server's order.
@@ -141,7 +270,7 @@ pub struct Formatted {
 #[derive(Debug)]
 pub struct Problems {
     /// The command that answered, for a log line or a status line.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Problems::items`] is counted in.
     pub encoding: PositionEncoding,
     /// The problems themselves, in the server's order.
@@ -160,7 +289,7 @@ pub struct Pushed {
     /// The version the problems are about, when the server names one.
     pub version: Option<i64>,
     /// The command that published, for the frame's `server` field.
-    pub program: &'static str,
+    pub program: String,
     /// The encoding every `character` in [`Pushed::items`] is counted in.
     pub encoding: PositionEncoding,
     /// The problems themselves, in the server's order.
@@ -204,7 +333,7 @@ impl Place {
     /// A local key is the language alone, so a daemon with no remote workspaces keeps
     /// the one-session-per-language behaviour it had; a remote key names the host and the
     /// root, because two workspaces on one host are two indexes.
-    fn key(&self, language: &'static str) -> String {
+    fn key(&self, language: &str) -> String {
         match &self.at {
             Where::Local => language.to_owned(),
             Where::Remote { host, .. } => {
@@ -217,6 +346,21 @@ impl Place {
 #[derive(Default)]
 pub struct Servers {
     sessions: Mutex<HashMap<String, Option<Running>>>,
+    /// Rows the profile's activated extensions contribute, by language.
+    ///
+    /// Kept apart from [`SERVERS`] rather than merged into it: the build's rows are
+    /// constants and a profile's are read from disk, and looking here first is what
+    /// makes an activated extension sit above a built-in without rewriting what the
+    /// binary shipped. Empty until [`Servers::register`] is called, so a daemon with
+    /// no activation behaves as it did.
+    activated: Mutex<Vec<Entry>>,
+    /// The pins a person recorded, by program.
+    ///
+    /// Carried beside the rows because the refusal happens where a server starts,
+    /// and a pin changes between two questions: approving one has to take effect on
+    /// the next request without a restart, and a file that changed under an approved
+    /// name has to stop starting one.
+    pins: Mutex<HashMap<String, String>>,
 }
 
 /// A started server and what the daemon knows about its use.
@@ -227,7 +371,7 @@ pub struct Servers {
 struct Running {
     session: Session,
     /// The command that runs, for a status line or a log.
-    program: &'static str,
+    program: String,
     /// The helper process, when this session runs on a host.
     ///
     /// Dropped with the session, which is what closes the far side and ends the
@@ -265,6 +409,32 @@ impl Servers {
         Self::default()
     }
 
+    /// Replace the rows the profile's activated extensions contribute.
+    ///
+    /// Replacement, not accumulation: this runs again after a save or a pack is
+    /// deactivated, and a row whose pack went away has to disappear as completely as
+    /// a newly activated one appears. Callers order the rows by preset id, so a
+    /// language two packs name keeps the first — two packs owning one language is a
+    /// manifest bug, and the answer must not depend on install order.
+    ///
+    /// The pins travel with the rows for the same reason: a row without its pin is a
+    /// file a person approved that the daemon would start anyway, and a pin without
+    /// its row is a hash with nothing to check.
+    pub async fn register(&self, entries: Vec<Entry>, pins: HashMap<String, String>) {
+        *self.activated.lock().await = entries;
+        *self.pins.lock().await = pins;
+    }
+
+    /// The row for `language`: an activated extension's, else this build's.
+    async fn entry(&self, language: &str) -> Option<Entry> {
+        let activated = self.activated.lock().await;
+        if let Some(entry) = activated.iter().find(|entry| entry.language == language) {
+            return Some(entry.clone());
+        }
+        drop(activated);
+        managed_entry(language).or_else(|| built_in_entry(language))
+    }
+
     /// Ask the server for `language` where the name at `offset` in `text` is used.
     ///
     /// `None` means no server answered — none is installed, it would not start, or it
@@ -280,13 +450,13 @@ impl Servers {
         text: &str,
         offset: usize,
     ) -> Option<Answer> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         // Marked used before the question rather than after the answer: the first
         // question is the index, and a sweep that stopped a server in the middle of
         // one would make the next keystroke pay for it a second time.
@@ -333,7 +503,7 @@ impl Servers {
                         running.round_trip = Some(asked.elapsed());
                         running.last_used = Instant::now();
                         return Some(Answer {
-                            program,
+                            program: program.clone(),
                             encoding,
                             locations,
                         });
@@ -366,13 +536,13 @@ impl Servers {
         path: &Path,
         text: &str,
     ) -> Option<Problems> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -414,13 +584,13 @@ impl Servers {
         text: &str,
         options: FormatOptions,
     ) -> Option<Formatted> {
-        let (language, program) = SERVERS
-            .iter()
-            .find(|(id, _, _)| *id == language)
-            .map(|(id, program, _)| (*id, *program))?;
+        let entry = self.entry(language).await?;
+        let language = entry.language.as_str();
+        let program = entry.program.clone();
         let key = place.key(language);
         let mut sessions = self.sessions.lock().await;
-        let running = running(&mut sessions, language, place, connections).await?;
+        let pins = self.pins.lock().await.clone();
+        let running = running(&mut sessions, &entry, place, connections, &pins).await?;
         running.last_used = Instant::now();
         running.requests += 1;
         let encoding = running.session.encoding();
@@ -472,13 +642,13 @@ impl Servers {
             let Some(running) = slot.as_mut() else {
                 continue;
             };
-            let program = running.program;
+            let program = running.program.clone();
             let encoding = running.session.encoding();
             for published in running.session.drain_published() {
                 pushed.push(Pushed {
                     path: published.path,
                     version: published.version,
-                    program,
+                    program: program.clone(),
                     encoding,
                     items: published.problems,
                 });
@@ -515,9 +685,8 @@ impl Servers {
             return;
         }
         futures::future::join_all(started.into_iter().map(|mut running| async move {
-            let server = running.program;
             running.session.shutdown().await;
-            tracing::debug!(server, "language server stopped");
+            tracing::debug!(server = %running.program, "language server stopped");
             drop(running);
         }))
         .await;
@@ -533,7 +702,7 @@ impl Servers {
     ///
     /// Returns what was stopped, in whatever order the map yielded it: a set, for a
     /// log line and for a test.
-    pub async fn stop_idle(&self, idle: Duration) -> Vec<&'static str> {
+    pub async fn stop_idle(&self, idle: Duration) -> Vec<String> {
         let now = Instant::now();
         let stopped: Vec<Running> = {
             let mut sessions = self.sessions.lock().await;
@@ -553,11 +722,13 @@ impl Servers {
         if stopped.is_empty() {
             return Vec::new();
         }
-        let languages: Vec<&'static str> = stopped.iter().map(|running| running.program).collect();
+        let languages: Vec<String> = stopped
+            .iter()
+            .map(|running| running.program.clone())
+            .collect();
         futures::future::join_all(stopped.into_iter().map(|mut running| async move {
-            let server = running.program;
             running.session.shutdown().await;
-            tracing::debug!(server, "idle language server stopped");
+            tracing::debug!(server = %running.program, "idle language server stopped");
             drop(running);
         }))
         .await;
@@ -572,47 +743,73 @@ impl Servers {
     /// `installed` is the one thing that tells the last of those apart.
     pub async fn status(&self) -> Vec<ServerState> {
         let now = Instant::now();
+        let activated = self.activated.lock().await;
         let sessions = self.sessions.lock().await;
-        SERVERS
+        let mut states: Vec<ServerState> = SERVERS
             .iter()
-            .map(|(language, program, _)| {
-                let running =
-                    sessions
-                        .get(*language)
-                        .and_then(|slot| slot.as_ref())
-                        .map(|running| RunningState {
-                            encoding: running.session.encoding(),
-                            idle: now.duration_since(running.last_used),
-                            round_trip: running.round_trip,
-                            requests: running.requests,
-                        });
-                ServerState {
-                    language,
-                    program,
-                    installed: installed(program),
-                    running,
-                }
+            .map(|(language, program, args)| {
+                activated
+                    .iter()
+                    .find(|entry| entry.language == *language)
+                    .cloned()
+                    .or_else(|| managed_entry(language))
+                    .unwrap_or_else(|| Entry::built_in(language, program, args))
             })
-            .collect()
+            .map(|entry| state_of(&sessions, now, entry))
+            .collect();
+        // A language only an activated extension names: after the build's rows,
+        // because the list reads "what this build knows" and then "what the profile
+        // added", and a client that knew the first list still finds it at the head.
+        states.extend(
+            activated
+                .iter()
+                .filter(|entry| built_in_entry(&entry.language).is_none())
+                .cloned()
+                .map(|entry| state_of(&sessions, now, entry)),
+        );
+        states
     }
 }
 
 /// The server behind `id`, started if it is not running.
 ///
 /// One place rather than one per question, because both questions pay the same index
-/// and both have to make the same three decisions: whether a server exists for the
-/// language, whether it is installed, and whether a failed one is retried (it is not —
-/// see the module note).
+/// and both have to make the same decisions: whether a server exists for the
+/// language, whether its bytes are still the ones a person approved, whether it is
+/// installed, and whether a failed one is retried (it is not — see the module note).
 async fn running<'a>(
     sessions: &'a mut HashMap<String, Option<Running>>,
-    language: &'static str,
+    entry: &Entry,
     place: &Place,
     connections: &Arc<Connections>,
+    pins: &HashMap<String, String>,
 ) -> Option<&'a mut Running> {
-    let (_, program, args) = SERVERS.iter().find(|(id, _, _)| *id == language)?;
+    let language = entry.language.as_str();
+    let program = entry.program.as_str();
     let key = place.key(language);
     if !sessions.contains_key(&key) {
-        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        if entry.untrusted {
+            tracing::warn!(
+                server = program,
+                "refusing to start a managed language server whose bytes changed since the install"
+            );
+            return None;
+        }
+        // The pin is the gate, and it is checked here rather than at each question so
+        // no route can start a changed program by forgetting to ask. A remote server's
+        // bytes are the host's to hash, so the check is local-only.
+        let approved = match &place.at {
+            Where::Local => pin_allows(program, pins.get(program).map(String::as_str)),
+            Where::Remote { .. } => true,
+        };
+        if !approved {
+            tracing::warn!(
+                server = program,
+                "refusing to start a language server whose bytes changed since it was approved"
+            );
+            return None;
+        }
+        let args = entry.args.clone();
         // A local server is only offered when it is installed; a remote one is the
         // host's to have, and the refusal there names the program the host could not run.
         let started = match &place.at {
@@ -655,7 +852,7 @@ async fn running<'a>(
             key.clone(),
             started.map(|(session, remote)| Running {
                 session,
-                program,
+                program: entry.program.clone(),
                 _remote: remote,
                 last_used: Instant::now(),
                 round_trip: None,
@@ -666,17 +863,58 @@ async fn running<'a>(
     sessions.get_mut(&key)?.as_mut()
 }
 
+/// Whether the bytes behind `program` are still the ones a person approved.
+///
+/// No pin is not a refusal: the build's own rows are the daemon's, and a pack's server
+/// is reported as `untrusted` before it starts (P4.6-7). A pin exists only after
+/// somebody answered that question, and then the file has to still hash to what they
+/// approved — otherwise replacing the binary under an approved name would be an
+/// upgrade nobody reviewed. The check lives here because all three questions
+/// (references, diagnostics, formatting) start a server through [`running`].
+fn pin_allows(program: &str, pin: Option<&str>) -> bool {
+    match pin {
+        None => true,
+        Some(pin) => crate::trust::program_fingerprint(program).as_deref() == Some(pin),
+    }
+}
+
 /// One language this build can start, as `GET /v1/lsp/servers` reports it.
 #[derive(Debug, Clone)]
 pub struct ServerState {
-    /// The LSP language id, which is also the key in [`SERVERS`].
-    pub language: &'static str,
+    /// The LSP language id, which is also the key a session is kept under.
+    pub language: String,
     /// The program that would be spawned.
-    pub program: &'static str,
+    pub program: String,
+    /// The extension that introduced the row, or `None` for this build's own.
+    pub extension: Option<String>,
     /// Whether that program is on this machine's `PATH`.
     pub installed: bool,
     /// The session, when one is running.
     pub running: Option<RunningState>,
+}
+
+/// One row of [`Servers::status`], with the session kept under its language.
+fn state_of(
+    sessions: &HashMap<String, Option<Running>>,
+    now: Instant,
+    entry: Entry,
+) -> ServerState {
+    let running = sessions
+        .get(entry.language.as_str())
+        .and_then(|slot| slot.as_ref())
+        .map(|running| RunningState {
+            encoding: running.session.encoding(),
+            idle: now.duration_since(running.last_used),
+            round_trip: running.round_trip,
+            requests: running.requests,
+        });
+    ServerState {
+        installed: !entry.untrusted && installed(&entry.program),
+        language: entry.language,
+        program: entry.program,
+        extension: entry.extension,
+        running,
+    }
 }
 
 /// A running session, as reported.
@@ -702,20 +940,59 @@ fn byte_offset(text: &str, characters: usize) -> usize {
         .map_or(text.len(), |(byte, _)| byte)
 }
 
-/// The LSP language id for a path, when this build has a server for it.
+/// The extensions that name a language, by LSP language id.
 ///
-/// The id and the key in [`SERVERS`] are the same string, which is what lets the
-/// route name a language and the registry find a session with it.
+/// The map is the routing table rather than this build's roster: an activated pack
+/// may name a server for a language the binary has none for, and a `.go` file is only
+/// reachable if its extension is read here. A language with no row is not refused —
+/// the registry answers no server and the parse tree takes the question — so adding
+/// a row costs nothing until something can answer for it.
+///
+/// The ids are the protocol's own (`c`, `cpp`, `csharp`, `bash`), because a server
+/// matches them in `initialize`; an extension in two rows would be a document two
+/// servers could judge.
+pub const LANGUAGES: &[(&str, &[&str])] = &[
+    ("rust", &["rs"]),
+    ("python", &["py", "pyi"]),
+    ("typescript", &["ts", "tsx", "mts", "cts"]),
+    ("javascript", &["js", "jsx", "mjs", "cjs"]),
+    ("go", &["go"]),
+    ("c", &["c", "h"]),
+    ("cpp", &["cc", "cpp", "cxx", "hpp", "hh", "hxx"]),
+    ("java", &["java"]),
+    ("ruby", &["rb"]),
+    ("php", &["php"]),
+    ("csharp", &["cs"]),
+    ("lua", &["lua"]),
+    ("kotlin", &["kt", "kts"]),
+    ("swift", &["swift"]),
+    ("dart", &["dart"]),
+    ("zig", &["zig"]),
+    ("haskell", &["hs"]),
+    ("elixir", &["ex", "exs"]),
+    ("html", &["html", "htm"]),
+    ("css", &["css", "scss", "less"]),
+    ("json", &["json", "jsonc"]),
+    ("yaml", &["yaml", "yml"]),
+    ("toml", &["toml"]),
+    ("sql", &["sql"]),
+    ("bash", &["sh", "bash", "zsh"]),
+    ("markdown", &["md", "markdown"]),
+];
+
+/// The LSP language id for a path.
+///
+/// The id and the key in [`SERVERS`] are the same string where the build has a row,
+/// which is what lets the route name a language and the registry find a session with
+/// it; a pack's row is the same key without a built-in behind it. The last extension
+/// decides: `a.rs.bak` is no language, because a save file is not a Rust source.
 #[must_use]
 pub fn language_of(path: &str) -> Option<&'static str> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
-    match extension.as_str() {
-        "rs" => Some("rust"),
-        "py" => Some("python"),
-        "ts" | "tsx" => Some("typescript"),
-        "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
-        _ => None,
-    }
+    LANGUAGES
+        .iter()
+        .find(|(_, extensions)| extensions.contains(&extension.as_str()))
+        .map(|(language, _)| *language)
 }
 
 /// Whether `program` is on this machine's `PATH`.
@@ -759,9 +1036,89 @@ mod tests {
         assert_eq!(language_of("tool.py"), Some("python"));
         assert_eq!(language_of("app.tsx"), Some("typescript"));
         assert_eq!(language_of("app.mjs"), Some("javascript"));
-        assert_eq!(language_of("README.md"), None);
+        assert_eq!(language_of("cmd/server.go"), Some("go"));
+        assert_eq!(language_of("src/lib.c"), Some("c"));
+        assert_eq!(language_of("include/widget.hpp"), Some("cpp"));
+        assert_eq!(language_of("Main.java"), Some("java"));
+        assert_eq!(language_of("script.tsx"), Some("typescript"));
+        assert_eq!(language_of("README.md"), Some("markdown"));
         assert_eq!(language_of("Makefile"), None);
         assert_eq!(language_of("a.rs.bak"), None, "the last extension decides");
+        assert_eq!(
+            language_of("Makefile.am"),
+            None,
+            "an unknown extension is no language"
+        );
+    }
+
+    #[test]
+    fn every_built_in_server_has_a_language_row() {
+        for (language, _, _) in SERVERS {
+            assert!(
+                LANGUAGES.iter().any(|(id, _)| id == language),
+                "{language} has a server and no extension a request could route"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pin_that_no_longer_matches_refuses_the_program() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        // A path with a directory in it is resolved where it points on every
+        // platform, so the fixture needs no name the OS adds a suffix to.
+        let program = directory.path().join("server");
+        std::fs::write(&program, b"the bytes that were approved").expect("write");
+        let program = program.to_str().expect("utf-8 path");
+        let approved = crate::trust::program_fingerprint(program).expect("the file hashes");
+
+        assert!(pin_allows(program, None), "no pin refuses nothing");
+        assert!(pin_allows(program, Some(&approved)));
+
+        std::fs::write(program, b"bytes nobody approved").expect("write");
+        assert!(
+            !pin_allows(program, Some(&approved)),
+            "a file that changed under an approved name is a different program"
+        );
+    }
+
+    #[test]
+    fn a_managed_install_whose_digest_changed_is_not_started() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let target = directory
+            .path()
+            .join("rust-analyzer")
+            .join("2026-11-16")
+            .join("test-target");
+        std::fs::create_dir_all(&target).expect("install directory");
+        let program = target.join("rust-analyzer");
+        std::fs::write(&program, b"the bytes the install verified").expect("write");
+        let digest = crate::trust::program_fingerprint(program.to_str().expect("utf-8"))
+            .expect("the file hashes");
+        std::fs::write(
+            target.join("install.json"),
+            serde_json::json!({
+                "schema": 1,
+                "id": "rust-analyzer",
+                "name": "rust-analyzer",
+                "version": "2026-11-16",
+                "target": "test-target",
+                "executable": program,
+                "args": [],
+                "languages": ["rust"],
+                "sha256": digest,
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let entry =
+            managed_entry_at(directory.path(), "rust").expect("the install names the language");
+        assert!(!entry.untrusted);
+
+        std::fs::write(&program, b"bytes nobody installed").expect("tamper");
+        let entry = managed_entry_at(directory.path(), "rust")
+            .expect("the install is still the selected row");
+        assert!(entry.untrusted, "a changed executable is not the install");
     }
 
     #[test]

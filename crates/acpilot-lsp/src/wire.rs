@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWr
 
 /// Refuse a message larger than this rather than growing a buffer until the
 /// process dies. Language servers do send large payloads (a full-project
-/// diagnostic pull on a big workspace); 64 MiB is far above anything observed,
+/// diagnostic pull on a big workspace). 64 MiB is far above anything observed,
 /// and still bounded.
 pub const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024;
 
@@ -94,7 +94,7 @@ where
     let mut body = vec![0; length];
     if let Err(error) = reader.read_exact(&mut body).await {
         if error.kind() == io::ErrorKind::UnexpectedEof {
-            // `read_exact` does not say how much it read; the caller gets a
+            // `read_exact` does not say how much it read. The caller gets a
             // framing error either way, and the next read would be garbage.
             return Err(FramingError::Truncated(0, length));
         }
@@ -106,7 +106,7 @@ where
 /// Write one message body with its header, then flush.
 ///
 /// Flushing matters: a server that receives half a request waits, the client
-/// waits for a response, and the bug shows up as a hang rather than an error.
+/// waits for a response. The bug shows up as a hang rather than an error.
 pub async fn write_message<W>(writer: &mut W, body: &[u8]) -> Result<(), FramingError>
 where
     W: AsyncWrite + Unpin,
@@ -220,7 +220,7 @@ mod tests {
         assert!(read_message_blocking(&mut reader).unwrap().is_none());
     }
 
-    // The async API needs a runtime; these cases only need the parser, so a
+    // The async API needs a runtime. These cases only need the parser, so a
     // current-thread runtime keeps them in the normal test binary.
     fn read_message_blocking(
         reader: &mut BufReader<&[u8]>,

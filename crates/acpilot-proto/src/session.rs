@@ -33,7 +33,7 @@ pub struct SessionSummary {
     /// Profile that owns this session.
     ///
     /// The daemon routes by profile, so this is normally the profile whose
-    /// header selected the router; it is carried so a stored row and a live
+    /// header selected the router. It is carried so a stored row and a live
     /// summary say the same thing.
     pub profile: String,
     /// Workspace the session edits.
@@ -44,6 +44,13 @@ pub struct SessionSummary {
     pub title: String,
     /// Lifecycle state.
     pub status: SessionStatus,
+    /// Driver that opened this session, when it came through the ACP bridge.
+    ///
+    /// Absent for a session a person opened at the machine. The id is the one
+    /// `GET /v1/acp/drivers` lists, so a transcript can answer who asked after
+    /// the connection ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_id: Option<String>,
     /// RFC 3339 timestamp of creation.
     pub created_at: String,
     /// RFC 3339 timestamp of the last event.
@@ -57,7 +64,7 @@ pub struct CreateSessionRequest {
     pub workspace_id: WorkspaceId,
     /// Agent to run.
     pub agent_id: AgentId,
-    /// Optional title; the first prompt supplies one otherwise.
+    /// Optional title. The first prompt supplies one otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -118,7 +125,7 @@ pub struct ModeState {
 
 /// Response to an accepted prompt.
 ///
-/// The turn itself streams over SSE; this only acknowledges that it started.
+/// The turn itself streams over SSE. This only acknowledges that it started.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PromptAccepted {
     /// Session the turn belongs to.

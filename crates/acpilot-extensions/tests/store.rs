@@ -432,3 +432,89 @@ fn a_missing_store_is_empty_not_broken() {
     assert!(store.scan().expect("scans").is_empty());
     assert!(store.load_latest().expect("loads").is_empty());
 }
+
+#[test]
+fn a_linked_checkout_is_ready_and_edits_are_seen() {
+    let source = TempDir::new();
+    write_theme(&source, "acpilot.test", "1.0.0");
+    let root = TempDir::new();
+    let store = Store::new(root.path());
+
+    let linked = store.link_from_dir(source.path()).expect("links");
+    assert!(linked.is_ready());
+    assert!(linked.is_linked());
+    assert!(linked.recorded.is_none());
+    assert_eq!(
+        fs::read_to_string(store.record_path("acpilot.test", "1.0.0")).unwrap(),
+        format!("link {}\n", linked.path.display())
+    );
+
+    // The edit is what the store serves next. Nothing has to be re-added.
+    let theme = source.path().join("theme.toml");
+    let original = fs::read_to_string(&theme).unwrap();
+    fs::write(&theme, original.replace("#e8edf6", "#101010")).unwrap();
+    let verified = store.verify("acpilot.test", "1.0.0").expect("verifies");
+    assert!(verified.is_ready(), "{:?}", verified.status);
+    assert!(verified.is_linked());
+    assert!(
+        fs::read_to_string(verified.path.join("theme.toml"))
+            .unwrap()
+            .contains("#101010")
+    );
+
+    // A link is not a second install: the id and version are still taken.
+    assert!(matches!(
+        store.link_from_dir(source.path()),
+        Err(ExtensionError::AlreadyInstalled { .. })
+    ));
+}
+
+#[test]
+fn a_link_whose_checkout_is_gone_is_blocked() {
+    let source = TempDir::new();
+    write_theme(&source, "acpilot.test", "1.0.0");
+    let checkout = source.path().to_path_buf();
+    let root = TempDir::new();
+    let store = Store::new(root.path());
+    store.link_from_dir(&checkout).expect("links");
+    drop(source);
+
+    let stored = store.verify("acpilot.test", "1.0.0").expect("row");
+    assert!(stored.is_blocked());
+    assert!(stored.is_linked(), "the row still says it was a link");
+    let StoreStatus::Blocked(reason) = &stored.status else {
+        panic!("a missing checkout is blocked");
+    };
+    assert!(reason.to_string().contains("gone"), "{reason}");
+    let active = store
+        .resolve_active(&["acpilot.test".to_owned()])
+        .expect("resolves");
+    assert!(active.extensions.is_empty());
+    assert_eq!(active.blocked.len(), 1);
+}
+
+#[test]
+fn a_link_whose_checkout_changes_its_version_is_blocked() {
+    let source = TempDir::new();
+    write_theme(&source, "acpilot.test", "1.0.0");
+    let root = TempDir::new();
+    let store = Store::new(root.path());
+    store.link_from_dir(source.path()).expect("links");
+
+    let manifest = source.path().join("extension.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+    )
+    .unwrap();
+
+    let stored = store.verify("acpilot.test", "1.0.0").expect("row");
+    let StoreStatus::Blocked(reason) = &stored.status else {
+        panic!("a checkout that moved on is blocked: {:?}", stored.status);
+    };
+    assert!(
+        reason.to_string().contains("now says acpilot.test@1.1.0"),
+        "{reason}"
+    );
+}

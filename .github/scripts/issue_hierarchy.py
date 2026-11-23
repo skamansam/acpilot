@@ -3,7 +3,7 @@
 
 `TODO.md` is a tree — phases, cross-cutting sections, open decisions — and the
 tracker flattened it into 243 sibling issues. A board of siblings has no answer
-to "is the engine phase nearly done"; it has an answer to "how many issues are
+to "is the engine phase nearly done". It has an answer to "how many issues are
 open", which is a different question.
 
 GitHub's sub-issues are the tree. This script creates one parent per phase and per
@@ -14,7 +14,7 @@ group, and attaches the issues that belong to it:
       ├── P2-2 · supervisor: spawn an `acp-stdio` agent
       └── …
 
-Parents are issues, not a second kind of object, so they land on the board like
+Parents are issues, not a second kind of object. They land on the board like
 anything else and the built-in workflows and `roadmap.mjs` treat them the same
 way. Every parent is closed when its last child closes: a finished phase whose
 card still says Todo is the failure this is meant to prevent.
@@ -228,9 +228,9 @@ def create_parent(parent: Parent) -> dict:
         "--label",
         "type:task",
     ).strip()
-    # The created URL is the number; the database id the sub-issue API wants is
-    # only on the issue itself, so read it back rather than parse the URL. A read
-    # in the same second as the create can still answer 404, so it is retried
+    # The created URL is the number. The database id the sub-issue API wants is
+    # only on the issue itself. Read it back rather than parse the URL. A read
+    # in the same second as the create can still answer 404. It is retried
     # rather than being allowed to strand a half-built tree.
     number = url.rsplit("/", 1)[-1]
     for attempt in range(4):
@@ -350,7 +350,7 @@ def main() -> int:
             print(f"  + #{issue['number']} {issue['title'][:70]}")
         total += len(owned)
 
-        # A parent is done when its last child is, and a parent that still says
+        # A parent is done when its last child is. A parent that still says
         # Todo over a finished phase is the thing this script exists to avoid.
         if owned and all(issue["state"] == "closed" for issue in owned):
             if found["state"] == "open":

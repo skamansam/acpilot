@@ -22,6 +22,7 @@ fn summary() -> SessionSummary {
         agent_id: "mock".into(),
         title: "a conversation".into(),
         status: SessionStatus::Closed,
+        driver_id: None,
         created_at: "2026-11-03T10:00:00Z".into(),
         updated_at: "2026-11-03T10:05:00Z".into(),
     }

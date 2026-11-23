@@ -11,7 +11,11 @@ pub mod cli;
 pub mod doctor;
 pub mod export;
 pub mod ext;
+pub mod lsp;
+pub mod registry;
+pub mod release;
 pub mod secret;
+pub mod update;
 
 pub use cli::{Cli, Command, ConfigCommand, ExtCommand, SecretCommand};
 

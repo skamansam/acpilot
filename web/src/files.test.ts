@@ -43,7 +43,7 @@ describe('languageFor', () => {
   });
 
   it('does not guess from a directory called something else', () => {
-    // The basename is what earns the grammar; `rs` as a parent directory is not
+// The basename is what earns the grammar. `rs` as a parent directory is not
     // an extension, and a file named `README` inside it is still plain.
     expect(languageFor('rs/README')).toBe('plain');
   });

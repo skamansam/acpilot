@@ -11,7 +11,7 @@ publish = false
 # Default features on purpose — this is the configuration iced would ship in,
 # exactly as `probes/gpui-bench` uses gpui's defaults.
 [dependencies]
-# `advanced` exposes the text primitives the shaping probe measures; it does
+# `advanced` exposes the text primitives the shaping probe measures. It does
 # not change the renderer, and the frame and first-paint numbers are from the
 # same default feature set as `probes/gpui-bench`.
 iced = { version = "0.14", features = ["advanced"] }

@@ -83,7 +83,7 @@ async fn an_answer_is_kept_for_the_client_that_connects_after_it() {
     });
 
     // A cold server's first publish can be the empty one that arrives before its
-    // analysis, so the question is asked again after a pause — which is exactly what
+    // analysis, so the question is asked again after a pause. Which is exactly what
     // the pane does while the buffer sits still.
     let mut answer = serde_json::Value::Null;
     for attempt in 1..=20 {

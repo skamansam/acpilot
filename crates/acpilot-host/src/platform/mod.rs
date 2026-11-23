@@ -25,7 +25,7 @@ mod windows;
 
 /// Whether this platform compares paths case-insensitively.
 ///
-/// A policy glob has to fold case on Windows to be usable there, and must not
+/// A policy glob has to fold case on Windows to be usable there. Must not
 /// fold it on POSIX: folding both would let a rule about `/work/secret` match
 /// `/Work/Secret` on Linux, which is a rule the author never wrote. It is a
 /// constant rather than a function because the answer is a property of the
@@ -37,6 +37,11 @@ compile_error!(
     "acpilot-host supports unix and windows only: add src/platform/<target>.rs and a \
      `spawn_pty` there, or make the daemon refuse to build for this target"
 );
+
+#[cfg(unix)]
+pub use unix::make_executable;
+#[cfg(windows)]
+pub use windows::make_executable;
 
 #[cfg(unix)]
 pub(crate) use unix::{

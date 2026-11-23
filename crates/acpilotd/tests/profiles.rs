@@ -149,7 +149,7 @@ async fn a_header_picks_the_profile_and_a_mutation_without_one_is_refused() {
         "the refusal names what it serves: {body}"
     );
 
-    // Activation changes the default for headerless reads; streams bind at
+    // Activation changes the default for headerless reads. Streams bind at
     // connect, so they follow on their next connection rather than by a frame.
     let (status, body) = send(app.clone(), "POST", "/v1/profiles/personal/activate", None).await;
     assert_eq!(status, StatusCode::OK);

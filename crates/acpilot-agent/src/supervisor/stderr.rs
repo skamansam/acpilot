@@ -18,7 +18,7 @@ use std::sync::Mutex;
 ///
 /// 64 KiB is a few hundred lines of a backtrace and small enough that a profile
 /// with a dozen agents costs less than a megabyte. The engine phase's P2-5 terminal buffer is
-/// larger because a terminal is the product surface; stderr is diagnostics.
+/// larger because a terminal is the product surface. Stderr is diagnostics.
 pub const STDERR_CAPACITY: usize = 64 * 1024;
 
 /// A bounded, thread-safe tail of a child's stderr.

@@ -17,7 +17,7 @@ pub struct WorkspaceSummary {
     pub name: String,
     /// Profile that owns this workspace.
     ///
-    /// Two profiles may see the same host path; the owner is what makes one
+    /// Two profiles may see the same host path. The owner is what makes one
     /// profile's workspace id unacceptable in another's request.
     pub profile: String,
     /// Host the root lives on.

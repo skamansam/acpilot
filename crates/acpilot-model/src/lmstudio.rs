@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::wire;
 use crate::{
-    ChatRequest, ChatResponse, DISCOVERY_TIMEOUT, Provider, post_chat, transport_error, unexpected,
-    wire::chat_body,
+    ChatRequest, ChatResponse, DISCOVERY_TIMEOUT, Provider, post_chat, post_chat_stream,
+    transport_error, unexpected, wire::chat_body, wire::stream_body,
 };
 
 /// The LM Studio adapter.
@@ -90,6 +90,29 @@ impl LmStudio {
         let (value, unsupported) = post_chat(&self.client, &self.provider, &url, &mut body).await?;
         wire::parse(value, unsupported).map_err(|error| unexpected(&self.provider.id, &error))
     }
+
+    /// `POST /api/v0/chat/completions` with `stream: true`.
+    ///
+    /// LM Studio streams the same frames as the OpenAI-compatible surface, so the
+    /// decoding is shared. Only the URL differs.
+    pub async fn chat_stream(
+        &self,
+        request: &ChatRequest,
+        on_text: &mut (dyn FnMut(&str) + Send),
+        on_reasoning: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<ChatResponse, AcpilotError> {
+        let url = self.provider.url("/api/v0/chat/completions");
+        let mut body = stream_body(request);
+        post_chat_stream(
+            &self.client,
+            &self.provider,
+            &url,
+            &mut body,
+            on_text,
+            on_reasoning,
+        )
+        .await
+    }
 }
 
 /// `GET /api/v0/models` response.
@@ -131,7 +154,7 @@ impl ModelRow {
             model_type,
             architecture: self.arch,
             quantization: self.quantization,
-            // `state` is `loaded` or `not-loaded`; anything else is not a claim we
+            // `state` is `loaded` or `not-loaded`. Anything else is not a claim we
             // are willing to make on the server's behalf.
             loaded: self.state.as_deref().map(|state| state == "loaded"),
             context_window: self.max_context_length,

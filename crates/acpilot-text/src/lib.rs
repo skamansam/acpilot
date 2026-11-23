@@ -48,6 +48,7 @@ pub mod outline;
 pub mod pane;
 pub mod references;
 pub mod selection;
+pub mod snippet;
 
 pub use buffer::{Buffer, LineColumn, LineEnding, TextError, is_word};
 pub use document::Document;

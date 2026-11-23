@@ -416,23 +416,55 @@ fn duplicate_theme_ids_are_refused() {
 }
 
 #[test]
-fn deferred_kinds_are_loaded_faithfully_but_not_read() {
+fn grammar_contributions_are_read() {
     let dir = TempDir::new();
     dir.write(
         "extension.toml",
-        &manifest("acpilot.test", "grammars", "grammars/rust"),
+        &manifest("acpilot.test", "grammars", "grammars/go"),
     );
-    dir.write("grammars/rust/manifest.toml", "name = \"rust\"\n");
+    dir.write(
+        "grammars/go/manifest.toml",
+        "name = \"go\"\nextensions = [\"go\"]\n",
+    );
+    dir.write("grammars/go/grammar.wasm", "wasm bytes");
+    dir.write("grammars/go/highlights.scm", "(identifier) @variable\n");
 
-    let extension = load_dir(dir.path()).expect("grammar path exists");
-    assert_eq!(extension.warnings.len(), 1);
-    assert!(extension.warnings[0].contains("P4.6-8"));
+    let extension = load_dir(dir.path()).expect("grammar contribution loads");
+    assert!(extension.warnings.is_empty(), "{:?}", extension.warnings);
     match &extension.contributions[0] {
-        Contribution::Unloaded { kind, path, .. } => {
-            assert_eq!(*kind, acpilot_proto::extension::ExtensionKind::Grammars);
-            assert_eq!(path, "grammars/rust");
+        Contribution::Grammar(grammar) => {
+            assert_eq!(grammar.name, "go");
+            assert_eq!(grammar.extension, "acpilot.test");
+            assert_eq!(grammar.extensions, ["go"]);
+            assert_eq!(grammar.wasm, b"wasm bytes");
+            assert_eq!(grammar.highlights, "(identifier) @variable\n");
         }
-        other => panic!("expected an unloaded contribution, got {other:?}"),
+        other => panic!("expected a grammar contribution, got {other:?}"),
+    }
+}
+
+#[test]
+fn snippet_contributions_are_read() {
+    let dir = TempDir::new();
+    dir.write(
+        "extension.toml",
+        &manifest("acpilot.test", "snippets", "snippets/rust.json"),
+    );
+    dir.write(
+        "snippets/rust.json",
+        r#"{"language":"rust","snippets":[{"prefix":"fn","body":["fn ${1:name}() {","    $0","}"],"description":"function"}]}"#,
+    );
+
+    let extension = load_dir(dir.path()).expect("snippet contribution loads");
+    assert!(extension.warnings.is_empty(), "{:?}", extension.warnings);
+    match &extension.contributions[0] {
+        Contribution::Snippets(snippets) => {
+            assert_eq!(snippets.language, "rust");
+            assert_eq!(snippets.extension, "acpilot.test");
+            assert_eq!(snippets.snippets[0].prefix, "fn");
+            assert_eq!(snippets.snippets[0].body[1], "    $0");
+        }
+        other => panic!("expected a snippet contribution, got {other:?}"),
     }
 }
 

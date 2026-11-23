@@ -62,9 +62,39 @@ pub fn pins(state: &AppState) -> HashMap<String, String> {
 #[must_use]
 pub fn fingerprint(spec: &AgentSpec) -> Option<String> {
     let command = spec.command()?;
-    let path = resolve(&command.program)?;
+    program_fingerprint(&command.program)
+}
+
+/// The bytes of a program, hashed by the same rule as an agent's.
+///
+/// Separate from [`fingerprint`] because the pin is about a *program*: a language
+/// server is a command a preset names, not a command line an agent declares, and both
+/// have to agree byte for byte or approving one would not approve the other.
+#[must_use]
+pub fn program_fingerprint(program: &str) -> Option<String> {
+    let path = resolve(program)?;
     let bytes = std::fs::read(path).ok()?;
     Some(hex(&Sha256::digest(bytes)))
+}
+
+/// The language-server pins a person has recorded, by program.
+///
+/// An unreadable pin list is an empty one, for the reason [`pins`] gives: a database
+/// that cannot answer should not stop a client seeing which servers exist.
+pub fn lsp_pins(state: &AppState) -> HashMap<String, String> {
+    let Some(store) = state.store() else {
+        return HashMap::new();
+    };
+    match store.lsp_server_pins() {
+        Ok(pins) => pins
+            .into_iter()
+            .map(|pin| (pin.program, pin.fingerprint))
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "the language-server pins could not be read");
+            HashMap::new()
+        }
+    }
 }
 
 /// The status a pin implies, on top of what this host knows about the program.
@@ -82,7 +112,7 @@ pub fn status(spec: &AgentSpec, pin: Option<&str>) -> AgentStatus {
 
 /// One agent as the API reports it, with its pin applied.
 #[must_use]
-pub fn summary(spec: &AgentSpec, pin: Option<&str>) -> AgentSummary {
+pub fn summary(spec: &AgentSpec, pin: Option<&str>, extension: Option<&str>) -> AgentSummary {
     AgentSummary {
         id: spec.id.clone(),
         name: spec.name.clone(),
@@ -93,6 +123,7 @@ pub fn summary(spec: &AgentSpec, pin: Option<&str>) -> AgentSummary {
         command: spec
             .command()
             .map_or_else(String::new, CommandSpec::command_line),
+        extension: extension.map(str::to_owned),
         protocol_version: None,
     }
 }
@@ -100,6 +131,20 @@ pub fn summary(spec: &AgentSpec, pin: Option<&str>) -> AgentSummary {
 /// The agent routes that are about trust.
 pub fn routes() -> Router<AppState> {
     Router::new().route("/v1/agents/{id}/trust", post(trust))
+}
+
+/// The language-server route that is about trust.
+///
+/// Keyed by language rather than by program because a language is what a client lists
+/// and what a URL can hold: a program is a path, and a path in a segment is a route
+/// that breaks the first time somebody installs a server somewhere with a slash in it.
+/// The pin itself is stored against the program, so approving `typescript` also
+/// approves `javascript` when one server answers for both.
+pub fn lsp_routes() -> Router<AppState> {
+    Router::new().route(
+        "/v1/lsp/servers/{language}/trust",
+        post(trust_language_server),
+    )
 }
 
 /// Add the route to the served OpenAPI document.
@@ -114,6 +159,13 @@ pub fn register(document: &mut utoipa::openapi::OpenApi) {
             <__path_trust_doc as utoipa::Path>::operation(),
         ),
     );
+    document.paths.paths.insert(
+        "/v1/lsp/servers/{language}/trust".to_owned(),
+        utoipa::openapi::path::PathItem::new(
+            utoipa::openapi::path::HttpMethod::Post,
+            <__path_trust_language_server_doc as utoipa::Path>::operation(),
+        ),
+    );
 }
 
 /// `POST /v1/agents/{id}/trust` — record the binary a person approved.
@@ -126,16 +178,19 @@ async fn trust(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<AgentSummary>, ApiError> {
-    let registry = state.registry().ok_or_else(|| {
-        ApiError::new(AcpilotError::conflict(
+    if state.registry().is_none() && state.profile_root().is_none() {
+        return Err(ApiError::new(AcpilotError::conflict(
             "this daemon has no profile, so it has no agents to trust",
-        ))
-    })?;
-    let spec = registry.get(&id).ok_or_else(|| {
-        ApiError::new(AcpilotError::not_found(format!(
-            "agent {id} in this profile"
-        )))
-    })?;
+        )));
+    }
+    let (spec, extension) = crate::agent_specs(&state)
+        .into_iter()
+        .find(|(spec, _)| spec.id == id)
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::not_found(format!(
+                "agent {id} in this profile"
+            )))
+        })?;
     let store = state.store().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon has no store, so a pin recorded now would be forgotten",
@@ -151,7 +206,54 @@ async fn trust(
             "the pin could not be recorded: {error}"
         ))))
     })?;
-    Ok(Json(summary(&spec, Some(&fingerprint))))
+    Ok(Json(summary(
+        &spec,
+        Some(&fingerprint),
+        extension.as_deref(),
+    )))
+}
+
+/// `POST /v1/lsp/servers/{language}/trust` — record the program a person approved.
+///
+/// The answer is the row itself, with the new state on it, so a client that cleared
+/// the question does not have to list again to find out what it did. A language this
+/// build cannot start is `404` rather than a pin recorded for nothing, and a program
+/// that is not on this host is `400` for the reason the agent route gives: there is
+/// nothing to approve.
+async fn trust_language_server(
+    State(state): State<AppState>,
+    ApiPath(language): ApiPath<String>,
+) -> Result<Json<acpilot_proto::lsp::LspServerSummary>, ApiError> {
+    state.refresh_language_servers().await;
+    let server = state
+        .language_servers()
+        .status()
+        .await
+        .into_iter()
+        .find(|server| server.language == language)
+        .ok_or_else(|| {
+            ApiError::new(AcpilotError::not_found(format!(
+                "a language server for {language} in this build"
+            )))
+        })?;
+    let store = state.store().ok_or_else(|| {
+        ApiError::new(AcpilotError::conflict(
+            "this daemon has no store, so a pin recorded now would be forgotten",
+        ))
+    })?;
+    let fingerprint = program_fingerprint(&server.program).ok_or_else(|| {
+        ApiError::new(AcpilotError::invalid(format!(
+            "the language server for {language} has no program on this host to approve"
+        )))
+    })?;
+    store
+        .save_lsp_server_pin(&server.program, &fingerprint)
+        .map_err(|error| {
+            ApiError::new(AcpilotError::Io(std::io::Error::other(format!(
+                "the pin could not be recorded: {error}"
+            ))))
+        })?;
+    Ok(Json(crate::lsp_summary(&server, Some(&fingerprint))))
 }
 
 /// OpenAPI registration for the route above.
@@ -173,6 +275,23 @@ async fn trust(
     ))
 )]
 fn trust_doc() {}
+
+/// OpenAPI registration for the language-server route, from the handler's metadata.
+/// The function body is never called.
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/lsp/servers/{language}/trust",
+    tag = "lsp",
+    summary = "Record that a language server's program is approved",
+    params(("language" = String, Path, description = "LSP language id")),
+    responses((
+        status = 200,
+        description = "The row, now approved, with the pin that made it so",
+        body = acpilot_proto::lsp::LspServerSummary
+    ))
+)]
+fn trust_language_server_doc() {}
 
 /// Where a command's program is on this host.
 ///

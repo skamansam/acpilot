@@ -45,11 +45,11 @@ Why this note has this shape:
 - **"Run its Preamble command first."** gstack's own measurements found that agents outside Claude usually skip each skill's setup step (one run in 29 for OpenClaw and Hermes). Without that step, the skill loses its session setup, which handles questions, consent and upgrade checks. One explicit sentence is the cheapest fix.
 - **The Rust commands.** I read the skill files: only `ship` (and `qa`, briefly) names cargo. `verify`, `health` and `test-audit` would have to infer your checks, so the block spells them out. Edit them to fit each repo, e.g. a cargo ci-* alias or just `check`.
 - **The "do not use skills" line.** gstack skills are long. Without this line, an agent with loose control may run a whole workflow for a typo fix.
-- **The `gstack:begin`/`gstack:end` markers.** They keep the block easy to find and to swap later. gstack's tooling uses the same markers for the block it can write itself.
+- **The `gstack:begin`/`gstack:end` markers.** They keep the block easy to find and to swap later. Gstack's tooling uses the same markers for the block it can write itself.
 
 Where to put it:
 
 - **Every project:** a global rules file, if the agent reads one. Freebuff and Devin both read AGENTS.md. I do not know whether either has a user-wide AGENTS.md.
-- **A specific repo:** the repo's AGENTS.md. gstack can write its 3-line routing block there for you with `~/workspace-other/gstack/bin/gstack-harness register generic --context <repo>/AGENTS.md`, and track it for clean removal. Paste the routing-hints and checks sections under it yourself.
+- **A specific repo:** the repo's AGENTS.md. Gstack can write its 3-line routing block there for you with `~/workspace-other/gstack/bin/gstack-harness register generic --context <repo>/AGENTS.md`, and track it for clean removal. Paste the routing-hints and checks sections under it yourself.
 
 If an agent ignores skills entirely, a smaller fallback is gstack's 1.8 KB digest, `~/workspace-other/gstack/agents-digest/gstack-AGENTS.md`. It holds only gstack's working principles (reuse before building, fix root causes, and so on), with no workflows. Paste it into AGENTS.md, and copy it again after each gstack upgrade.

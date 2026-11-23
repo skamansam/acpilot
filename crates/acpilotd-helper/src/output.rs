@@ -28,7 +28,7 @@ impl Output {
 
     /// Write one JSON line.
     ///
-    /// A failed write is not reported: the daemon is the only reader, so a closed
+    /// A failed write is not reported: the daemon is the only reader. A closed
     /// pipe means it is gone and the next read of stdin ends the process anyway.
     pub fn send(&self, value: &Value) {
         let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);

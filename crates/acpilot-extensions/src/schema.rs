@@ -10,7 +10,7 @@
 //! major version is in the filename and matches `schema_version`, v1 only ever
 //! gains optional keys or enum members, and anything a `schema_version = 1`
 //! loader would read differently ships as `extension-v2.json`. Regenerate with
-//! `cargo xtask schema`; the drift test in `tests/schema.rs` is the gate.
+//! `cargo xtask schema`. The drift test in `tests/schema.rs` is the gate.
 
 use serde_json::{Map, Value, json};
 
@@ -76,7 +76,7 @@ pub fn json_schema() -> Value {
         .as_object()
         .cloned()
         .expect("the manifest is an object with properties");
-    // The struct's own docs describe the type; the document's describe the file.
+    // The struct's own docs describe the type. The document's describe the file.
     generated.remove("title");
     generated.remove("description");
 
@@ -127,7 +127,7 @@ fn tighten_properties(root: &mut Map<String, Value>) {
 
     pattern(properties.get_mut("id"), ID_PATTERN);
     if let Some(Value::Object(id)) = properties.get_mut("id") {
-        // The pattern bounds each segment; this bounds the whole id, which is
+        // The pattern bounds each segment. This bounds the whole id, which is
         // what `validate_namespaced_id` checks before anything else.
         id.insert("maxLength".to_owned(), json!(128));
     }
@@ -184,7 +184,7 @@ fn pattern(property: Option<&mut Value>, expression: &str) {
 /// `Option<T>` generates `"type": ["string", "null"]`, and TOML has no null:
 /// publishing it would describe a file nobody can write and offer an editor a
 /// completion that does not parse. "Absent" is the only way to say "not set".
-/// The agent manifest's schema applies the same rule to its own document; a test
+/// The agent manifest's schema applies the same rule to its own document. A test
 /// here fails if any null survives.
 fn for_toml(value: &mut Value) {
     match value {
@@ -208,7 +208,7 @@ fn for_toml(value: &mut Value) {
             if rust_integer {
                 map.remove("format");
             }
-            // A one-item `type` array is noise; JSON Schema accepts the string.
+            // A one-item `type` array is noise. JSON Schema accepts the string.
             let single = match map.get("type") {
                 Some(Value::Array(types)) if types.len() == 1 => types.first().cloned(),
                 _ => None,

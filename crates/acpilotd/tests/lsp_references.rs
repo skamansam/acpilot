@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The fixture is the point of the test. Two modules define a function with the same
-//! name and each calls its own; the caret is on the *call in the first module*. A
+//! name and each calls its own. The caret is on the *call in the first module*. A
 //! scoped answer lists the definition and the call on line 1 and nothing on line 2,
 //! while the parse-tree fallback — which is a spelling search with a parser's help —
 //! lists all four. That difference is the whole reason this route asks a server first.
@@ -116,7 +116,7 @@ async fn a_language_server_answers_with_the_uses_in_scope() {
 async fn a_language_with_no_server_falls_back_to_the_parse_tree() {
     // Markdown has no server this build knows, so the question goes to the parse-tree
     // search over the workspace. That is the contrast the other test needs: four rows,
-    // because spelling cannot tell module `a`'s `dup` from module `b`'s, and the prose
+    // because spelling cannot tell module `a`'s `dup` from module `b`'s. The prose
     // in the `.md` is not a row at all.
     let directory = workspace();
     fs::write(

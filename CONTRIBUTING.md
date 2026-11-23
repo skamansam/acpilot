@@ -386,8 +386,19 @@ The rules that keep the stack traceable:
   the stack, and the phase PR then carries the same change twice.
 - The phase PR merges only after its capability PRs are in and
   `cargo xtask check` is green on the phase branch.
-- Remove a capability branch after its merge. The phase branch stays until the
-  phase PR merges.
+- Drop a branch only when its base holds every commit on it. The checks below
+  use `<base>` and `<branch>`.
+  - Each pull request that targets the branch merged. A closed pull request is
+    not a merge. Its commits need another home first.
+  - `git rev-list --count <base>..<branch>` prints `0`, so the branch has no
+    commit that its base lacks. The branch may be behind by any number.
+  - `git diff --name-only <base> <branch>` prints nothing when the branch is
+    level with its base. A branch that is behind shows only what the base
+    gained after the merge.
+  - The branch exists on the remote. A ref that lives in one clone has no
+    second copy to restore.
+- A capability branch's base is the phase branch. A phase branch's base is
+  `main`, and it passes the checks above only after its phase PR merges.
 
 A merge that lands a phase is one commit on `main`, so a reader can see what a
 phase shipped without reading the whole branch.

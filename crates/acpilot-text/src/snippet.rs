@@ -54,7 +54,7 @@ pub fn expand(body: &str) -> SnippetTemplate {
                     Some(':') => {
                         chars.next();
                         let mut default = String::new();
-                        while let Some(character) = chars.next() {
+                        for character in chars.by_ref() {
                             if character == '}' {
                                 break;
                             }

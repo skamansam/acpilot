@@ -1954,8 +1954,13 @@ v0.1 (D18).
     and `$0`. It selects the first default. `Tab` and `Shift-Tab` walk the stops. Either key falls
     back to indent when no snippet is active. The body is one undo step. Moving the caret or a
     non-text edit ends the session. A save of the profile's activation list reloads the set without
-    a restart. Tests cover the expander, the pane's stops and the command path. **Open:** there is
-    no picker or completion trigger, and no `${1|a,b|}` choices.
+    a restart. Tests cover the expander, the pane's stops and the command path.
+  - **Progress (2026-11-22):** `:snippet` with no prefix opens a picker. It lists the open file's
+    language's templates, filters by prefix or description as the person types, moves with
+    `Up`/`Down` and `Tab`, inserts on `Enter`, and closes on `Esc` without touching the buffer.
+    The rows are read from the active set on every key and frame, so a live reload narrows the
+    list rather than leaving a stale one. A language with no templates says so instead of showing
+    an empty card. **Open:** there is no completion trigger, and no `${1|a,b|}` choices.
 
 - [x] **P4.6-10 · API and CLI** (1d) — done: `acpilotd::extensions`, `extension.*` frames on
   `/v1/events`, and `--json` on every `acpilot ext` verb

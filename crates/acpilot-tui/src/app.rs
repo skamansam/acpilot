@@ -221,6 +221,21 @@ pub struct Palette {
     pub selected: usize,
 }
 
+/// The snippet picker, while it is up.
+///
+/// `:snippet` with no prefix asks which template to insert. This is a list, not a
+/// second command. The templates belong to the active packs, and a person need not
+/// remember every prefix one of them declares. The filter matches the prefix and
+/// the description, because a person who does not remember the prefix can search
+/// by the description.
+#[derive(Debug, Clone, Default)]
+pub struct SnippetPicker {
+    /// The query that filters it.
+    pub query: String,
+    /// The index of the marked row, in the filtered list.
+    pub selected: usize,
+}
+
 /// What a menu row does.
 ///
 /// Every variant is an existing path — a focus move, a pane toggle, a request — so
@@ -1961,6 +1976,8 @@ pub struct App {
     pub pending_line: Option<u32>,
     /// The palette, when it is up.
     pub palette: Option<Palette>,
+    /// The snippet picker, when it is up.
+    pub snippet_picker: Option<SnippetPicker>,
     /// The menu bar, when it has the keyboard.
     pub menu: Option<MenuState>,
     /// Where the bar and its list were drawn this frame, for the mouse.
@@ -2765,6 +2782,7 @@ impl App {
             commit: None,
             pending_line: None,
             palette: None,
+            snippet_picker: None,
             menu: None,
             menu_areas: MenuAreas::default(),
             theme: Theme::default(),
@@ -4348,6 +4366,13 @@ impl App {
             return self.palette_key(key);
         }
 
+        // The snippet picker is the editor's question. It is drawn over the buffer,
+        // so its keys are text until it closes. The palette follows the same rule
+        // one line above.
+        if self.snippet_picker.is_some() {
+            return self.snippet_picker_key(key);
+        }
+
         // The content search is the next question out: it is drawn over every pane
         // and its keys are text, so letting a key through to a pane would be a key
         // acting on something nobody can see.
@@ -5471,13 +5496,17 @@ impl App {
                     Some(Request::OpenFile(path.to_owned()))
                 }
             }
+            "snippet" => {
+                self.open_snippets();
+                None
+            }
             _ if command.starts_with("snippet ") => {
                 let prefix = command
                     .strip_prefix("snippet ")
                     .map(str::trim)
                     .unwrap_or_default();
                 if prefix.is_empty() {
-                    self.notice(":snippet needs a prefix");
+                    self.open_snippets();
                 } else {
                     self.insert_snippet(prefix);
                 }
@@ -5488,6 +5517,111 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Open the snippet picker for the open file's language.
+    ///
+    /// A language with no snippets says so instead of showing an empty card. An
+    /// empty list looks the same as a list that failed to load. The answer here is
+    /// that no active pack declares one.
+    fn open_snippets(&mut self) {
+        let Some(editor) = self.editor.as_ref() else {
+            self.notice("no file is open · nothing to insert into");
+            return;
+        };
+        let language = self.grammars.language_for_path(editor.path());
+        let count = self.snippets.get(&language).map_or(0, Vec::len);
+        if count == 0 {
+            self.notice(&format!("no snippets for {language}"));
+            return;
+        }
+        self.snippet_picker = Some(SnippetPicker::default());
+        self.status = format!("snippets · {count} for {language} · type to filter");
+    }
+
+    /// The snippets the picker lists, filtered by the query.
+    ///
+    /// Read fresh on every key and every frame. A live reload that replaces the
+    /// active set narrows the list under the query, rather than leaving a stale one.
+    #[must_use]
+    pub fn snippet_matches(&self) -> Vec<acpilot_extensions::Snippet> {
+        let query = self
+            .snippet_picker
+            .as_ref()
+            .map(|picker| picker.query.to_lowercase())
+            .unwrap_or_default();
+        let Some(language) = self
+            .editor
+            .as_ref()
+            .map(|editor| self.grammars.language_for_path(editor.path()))
+        else {
+            return Vec::new();
+        };
+        self.snippets
+            .get(&language)
+            .map(|snippets| {
+                snippets
+                    .iter()
+                    .filter(|snippet| {
+                        snippet.prefix.to_lowercase().contains(&query)
+                            || snippet.description.as_deref().is_some_and(|description| {
+                                description.to_lowercase().contains(&query)
+                            })
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The picker's keys: filter, choose, insert.
+    ///
+    /// `Tab` is a move down, so a person can mark a row without leaving the home
+    /// row. `Esc` closes it and leaves the buffer as it was. A picker that
+    /// dismissed itself by inserting would be a key that cannot be undone by
+    /// reading the list.
+    fn snippet_picker_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let selected = self.snippet_picker.as_ref().map(|picker| picker.selected)?;
+        let count = self.snippet_matches().len();
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.snippet_picker = None;
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if let Some(picker) = self.snippet_picker.as_mut() {
+                    picker.selected = picker.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                if selected + 1 < count
+                    && let Some(picker) = self.snippet_picker.as_mut()
+                {
+                    picker.selected += 1;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(picker) = self.snippet_picker.as_mut() {
+                    picker.query.pop();
+                    picker.selected = 0;
+                }
+            }
+            KeyCode::Enter => {
+                let chosen = self.snippet_matches().get(selected).cloned();
+                self.snippet_picker = None;
+                if let Some(snippet) = chosen {
+                    self.insert_snippet(&snippet.prefix);
+                }
+            }
+            KeyCode::Char(character) if !control => {
+                if let Some(picker) = self.snippet_picker.as_mut() {
+                    picker.query.push(character);
+                    picker.selected = 0;
+                }
+            }
+            _ => {}
+        }
+        None
     }
 
     /// Insert the active pack's template for a prefix into the open buffer.
@@ -10360,6 +10494,88 @@ mod tests {
             Some(3..7),
             "BackTab returned to the name"
         );
+    }
+
+    #[test]
+    fn the_snippet_picker_lists_the_open_files_templates_and_inserts_one() {
+        let mut app = App::new("daemon");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: String::new(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_snippets(vec![acpilot_extensions::SnippetSet {
+            language: "rust".to_owned(),
+            extension: "acpilot.test".to_owned(),
+            snippets: vec![
+                acpilot_extensions::Snippet {
+                    prefix: "fn".to_owned(),
+                    body: vec![
+                        "fn ${1:name}() {".to_owned(),
+                        "    $0".to_owned(),
+                        "}".to_owned(),
+                    ],
+                    description: Some("a function".to_owned()),
+                },
+                acpilot_extensions::Snippet {
+                    prefix: "test".to_owned(),
+                    body: vec!["#[test]".to_owned(), "fn $1() {}".to_owned()],
+                    description: Some("a unit test".to_owned()),
+                },
+            ],
+        }]);
+
+        // No prefix asks which template, rather than guessing at one.
+        app.ex_command("snippet");
+        assert!(app.snippet_picker.is_some());
+        assert_eq!(app.snippet_matches().len(), 2, "both templates are rows");
+
+        // The rows move from the home row: `Tab` is a move down.
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.snippet_picker.as_ref().expect("a picker").selected, 1);
+
+        // The query matches the description as well as the prefix.
+        for character in "unit".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let matches = app.snippet_matches();
+        assert_eq!(matches.len(), 1, "`unit` is in `a unit test`");
+        assert_eq!(matches[0].prefix, "test");
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.snippet_picker.is_none(), "choosing closes the list");
+        let editor = app.editor.as_ref().expect("a buffer");
+        assert!(editor.document().text().starts_with("#[test]"));
+        assert!(editor.in_snippet(), "the stops came with the template");
+    }
+
+    #[test]
+    fn esc_closes_the_snippet_picker_without_touching_the_buffer() {
+        let mut app = App::new("daemon");
+        app.apply(Update::File {
+            path: "src/main.rs".to_owned(),
+            text: "fn main() {}\n".to_owned(),
+            etag: "\"v1\"".to_owned(),
+            marks: Vec::new(),
+        });
+        app.set_snippets(vec![acpilot_extensions::SnippetSet {
+            language: "rust".to_owned(),
+            extension: "acpilot.test".to_owned(),
+            snippets: vec![acpilot_extensions::Snippet {
+                prefix: "fn".to_owned(),
+                body: vec!["fn ${1:name}() {}".to_owned()],
+                description: None,
+            }],
+        }]);
+        let before = app.editor.as_ref().expect("a buffer").document().text();
+
+        app.ex_command("snippet");
+        assert!(app.snippet_picker.is_some());
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.snippet_picker.is_none(), "Esc is the way out");
+        let after = app.editor.as_ref().expect("a buffer").document().text();
+        assert_eq!(after, before, "dismissing a question writes nothing");
     }
 
     #[test]

@@ -98,6 +98,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     if app.palette.is_some() {
         draw_palette(frame, app, body);
     }
+    if app.snippet_picker.is_some() {
+        draw_snippets(frame, app, body);
+    }
     if app.grep.is_some() {
         draw_grep(frame, app, body);
     }
@@ -1960,6 +1963,84 @@ fn draw_palette(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), list);
+}
+
+/// The snippet picker: the active packs' templates for the open file's language.
+///
+/// One row per template, its prefix first and its description beside it. The
+/// prefix is what the row does. The description is why a person who does not
+/// remember the prefix can still find the row.
+fn draw_snippets(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = &app.snippet_picker else {
+        return;
+    };
+    let matches = app.snippet_matches();
+    let card = middle(area, 60, 50);
+    if card.width < 20 || card.height < 4 {
+        return;
+    }
+    frame.render_widget(Clear, card);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Snippets · {} ", matches.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
+    let [input, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+
+    let query = if picker.query.is_empty() {
+        Span::styled(
+            "type to filter…",
+            Style::default().fg(app.theme.text_muted()),
+        )
+    } else {
+        Span::raw(picker.query.clone())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("> ", Style::default().fg(app.theme.accent())),
+            query,
+        ])),
+        input,
+    );
+    let typed = u16::try_from(picker.query.chars().count()).unwrap_or(u16::MAX);
+    frame.set_cursor_position((input.x + 2 + typed, input.y));
+
+    let capacity = usize::from(list.height).max(1);
+    let first = picker.selected.saturating_sub(capacity - 1);
+    let rows: Vec<Line> = matches
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(capacity)
+        .map(|(index, snippet)| {
+            let chosen = index == picker.selected;
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let mut spans = vec![Span::styled(snippet.prefix.clone(), row)];
+            if let Some(description) = &snippet.description {
+                spans.push(Span::styled(
+                    format!("  {description}"),
+                    Style::default().fg(app.theme.text_muted()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    if rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no snippet matches").style(Style::default().fg(app.theme.text_muted())),
+            list,
+        );
+    } else {
+        frame.render_widget(Paragraph::new(rows), list);
+    }
 }
 
 /// The workspace content search: the query, and one row per matching line.

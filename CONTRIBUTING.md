@@ -405,6 +405,23 @@ The rules that keep the stack traceable:
 A merge that lands a phase is one commit on `main`, so a reader can see what a
 phase shipped without reading the whole branch.
 
+#### How a phase moves
+
+1. Create the phase branch from `main` and open its pull request as a draft. The
+   draft says what the phase covers, and it gives the phase branch a place to
+   report its checks.
+2. Create a branch for the task and open a draft pull request that targets the
+   phase branch. Every commit for that task goes on this branch.
+3. When the task is done, merge its pull request into the phase branch, then add
+   it to the phase pull request body. The body is the stack: it lists each task
+   in merge order.
+4. When every task is in and `cargo xtask check` is green on the phase branch,
+   tell the maintainer. The maintainer reviews the phase pull request, then
+   merges it.
+
+A task that starts before the phase branch exists belongs to the next phase.
+Create the phase branch first.
+
 ### The protection rule
 
 The rule itself is repository settings, not a file. It is a ruleset called

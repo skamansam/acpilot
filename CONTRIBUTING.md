@@ -340,8 +340,10 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
   and Windows, so a platform-specific shortcut will be caught.
 - One check is required to merge: **`required checks`**, the job at the bottom of
   `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`,
-  `frame-budget`, `deny`, `docs` and `history`, and it passes only when all of them
-  pass. The ruleset below therefore points
+  `frame-budget`, `resources`, `deny`, `docs`, `history` and `ste`, and it passes
+  only when all of them pass. `ste` lints the documentation a pull request touches,
+  as `.md`, `.mdx` and `.txt` files. Source comments stay with the local hook until
+  their debt reaches zero. The ruleset below therefore points
   at one name instead of a list that has to be edited whenever a job is added or
   renamed.
 - Only a pull request publishes that name. `on: push` covers `main` alone, so a

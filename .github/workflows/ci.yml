@@ -1,27 +1,28 @@
 name: CI
 
 on:
-  # `main` alone. Every branch used to be here, so that a branch pushed before its
-  # pull request existed still started a run. But a push run and the pull request run
-  # of one branch share a concurrency group, so the pull request cancels the push a
-  # minute in, and GitHub records a check run for every job of the cancelled run,
-  # with conclusion `cancelled`. That entry counts as not-success for a required
-  # check: #302 read `BLOCKED` with all thirteen jobs green and moved to `clean`
-  # only when its cancelled push run was deleted. Skipping the job under an `if:`
-  # does not help, because the entry is still published. A branch's checks come from
-  # its pull request; `workflow_dispatch` covers a branch tip nobody asked about;
-  # and this run on `main` is the one that says a merge landed green.
+  # `main` alone. Every branch used to sit here, so a branch pushed before its pull
+  # request existed still started a run. A push run and the pull request run of one
+  # branch then shared a concurrency group. The pull request cancelled the push a
+  # minute in, and GitHub recorded a check run for every job of the cancelled run,
+  # with conclusion `cancelled`. A required check treats that entry as not-success:
+  # #302 read `BLOCKED` with all thirteen jobs green. Deleting its cancelled push
+  # run moved the pull request to `clean`. An `if:` on the job does not help,
+  # because the entry is still published. A branch gets its checks from its pull
+  # request. `workflow_dispatch` covers a branch tip nobody asked about. This run
+  # on `main` is the one that says a merge landed green.
   push:
     branches: [main]
   pull_request:
-  # And a way to ask for a run against a commit that is already pushed: a workflow
-  # that can only start from an event cannot check a branch tip after the fact.
+  # A way to ask for a run against a commit that is already pushed. A workflow that
+  # starts only from an event cannot check a branch tip after the fact.
   workflow_dispatch:
 
-# One run per branch. `push` no longer fires for a branch (see above), so on a pull
+# One run per branch. `push` no longer fires for a branch (see above). On a pull
 # request this group cancels the run of the previous commit when the branch moves
-# again — the case it exists for. `head_ref` is the branch a pull request comes from
-# and is empty on a push to `main`, so the two never share a group by accident.
+# again, which is the case it exists for. `head_ref` names the branch a pull request
+# comes from, and it is empty on a push to `main`. The two events therefore never
+# share a group by accident.
 concurrency:
   group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
@@ -41,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Reads rust-toolchain.toml, so the pin is defined in exactly one place.
+      # Reads rust-toolchain.toml, so the pin lives in exactly one place.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false
@@ -60,33 +61,35 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --no-fail-fast
 
-      # The docs feature is off by default; it still has to compile and pass.
+      # The docs feature is off by default. It still has to compile and pass.
       - name: Test (docs feature)
         run: cargo test -p acpilotd --features docs
 
-      # The themes page promises this gate, so it gets a named step: a red build
-      # says which check failed without opening the log. Every foreground token
-      # is measured against both surfaces in every built-in theme; a pair below
-      # WCAG AA fails with the token names and both ratios.
+      # The themes page promises this gate, so it gets a named step. A red build
+      # names the check without opening the log. The task measures every foreground
+      # token against both surfaces in every built-in theme. A pair below WCAG AA
+      # fails with the token names and both ratios.
       - name: Theme contrast (WCAG AA)
         run: cargo test -p acpilot-extensions --test themes built_in_themes_meet_wcag_aa
 
-  # `crates/acpilot-web/assets/index.html` is built, not hand-written, and it is
-  # committed so that building the daemon needs no Node. That trade only works if
-  # the committed page is the one `web/` produces, which is what this job checks:
-  # a source change without a rebuild fails here, in the pull request, rather than
-  # shipping a daemon whose `/app` is older than its own repository.
+  # The build writes `crates/acpilot-web/assets/index.html`, and nobody edits it by
+  # hand. The repository commits it, so building the daemon needs no Node. That
+  # trade works only if the committed page matches what `web/` produces. This job
+  # checks that, so a source change without a rebuild fails here, in the pull
+  # request. The alternative ships a daemon whose `/app` is older than its own
+  # repository.
   #
-  # It is also where the live shell test runs, which is why this job has a Rust
-  # toolchain: that test spawns a real daemon, and a fake one would prove the
-  # repaint against the same mock the unit test already uses.
+  # The live shell test runs here too, which is why this job has a Rust toolchain.
+  # That test spawns a real daemon. A fake one would prove the repaint against the
+  # same mock the unit test already uses.
   #
-  # The checks themselves are `cargo xtask web-check` — install, `svelte-check`,
-  # the token-flow tests, the daemon build, the live shell test, the binaries and
-  # Chromium run that edit a file and approve a permission, the page build and the
-  # drift comparison, in that order. They live in the task because a
-  # developer's `cargo xtask check` runs the same list: written here instead, the
-  # runner could keep checking five commands while the local gate grew a sixth.
+  # The checks are one task, `cargo xtask web-check`. It runs install and
+  # `svelte-check`, then the token-flow tests and the daemon build. Next come the
+  # live shell test and the binaries, then Chromium runs that edit a file and
+  # approve a permission. The page build and the drift comparison close the list.
+  # They live in the task because a developer's `cargo xtask check` runs the same
+  # list. Written here instead, the runner could keep checking five commands while
+  # the local gate grew a sixth.
   web:
     name: web UI matches web/
     runs-on: ubuntu-latest
@@ -105,21 +108,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # `web-check` installs when `node_modules` is missing, but the browser has to
-      # be installed after the package is there and before the run that uses it:
-      # `playwright` is a devDependency, and its Chromium revision is the one that
-      # package expects rather than an `npx` download that may be newer.
+      # `web-check` installs when `node_modules` is missing. The browser has to go
+      # in after the package and before the run that uses it. `playwright` is a
+      # devDependency, and its Chromium revision is the one that package expects,
+      # not an `npx` download that may be newer.
       - name: Web dependencies
         working-directory: web
         run: npm ci
 
-      # The browser alone, never `--with-deps`: that flag's first act is
+      # The browser alone, never `--with-deps`. That flag starts with
       # `apt-get update`, and on a runner that could not resolve
-      # `security.ubuntu.com` it failed before a single test ran, with a log that read
-      # like missing fonts. The runner image already carries Chromium's runtime
-      # libraries and its fonts, which is also why this job needs no apt at all. The
-      # Playwright image is not an option here: it has no C toolchain, and this job
-      # compiles the daemon and the CLI, so its Rust build stops at `linker cc not
+      # `security.ubuntu.com` it failed before a single test ran. Its log read like
+      # missing fonts. The runner image already carries Chromium's runtime
+      # libraries and its fonts, which is also why this job needs no apt at all.
+      # The Playwright image is not an option here: it has no C toolchain, and this
+      # job compiles the daemon and the CLI. Its Rust build stops at `linker cc not
       # found`. A library that is genuinely absent now fails in the e2e run, where
       # the browser names it.
       - name: Playwright browser
@@ -127,27 +130,26 @@ jobs:
         run: npx playwright install chromium
 
       # Install, types, both test runs and the embedded page, in the task's order.
-      # A drift failure names the page to commit and exits non-zero; the rebuilt
-      # file is left in the working tree, so the log has something to point at.
+      # A drift failure names the page to commit and exits non-zero. The task leaves
+      # the rebuilt file in the working tree, so the log has something to point at.
       - name: Web checks
         run: cargo xtask web-check
 
-  # The desktop shell is behind a feature that is off by default, so the `check`
-  # job above never compiles it — which means it is one refactor away from not
-  # building at all. This job is the price of that default: it builds, links and
-  # tests the shell with the feature on.
+  # The desktop shell sits behind a feature that is off by default, so the `check`
+  # job above never compiles it. One refactor could stop it building at all. This
+  # job pays the price of that default: it builds, links and tests the shell with
+  # the feature on.
   #
-  # One Linux job rather than three: the code we write is platform-neutral, and
-  # the platform-specific parts belong to gpui, whose own CI is not ours to
-  # reproduce. The release matrix is where macOS and Windows are built, because
-  # that is where their output is needed — checking them on every push would pay
-  # the same price twice.
+  # One Linux job rather than three. The code we write is platform-neutral, and
+  # the platform-specific parts belong to gpui. Its own CI is not ours to
+  # reproduce. The release matrix builds macOS and Windows, because that is where
+  # their output goes. Checking them on every push would pay the same price twice.
   #
-  # The two things Linux needs that the runner does not have are the dev symlinks
-  # gpui's Linux backend links against even with X11 off, and the `libc` version
-  # its `xattr` dependency still uses. Both are documented in ADR 0009 §5; the
-  # `libc` one is asserted here because `cargo update` breaks it silently and the
-  # error a developer sees is `xattr`'s, not ours.
+  # Linux needs two things the runner lacks. The first is the dev symlinks gpui's
+  # Linux backend links against even with X11 off. The second is the `libc` version
+  # that its `xattr` dependency still uses. ADR 0009 §5 documents both. This job
+  # asserts the `libc` one, because `cargo update` breaks it silently and the error
+  # a developer sees is `xattr`'s, not ours.
   gui:
     name: desktop shell (gui feature)
     runs-on: ubuntu-latest
@@ -184,32 +186,33 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      # The job's three checks are one task, so a developer reproduces them with
-      # `cargo xtask gui-check`: the lint with both features (`gui-tests` decides
-      # what the test targets compile, so the lint sees the same feature set the
-      # tests do), the link — `check` does not link, and the Linux link is exactly
-      # where the missing xkbcommon-x11 symlink shows up — and the tests, where
-      # `gui-tests` adds gpui's headless harness so the About panel and the palette
-      # that opens it are exercised in a real `Context` without a display.
+      # The job's three checks are one task, so `cargo xtask gui-check` reproduces
+      # them. The task runs the lint with both features: `gui-tests` decides what
+      # the test targets compile, so the lint sees the same feature set the tests
+      # do. It runs the link, because `check` does not link, and the Linux link is
+      # exactly where the missing xkbcommon-x11 symlink appears. It runs the tests,
+      # where `gui-tests` adds gpui's headless harness. That harness drives the
+      # About panel and the palette that opens it in a real `Context` without a
+      # display.
       #
-      # It is a task and not raw cargo lines for the reason every other job is a
-      # task: the feature pair and the order are written once, and this file cannot
+      # A task and not raw cargo lines, for the reason every other job is a task.
+      # The task states the feature pair and the order once, so this file cannot
       # fall behind what a local run does. `cargo xtask test all` is the workspace
-      # gate plus this test run, which is what a full local session does; `cargo
-      # xtask check` builds the shell but leaves the harness out, because it is a
-      # second gpui build.
+      # gate plus this test run, which is what a full local session does. `cargo
+      # xtask check` builds the shell but leaves the harness out, because the
+      # harness is a second gpui build.
       - name: Check (gui feature, with the window harness)
         run: cargo xtask gui-check
 
-  # P0-5's two halves are a Windows program (`wsl.exe` driver) and a Linux one
-  # (`acpilotd-helper`), and the liftable part — `paths.rs` — is compiled into
-  # `acpilot-host` on every platform. So both halves are tested on both operating
-  # systems: a translation bug or a helper that only works on the machine it was
-  # written on is exactly what `docs/notes/wsl-helper.md` must not be wrong about.
-  # The WSL round trip itself needs a WSL2 distro, which no hosted runner has;
-  # it lives in the opt-in `wsl-bench` job below. The checks here are the
-  # deterministic half of that note's "Testing both sides" table, and they are
-  # not written out here: `cargo xtask probe` runs them, so CI and a developer's
+  # P0-5 has two halves: a Windows program (`wsl.exe` driver) and a Linux one
+  # (`acpilotd-helper`). The liftable part, `paths.rs`, compiles into
+  # `acpilot-host` on every platform. Both jobs therefore run both halves on both
+  # operating systems. A translation bug, or a helper that works only on the
+  # machine someone wrote it on, is exactly what `docs/notes/wsl-helper.md` must
+  # not get wrong. The WSL round trip itself needs a WSL2 distro, which no hosted
+  # runner has, so it lives in the opt-in `wsl-bench` job below. The checks here
+  # are the deterministic half of that note's "Testing both sides" table. This file
+  # does not list them: `cargo xtask probe` runs them, so CI and a developer's
   # shell cannot drift apart.
   probes:
     name: p0-5 probe (${{ matrix.os }})
@@ -228,23 +231,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # `cargo xtask` is a workspace member, so the workspace target joins the
-          # probe's own (a standalone crate with its own lockfile) in the key.
+          # `cargo xtask` is a workspace member, so the key covers the workspace
+          # target and the probe's own target (a standalone crate with its own
+          # lockfile).
           workspaces: |
             . -> target
             probes/wsl-helper -> target
 
-      # The six checks — fmt for the crate and for the helper that cargo never
-      # sees, clippy, the 23 tests, the helper's 4, and the process-level
-      # protocol checker — live in xtask so that the command here and the one a
-      # developer runs are the same command. That also keeps the Windows job off
-      # bash: xtask spawns cargo, rustfmt, rustc and python directly.
+      # Six checks live in xtask: fmt, clippy, the 23 tests, the helper's 4, and the
+      # process-level protocol checker. One of them formats both the crate and the
+      # helper that cargo never sees. The command here and the one a developer runs
+      # are therefore the same command. That also keeps the Windows job off bash,
+      # because xtask spawns cargo, rustfmt, rustc and python directly.
       - name: Probe checks
         run: cargo xtask probe
 
-      # The guard stays here rather than in xtask: it asserts the binary's own
-      # exit codes (1 and 2), a property of the program rather than of a command
-      # line, and it only means anything where wsl.exe is absent.
+      # The guard stays here rather than in xtask. It asserts the binary's own exit
+      # codes (1 and 2), a property of the program rather than of a command line.
+      # The guard only means anything where wsl.exe is absent.
       - name: Platform guard
         if: runner.os == 'Linux'
         working-directory: probes/wsl-helper
@@ -259,20 +263,20 @@ jobs:
           test "$help" -eq 2 || { echo "--help exited $help, expected 2"; exit 1; }
 
   # The end-to-end half of P0-5: start a real distro, spawn the Linux helper
-  # through wsl.exe, and time it. This is the only job that reproduces the
-  # numbers in `docs/notes/wsl-helper.md`, and it needs the one thing
-  # `windows-latest` cannot give — WSL2. WSL2 runs a real kernel in a Hyper-V VM,
-  # so it needs nested virtualisation, which standard hosted runners do not have
-  # (actions/runner-images#5920); the image can offer WSL1 only, and WSL1 numbers
-  # describe a different product. So the job is opt-in, and only runs where WSL2
-  # exists:
+  # through wsl.exe, and time it. Only this job reproduces the numbers in
+  # `docs/notes/wsl-helper.md`. It needs the one thing `windows-latest` cannot
+  # give: WSL2. WSL2 runs a real kernel in a Hyper-V VM, so it needs nested
+  # virtualisation, which standard hosted runners lack
+  # (actions/runner-images#5920). Such an image can offer WSL1 only, and WSL1
+  # numbers describe a different product. The job is therefore opt-in, and it runs
+  # only where WSL2 exists:
   #
   #   gh variable set WSL_BENCH  --body true
   #   gh variable set WSL_RUNNER --body '["self-hosted","windows","wsl2"]'
   #
   # Register a Windows machine with the `wsl2` label to turn it on. The distro's
-  # own `wsl.exe -l -v` row is then the gate (`--require-wsl2`), so a runner that
-  # stopped being WSL2 fails here instead of publishing WSL1 timings as if they
+  # own `wsl.exe -l -v` row is then the gate (`--require-wsl2`). A runner that
+  # stopped being WSL2 fails here, instead of publishing WSL1 timings as if they
   # were the shipped path.
   wsl-bench:
     name: p0-5 bench (WSL2)
@@ -291,18 +295,18 @@ jobs:
           workspaces: probes/wsl-helper -> target
 
       # `install` compiles helper/acpilotd-helper.rs with the distro's own rustc
-      # and writes ~/.local/bin/acpilotd-helper — the same path a developer uses,
-      # so the prerequisite is a rustc inside the distro.
+      # and writes ~/.local/bin/acpilotd-helper, the same path a developer uses.
+      # The prerequisite is a rustc inside the distro.
       - name: Install the helper inside the distro
         run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- install
 
-      # No `shell:` override on purpose: the only argument that needs quoting is
+      # No `shell:` override on purpose. The only argument that needs quoting is
       # an expression, so this line is valid under bash and under pwsh.
       - name: Bench
         run: cargo run --release --manifest-path probes/wsl-helper/Cargo.toml -- bench --require-wsl2 --oracle --json "${{ runner.temp }}/wsl-helper.json"
 
-      # The JSON is the artifact worth keeping: it is what the note's table is
-      # regenerated from, and `wsl_version` in it says which product it measured.
+      # The JSON is the artifact worth keeping. The note's table regenerates from
+      # it, and `wsl_version` inside it says which product the run measured.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -310,20 +314,19 @@ jobs:
           path: ${{ runner.temp }}/wsl-helper.json
           if-no-files-found: warn
 
-  # P6-12's promise is "60 fps at 200×60, or it is a bug", and this is the job that
-  # keeps it from being a sentence in a note. It draws the design pass's world —
-  # the tree, the editor with a real parse, the session list, the transcript and
-  # both footer rows — into a `TestBackend` at the size the budget is stated for,
-  # and fails if the mean or the 95th percentile misses one frame's worth of a
-  # 60 fps budget.
+  # P6-12 promises "60 fps at 200×60, or it is a bug", and this job keeps that
+  # promise out of the note. It draws the design pass's world into a `TestBackend`
+  # at the size the budget states. That world is the tree, the editor with a real
+  # parse, the session list, the transcript and both footer rows. It fails if the
+  # mean or the 95th percentile misses one frame's worth of a 60 fps budget.
   #
-  # Release, because an unoptimised build is nineteen times slower (`docs/notes/
-  # tui-shell.md`) and that number describes nothing anybody runs. The worst frame
-  # is printed and not gated: a shared runner produces one occasionally, and one
-  # scheduler hiccup is not a regression, while a sustained doubling is — which is
-  # what the mean and the p95 see. The example exits 1 on its own, so the failure
-  # reads as the four numbers plus how far off it was, rather than as a missing
-  # command.
+  # Release, because an unoptimised build is nineteen times slower
+  # (`docs/notes/tui-shell.md`) and that number describes nothing anybody runs.
+  # The gate prints the worst frame but does not gate it. A shared runner produces
+  # one occasionally, and one scheduler hiccup is not a regression. A sustained
+  # doubling is, and the mean and the p95 see that doubling. The example exits 1 on
+  # its own, so the failure reads as four numbers plus how far off the run was. It
+  # does not read as a missing command.
   frame-budget:
     name: frame budget (200x60)
     runs-on: ubuntu-latest
@@ -339,13 +342,14 @@ jobs:
       - name: Draw 200x60 frames and hold them to 16.7 ms
         run: cargo run --release --quiet -p acpilot-tui --example frame -- 200 60 300 --budget 16.7
 
-  # XT-4's gate. The budgets are the medians `cargo xtask resources` measured, and the
-  # job repeats the measurement three times and fails when one is past its budget plus a
-  # margin. Release, because a debug build is a different program, and no `--debug` here
-  # for the same reason: `--gate` refuses it rather than comparing it with release
-  # figures. The task is the gate: a hosted runner is noisier than the machine the
-  # budgets came from, so this job catches a regression and `docs/notes/resources.md`
-  # keeps the measured number and its hardware — neither is a claim about a user's box.
+  # XT-4's gate. The budgets are the medians `cargo xtask resources` measured. The
+  # job repeats the measurement three times and fails when one lands past its budget
+  # plus a margin. Release, because a debug build is a different program, and no
+  # `--debug` here for the same reason: `--gate` refuses it rather than comparing it
+  # with release figures. The task is the gate. A hosted runner is noisier than the
+  # machine the budgets came from, so this job catches a regression.
+  # `docs/notes/resources.md` keeps the measured number and its hardware. Neither
+  # makes a claim about a user's box.
   resources:
     name: resources (median of three)
     runs-on: ubuntu-latest
@@ -379,17 +383,35 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@v2
-      # Regenerating must be a no-op: a wire change has to be reviewed as a diff,
-      # not discovered by a client.
+      # Regenerating must be a no-op. A wire change has to arrive as a reviewed
+      # diff, not as something a client discovers.
       - name: Regenerate OpenAPI snapshot
         run: INSTA_UPDATE=always cargo test -p acpilot-proto
       - name: Fail if the snapshot changed
         run: git diff --exit-code -- crates/acpilot-proto/tests/snapshots
 
-  # CONTRIBUTING's "Git history" rules, checked. Each of them is a state this
-  # repository has been in: a merge that kept one side's tree, so `main`'s work was
-  # recorded as merged and then vanished; and a pull request that could not merge at
-  # all. Both are cheap to see here and expensive to find at the merge button.
+  # The prose gate. It reads the documentation a pull request touches and reports
+  # what AGENTS.md rejects. Source comments stay out of CI on purpose. A file
+  # written before the rule still carries its old prose, and the local hook keeps
+  # that debt from growing.
+  ste:
+    name: STE prose lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The script diffs against the base, so the clone needs the full history.
+          fetch-depth: 0
+
+      # `github.base_ref` is the pull request's target. On a push to `main` it is
+      # empty, and the run compares `main` with itself.
+      - name: Lint the documentation the change touches
+        run: scripts/ste-check.sh --docs "origin/${{ github.base_ref || 'main' }}"
+
+  # CONTRIBUTING's "Git history" rules, checked. Each rule describes a state this
+  # repository reached. One merge kept one side's tree, so `main`'s work counted as
+  # merged and then vanished. Another pull request could not merge at all. Both are
+  # cheap to see here and expensive to find at the merge button.
   #
   # A full history, because the check compares every merge with both of its parents.
   # A shallow clone has neither the merge commits nor the base to compare them with.
@@ -401,8 +423,8 @@ jobs:
         with:
           fetch-depth: 0
           # The branch's own tip, not the merge commit GitHub builds from base and
-          # head: that commit's tree equals the head's whenever the branch already
-          # contains the base, so the job would find an "ours" merge of its own
+          # head. That commit's tree equals the head's whenever the branch already
+          # contains the base. The job would then find an "ours" merge of its own
           # making and report the harness instead of the branch.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
@@ -412,46 +434,48 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # `github.base_ref` is the pull request's target and is empty on a push, where
-      # the branch has not said where it is going: `main` is the only answer.
+      # `github.base_ref` is the pull request's target. It is empty on a push,
+      # where the branch has not said where it is going, so `main` is the only
+      # answer.
       - name: History rules
         run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
 
-  # One check to require in branch protection, so the rule does not have to be
-  # restated every time a job is added — and cannot silently stop covering one
-  # when a job is renamed. It needs every gate above and passes only if all of
-  # them passed, which is exactly the predicate a required check should express.
+  # One check to require in branch protection. The rule then does not need a
+  # restatement every time a job arrives, and it cannot silently stop covering a
+  # job that someone renames. This job needs every gate above and passes only if
+  # all of them passed, which is the predicate a required check should express.
   #
-  # The opt-in jobs (`wsl-bench`) are deliberately not in `needs`: they are
-  # skipped on a hosted runner, and a skipped job in `needs` would either block
-  # every pull request or need the same exception twice.
+  # The opt-in `wsl-bench` job is deliberately absent from `needs`. A hosted runner
+  # skips it, and a skipped job in `needs` would either block every pull request or
+  # need the same exception twice.
   #
   # Protect `main` with:
   #
   #   required status checks: "required checks"
   #   require branches to be up to date before merging: yes
   #
-  # The individual jobs stay listed in the PR's checks tab either way; this is the
-  # one a rule points at.
-  # The ruleset on `main` requires the single context `required checks` and allows no
-  # bypass. GitHub records a check run for every job of a run, a cancelled one
-  # included, and a `cancelled` entry under a required name counts as not-success in
-  # that commit's rollup: #302 read `BLOCKED` with every job green, and deleting its
-  # cancelled push run moved the pull request to `clean` with no other change.
+  # The PR's checks tab lists the individual jobs either way. This is the one a
+  # rule points at. The ruleset on `main` requires the single context
+  # `required checks` and allows no bypass.
   #
-  # Pushing a branch and then opening its pull request puts a push run and a pull
-  # request run of the same commit in one concurrency group, so the later cancels the
-  # earlier, and the two events cannot publish one name. A job's `name` is a literal —
-  # an expression there becomes the name, which is how the first attempt at this
-  # published a check called `github.event_name == ...` — so the two events get two
-  # jobs over one assertion.
+  # GitHub records a check run for every job of a run, a cancelled one included. A
+  # `cancelled` entry under a required name counts as not-success in that commit's
+  # rollup. #302 read `BLOCKED` with every job green, and deleting its cancelled
+  # push run moved the pull request to `clean` with no other change.
+  #
+  # A branch push and the pull request of the same commit share one concurrency
+  # group. The later event cancels the earlier one, so the two events cannot
+  # publish one name. A job's `name` is a literal: an expression there becomes the
+  # name, which is how the first attempt published a check called
+  # `github.event_name == ...`. The two events therefore get two jobs over one
+  # assertion.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste]
     # `always()` also fired inside a cancelled run, where every dependency reports
-    # `cancelled`; `!cancelled()` runs the job after a dependency fails, which is the
-    # case it exists for, and stays out of a cancelled run, where it has nothing to say.
-    # Only the event that merges publishes the name the ruleset asks for.
+    # `cancelled`. `!cancelled()` runs the job after a dependency fails, which is
+    # the case it exists for. It stays out of a cancelled run, where it has nothing
+    # to say. Only the event that merges publishes the name the ruleset asks for.
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -467,6 +491,7 @@ jobs:
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}
+            ste=${{ needs.ste.result }}
         run: |
           set -euo pipefail
           failed=""
@@ -484,14 +509,13 @@ jobs:
           fi
 
   # The same assertion under a name of its own, for the runs that are not a pull
-  # request: a push to `main`, and a manual run. The required name belongs to the
-  # pull request alone, and a job that is in a run at all publishes its name there
-  # whatever its `if:` says, so this job cannot be the one called `required checks`.
-  # Keep the two step bodies in step; they are the same check because they are the
-  # same gate.
+  # request: a push to `main` and a manual run. The required name belongs to the
+  # pull request alone. A job in a run publishes its name there whatever its `if:`
+  # says, so this job cannot be the one called `required checks`. Keep the two step
+  # bodies in step. They are the same check because they serve the same gate.
   required-branch:
     name: required checks (branch)
-    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste]
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -507,6 +531,7 @@ jobs:
             deny=${{ needs.deny.result }}
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}
+            ste=${{ needs.ste.result }}
         run: |
           set -euo pipefail
           failed=""

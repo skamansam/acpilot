@@ -208,7 +208,7 @@ fn for_toml(value: &mut Value) {
             if rust_integer {
                 map.remove("format");
             }
-// A one-item `type` array is noise. JSON Schema accepts the string.
+            // A one-item `type` array is noise. JSON Schema accepts the string.
             let single = match map.get("type") {
                 Some(Value::Array(types)) if types.len() == 1 => types.first().cloned(),
                 _ => None,

@@ -1185,7 +1185,7 @@ export interface components {
             public_url?: string | null;
             /**
              * @description Whether a bearer token is required. Loopback-only endpoints may disable
-             *     it; anything else may not.
+             *     it. Anything else may not.
              */
             require_token: boolean;
             /** @description Transports currently served. */
@@ -1210,7 +1210,7 @@ export interface components {
             peer: string;
             /**
              * Format: int32
-             * @description Turns this driver has prompted; the audit trail at a glance.
+             * @description Turns this driver has prompted. The audit trail at a glance.
              */
             prompt_turns: number;
             /** @description Scopes actually granted, which may be fewer than requested. */
@@ -1417,7 +1417,7 @@ export interface components {
          * @description Ask for a code, from the cockpit.
          *
          *     The person issuing the code decides whether the driver may answer permission
-         *     requests; a driver cannot grant itself one by asking.
+         *     requests. A driver cannot grant itself one by asking.
          */
         CreatePairingRequest: {
             /**
@@ -1464,7 +1464,7 @@ export interface components {
         CreateSessionRequest: {
             /** @description Agent to run. */
             agent_id: components["schemas"]["String"];
-            /** @description Optional title; the first prompt supplies one otherwise. */
+            /** @description Optional title. The first prompt supplies one otherwise. */
             title?: string | null;
             /** @description Workspace to attach the session to. */
             workspace_id: components["schemas"]["String"];
@@ -1638,7 +1638,7 @@ export interface components {
          *     `code` is a stable, documented identifier (`invalid_request`, `not_found`,
          *     `conflict`, `permission_denied`, `timeout`, `host_unavailable`,
          *     `model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on
-         *     `code`; `message` is for humans and may be reworded.
+         *     `code`. `message` is for humans and may be reworded.
          */
         ErrorBody: {
             /** @description Stable identifier for the failure class. */
@@ -2054,7 +2054,7 @@ export interface components {
          * @description What a host can actually do.
          *
          *     Capabilities are discovered rather than assumed: a host that cannot spawn
-         *     processes still edits files, and the UIs need to know that before offering an
+         *     processes still edits files. The UIs need to know that before offering an
          *     agent.
          */
         HostCapabilities: {
@@ -2165,7 +2165,7 @@ export interface components {
              * @description The extension that introduced this row, absent for this build's own.
              *
              *     A client that asks the person to trust a command has to name where the
-             *     command came from, and "rust-analyzer from acpilot.rust-pack" is a question
+             *     command came from. "Rust-analyzer from acpilot.rust-pack" is a question
              *     about a pin, while a bare path is a question about nothing.
              */
             extension?: string | null;
@@ -2178,7 +2178,7 @@ export interface components {
              * @description The last `textDocument/references` round trip, in milliseconds.
              *
              *     The answer and not the index: a cold server's first answer pays for an index
-             *     that is paid once, and a figure that mixed the two would make every report
+             *     that is paid once. A figure that mixed the two would make every report
              *     read as slow when only the first question was.
              */
             round_trip_ms?: number | null;
@@ -2314,7 +2314,7 @@ export interface components {
         /**
          * @description What a driver gets when it claims a pair: its row, and the token once.
          *
-         *     The token is in this response and nowhere else — the ledger keeps an Argon2id
+         *     The token is in this response and nowhere else. The ledger keeps an Argon2id
          *     hash of it, so a driver that loses it asks for another code.
          */
         PairedDriver: {
@@ -2376,7 +2376,7 @@ export interface components {
         /**
          * @description Position encoding negotiated with a server.
          *
-         *     LSP defaults to UTF-16, while the editor buffers are UTF-8 bytes; the daemon
+         *     LSP defaults to UTF-16, while the editor buffers are UTF-8 bytes. The daemon
          *     negotiates explicitly and records what was agreed rather than assuming.
          * @enum {string}
          */
@@ -2661,7 +2661,7 @@ export interface components {
         /**
          * @description Response to an accepted prompt.
          *
-         *     The turn itself streams over SSE; this only acknowledges that it started.
+         *     The turn itself streams over SSE. This only acknowledges that it started.
          */
         PromptAccepted: {
             /**
@@ -2992,7 +2992,7 @@ export interface components {
              * @description Kind-specific payload.
              *
              *     A map of unknown values in the document, not a bare `object`: a bare object
-             *     is "no properties may be added", and a client generated from that refuses
+             *     is "no properties may be added". A client generated from that refuses
              *     every payload an adapter actually sends.
              */
             payload: {
@@ -3046,7 +3046,7 @@ export interface components {
              * @description Profile that owns this session.
              *
              *     The daemon routes by profile, so this is normally the profile whose
-             *     header selected the router; it is carried so a stored row and a live
+             *     header selected the router. It is carried so a stored row and a live
              *     summary say the same thing.
              */
             profile: string;
@@ -3281,7 +3281,7 @@ export interface components {
             /**
              * @description Profile that owns this workspace.
              *
-             *     Two profiles may see the same host path; the owner is what makes one
+             *     Two profiles may see the same host path. The owner is what makes one
              *     profile's workspace id unacceptable in another's request.
              */
             profile: string;

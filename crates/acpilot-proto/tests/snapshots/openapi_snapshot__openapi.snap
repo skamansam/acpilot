@@ -39,7 +39,7 @@ expression: canonical(document)
             ]
           },
           "require_token": {
-            "description": "Whether a bearer token is required. Loopback-only endpoints may disable\nit; anything else may not.",
+            "description": "Whether a bearer token is required. Loopback-only endpoints may disable\nit. Anything else may not.",
             "type": "boolean"
           },
           "transports": {
@@ -96,7 +96,7 @@ expression: canonical(document)
             "type": "string"
           },
           "prompt_turns": {
-            "description": "Turns this driver has prompted; the audit trail at a glance.",
+            "description": "Turns this driver has prompted. The audit trail at a glance.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -489,7 +489,7 @@ expression: canonical(document)
         "type": "object"
       },
       "CreatePairingRequest": {
-        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests; a driver cannot grant itself one by asking.",
+        "description": "Ask for a code, from the cockpit.\n\nThe person issuing the code decides whether the driver may answer permission\nrequests. A driver cannot grant itself one by asking.",
         "properties": {
           "grant_answer_permissions": {
             "description": "Allow the paired driver to answer permission requests for the turns it\nstarts. Off by default, and off is the safe answer.",
@@ -575,7 +575,7 @@ expression: canonical(document)
             "description": "Agent to run."
           },
           "title": {
-            "description": "Optional title; the first prompt supplies one otherwise.",
+            "description": "Optional title. The first prompt supplies one otherwise.",
             "type": [
               "string",
               "null"
@@ -867,7 +867,7 @@ expression: canonical(document)
         "type": "string"
       },
       "ErrorBody": {
-        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`; `message` is for humans and may be reworded.",
+        "description": "Machine-readable error payload.\n\n`code` is a stable, documented identifier (`invalid_request`, `not_found`,\n`conflict`, `permission_denied`, `timeout`, `host_unavailable`,\n`model_unavailable`, `agent_failed`, `protocol`, `io`). Clients switch on\n`code`. `message` is for humans and may be reworded.",
         "properties": {
           "code": {
             "description": "Stable identifier for the failure class.",
@@ -1738,7 +1738,7 @@ expression: canonical(document)
         "type": "object"
       },
       "HostCapabilities": {
-        "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files, and the UIs need to know that before offering an\nagent.",
+        "description": "What a host can actually do.\n\nCapabilities are discovered rather than assumed: a host that cannot spawn\nprocesses still edits files. The UIs need to know that before offering an\nagent.",
         "properties": {
           "filesystem": {
             "description": "Can the daemon read and write files here?",
@@ -1969,7 +1969,7 @@ expression: canonical(document)
             ]
           },
           "extension": {
-            "description": "The extension that introduced this row, absent for this build's own.\n\nA client that asks the person to trust a command has to name where the\ncommand came from, and \"rust-analyzer from acpilot.rust-pack\" is a question\nabout a pin, while a bare path is a question about nothing.",
+            "description": "The extension that introduced this row, absent for this build's own.\n\nA client that asks the person to trust a command has to name where the\ncommand came from. \"Rust-analyzer from acpilot.rust-pack\" is a question\nabout a pin, while a bare path is a question about nothing.",
             "type": [
               "string",
               "null"
@@ -1987,7 +1987,7 @@ expression: canonical(document)
             "type": "array"
           },
           "round_trip_ms": {
-            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once, and a figure that mixed the two would make every report\nread as slow when only the first question was.",
+            "description": "The last `textDocument/references` round trip, in milliseconds.\n\nThe answer and not the index: a cold server's first answer pays for an index\nthat is paid once. A figure that mixed the two would make every report\nread as slow when only the first question was.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -2254,7 +2254,7 @@ expression: canonical(document)
         "type": "object"
       },
       "PairedDriver": {
-        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else — the ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
+        "description": "What a driver gets when it claims a pair: its row, and the token once.\n\nThe token is in this response and nowhere else. The ledger keeps an Argon2id\nhash of it, so a driver that loses it asks for another code.",
         "properties": {
           "driver": {
             "$ref": "#/components/schemas/AcpDriverSummary",
@@ -2386,7 +2386,7 @@ expression: canonical(document)
         "type": "object"
       },
       "PositionEncoding": {
-        "description": "Position encoding negotiated with a server.\n\nLSP defaults to UTF-16, while the editor buffers are UTF-8 bytes; the daemon\nnegotiates explicitly and records what was agreed rather than assuming.",
+        "description": "Position encoding negotiated with a server.\n\nLSP defaults to UTF-16, while the editor buffers are UTF-8 bytes. The daemon\nnegotiates explicitly and records what was agreed rather than assuming.",
         "enum": [
           "utf8",
           "utf16"
@@ -2819,7 +2819,7 @@ expression: canonical(document)
         "type": "object"
       },
       "PromptAccepted": {
-        "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE; this only acknowledges that it started.",
+        "description": "Response to an accepted prompt.\n\nThe turn itself streams over SSE. This only acknowledges that it started.",
         "properties": {
           "first_seq": {
             "description": "Sequence number the client should use as `Last-Event-ID` when reconnecting.",
@@ -3442,7 +3442,7 @@ expression: canonical(document)
           },
           "payload": {
             "additionalProperties": {},
-            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\", and a client generated from that refuses\nevery payload an adapter actually sends.",
+            "description": "Kind-specific payload.\n\nA map of unknown values in the document, not a bare `object`: a bare object\nis \"no properties may be added\". A client generated from that refuses\nevery payload an adapter actually sends.",
             "propertyNames": {
               "type": "string"
             },
@@ -3539,7 +3539,7 @@ expression: canonical(document)
             "description": "Session identifier."
           },
           "profile": {
-            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router; it is carried so a stored row and a live\nsummary say the same thing.",
+            "description": "Profile that owns this session.\n\nThe daemon routes by profile, so this is normally the profile whose\nheader selected the router. It is carried so a stored row and a live\nsummary say the same thing.",
             "type": "string"
           },
           "status": {
@@ -3976,7 +3976,7 @@ expression: canonical(document)
             "type": "string"
           },
           "profile": {
-            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path; the owner is what makes one\nprofile's workspace id unacceptable in another's request.",
+            "description": "Profile that owns this workspace.\n\nTwo profiles may see the same host path. The owner is what makes one\nprofile's workspace id unacceptable in another's request.",
             "type": "string"
           },
           "root": {

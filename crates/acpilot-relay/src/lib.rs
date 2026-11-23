@@ -574,7 +574,7 @@ pub struct Member {
     pub inviter: String,
     /// When it joined, Unix seconds.
     pub joined_at: i64,
-/// When it left, Unix seconds. `None` while active.
+    /// When it left, Unix seconds. `None` while active.
     pub revoked_at: Option<i64>,
 }
 

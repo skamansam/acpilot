@@ -412,7 +412,7 @@ phase shipped without reading the whole branch.
    report its checks.
 2. Create a branch for the task and open a draft pull request that targets the
    phase branch. Every commit for that task goes on this branch.
-3. When the task is done, merge its pull request into the phase branch, then add
+3. When the task is complete, merge its pull request into the phase branch, then add
    it to the phase pull request body. The body is the stack: it lists each task
    in merge order.
 4. When every task is in and `cargo xtask check` is green on the phase branch,

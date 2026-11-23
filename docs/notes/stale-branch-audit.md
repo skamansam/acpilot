@@ -3,7 +3,7 @@
 `main` holds every byte from the refs below, with one exception that this note
 names. The commits check in `CONTRIBUTING.md` still reports work for most of
 them, because a squash merge writes the same patch under a new hash. This note
-records the content comparison and the refs that are safe to delete.
+records the content comparison, and the outcome at the end.
 
 All counts use `origin/main` at `8d963e0` and the tips as of 2026-11-23.
 
@@ -26,7 +26,7 @@ nothing `main` lacks.
 
 ## Result
 
-| Ref | Ahead | Behind | Landed as | Evidence | Safe to delete |
+| Ref | Ahead | Behind | Landed as | Evidence | Verdict at audit |
 | --- | --- | --- | --- | --- | --- |
 | `roadmap-tooling` | 2 | 138 | `40cec08`, PR #267 | tree `633d91c4` on both | yes |
 | `p2-5-terminals` | 1 | 137 | `782b973`, PR #294 | tree `76f34c1b` on both | yes |
@@ -78,7 +78,7 @@ Eleven commits sit above `main`, and PR #2 squashed the tip into `5ec20ee`. The
 tip `3580861` and `5ec20ee` share the tree id `612a95f4`, so the whole branch
 landed.
 
-## The ref that stays
+## The ref that needed a decision
 
 `tui-shell-menus-themes` has 156 commits above `main`, and PR #301 closed without
 a merge. #344 records the file-by-file comparison. The branch changes 263 paths
@@ -92,7 +92,7 @@ differ, and `main` holds the newer text in both:
 `crates/acpilot-extensions/src/contrast.rs`. The landing commit `0c57cd6` deleted
 it, and the branch drops it too, so nothing unique sits there.
 
-A person makes the retirement call. This note only records the evidence.
+A person made that call later. The Outcome section records it.
 
 ## `backup/main-9eae926`
 
@@ -107,8 +107,8 @@ and the thirteenth matches byte for byte. For example, `main` adds 329 lines to
 changed follow the same pattern.
 
 Nothing waits to be ported. Each file has the landed version, and the later 156
-commits carry the refined work. Deleting the ref loses no reachable content:
-`9eae926` stays an ancestor of `origin/tui-shell-menus-themes`.
+commits carry the refined work, which matches `tui-shell`, a branch `main`
+contains. The local ref is gone.
 
 ## What this change does
 
@@ -117,6 +117,19 @@ commits carry the refined work. Deleting the ref loses no reachable content:
 - Leaves the other refs in place. Their rows here are the evidence for a later
   cleanup.
 
+## Outcome
+
+On 2026-11-23 the cleanup finished, after `phase/p4.6-mod-shop` merged into
+`main` as `7003a47`:
+
+- Deleted `roadmap-tooling`, `p2-5-terminals`, and the local `backup/main-9eae926` ref.
+- Deleted `web-ui-and-desktop-release`, `tui-shell`, and the five other zero-ahead refs.
+- Deleted `phase/p4.5-models` and `phase/p4.6-mod-shop`, plus the three refs that
+  merged through the phase.
+- Deleted `tui-shell-menus-themes` once the evidence showed no unique content.
+
+`main` and the dependabot ref remain.
+
 ## Commands
 
 ```bash
@@ -124,9 +137,9 @@ commits carry the refined work. Deleting the ref loses no reachable content:
 git rev-parse <branch-tip>^{tree} <landing-commit>^{tree}
 git merge-base --is-ancestor <landing-commit> main
 
-# confirm the draft survives after its ref goes
-git rev-list origin/tui-shell-menus-themes | grep 9eae926
+# confirm the landed draft stays in main
+git merge-base --is-ancestor 0c57cd6 main
 
 # confirm the deletions
-git ls-remote --heads origin roadmap-tooling p2-5-terminals
+git ls-remote --heads origin
 ```

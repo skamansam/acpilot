@@ -128,9 +128,9 @@ On 2026-11-23 the cleanup finished, after `phase/p4.6-mod-shop` merged into
   merged through the phase.
 - Deleted `tui-shell-menus-themes` once the evidence showed no unique content.
 
-`main` is the only branch on `origin`. The dependabot ref is deleted too.
-Pull request #3 brought its lockfile change into `main`, and the ref tip
-had the same tree as merge commit `5609fe7`.
+`main` is the only branch on `origin`. The cleanup deleted the dependabot
+ref too. Pull request #3 brought its lockfile change into `main`, and the
+ref tip had the same tree as merge commit `5609fe7`.
 
 ## Commands
 

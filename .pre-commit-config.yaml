@@ -2,7 +2,7 @@
 #
 # These are the same commands CI runs, so a commit that passes here does not fail
 # for a reason the author could have seen locally. `xtask check` remains the
-# single entry point for the whole gate; this file is the commit-time version of
+# single entry point for the whole gate. This file is the commit-time version of
 # it, plus the CI jobs that `xtask check` does not cover yet.
 #
 # Install once per clone:
@@ -65,4 +65,14 @@ repos:
         language: system
         files: '(Cargo\.(toml|lock)$|deny\.toml$)'
         pass_filenames: false
+        require_serial: true
+
+      # The STE rule applies when a change touches a file. The hook lints each
+      # staged prose file whole and each staged source file through its
+      # comments. The script skips vendored and generated trees and TODO.md.
+      - id: ste-lint
+        name: STE prose lint
+        entry: scripts/ste-check.sh --files
+        language: system
+        pass_filenames: true
         require_serial: true

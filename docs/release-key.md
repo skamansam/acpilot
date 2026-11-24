@@ -11,6 +11,9 @@ Two pieces of configuration, both on the repository rather than in the tree:
 | --- | --- | --- |
 | Repository secret | `ACPILOT_SIGNING_KEY` | the private key, PKCS#8 PEM. `release.yml` signs every checksum with it |
 | Repository variable | `ACPILOT_RELEASE_PUBKEY` | the public key, 64 hex characters. Compiled into `acpilot` by the archives job |
+| Repository variable, optional | `ACPILOT_KEY_ROTATE_BY` | the date this key should retire, `YYYY-MM-DD`. The weekly credential check warns as it nears |
+
+The weekly `release credentials` job warns a month before the tap token ends, and a month before `ACPILOT_KEY_ROTATE_BY` passes. The key itself has no expiry date.
 
 A release with the secret missing fails in its signing step. A binary built without the
 variable refuses to update itself, and says so, rather than trusting a checksum alone.

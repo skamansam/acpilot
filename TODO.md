@@ -2775,11 +2775,22 @@ The `[windows]` and `[windows, wsl]` tickets wait until that path is done.
   - **Tap 2026-11-17:** `skamansam/homebrew-tap` exists and `release.yml` publishes the
     generated formulae to it before the release is created, so a tap never advertises a
     version whose archives were not published. The push uses the `HOMEBREW_TAP_TOKEN`
-    secret, which is not set yet, so the `tap` job fails until it is. `cargo xtask dist
+    secret, which is now set. `cargo xtask dist
     --release-version` writes the release tag into the installers and formulae, because
     dist names them after `Cargo.toml` (`0.1.0`) and refuses a `--tag` that disagrees.
-    No release has used either half yet, so no tap formula has been installed from a
-    real release.
+  - **Release 2026-11-24:** `v0.2.7` is the first release through the whole workflow.
+    All eight jobs passed. `tap` pushed `acpilot 0.2.7` to `skamansam/homebrew-tap`
+    before `publish` created the release, so a real release now uses both halves.
+    The `homebrew` job failed first, because Homebrew 4.6 and later refuse a formula
+    that lives outside a tap. The job now copies the generated formulae into a local
+    tap directory and installs `acpilot/local/acpilot-cli`. `HOMEBREW_TAP_TOKEN` holds
+    a personal `gh` CLI token for now, which reaches every repository the account can
+    write. A fine-grained token limited to `skamansam/homebrew-tap` replaces it.
+  - **Checked 2026-11-24 (`v0.2.7`):** the shell installer put `acpilot 0.2.7` into a
+    temporary prefix. Two gaps showed up. The archive carries no `install.json`, so
+    `acpilot update --check` there refuses to replace the copy. The installer also
+    printed "no checksums to verify", so it did not compare the download with the
+    release's `.sha256`.
   - **Decided 2026-11-17 (ADR 0011):** cargo-dist's shape wins. A release is one archive per program — `acpilot-cli`, `acpilotd`, `acpilot-gui` — that the installers put in the same bin directory, where `acpilot` finds the daemon it spawns by sibling lookup (ADR 0004 §5: `PATH` is deliberately not searched). `release.yml` now runs `cargo xtask dist --artifacts local` per target and `--artifacts global` once, so there is no second shape and nothing is packaged by hand.
   - **Checked 2026-11-17:** `release.yml` installs the generated formulae with real
     Homebrew on a macOS runner, and `publish` waits for that job. It fails the release

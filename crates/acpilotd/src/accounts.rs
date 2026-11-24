@@ -238,6 +238,28 @@ pub fn default_path() -> PathBuf {
     acpilot_profile::data_dir().join("users.sqlite")
 }
 
+/// How long one open waits for a lock before SQLite reports it.
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How many times a busy store is retried before a request fails.
+const OPEN_ATTEMPTS: usize = 40;
+
+/// The pause between those attempts.
+const OPEN_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Whether `error` says another process holds the store, which is worth a retry.
+///
+/// A busy timeout covers a plain lock wait. A journal mode switch does not always
+/// honour it, so the open that loses that race comes back as an error instead of
+/// waiting. The store is shared with every other process that runs as this user,
+/// which on a test machine is every test binary at once.
+fn busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
 impl Accounts {
     /// Use the database at `path`, with the signing key beside it.
     #[must_use]
@@ -276,23 +298,29 @@ impl Accounts {
             std::fs::create_dir_all(directory).map_err(state)?;
             acpilot_host::private_dir(directory).map_err(state)?;
         }
-        let connection = Connection::open(&self.path).map_err(state)?;
-        // SQLite waits zero milliseconds for a lock by default, so the second writer
-        // fails at once with `SQLITE_BUSY`. Eight test binaries that open one fresh
-        // store together all switch on WAL and run the schema. The losers of that race
-        // saw an unreadable store, and the middleware answered 401. Ten seconds is
-        // longer than the schema takes, and shorter than a request should hang.
-        connection
-            .busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(state)?;
-        connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(state)?;
-        connection
-            .pragma_update(None, "foreign_keys", "ON")
-            .map_err(state)?;
-        connection.execute_batch(SCHEMA).map_err(state)?;
-        acpilot_host::private_file(&self.path).map_err(state)?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.open_once() {
+                Ok(connection) => {
+                    acpilot_host::private_file(&self.path).map_err(state)?;
+                    return Ok(connection);
+                }
+                Err(error) if attempt < OPEN_ATTEMPTS && busy(&error) => {
+                    std::thread::sleep(OPEN_PAUSE);
+                }
+                Err(error) => return Err(state(error)),
+            }
+        }
+    }
+
+    /// One attempt at opening the store: the pragmas, then the schema.
+    fn open_once(&self) -> rusqlite::Result<Connection> {
+        let connection = Connection::open(&self.path)?;
+        connection.busy_timeout(OPEN_WAIT)?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.execute_batch(SCHEMA)?;
         Ok(connection)
     }
 

@@ -277,6 +277,14 @@ impl Accounts {
             acpilot_host::private_dir(directory).map_err(state)?;
         }
         let connection = Connection::open(&self.path).map_err(state)?;
+        // SQLite waits zero milliseconds for a lock by default, so the second writer
+        // fails at once with `SQLITE_BUSY`. Eight test binaries that open one fresh
+        // store together all switch on WAL and run the schema. The losers of that race
+        // saw an unreadable store, and the middleware answered 401. Ten seconds is
+        // longer than the schema takes, and shorter than a request should hang.
+        connection
+            .busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(state)?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(state)?;

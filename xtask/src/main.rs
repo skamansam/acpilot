@@ -1173,6 +1173,10 @@ fn run_dist(
         if !mark_homebrew_formulas() {
             return ExitCode::FAILURE;
         }
+
+        if !mark_shell_installers() {
+            return ExitCode::FAILURE;
+        }
     }
 
     report_dist_artifacts();
@@ -1393,6 +1397,136 @@ fn replace_version(text: &str, from: &str, to: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The line a shell installer prints when every program is in place.
+const INSTALLER_INSTALLED: &str = "\n    say \"everything's installed!\"";
+
+/// The marker a shell installer writes, so its own copy may replace itself.
+///
+/// The archive holds `install.json`. The installer unpacks that archive into a
+/// temporary tree and deletes the tree. One program in `bin` then remains, and that
+/// copy cannot say how it arrived, so `acpilot update` refuses it.
+///
+/// ADR 0010 gives the installer's answer as a marker under the user data directory.
+/// `acpilot_host::install` reads that path last. A copy that the script installed may
+/// then update itself, and a binary that somebody copied by hand still may not.
+///
+/// `$INFERRED_HOME` comes from dist and is `$HOME`, unless the script runs under
+/// `sudo`. `$XDG_DATA_HOME` wins when it exists, because `acpilot_host::install`
+/// follows the same rule.
+const INSTALLER_MARKER: &str =
+    "\n    # acpilot: say how this copy arrived (ADR 0010). The archive's
+    # install.json is unpacked into a temporary tree and deleted with it.
+    _acpilot_state=\"${XDG_DATA_HOME:-$INFERRED_HOME/.local/share}/acpilot\"
+    ensure mkdir -p \"$_acpilot_state\"
+    printf '{\"method\":\"tarball\"}\\n' > \"$_acpilot_state/install.json\"";
+
+/// Mark the shell installers, and refuse one that hashes no archive.
+///
+/// dist reads each archive in `target/distrib` and writes its checksum into the
+/// installer. The `installers` job starts on an empty checkout, so an unguarded run
+/// ships a script that trusts the transport and nothing else. v0.2.7 printed "no
+/// checksums to verify", and no step noticed.
+///
+/// The marker is the other half of the promise. A script that leaves no record of
+/// itself leaves a copy that cannot say whether it may update.
+///
+/// Both changes are text, as [`retag_for_release`] is. Neither touches an archive, so
+/// this runs after dist packaged everything.
+fn mark_shell_installers() -> bool {
+    let dir = dist_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{}: {error}", dir.display());
+            return false;
+        }
+    };
+    let mut installers: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sh"))
+        .collect();
+    installers.sort();
+    if installers.is_empty() {
+        eprintln!(
+            "==> dist: no shell installer was written and the config asks for one, so an \
+             installed copy cannot say how it arrived"
+        );
+        return false;
+    }
+    for path in installers {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return false;
+            }
+        };
+        let (named, verified) = installer_checksum_counts(&text);
+        if named == 0 || verified != named {
+            eprintln!(
+                "==> dist: {name} names {named} archive(s) and verifies {verified}, so it \
+                 hands `tar` a download nothing checked. dist writes those checksums from \
+                 the archives in target/distrib, which do not exist when the global build \
+                 runs. `release.yml` downloads them first: `installers` needs `archives`."
+            );
+            return false;
+        }
+        let Some(marked) = marked_installer(&text) else {
+            eprintln!(
+                "==> dist: {name} does not print `everything's installed!`, so there is no \
+                 place to name the installation it made"
+            );
+            return false;
+        };
+        if marked != text
+            && let Err(error) = fs::write(&path, marked)
+        {
+            eprintln!("{}: {error}", path.display());
+            return false;
+        }
+        println!("    {name} verifies every archive and leaves a marker for update");
+    }
+    true
+}
+
+/// How many archives a shell installer names, and how many it checksums.
+///
+/// dist writes one `case` branch per archive, with `_zip_ext` and, when it had the
+/// archive to hash, `_checksum_style`. A branch without the second line hands `tar` a
+/// download with no check.
+fn installer_checksum_counts(text: &str) -> (usize, usize) {
+    let named = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("_zip_ext="))
+        .count();
+    let verified = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("_checksum_style="))
+        .count();
+    (named, verified)
+}
+
+/// The installer with the marker block added, or `None` when there is nowhere to add it.
+///
+/// A second pass returns the text unchanged. `cargo xtask dist` runs again over the same
+/// `target/distrib` often, and a marker appended twice writes the file twice.
+fn marked_installer(text: &str) -> Option<String> {
+    if text.contains("_acpilot_state") {
+        return Some(text.to_owned());
+    }
+    let at = text.find(INSTALLER_INSTALLED)?;
+    let mut marked = String::with_capacity(text.len() + INSTALLER_MARKER.len());
+    marked.push_str(&text[..at]);
+    marked.push_str(INSTALLER_MARKER);
+    marked.push_str(&text[at..]);
+    Some(marked)
 }
 
 /// Write the release tag into the installers and formulae dist just generated.
@@ -2365,6 +2499,42 @@ fn encode_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_installer_says_how_its_copy_arrived() {
+        let installer = "\n    say \"everything's installed!\"\n";
+        let marked = marked_installer(installer).expect("the installer has a place for the marker");
+        assert!(
+            marked.contains("XDG_DATA_HOME") && marked.contains("install.json"),
+            "a copy with no marker is a copy `acpilot update` refuses: {marked}"
+        );
+        assert_eq!(
+            marked_installer(&marked).as_deref(),
+            Some(marked.as_str()),
+            "a second pass writes the marker once"
+        );
+    }
+
+    #[test]
+    fn an_installer_that_checksums_no_archive_is_refused() {
+        // The shape dist 0.32 writes for one archive, as v0.2.7 shipped it. The branch
+        // has `_zip_ext` and no `_checksum_style`, which is the "no checksums to
+        // verify" line a real install printed.
+        let blind = r#"        "acpilot-cli-x86_64-unknown-linux-gnu.tar.gz")
+            _arch="x86_64-unknown-linux-gnu"
+            _zip_ext=".tar.gz"
+            _bins="acpilot"
+            ;;"#;
+        assert_eq!(installer_checksum_counts(blind), (1, 0));
+
+        let checked = r#"        "acpilot-cli-x86_64-unknown-linux-gnu.tar.gz")
+            _checksum_style="sha256"
+            _checksum_value="6f1e"
+            _zip_ext=".tar.gz"
+            _bins="acpilot"
+            ;;"#;
+        assert_eq!(installer_checksum_counts(checked), (1, 1));
+    }
 
     /// One job's text: from its key to the next sibling job key.
     ///

@@ -325,7 +325,14 @@ jobs:
             python3 -c 'import pathlib, sys; path = pathlib.Path(sys.argv[1]); path.write_text(path.read_text().replace("https://github.com/skamansam/acpilot", "http://127.0.0.1:8788"))' "$formula"
             grep -c 'http://127.0.0.1:8788' "$formula"
           done
-          brew install --formula "$PWD/dist/acpilot-cli.rb" "$PWD/dist/acpilotd.rb"
+          # Homebrew 4.6 and later refuse a formula outside a tap. A tap is a
+          # directory, and it needs no Git repository. This step copies the
+          # generated formulae into one and installs them by tap-qualified name.
+          # Homebrew trusts a fully qualified install without a separate trust step.
+          tap="$(brew --repository)/Library/Taps/acpilot/homebrew-local"
+          mkdir -p "$tap/Formula"
+          cp dist/acpilot-cli.rb dist/acpilotd.rb "$tap/Formula/"
+          brew install --formula acpilot/local/acpilot-cli acpilot/local/acpilotd
 
       # The marker is the whole point: without it `acpilot update` treats a keg as
       # the user's own and writes over a file `brew upgrade` will discard. `--check`

@@ -221,7 +221,12 @@ jobs:
 
   installers:
     name: installers
-    needs: version
+    # `archives` is a need, not just `version`. dist writes each archive's checksum
+    # into the shell installer and the formula. It reads that checksum from the archive
+    # in `target/distrib`. A job that starts before the archives exist finds nothing
+    # there. Every installer then says "no checksums to verify", and the formula has no
+    # `sha256` at all. v0.2.7 shipped exactly that.
+    needs: [version, archives]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -235,6 +240,16 @@ jobs:
           test -n "$pinned" || { echo "dist-workspace.toml pins no cargo-dist version"; exit 1; }
           command -v dist >/dev/null || cargo install cargo-dist --version "$pinned" --locked
           command -v cargo-cyclonedx >/dev/null || cargo install cargo-cyclonedx --locked
+
+      # dist reads the archives, not the release. The checksum it writes into the
+      # installer and the formula is the digest of a file in `target/distrib`. A fresh
+      # checkout has an empty directory, so an unguarded run makes an installer that
+      # trusts the transport and nothing else. `archives` is a need for the same reason.
+      # A download that starts first finds only this job's own output.
+      - uses: actions/download-artifact@v4
+        with:
+          path: target/distrib
+          merge-multiple: true
 
       # This job makes the global artifacts once for the release, not once per
       # target. They are the shell and PowerShell installers, the Homebrew formula

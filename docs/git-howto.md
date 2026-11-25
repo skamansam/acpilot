@@ -520,7 +520,7 @@ Day 9   Merge bottom-up: #102 → #103 → #104 → #105 into phase/2-…
 ## 11. Maintenance notes (for humans)
  
 - If you change the naming scheme, merge strategy, or exceptions, edit this file. Agents should treat it as authoritative.
-- Suggested repo settings: protect `main` and `phase/*` (require PR + passing checks, block force-pushes), and enable *Automatically delete head branches*.
+- Suggested repo settings: protect `main` and `phase/*` (require PR + passing checks, block force-pushes), and enable the `Automatically delete head branches` setting.
 - Suggested commit enforcement: [commitlint](https://commitlint.js.org) with `@commitlint/config-conventional` plus a `commit-msg` hook (or the regex in §3.3) to reject non-conforming messages. Optionally the gitmoji-cli hook to help pick emojis.
 - Enable the ACPilot project's built-in workflows noted in §3.4 so cards move without the agent.
 - Suggested labels: `blocked`, `blocked:external-windows`, `blocked:dependency`, `blocked:decision`, `phase`, `item`, `stack`.

@@ -440,10 +440,10 @@ jobs:
       - name: History rules
         run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
 
-  # docs/git-howto.md §3.2 and §5.2, checked from one pull request. A phase PR
-  # targets `main`, starts `Phase <N>: ` and `Stack: phase root`, and has at least
-  # one open item PR on it. An item PR targets the branch below it, never `main`;
-  # its title is `[<N>.<seq>] <title> (#<issue>)`, its body starts
+  # docs/git-howto.md §3.2, §5.2 and §7.2, checked from one pull request. A phase
+  # PR targets `main`, starts `Phase <N>: ` and `Stack: phase root`, and keeps an
+  # open item PR while unblocked work remains. An item PR targets the branch below
+  # it, never `main`; its title is `[<N>.<seq>] <title> (#<issue>)`, its body starts
   # `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and it closes its
   # issue. The rule is read from branch names, so no list goes stale.
   #
@@ -490,8 +490,14 @@ jobs:
             [ "$first" = "Stack: phase root" ] || fail "the body does not start with 'Stack: phase root'"
             printf '%s' "$body" | grep -Eqi "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+" \
               || fail "the body closes no issue; add 'Closes #<issue>' for each item and the phase"
-            [ "$(gh pr list --base "$HEAD_REF" --state open --json number --jq 'length')" != 0 ] \
-              || fail "no open item PR on $HEAD_REF; a phase never runs without a current item"
+            # §7.2 calls a phase without an item PR unhealthy only while unblocked
+            # work remains. When the last item merges, the phase PR is the
+            # remaining work and lands at once (§5.5), so a hard failure here
+            # would block the very merge it is waiting on.
+            open_items=$(gh pr list --base "$HEAD_REF" --state open --json number --jq 'length')
+            if [ "$open_items" = 0 ]; then
+              echo "note: no open item PR on $HEAD_REF; expected only while the phase lands"
+            fi
           fi
 
           if [ -n "$item" ]; then

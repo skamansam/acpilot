@@ -390,8 +390,8 @@ The rules that keep the stack traceable:
   in its body. The `phase` job exempts it, because it closes no ticket.
 - The `phase` job in CI reads the branch, the base, the title and the body, and it
   fails a PR that breaks a rule above.
-- A phase PR merges only after its stack is in and `cargo xtask check` is green on
-  the phase branch.
+- A phase PR merges with its stack, and only when every member is green and
+  `cargo xtask check` is green on the phase branch.
 - Drop a branch only when its base holds every commit on it. The checks below
   use `<base>` and `<branch>`.
   - Each pull request that targets the branch merged. A closed pull request is
@@ -419,7 +419,7 @@ gh stack merge                            # the whole stack, in one operation
 they are. `gh stack submit --auto` writes its own titles, so it is not the tool for
 a ticket stack.
 
-A merge that lands a phase is one commit on `main`, so a reader can see what a
+A merge that lands a phase is one operation on `main`, so a reader can see what a
 phase shipped without reading the whole branch.
 
 #### How a phase moves
@@ -435,10 +435,11 @@ phase shipped without reading the whole branch.
 3. Link the PRs into the stack, bottom first:
    `gh stack link <phase-pr> <ticket-pr>...`. Add each new ticket as it starts, so
    the phase always has a merge tree rather than a list.
-4. When every ticket is green, `gh stack merge` merges the stack into the phase
-   branch in one all-or-nothing operation. Run `cargo xtask check` on the phase
-   branch, then tell the maintainer. The maintainer reviews the phase pull request
-   and merges it.
+4. When every ticket is green, run `cargo xtask check` on the phase branch and tell
+   the maintainer. The maintainer reviews the phase pull request, marks it ready for
+   review, and runs `gh stack merge`. That lands the whole stack on `main` in one
+   all-or-nothing operation, phase PR included, so every ticket and the phase close
+   together.
 
 A task that starts before the phase branch exists belongs to the next phase.
 Create the phase branch first.

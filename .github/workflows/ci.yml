@@ -440,16 +440,17 @@ jobs:
       - name: History rules
         run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
 
-  # CONTRIBUTING's "One pull request per phase, and a stack under it", checked.
-  # A ticket PR names its ticket and closes its issue, and it never reaches for
-  # `main`: its base is the phase branch or the ticket below it, and that base has
-  # an open PR. A phase PR names the phase code and closes the phase issue. The
-  # rule is read from branch names, so no list goes stale when a ticket lands.
+  # docs/git-howto.md §3.2 and §5.2, checked from one pull request. A phase PR
+  # targets `main`, starts `Phase <N>: ` and `Stack: phase root`, and has at least
+  # one open item PR on it. An item PR targets the branch below it, never `main`;
+  # its title is `[<N>.<seq>] <title> (#<issue>)`, its body starts
+  # `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and it closes its
+  # issue. The rule is read from branch names, so no list goes stale.
   #
   # A push to `main` and a manual run have no pull request, and they pass. The job
   # is in both aggregations for that reason: a skipped entry is not a success.
   phase:
-    name: phase and ticket links
+    name: phase and item links
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -458,53 +459,68 @@ jobs:
       HEAD_REF: ${{ github.head_ref || '' }}
       BASE_REF: ${{ github.base_ref || '' }}
     steps:
-      - name: A ticket sits on its phase, and both close their issue
+      - name: The phase and item shape from docs/git-howto.md
         run: |
           set -euo pipefail
           if [ -z "$PR" ]; then
             echo "no pull request; nothing to check"
             exit 0
           fi
-          # `p4.5-13-external-skills` names `P4.5-13`, and `p12-3b-...` names
-          # `P12-3`: the suffix after the number is prose, not part of the code.
-          ticket=$(printf '%s' "$HEAD_REF" | sed -nE 's/^p([0-9]+(\.[0-9]+)?)-([0-9]+).*/P\1-\3/p')
-          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/p([0-9]+(\.[0-9]+)?)-.*|P\1|p')
-          if [ -z "$ticket" ] && [ -z "$phase" ]; then
-            echo "$HEAD_REF is neither a ticket nor a phase branch; the rule does not apply"
+          fail() { echo "$1"; exit 1; }
+
+          # `phase/4.5-models` names phase `4.5`. `item/4.5.1-60-external-skills`
+          # names stack position `4.5.1` and issue `60`.
+          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+(\.[0-9]+)?)-[a-z0-9-]+$|\1|p')
+          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+(\.[0-9]+)?\.[0-9]+)-([0-9]+)-[a-z0-9-]+$|\1 \3|p')
+          if [ -z "$phase" ] && [ -z "$item" ]; then
+            echo "$HEAD_REF is not a phase or item branch; the guide does not cover it"
             exit 0
           fi
+
           title=$(gh pr view "$PR" --json title --jq .title)
           body=$(gh pr view "$PR" --json body --jq .body)
-          if [ -n "$ticket" ]; then
-            if [ "$BASE_REF" = "main" ]; then
-              echo "ticket branch $HEAD_REF targets main; it must target its phase branch"
-              exit 1
-            fi
-            if [ "$(gh pr list --head "$BASE_REF" --state open --json number --jq 'length')" = "0" ]; then
-              echo "no open PR for $BASE_REF, so $HEAD_REF has no phase PR above it"
-              exit 1
-            fi
-            if ! printf '%s' "$title" | grep -Fqi "$ticket"; then
-              echo "the title does not name $ticket"
-              exit 1
-            fi
-          fi
-          if [ -n "$phase" ]; then
-            if [ "$BASE_REF" != "main" ]; then
-              echo "phase branch $HEAD_REF targets $BASE_REF; a phase PR targets main"
-              exit 1
-            fi
-            if ! printf '%s' "$title" | grep -Fqi "$phase"; then
-              echo "the title does not name $phase"
-              exit 1
-            fi
-          fi
-          if ! printf '%s' "$body" | grep -Eqi '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+'; then
-            echo "the body closes no issue; add 'Closes #<issue>'"
-            exit 1
-          fi
-          echo "$HEAD_REF names its issue and sits on an open PR"
+          first=$(printf '%s\n' "$body" | head -n 1)
 
+          if [ -n "$phase" ]; then
+            [ "$BASE_REF" = main ] || fail "phase branch $HEAD_REF targets $BASE_REF; a phase PR targets main"
+            case "$title" in
+              "Phase $phase: "*) ;;
+              *) fail "the title does not start with 'Phase $phase: '" ;;
+            esac
+            [ "$first" = "Stack: phase root" ] || fail "the body does not start with 'Stack: phase root'"
+            printf '%s' "$body" | grep -Eqi "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+" \
+              || fail "the body closes no issue; add 'Closes #<issue>' for each item and the phase"
+            [ "$(gh pr list --base "$HEAD_REF" --state open --json number --jq 'length')" != 0 ] \
+              || fail "no open item PR on $HEAD_REF; a phase never runs without a current item"
+          fi
+
+          if [ -n "$item" ]; then
+            seq=${item% *}
+            issue=${item#* }
+            [ "$BASE_REF" != main ] || fail "item branch $HEAD_REF targets main; it must target the branch below it"
+            case "$BASE_REF" in
+              phase/*|item/*) ;;
+              *) fail "item branch $HEAD_REF targets $BASE_REF; its base must be the phase or the item below it" ;;
+            esac
+            [ "$(gh pr list --head "$BASE_REF" --state open --json number --jq 'length')" != 0 ] \
+              || fail "no open PR for $BASE_REF, so $HEAD_REF has no branch below it in the stack"
+            case "$title" in
+              "[$seq] "*) ;;
+              *) fail "the title does not start with '[$seq] '" ;;
+            esac
+            case "$title" in
+              *"(#$issue)") ;;
+              *) fail "the title does not end with '(#$issue)'" ;;
+            esac
+            case "$first" in
+              "Stack: "*" · base: $BASE_REF · phase: #"*) ;;
+              *) fail "the body does not start with 'Stack: <seq> of <total> · base: $BASE_REF · phase: #<pr>'" ;;
+            esac
+            printf '%s' "$body" | grep -Eqi "(^|[^A-Za-z])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#$issue([^0-9]|$)" \
+              || fail "the body does not close #$issue"
+          fi
+
+          echo "$HEAD_REF has the shape docs/git-howto.md asks for"
   # One check to require in branch protection. The rule then does not need a
   # restatement every time a job arrives, and it cannot silently stop covering a
   # job that someone renames. This job needs every gate above and passes only if

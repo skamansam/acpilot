@@ -397,10 +397,16 @@ for a host where it is not on `PATH`.
 
 ## Sessions and turns
 
-`POST /v1/sessions` takes `CreateSessionRequest { workspace_id, agent_id, title? }`
-and returns `SessionSummary`. `workspace_id` may be empty, which means this
-daemon's own workspace. An id it does not serve is `404`, checked before the policy
-so that answer does not depend on whether one loaded.
+`POST /v1/sessions` takes
+`CreateSessionRequest { workspace_id, agent_id, title?, skills? }` and returns
+`SessionSummary`. `workspace_id` may be empty, which means this daemon's own
+workspace. An id it does not serve is `404`, checked before the policy so that
+answer does not depend on whether one loaded.
+
+`skills` is the picker's answer for an external agent. Absent means every visible
+skill, and an empty list means none. Each name must be visible to this daemon. An
+unknown name is `400` with the visible names in `details`. The chosen instructions
+are appended to ACP's `systemPrompt` when the agent advertises it.
 
 `SessionSummary` and `WorkspaceSummary` both carry `profile`, the identity that
 owns the row. `POST /v1/workspaces` records the first profile to open a host and

@@ -1464,6 +1464,14 @@ export interface components {
         CreateSessionRequest: {
             /** @description Agent to run. */
             agent_id: components["schemas"]["String"];
+            /**
+             * @description Skills to append to an external agent's system prompt.
+             *
+             *     Absent means every visible skill, which is what a client that has no
+             *     picker wants. An empty list means none. A name the daemon cannot see is
+             *     refused rather than silently dropped.
+             */
+            skills?: string[] | null;
             /** @description Optional title. The first prompt supplies one otherwise. */
             title?: string | null;
             /** @description Workspace to attach the session to. */

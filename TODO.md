@@ -1751,9 +1751,16 @@ resolved.
     recipe, and `^S` saves with `^D` choosing workspace or profile. A recipe carries
     `skills: ["name"]`; `acpilot-agent-lm` appends those instructions to its system
     prompt at `session/new`, and a lab run does the same before assembling the corpus,
-    warning beside the run when a named skill is missing. **Open:** external (non-model)
-    agents get no ACP attachment for skills; the recipe field is the contract, and an
-    external agent that has no native skill mechanism simply receives none.
+    warning beside the run when a named skill is missing.
+  - **Result (2026-11-25):** every visible workspace and profile skill is appended to
+    an external ACP agent's own system prompt at `session/new` and `session/load`,
+    using ACP's `systemPrompt` field and the shared skill renderer. The field is sent
+    only when the agent advertises `sessionCapabilities.systemPrompt`; an agent
+    without the capability keeps its own instructions instead of receiving a field
+    it would reject. A skill that fails to parse is logged and left out, not a
+    reason to refuse the session. **Open:** the capability is the only delivery
+    path, so an external agent that does not advertise it still receives none, and
+    there is no per-session skill picker.
 
 ---
 

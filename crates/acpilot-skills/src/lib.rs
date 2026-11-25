@@ -239,6 +239,23 @@ pub fn save_skill(
     Ok(skill)
 }
 
+/// The system-prompt section for `skills`, in the order given.
+///
+/// Every consumer appends the same text: the model agent, a lab run, and an
+/// external ACP agent. A skill then reads the same in each place. The leading
+/// blank line separates the section from the prompt before it.
+#[must_use]
+pub fn instructions(skills: &[Skill]) -> String {
+    let mut text = String::new();
+    for skill in skills {
+        text.push_str("\n\n## Skill: ");
+        text.push_str(&skill.name);
+        text.push_str("\n\n");
+        text.push_str(&skill.instructions);
+    }
+    text
+}
+
 /// The file text for one skill, with the YAML escaped rather than interpolated.
 #[must_use]
 pub fn render(name: &str, description: &str, instructions: &str) -> String {

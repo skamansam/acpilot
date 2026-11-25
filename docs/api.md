@@ -1142,6 +1142,13 @@ beside the run, not a refusal. `POST /v1/skills` takes the same name, descriptio
 instructions and destination the lab's editor holds. The parser runs before the write,
 so the file on disk is always one the model agent would accept.
 
+An external ACP agent receives every visible workspace and profile skill. The
+daemon appends them to the agent's own system prompt at `session/new` and
+`session/load`. It sends ACP's `systemPrompt` field only when the agent advertises
+`sessionCapabilities.systemPrompt`. An agent without a native skill mechanism keeps
+its own instructions. A skill that does not parse is logged and omitted. The session
+still opens.
+
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 
 ```

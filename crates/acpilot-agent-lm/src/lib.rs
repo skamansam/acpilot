@@ -271,12 +271,7 @@ pub struct TurnResult {
 /// prompt, which is the one delivery every OpenAI-shaped server understands.
 fn system_prompt(recipe: &ModelRecipe, skills: &[acpilot_skills::Skill]) -> String {
     let mut prompt = recipe.system_prompt.clone();
-    for skill in skills {
-        prompt.push_str(&format!(
-            "\n\n## Skill: {}\n\n{}",
-            skill.name, skill.instructions
-        ));
-    }
+    prompt.push_str(&acpilot_skills::instructions(skills));
     prompt
 }
 

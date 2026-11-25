@@ -970,10 +970,42 @@ pub async fn create(
 /// opens is owned by this session id, and one store means the idle sweep and the
 /// session's own release see the same processes.
 fn options_for(state: &AppState, id: &str, agent: &str, fs: Arc<Fs>) -> SessionOptions {
-    SessionOptions::new(id.to_owned())
+    let options = SessionOptions::new(id.to_owned())
         .agent(agent.to_owned())
         .fs(fs)
-        .terminals(Arc::clone(state.agent_terminals()))
+        .terminals(Arc::clone(state.agent_terminals()));
+    match skills_prompt(state) {
+        Some(prompt) => options.system_prompt(prompt),
+        None => options,
+    }
+}
+
+/// The visible skills as an appended system prompt for an external agent.
+///
+/// ACP's `systemPrompt` is the portable way to give an external agent
+/// instructions it can act on. A skill is an instruction, not a tool. The agent
+/// decides whether it accepts the field. `Session::new_session` sends it only
+/// when the agent advertises `sessionCapabilities.systemPrompt`. An agent
+/// without a native skill mechanism keeps its own prompt.
+///
+/// A broken skill does not refuse a session. The daemon has a workspace to open
+/// whether or not every `SKILL.md` parses. The warning names the file.
+fn skills_prompt(state: &AppState) -> Option<String> {
+    let workspace = state.workspace()?;
+    let skills = match acpilot_skills::discover_scoped(&workspace.root, state.profile_root(), &[]) {
+        Ok(skills) => skills,
+        Err(error) => {
+            tracing::warn!(%error, "skills were not delivered to this session");
+            return None;
+        }
+    };
+    if skills.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Use these Agent Skills when their instructions match the task.{}",
+        acpilot_skills::instructions(&skills)
+    ))
 }
 
 /// Run one session's owner loop on a thread of its own.
@@ -2023,6 +2055,38 @@ mod tests {
             next_id(&AppState::new()),
             "s1",
             "with nowhere to keep a transcript, the count of live sessions is the answer"
+        );
+    }
+
+    #[test]
+    fn a_workspaces_skills_become_the_external_agents_system_prompt() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("work");
+        let skill = root.join(".acpilot/skills/review");
+        std::fs::create_dir_all(&skill).expect("skill directory");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: review\ndescription: Review a diff.\n---\n\nRead the diff before commenting.\n",
+        )
+        .expect("skill");
+        let state = AppState::new().with_workspace(crate::Workspace {
+            id: "work".to_owned(),
+            profile: String::new(),
+            root,
+        });
+
+        let prompt = skills_prompt(&state).expect("the workspace contributes skills");
+        assert!(
+            prompt.contains("Use these Agent Skills"),
+            "the section says what it is: {prompt}"
+        );
+        assert!(
+            prompt.contains("## Skill: review"),
+            "the skill is named in the prompt: {prompt}"
+        );
+        assert!(
+            prompt.contains("Read the diff before commenting."),
+            "the instructions are delivered: {prompt}"
         );
     }
 

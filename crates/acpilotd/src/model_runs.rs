@@ -289,10 +289,9 @@ fn system_prompt(plan: &Plan) -> (String, Vec<String>) {
     let mut warnings = Vec::new();
     for name in &plan.recipe.skills {
         match skills.iter().find(|skill| &skill.name == name) {
-            Some(skill) => prompt.push_str(&format!(
-                "\n\n## Skill: {}\n\n{}",
-                skill.name, skill.instructions
-            )),
+            Some(skill) => {
+                prompt.push_str(&acpilot_skills::instructions(std::slice::from_ref(skill)))
+            }
             None => warnings.push(format!(
                 "the recipe selects skill `{name}`, which this workspace and profile do not provide"
             )),

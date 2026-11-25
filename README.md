@@ -898,7 +898,8 @@ The short version:
   Windows, so a platform-specific shortcut is caught there.
 - One idea per commit, imperative subject, scoped by area (`proto:`, `acpilotd:`, `tui:`,
   `docs:`). The body explains why.
-- One pull request per phase, with a capability PR per ticket targeting the phase branch.
+- One pull request per phase, with a ticket PR stacked on it: the title carries the
+ticket code and the body closes the ticket's issue.
 - Never `git commit --no-verify`: the same failure is waiting in CI.
 - A new dependency needs a sentence on why the existing ones do not do the job, plus a
   clean `cargo deny`. The version policy is latest stable, with the documented pins.

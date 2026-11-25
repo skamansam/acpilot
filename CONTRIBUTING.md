@@ -361,33 +361,37 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
 ### One pull request per phase, and a stack under it
 
 A phase in `TODO.md` receives one pull request. That PR is the unit that matches a
-phase in the roadmap project. Its body lists the tasks it closes.
+phase in the roadmap project. It opens as a draft when the phase starts, so a phase
+never has work without a PR that reports it. Its title carries the phase code
+(`P4.5 · Models`) and its body closes the phase's issue (`Closes #273`).
 
-Each capability in that phase receives its own pull request. It targets the phase
-branch, not `main`. Merge it into the phase branch when its checks are green.
-The phase PR then reaches `main` once, and its history names every ticket it
-closed.
+Each capability in that phase receives its own pull request. The capability PRs form
+one GitHub stack: the bottom one targets the phase branch, and each one above it
+targets the ticket below. Nothing a phase owns targets `main` except the phase PR.
 
 ```
 main
-└── phase/p4-profiles            one PR, merged once
-    ├── p4-9-global-profile      one PR per capability
-    ├── p4-10-precedence-matrix
-    └── p4-11-provider-registry
+└── phase/p4.5-models              the phase PR, merged once
+    └── p4.5-12-skills             a ticket PR, targeting the phase branch
+        └── p4.5-13-external       a ticket PR, targeting the ticket below
 ```
 
 The rules that keep the stack traceable:
 
-- A phase branch is named `phase/<phase code>`, for example `phase/p4-profiles`.
-- A capability branch carries its ticket code, for example `p4-10-precedence`.
-  Its PR title starts with the same code.
-- Every PR body links the ticket it closes in the roadmap project. A PR with no
-  ticket is either a task `TODO.md` does not have yet, or work that does not
-  belong in the phase.
-- A capability PR never targets `main` while its phase PR is open. That breaks
-  the stack, and the phase PR then carries the same change twice.
-- The phase PR merges only after its capability PRs are in and
-  `cargo xtask check` is green on the phase branch.
+- A phase branch is named `phase/<phase code>`, for example `phase/p4.5-models`.
+- A ticket branch carries its ticket code, for example `p4.5-13-external-skills`.
+- A ticket PR's title starts with the ticket code, for example
+  `P4.5-13 · skills: ...`, and its body closes the ticket's issue (`Closes #60`).
+- A phase PR's title starts with the phase code, for example `P4.5 · Models`, and
+  its body closes the phase's issue.
+- A ticket PR never targets `main`. Its base is the phase branch or the ticket PR
+  below it, so an open PR sits between every ticket and `main`.
+- A PR that belongs to no phase (a `docs/`, `ci/`, `fix/` or `deps/` branch) says so
+  in its body. The `phase` job exempts it, because it closes no ticket.
+- The `phase` job in CI reads the branch, the base, the title and the body, and it
+  fails a PR that breaks a rule above.
+- A phase PR merges only after its stack is in and `cargo xtask check` is green on
+  the phase branch.
 - Drop a branch only when its base holds every commit on it. The checks below
   use `<base>` and `<branch>`.
   - Each pull request that targets the branch merged. A closed pull request is
@@ -399,8 +403,21 @@ The rules that keep the stack traceable:
     gained after the merge.
   - The branch exists on the remote. A ref that lives in one clone has no
     second copy to restore.
-- A capability branch's base is the phase branch. A phase branch's base is
-  `main`, and it passes the checks above only after its phase PR merges.
+- A ticket branch's base is the phase branch or the ticket below it. A phase
+  branch's base is `main`, and it passes the checks above only after its phase PR
+  merges.
+
+The tool is `gh stack`:
+
+```bash
+gh stack link <phase-pr> <ticket-pr>...   # bottom first; sets the bases and the stack
+gh stack view                             # the current stack
+gh stack merge                            # the whole stack, in one operation
+```
+
+`gh stack link` takes PR numbers, so the titles and bodies written above stay as
+they are. `gh stack submit --auto` writes its own titles, so it is not the tool for
+a ticket stack.
 
 A merge that lands a phase is one commit on `main`, so a reader can see what a
 phase shipped without reading the whole branch.
@@ -408,16 +425,20 @@ phase shipped without reading the whole branch.
 #### How a phase moves
 
 1. Create the phase branch from `main` and open its pull request as a draft. The
-   draft says what the phase covers, and it gives the phase branch a place to
-   report its checks.
-2. Create a branch for the task and open a draft pull request that targets the
-   phase branch. Every commit for that task goes on this branch.
-3. When the task is complete, merge its pull request into the phase branch, then add
-   it to the phase pull request body. The body is the stack: it lists each task
-   in merge order.
-4. When every task is in and `cargo xtask check` is green on the phase branch,
-   tell the maintainer. The maintainer reviews the phase pull request, then
-   merges it.
+   draft says what the phase covers, names the phase code, and closes the phase
+   issue. A branch needs a commit before GitHub will open a PR for it. The first
+   commit records the phase in its `TODO.md` heading: the branch and the issue.
+2. Create a branch for the ticket and open a draft pull request. Its title starts
+   with the ticket code, its body closes the ticket's issue, and its base is the
+   phase branch or the ticket below it. Every commit for that ticket goes on this
+   branch.
+3. Link the PRs into the stack, bottom first:
+   `gh stack link <phase-pr> <ticket-pr>...`. Add each new ticket as it starts, so
+   the phase always has a merge tree rather than a list.
+4. When every ticket is green, `gh stack merge` merges the stack into the phase
+   branch in one all-or-nothing operation. Run `cargo xtask check` on the phase
+   branch, then tell the maintainer. The maintainer reviews the phase pull request
+   and merges it.
 
 A task that starts before the phase branch exists belongs to the next phase.
 Create the phase branch first.

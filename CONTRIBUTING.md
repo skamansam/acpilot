@@ -376,7 +376,7 @@ The gate enforces the part it can see from one pull request:
   issue with `Closes #<issue>`.
 - A phase PR keeps an open item PR on it while unblocked work remains (§7.2).
   Once the last item merges, the phase PR is the remaining work and lands
-  immediately (§5.5), so the job reports the empty stack as a note rather than
+  immediately (§5.5). The job reports the empty stack as a note rather than
   failing the merge it is waiting on.
 - A PR that belongs to no phase (a `docs/`, `ci/`, `fix/` or `deps/` branch) says so
   in its body. The `phase` job exempts it, because it closes no ticket.
@@ -387,8 +387,9 @@ The merge order is the guide's §5.5. Squash each item into the phase branch, bo
 up. Then merge the phase PR into `main` with a merge commit.
 
 If the PRs were linked as a GitHub stack, run `gh stack unstack` before that
-procedure. A stack merge applies one method to every PR, and `main` allows merge
-commits only, so it cannot squash the items and merge the phase in one operation.
+procedure. A stack merge applies one method to every PR. `main` allows merge
+commits only, so the stack cannot squash the items and merge the phase in one
+operation.
 
 Drop a branch only when its base holds every commit on it. The checks below use
 `<base>` and `<branch>`.

@@ -1189,7 +1189,7 @@ gives `type`, `arch`, `quantization`, `state`, and `max_context_length`, and
 Ollama, llama.cpp, vLLM, and OpenRouter ride the same `open_ai_compatible` adapter; Anthropic
 and Gemini are not OpenAI-shaped and get their own variant when the adapter exists.
 
-**Status (2026-11-13):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
+**Status (2026-11-25):** done are P4.5-1 (both adapters and the provider routes), P4.5-2
 (discovery and the remembered probe answers), P4.5-3 (the recipe loader with last-good
 reload), P4.5-4 (prompt assembly and the corpus selectors), P4.5-5 (the agent that runs the
 loop), P4.5-6 (the append-only run log with paging and replay), P4.5-7 (the recipe, model
@@ -1198,10 +1198,10 @@ and run routes), P4.5-8 (the lab page in the TUI) and P4.5-9 (promotion writes a
 landed (`acpilotd --acp`, stdio) and its remote half now serves HTTP/JSON-RPC with pairing,
 scopes, revocation and the cockpit routes. P4.5-11's request-body snapshots, streaming, the
 five bridge tests, byte-identical replay, the promoted agent's P2 smoke, the TUI's
-permission card and the live LM Studio run have landed.
-P4.5-13 (skills) remains. A run writes its record before the `finished` frame, and the
-lab reads that record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run
-resolved.
+permission card and the live LM Studio run have landed. P4.5-12 (integration stats) and
+P4.5-13 (skills) have landed too, so every item in the phase is done and the phase PR
+closes it. A run writes its record before the `finished` frame, and the lab reads that
+record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run resolved.
 
 - [x] **P4.5-1 · `acpilot-model` crate** (2d) — `Backend`, both adapters, and the refusal retry
   landed with 17 tests in this crate. **The daemon route landed 2026-11-12.**

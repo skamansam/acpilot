@@ -1172,6 +1172,8 @@ Three rules:
 
 ## Models phase (P4.5) — Local models and the model lab (≈14 days)
 
+**Phase branch:** `phase/p4.5-models` · **Phase issue:** #273
+
 Numbered `P4.5` so every existing task id stays valid: this lands after profiles (recipes
 are per-profile data, and credentials are keyring entries) and before the CLI grows the
 commands that drive it. Decisions and consequences: `docs/adr/0002-local-models-and-the-model-lab.md`.

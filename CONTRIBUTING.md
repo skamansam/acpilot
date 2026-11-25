@@ -287,17 +287,18 @@ Two suites are contracts rather than coverage, and should not be weakened:
 
 ## Commits
 
-One idea per commit, imperative subject, scoped by area:
+`docs/git-howto.md` §3.3 is the format: a Conventional Commit type, a noun scope,
+then a gitmoji and an imperative description. Every commit ends with a `Refs #<issue>`
+or a `Closes #<issue>` footer.
 
 ```
-proto: add terminal resize event
-acpilotd: reject stale ETags on file writes
-tui: keep cursor visible on fold
-docs: record the GUI framework decision
+feat(session): ✨ persist pilot sessions to disk
+
+Refs #47
 ```
 
-Body explains *why*, not *what*, because the diff already says what. Reference the task
-ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
+One idea per commit. The body explains *why*, not *what*, because the diff already
+says what.
 
 ## Git history
 
@@ -320,8 +321,9 @@ back. Every rule below prevents a state this repository has already been in.
   a second hash. The next merge carries it twice.
 - **`main` takes merge commits only.** Squash and rebase rewrite shared history, and
   they are how one change has two identities. The ruleset allows `merge` alone.
-- **Never force push, on any branch.** `main` refuses it. Every other branch is
-  somebody's work in progress. To fix a commit, add a commit that fixes it.
+- **Never force push a shared branch.** `main` and `phase/*` refuse it. An item
+  branch you own may take `--force-with-lease` after a restack, because
+  `docs/git-howto.md` §5.4 rewrites it on purpose. Never use `--force`.
 
 `cargo xtask history-check` is the mechanical half. CI's `history` job runs it on every
 push and pull request:
@@ -360,89 +362,40 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
 
 ### One pull request per phase, and a stack under it
 
-A phase in `TODO.md` receives one pull request. That PR is the unit that matches a
-phase in the roadmap project. It opens as a draft when the phase starts, so a phase
-never has work without a PR that reports it. Its title carries the phase code
-(`P4.5 · Models`) and its body closes the phase's issue (`Closes #273`).
+`docs/git-howto.md` is the authority on branches, PR titles and bodies, commit
+messages, stack order and the merge procedure. Read it before you open a branch, and
+re-read it when the repository state looks wrong.
 
-Each capability in that phase receives its own pull request. The capability PRs form
-one GitHub stack: the bottom one targets the phase branch, and each one above it
-targets the ticket below. Nothing a phase owns targets `main` except the phase PR.
+The gate enforces the part it can see from one pull request:
 
-```
-main
-└── phase/p4.5-models              the phase PR, merged once
-    └── p4.5-12-skills             a ticket PR, targeting the phase branch
-        └── p4.5-13-external       a ticket PR, targeting the ticket below
-```
-
-The rules that keep the stack traceable:
-
-- A phase branch is named `phase/<phase code>`, for example `phase/p4.5-models`.
-- A ticket branch carries its ticket code, for example `p4.5-13-external-skills`.
-- A ticket PR's title starts with the ticket code, for example
-  `P4.5-13 · skills: ...`, and its body closes the ticket's issue (`Closes #60`).
-- A phase PR's title starts with the phase code, for example `P4.5 · Models`, and
-  its body closes the phase's issue.
-- A ticket PR never targets `main`. Its base is the phase branch or the ticket PR
-  below it, so an open PR sits between every ticket and `main`.
+- A phase branch is `phase/<phase>-<slug>`, and its PR targets `main`, starts
+  `Phase <phase>: ` and opens with `Stack: phase root`.
+- An item branch is `item/<phase>.<seq>-<issue>-<slug>`. Its PR targets the branch
+  below it, never `main`. Its title is `[<phase>.<seq>] <title> (#<issue>)`. Its body
+  starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>` and it closes the
+  issue with `Closes #<issue>`.
+- A phase PR needs at least one open item PR on it, because a phase never runs
+  without a current item.
 - A PR that belongs to no phase (a `docs/`, `ci/`, `fix/` or `deps/` branch) says so
   in its body. The `phase` job exempts it, because it closes no ticket.
-- The `phase` job in CI reads the branch, the base, the title and the body, and it
-  fails a PR that breaks a rule above.
-- A phase PR merges with its stack, and only when every member is green and
-  `cargo xtask check` is green on the phase branch.
-- Drop a branch only when its base holds every commit on it. The checks below
-  use `<base>` and `<branch>`.
-  - Each pull request that targets the branch merged. A closed pull request is
-    not a merge. Its commits need another home first.
-  - `git rev-list --count <base>..<branch>` prints `0`, so the branch has no
-    commit that its base lacks. The branch may be behind by any number.
-  - `git diff --name-only <base> <branch>` prints nothing when the branch is
-    level with its base. A branch that is behind shows only what the base
-    gained after the merge.
-  - The branch exists on the remote. A ref that lives in one clone has no
-    second copy to restore.
-- A ticket branch's base is the phase branch or the ticket below it. A phase
-  branch's base is `main`, and it passes the checks above only after its phase PR
-  merges.
+- The `phase` job in CI reads the branch, the base, the title and the body. The
+  project card, the commit footers and the reviewer approvals are still yours.
 
-The tool is `gh stack`:
+The merge order is the guide's §5.5. Squash each item into the phase branch, bottom
+up. Then merge the phase PR into `main` with a merge commit.
 
-```bash
-gh stack link <phase-pr> <ticket-pr>...   # bottom first; sets the bases and the stack
-gh stack view                             # the current stack
-gh stack merge                            # the whole stack, in one operation
-```
+Drop a branch only when its base holds every commit on it. The checks below use
+`<base>` and `<branch>`.
 
-`gh stack link` takes PR numbers, so the titles and bodies written above stay as
-they are. `gh stack submit --auto` writes its own titles, so it is not the tool for
-a ticket stack.
-
-A merge that lands a phase is one operation on `main`, so a reader can see what a
-phase shipped without reading the whole branch.
-
-#### How a phase moves
-
-1. Create the phase branch from `main` and open its pull request as a draft. The
-   draft says what the phase covers, names the phase code, and closes the phase
-   issue. A branch needs a commit before GitHub will open a PR for it. The first
-   commit records the phase in its `TODO.md` heading: the branch and the issue.
-2. Create a branch for the ticket and open a draft pull request. Its title starts
-   with the ticket code, its body closes the ticket's issue, and its base is the
-   phase branch or the ticket below it. Every commit for that ticket goes on this
-   branch.
-3. Link the PRs into the stack, bottom first:
-   `gh stack link <phase-pr> <ticket-pr>...`. Add each new ticket as it starts, so
-   the phase always has a merge tree rather than a list.
-4. When every ticket is green, run `cargo xtask check` on the phase branch and tell
-   the maintainer. The maintainer reviews the phase pull request, marks it ready for
-   review, and runs `gh stack merge`. That lands the whole stack on `main` in one
-   all-or-nothing operation, phase PR included, so every ticket and the phase close
-   together.
-
-A task that starts before the phase branch exists belongs to the next phase.
-Create the phase branch first.
+- Each pull request that targets the branch merged. A closed pull request is not a
+  merge. Its commits need another home first.
+- `git rev-list --count <base>..<branch>` prints `0`, so the branch has no commit
+  that its base lacks. The branch may be behind by any number.
+- `git diff --name-only <base> <branch>` prints nothing when the branch is level
+  with its base. A branch that is behind shows only what the base gained after the
+  merge.
+- The branch exists on the remote. A ref that lives in one clone has no second copy
+  to restore.
 
 ### The protection rule
 

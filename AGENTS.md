@@ -17,6 +17,10 @@ it step by step. Run its Preamble command first. Load nothing else up front.
 This file's own sections still apply: the routing block is about which workflow
 to run, not about which documents describe this codebase.
 
+**Git work follows `docs/git-howto.md`.** It is the authority on branch names, PR
+titles and bodies, commit messages and the stack merge order. Re-read it whenever the
+repository state looks wrong.
+
 ### When to use which skill
 
 - Bug, failing test, panic, or wrong output: `investigate` (root cause before any fix).
@@ -56,6 +60,7 @@ to run, not about which documents describe this codebase.
 | --- | --- |
 | `TODO.md` | The plan text. Every task has a code (`P2-7`, `XT-1`) that is also a commit reference and an issue title. The **ACPilot Roadmap** project is the source of truth for a ticket's state. A task can be half-done, with its `Open:` list at the bottom. |
 | `CONTRIBUTING.md` | The gate, the test rules, the platform rule, commits and releases. |
+| `docs/git-howto.md` | Branch names, PR titles and bodies, commit format and the stack merge order. |
 | `README.md` §3 and §6 | The process model and the crate list. Read §3 before touching anything that crosses a process boundary. |
 | `docs/adr/` | Decisions that bind this codebase. An ADR is superseded, never edited. |
 | `docs/notes/` | Measurements with numbers. A change that contradicts one needs a new number, not an adjective. |
@@ -106,7 +111,7 @@ If the TUI cannot do something, the GUI must not be able to either.
 - **No `unsafe`.** It is forbidden at the workspace level. A job object on Windows
   is not a reason to add it.
 - **No force pushes, no `-s ours` merges, no rebase of a pushed branch.** A merge that
-  keeps one side's tree records the base as merged and drops its work, and no later
+  keeps one side's tree records the base as merged and drops its work. No later
   merge can conflict over what went missing. `cargo xtask history-check` fails on it,
   and CI's `history` job runs it.
 - **A new dependency needs a sentence** on why the existing ones do not do the job,

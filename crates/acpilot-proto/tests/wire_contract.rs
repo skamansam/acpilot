@@ -154,6 +154,20 @@ fn session_documents() {
         "title": "Fix the framing bug"
     }));
 
+    // A picker names the skills this session receives. An empty list is a
+    // deliberate "none", not the same request as leaving the field out.
+    round_trip::<acpilot_proto::session::CreateSessionRequest>(json!({
+        "workspace_id": "ws-1",
+        "agent_id": "claude",
+        "skills": ["review"]
+    }));
+
+    round_trip::<acpilot_proto::session::CreateSessionRequest>(json!({
+        "workspace_id": "ws-1",
+        "agent_id": "claude",
+        "skills": []
+    }));
+
     round_trip::<acpilot_proto::session::PromptRequest>(json!({
         "text": "run the tests"
     }));

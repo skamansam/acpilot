@@ -87,6 +87,7 @@ impl Harness {
                 workspace_id: String::new(),
                 agent_id: "mock".into(),
                 title: None,
+                skills: None,
             }),
         )
         .await

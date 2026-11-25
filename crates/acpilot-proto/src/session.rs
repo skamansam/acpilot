@@ -67,6 +67,13 @@ pub struct CreateSessionRequest {
     /// Optional title. The first prompt supplies one otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Skills to append to an external agent's system prompt.
+    ///
+    /// Absent means every visible skill, which is what a client that has no
+    /// picker wants. An empty list means none. A name the daemon cannot see is
+    /// refused rather than silently dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
 }
 
 /// Request body for `POST /v1/sessions/{id}/prompt`.

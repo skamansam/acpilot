@@ -1758,9 +1758,13 @@ resolved.
     only when the agent advertises `sessionCapabilities.systemPrompt`; an agent
     without the capability keeps its own instructions instead of receiving a field
     it would reject. A skill that fails to parse is logged and left out, not a
-    reason to refuse the session. **Open:** the capability is the only delivery
-    path, so an external agent that does not advertise it still receives none, and
-    there is no per-session skill picker.
+    reason to refuse the session. A session may name its own subset through
+    `CreateSessionRequest.skills`: absent means every visible skill, empty means
+    none, and a name the daemon cannot see is a `400` that lists the visible
+    names. `New Session` in the TUI opens a picker with every visible skill
+    ticked, and always starts another conversation so one agent can run with
+    different skills. **Open:** the capability is the only delivery path, so an
+    external agent that does not advertise it still receives none.
 
 ---
 

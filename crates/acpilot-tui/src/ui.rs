@@ -86,6 +86,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     } else if app.agent_picker {
         draw_agent_picker(frame, app, body);
     }
+    if app.skill_picker.is_some() {
+        draw_skill_picker(frame, app, body);
+    }
     if app.lsp_pin.is_some() {
         draw_lsp_pin(frame, app, body);
     }
@@ -3098,6 +3101,73 @@ fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Agents · {} ", app.agents.len()))
+        .border_style(Style::default().fg(app.theme.accent()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
+/// The skills a new external-agent session will receive.
+///
+/// A checkbox list rather than a sentence, because a skill is a set: the same
+/// agent may review one conversation and release another. All rows start ticked,
+/// so a person who wants the old behaviour presses `Enter` and is done.
+fn draw_skill_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = &app.skill_picker else {
+        return;
+    };
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    let mut lines: Vec<Line> = app
+        .skills
+        .iter()
+        .enumerate()
+        .map(|(index, skill)| {
+            let chosen = index == picker.selected;
+            let ticked = picker.chosen.contains(&skill.name);
+            let marker = if chosen { "▸ " } else { "  " };
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let source = match skill.source {
+                acpilot_proto::skills::SkillSource::Workspace => "ws",
+                acpilot_proto::skills::SkillSource::Profile => "profile",
+                acpilot_proto::skills::SkillSource::Extension => "ext",
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{marker}{} {}", if ticked { "✓" } else { "·" }, skill.name),
+                    row,
+                ),
+                Span::styled(
+                    format!("  {source}"),
+                    Style::default().fg(app.theme.text_muted()),
+                ),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    if let Some(skill) = app.skills.get(picker.selected) {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", skill.description),
+            Style::default().fg(app.theme.text_muted()),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "Space toggles · Enter starts · Esc closes",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " Skills for {} · {}/{} selected ",
+            picker.agent,
+            picker.chosen.len(),
+            app.skills.len()
+        ))
         .border_style(Style::default().fg(app.theme.accent()));
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }

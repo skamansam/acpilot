@@ -63,7 +63,16 @@ pub enum Request {
     /// Cancel the turn in flight.
     Cancel,
     /// Start a session with this agent and open it.
-    New(String),
+    ///
+    /// `skills` is the picker's answer: `None` delivers every visible skill,
+    /// and an empty list delivers none. A named subset must exist on the
+    /// daemon, which refuses the request rather than dropping a name.
+    New {
+        /// The agent to run.
+        agent: String,
+        /// The skills this session receives.
+        skills: Option<Vec<String>>,
+    },
     /// End a session.
     Delete(String),
     /// Record that the binary behind this agent is the one a person meant.
@@ -296,6 +305,8 @@ pub enum Update {
     LabError(String),
     /// The profile's agents.
     Agents(Vec<AgentSummary>),
+    /// The skills a new session may choose from.
+    Skills(Vec<acpilot_proto::skills::SkillSummary>),
     /// The language servers, when one of them is waiting for an answer.
     ///
     /// A list rather than the usual status line, because a row whose program nobody
@@ -851,6 +862,7 @@ async fn run(
                 Some(Request::LabSkillSave(draft)) => match client.save_skill(&draft).await {
                     Ok(skill) => {
                         let _ = updates.send(Update::LabSkillSaved(skill));
+                        refresh_skills(&client, &updates).await;
                     }
                     Err(error) => {
                         let _ = updates.send(Update::LabError(describe(&error)));
@@ -1177,12 +1189,13 @@ async fn run(
                         Err(error) => { let _ = updates.send(Update::Status(describe(&error))); }
                     }
                 }
-                Some(Request::New(agent_id)) => {
+                Some(Request::New { agent, skills }) => {
                     let request = CreateSessionRequest {
                         // The daemon serves one workspace; an empty id means it.
                         workspace_id: String::new(),
-                        agent_id,
+                        agent_id: agent,
                         title: None,
+                        skills,
                     };
                     match client.create_session(&request).await {
                         Ok(summary) => {
@@ -1310,6 +1323,24 @@ async fn refresh(client: &Client, include_ignored: bool, updates: &UnboundedSend
     refresh_permissions(client, updates).await;
     refresh_stats(client, updates).await;
     refresh_files(client, include_ignored, updates).await;
+    refresh_skills(client, updates).await;
+}
+
+/// Read the skills a new session can choose from.
+///
+/// A daemon with no workspace answers `409`. That is the same absence the tree
+/// reports, and a status line on every start would be noise. Any other failure is
+/// worth saying, because the picker would otherwise be empty with no reason.
+async fn refresh_skills(client: &Client, updates: &UnboundedSender<Update>) {
+    match client.skills().await {
+        Ok(skills) => {
+            let _ = updates.send(Update::Skills(skills));
+        }
+        Err(error) if error.code() == Some("conflict") => {}
+        Err(error) => {
+            let _ = updates.send(Update::Status(describe(&error)));
+        }
+    }
 }
 
 /// Read the workspace root, so the tree has rows before a key is pressed.
@@ -1887,7 +1918,7 @@ async fn run_demo(
             // shows is the one it kept, and pretending to run it would be the one
             // thing a design pass must not do.
             Request::TerminalWrite(_) | Request::TerminalResize(_) => {}
-            Request::New(_) | Request::Delete(_) | Request::Cancel => {
+            Request::New { .. } | Request::Delete(_) | Request::Cancel => {
                 let _ = updates.send(Update::Status(
                     "design pass · there is no daemon to ask".to_owned(),
                 ));

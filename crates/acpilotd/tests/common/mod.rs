@@ -12,34 +12,36 @@ use std::sync::OnceLock;
 /// guarantee it is built before the tests that need it. Building it here once is what
 /// makes a suite work from a clean `cargo nextest run` as well as from
 /// `cargo xtask check`, which builds the workspace first.
+///
+/// The build runs even when the executable exists: a fixture source change would
+/// otherwise leave every test talking to the previous binary, and a protocol test
+/// that silently tests yesterday's agent is worse than one that rebuilds.
 pub fn mock_agent() -> &'static Path {
     static AGENT: OnceLock<PathBuf> = OnceLock::new();
     AGENT
         .get_or_init(|| {
+            let status = std::process::Command::new(env!("CARGO"))
+                .args([
+                    "build",
+                    "-p",
+                    "acpilot-agent",
+                    "--bin",
+                    "acpilot-mock-agent",
+                ])
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .status()
+                .expect("cargo is on PATH");
+            assert!(status.success(), "the mock agent must build");
+
             let exe = std::env::current_exe().expect("the test's own path");
             let debug = exe.parent().and_then(Path::parent).expect("target/debug");
             // The executable suffix is the platform's: a Windows build is
             // `acpilot-mock-agent.exe`, and a path without it would look like a
             // fixture that was never built.
-            let path = debug.join(format!(
+            debug.join(format!(
                 "acpilot-mock-agent{}",
                 std::env::consts::EXE_SUFFIX
-            ));
-            if !path.exists() {
-                let status = std::process::Command::new(env!("CARGO"))
-                    .args([
-                        "build",
-                        "-p",
-                        "acpilot-agent",
-                        "--bin",
-                        "acpilot-mock-agent",
-                    ])
-                    .current_dir(env!("CARGO_MANIFEST_DIR"))
-                    .status()
-                    .expect("cargo is on PATH");
-                assert!(status.success(), "the mock agent must build");
-            }
-            path
+            ))
         })
         .as_path()
 }

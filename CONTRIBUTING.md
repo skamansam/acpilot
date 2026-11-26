@@ -375,12 +375,11 @@ The gate enforces the part it can see from one pull request:
   below it, never `main`. Its title is `[<phase>.<seq>] <title> (#<issue>)`. Its body
   starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>` and it closes the
   issue with `Closes #<issue>`.
-- A phase number is a whole number. A decimal roadmap group such as `4.5 · Models`
-  is a sub-issue of Phase 4, not a phase. It has no `phase/` branch or phase PR.
-  Its items stack under Phase 4's trunk as `item/4.1-…`, `item/4.2-…`.
-- An item's issue is a sub-issue of the phase issue, directly or through a decimal
-  group. The job walks the parent chain, so an item parented to no phase, or to
-  another phase, fails.
+- A phase number may carry one decimal part (`4.5 · Models`, `4.6 · Mod shop`),
+  and each of those is a phase with its own `phase/` branch and trunk PR. Its items
+  take the phase number, so Phase 4.5's first item is `item/4.5.1-…`.
+- An item's issue is a sub-issue of its phase issue. The job walks the parent
+  chain, so an item parented to no phase, or to another phase, fails.
 - A phase PR keeps an open item PR on it while unblocked work remains (§7.2).
   Once the last item merges, the phase PR is the remaining work and lands
   immediately (§5.5). The job reports the empty stack as a note rather than

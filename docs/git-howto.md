@@ -51,7 +51,7 @@
 - `<seq>` is the item's position in the stack within its phase (1, 2, 3…). It reflects **stack order**, not priority.
 - Slugs are lowercase, hyphenated, ≤ 5 words.
 
-**A phase number is a whole number, and a phase is an issue.** A decimal group such as `4.5 · Models` is a sub-issue of Phase 4, not a phase. It gets no `phase/` branch and no phase PR. Its items stack under Phase 4's trunk and take the phase number, so the first two are `item/4.1-60-skills` and `item/4.2-61-…`. The issue keeps its `P4.5-13` code, which is a ticket reference and not a branch number.
+**A phase number can carry one decimal part, and a phase is an issue.** The roadmap ships `4.5 · Models` and `4.6 · Mod shop` as phases of their own, next to `4 · Profiles`. Each one gets a `phase/` branch and a trunk PR. An item takes its phase's number, so Phase 4's first item is `item/4.1-…` and Phase 4.5's is `item/4.5.1-…`. The task code stays `P4.5-13`, which is a ticket reference as well as part of the branch number.
 ### 3.2 PR titles and bodies
  
 **Rule: a PR title without its number is invalid.**
@@ -64,8 +64,8 @@
 - **Phase PR body:** first line `Stack: phase root`. Then `Phase issue: #<n>`, the phase's own issue from the roadmap. A checklist of every item in the phase. And one **closing keyword per item** (`Closes #41`, `Closes #44`, …) plus that phase issue. Keep it updated as items complete.
 - **Item PR body:** first line `Stack: 3 of 5 · base: item/2.2-… · phase: #101`. Then `Closes #<issue>`. Then what changed, how it was tested, and what the next item in the stack depends on from this one.
 - Item PRs link their issue with a closing keyword **from the start** (even as drafts). That is what attaches the PR to the ticket and moves the card.
-- **A phase PR is the trunk of one phase.** Its title carries the whole phase number. It never carries a decimal group (`Phase 4: Models`, not `Phase 4.5: Models`).
-- **An item's issue is a sub-issue of the phase issue**, directly or through a decimal group such as `4.5 · Models`. That chain is the roadmap, and the CI `phase` job walks it, so an item whose issue hangs off no phase — or off another phase — fails.
+- **A phase PR is the trunk of one phase.** Its title carries the phase number, a decimal part included (`Phase 4.5: Models`). Models and the mod shop are phases, not sub-issues under profiles.
+- **An item's issue is a sub-issue of the phase issue.** The CI `phase` job walks the parent chain, so an item whose issue hangs off no phase — or off another phase — fails.
 ### 3.3 Commit messages (Conventional Commits + gitmoji)
  
 Sources: [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/#specification) and the [gitmoji specification](https://gitmoji.dev/specification).
@@ -259,7 +259,7 @@ gh pr create --draft --base main --head phase/<N>-<slug> \
 # sub-issues, so CI can check that each item belongs to this phase.
 ```
  
-A decimal group is an item under a phase, not a phase. Do not create a `phase/` branch or a phase PR for `4.5`.
+Every phase gets its own branch and PR, `4.5 · Models` included. The number in the branch is the phase number.
 
 Then immediately start the first item (5.2). **A phase PR must never exist without a current item PR.**
  
@@ -415,7 +415,6 @@ Between "last item merged into the phase" and "next phase started", there may br
 - Commits exist directly on `main` or `phase/*` that are not from a merged PR.
 - A PR shows hundreds of unrelated commits (stale base).
 - A branch or PR title is missing its phase/ticket number.
-- A `phase/` branch or phase PR carries a decimal number, because a decimal group is an item under a phase.
 - Commits that are not Conventional Commits, have no gitmoji, or have no `Refs`/`Closes` footer.
 - An item PR has no closing keyword linking it to its ticket.
 ---

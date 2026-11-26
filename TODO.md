@@ -1172,9 +1172,9 @@ Three rules:
 
 ## Models phase (P4.5) — Local models and the model lab (≈14 days)
 
-Numbered `P4.5` so every existing task id stays valid: this lands after profiles (recipes
-are per-profile data, and credentials are keyring entries) and before the CLI grows the
-commands that drive it. Decisions and consequences: `docs/adr/0002-local-models-and-the-model-lab.md`.
+Its own phase, numbered `P4.5` so every existing task id stays valid. It lands after
+profiles (recipes are per-profile data, and credentials are keyring entries) and before
+the CLI grows the commands that drive it. Decisions and consequences: `docs/adr/0002-local-models-and-the-model-lab.md`.
 
 The shape in one paragraph: a **provider** is an HTTP chat endpoint; a **recipe** is a tuned
 configuration for one model of one provider; the **lab** is a UI over the API that edits
@@ -1759,8 +1759,8 @@ resolved.
 
 ## Mod shop phase (P4.6) — Extensions: the mod shop (≈11 days)
 
-Numbered after the model lab for the same reason: no existing task id moves. Decisions and the
-argument against WASM-everything: `docs/adr/0003-extensions-are-data-first.md`.
+Its own phase, numbered after the model lab for the same reason: no existing task id moves.
+Decisions and the argument against WASM-everything: `docs/adr/0003-extensions-are-data-first.md`.
 
 The shape: a **declarative** extension is a directory with `extension.toml` and assets — a theme,
 language-server presets, agent presets, grammars, snippets, a keymap layer. It is installed once

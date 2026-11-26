@@ -446,9 +446,9 @@ jobs:
   # branch below it, never `main`. Its title is `[<N>.<seq>] <title> (#<issue>)`.
   # Its body starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and
   # it closes its issue. A phase PR names its roadmap issue as `Phase issue: #<n>`.
-  # An item's issue must be that issue or a descendant of it. A decimal group
-  # such as `4.5 · Models` can then sit between the two. The rule is read from
-  # branch names, so no list goes stale.
+  # An item's issue must be a sub-issue of that issue. A phase number can carry a
+  # decimal part (`4.5`), because the roadmap ships Models and Mod shop that way.
+  # The rule is read from branch names, so no list goes stale.
   #
   # A push to `main` and a manual run have no pull request, and they pass. The job
   # is in both aggregations for that reason: a skipped entry is not a success.
@@ -471,18 +471,17 @@ jobs:
           fi
           fail() { echo "$1"; exit 1; }
 
-          # `phase/4-models` names phase `4`. `item/4.1-60-external-skills` names
-          # phase `4`, stack position `1` and issue `60`. A decimal group such as
-          # `4.5 · Models` is a sub-issue of Phase 4, never a phase, so no branch
-          # name carries `4.5` as its phase.
-          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+)-[a-z0-9-]+$|\1|p')
-          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+)\.([0-9]+)-([0-9]+)-[a-z0-9-]+$|\1.\2 \3|p')
+          # `phase/4.5-models` names phase `4.5`. `item/4.5.1-60-skills` names
+          # phase `4.5`, stack position `1` and issue `60`. The phase part takes
+          # one decimal: the roadmap ships `4.5 · Models` as a phase of its own.
+          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+(\.[0-9]+)?)-[a-z0-9-]+$|\1|p')
+          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+(\.[0-9]+)?)\.([0-9]+)-([0-9]+)-[a-z0-9-]+$|\1 \3 \4|p')
           case "$HEAD_REF" in
             phase/*|item/*) ;;
             *) echo "$HEAD_REF is not a phase or item branch; the guide does not cover it"; exit 0 ;;
           esac
           [ -n "$phase" ] || [ -n "$item" ] \
-            || fail "a phase number is a whole number and an item is item/<phase>.<seq>-<issue>-<slug>"
+            || fail "a phase number is <n> or <n>.<m>, and an item is item/<phase>.<seq>-<issue>-<slug>"
 
           title=$(gh pr view "$PR" --json title --jq .title)
           body=$(gh pr view "$PR" --json body --jq .body)
@@ -515,8 +514,8 @@ jobs:
           fi
 
           if [ -n "$item" ]; then
-            seq=${item% *}
-            issue=${item#* }
+            read -r phase_of_item stack issue <<< "$item"
+            seq="$phase_of_item.$stack"
             [ "$BASE_REF" != main ] || fail "item branch $HEAD_REF targets main; it must target the branch below it"
             case "$BASE_REF" in
               phase/*|item/*) ;;
@@ -541,13 +540,14 @@ jobs:
             phase_title=$(gh pr view "$phase_pr" --json title --jq .title 2>/dev/null || true)
             phase_base=$(gh pr view "$phase_pr" --json baseRefName --jq .baseRefName 2>/dev/null || true)
             case "$phase_title" in
-              "Phase ${seq%%.*}: "*) ;;
+              "Phase $phase_of_item: "*)
+                ;;
               *) fail "phase PR #$phase_pr is '$phase_title', not 'Phase ${seq%%.*}: <name>'" ;;
             esac
             [ "$phase_base" = main ] || fail "phase PR #$phase_pr targets '$phase_base'; the phase PR is the trunk and targets main"
-            # The phase issue is an ancestor of the item's issue. A decimal group
-            # such as 4.5 · Models is a sub-issue of the phase and a parent of the
-            # item. The chain can then be two links. The cap stops a cycle.
+            # The phase issue is an ancestor of the item's issue. That link is the
+            # roadmap, so an item under another phase fails even when every PR
+            # field is right. The cap stops a cycle.
             phase_body=$(gh pr view "$phase_pr" --json body --jq .body 2>/dev/null || true)
             phase_issue=$(printf '%s\n' "$phase_body" \
               | sed -nE 's/^Phase issue: #([0-9]+)([^0-9]|$).*/\1/p' | head -n 1)
@@ -564,7 +564,7 @@ jobs:
               fi
             done
             [ -n "$linked" ] \
-              || fail "#$issue is not a sub-issue of #$phase_issue, the phase issue on PR #$phase_pr; parent it to the phase or to its decimal group"
+              || fail "#$issue is not a sub-issue of #$phase_issue, the phase issue on PR #$phase_pr. Add it to that phase."
             printf '%s' "$body" | grep -Eqi "(^|[^A-Za-z])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#$issue([^0-9]|$)" \
               || fail "the body does not close #$issue"
           fi

@@ -50,6 +50,8 @@
 - Item branches contain **both** the phase.sequence (`2.3`) **and** the GitHub issue/ticket number (`47`).
 - `<seq>` is the item's position in the stack within its phase (1, 2, 3…). It reflects **stack order**, not priority.
 - Slugs are lowercase, hyphenated, ≤ 5 words.
+
+**A phase number is a whole number, and a phase is an issue.** A decimal group such as `4.5 · Models` is a sub-issue of Phase 4, not a phase. It gets no `phase/` branch and no phase PR. Its items stack under Phase 4's trunk and take the phase number, so the first two are `item/4.1-60-skills` and `item/4.2-61-…`. The issue keeps its `P4.5-13` code, which is a ticket reference and not a branch number.
 ### 3.2 PR titles and bodies
  
 **Rule: a PR title without its number is invalid.**
@@ -62,6 +64,7 @@
 - **Phase PR body:** first line `Stack: phase root`. A checklist of every item in the phase. And one **closing keyword per item** (`Closes #41`, `Closes #44`, …) plus the phase's own tracking issue if there is one. Keep it updated as items complete.
 - **Item PR body:** first line `Stack: 3 of 5 · base: item/2.2-… · phase: #101`. Then `Closes #<issue>`. Then what changed, how it was tested, and what the next item in the stack depends on from this one.
 - Item PRs link their issue with a closing keyword **from the start** (even as drafts). That is what attaches the PR to the ticket and moves the card.
+- **A phase PR is the trunk of one phase.** Its title carries the whole phase number. It never carries a decimal group (`Phase 4: Models`, not `Phase 4.5: Models`).
 ### 3.3 Commit messages (Conventional Commits + gitmoji)
  
 Sources: [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/#specification) and the [gitmoji specification](https://gitmoji.dev/specification).
@@ -254,11 +257,15 @@ gh pr create --draft --base main --head phase/<N>-<slug> \
 # (add "Closes #<phase-tracking-issue>" too, if the phase has its own issue)
 ```
  
+A decimal group is an item under a phase, not a phase. Do not create a `phase/` branch or a phase PR for `4.5`.
+
 Then immediately start the first item (5.2). **A phase PR must never exist without a current item PR.**
  
 ### 5.2 Starting an item
  
 Pick the next item in roadmap order that is **not blocked** (see §6). Branch from the **top of the stack**, which is the latest item branch, or the phase branch if this is the first item.
+
+The branch number is the phase number plus stack position. The first item of Phase 4 is `item/4.1-<issue>-<slug>`, the second `item/4.2-…`.
  
 ```bash
 git fetch --all --prune
@@ -406,6 +413,7 @@ Between "last item merged into the phase" and "next phase started", there may br
 - Commits exist directly on `main` or `phase/*` that are not from a merged PR.
 - A PR shows hundreds of unrelated commits (stale base).
 - A branch or PR title is missing its phase/ticket number.
+- A `phase/` branch or phase PR carries a decimal number, because a decimal group is an item under a phase.
 - Commits that are not Conventional Commits, have no gitmoji, or have no `Refs`/`Closes` footer.
 - An item PR has no closing keyword linking it to its ticket.
 ---

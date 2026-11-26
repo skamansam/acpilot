@@ -374,6 +374,9 @@ The gate enforces the part it can see from one pull request:
   below it, never `main`. Its title is `[<phase>.<seq>] <title> (#<issue>)`. Its body
   starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>` and it closes the
   issue with `Closes #<issue>`.
+- A phase number is a whole number. A decimal roadmap group such as `4.5 · Models`
+  is a sub-issue of Phase 4, not a phase. It has no `phase/` branch or phase PR.
+  Its items stack under Phase 4's trunk as `item/4.1-…`, `item/4.2-…`.
 - A phase PR keeps an open item PR on it while unblocked work remains (§7.2).
   Once the last item merges, the phase PR is the remaining work and lands
   immediately (§5.5). The job reports the empty stack as a note rather than

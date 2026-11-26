@@ -468,14 +468,18 @@ jobs:
           fi
           fail() { echo "$1"; exit 1; }
 
-          # `phase/4.5-models` names phase `4.5`. `item/4.5.1-60-external-skills`
-          # names stack position `4.5.1` and issue `60`.
-          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+(\.[0-9]+)?)-[a-z0-9-]+$|\1|p')
-          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+(\.[0-9]+)?\.[0-9]+)-([0-9]+)-[a-z0-9-]+$|\1 \3|p')
-          if [ -z "$phase" ] && [ -z "$item" ]; then
-            echo "$HEAD_REF is not a phase or item branch; the guide does not cover it"
-            exit 0
-          fi
+          # `phase/4-models` names phase `4`. `item/4.1-60-external-skills` names
+          # phase `4`, stack position `1` and issue `60`. A decimal group such as
+          # `4.5 · Models` is a sub-issue of Phase 4, never a phase, so no branch
+          # name carries `4.5` as its phase.
+          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+)-[a-z0-9-]+$|\1|p')
+          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+)\.([0-9]+)-([0-9]+)-[a-z0-9-]+$|\1.\2 \3|p')
+          case "$HEAD_REF" in
+            phase/*|item/*) ;;
+            *) echo "$HEAD_REF is not a phase or item branch; the guide does not cover it"; exit 0 ;;
+          esac
+          [ -n "$phase" ] || [ -n "$item" ] \
+            || fail "a phase number is a whole number and an item is item/<phase>.<seq>-<issue>-<slug>"
 
           title=$(gh pr view "$PR" --json title --jq .title)
           body=$(gh pr view "$PR" --json body --jq .body)
@@ -522,6 +526,15 @@ jobs:
               "Stack: "*" · base: $BASE_REF · phase: #"*) ;;
               *) fail "the body does not start with 'Stack: <seq> of <total> · base: $BASE_REF · phase: #<pr>'" ;;
             esac
+            phase_pr=$(printf '%s\n' "$first" | sed -nE 's/.* · phase: #([0-9]+)$/\1/p')
+            [ -n "$phase_pr" ] || fail "the body names no phase PR; add 'phase: #<pr>' to the first line"
+            phase_title=$(gh pr view "$phase_pr" --json title --jq .title 2>/dev/null || true)
+            phase_base=$(gh pr view "$phase_pr" --json baseRefName --jq .baseRefName 2>/dev/null || true)
+            case "$phase_title" in
+              "Phase ${seq%%.*}: "*) ;;
+              *) fail "phase PR #$phase_pr is '$phase_title', not 'Phase ${seq%%.*}: <name>'" ;;
+            esac
+            [ "$phase_base" = main ] || fail "phase PR #$phase_pr targets '$phase_base'; the phase PR is the trunk and targets main"
             printf '%s' "$body" | grep -Eqi "(^|[^A-Za-z])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#$issue([^0-9]|$)" \
               || fail "the body does not close #$issue"
           fi

@@ -441,11 +441,14 @@ jobs:
         run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
 
   # docs/git-howto.md §3.2, §5.2 and §7.2, checked from one pull request. A phase
-  # PR targets `main`, starts `Phase <N>: ` and `Stack: phase root`, and keeps an
-  # open item PR while unblocked work remains. An item PR targets the branch below
-  # it, never `main`; its title is `[<N>.<seq>] <title> (#<issue>)`, its body starts
-  # `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and it closes its
-  # issue. The rule is read from branch names, so no list goes stale.
+  # PR targets `main`. It starts `Phase <N>: ` and `Stack: phase root`, and it
+  # keeps an open item PR while unblocked work remains. An item PR targets the
+  # branch below it, never `main`. Its title is `[<N>.<seq>] <title> (#<issue>)`.
+  # Its body starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and
+  # it closes its issue. A phase PR names its roadmap issue as `Phase issue: #<n>`.
+  # An item's issue must be that issue or a descendant of it. A decimal group
+  # such as `4.5 · Models` can then sit between the two. The rule is read from
+  # branch names, so no list goes stale.
   #
   # A push to `main` and a manual run have no pull request, and they pass. The job
   # is in both aggregations for that reason: a skipped entry is not a success.
@@ -494,10 +497,17 @@ jobs:
             [ "$first" = "Stack: phase root" ] || fail "the body does not start with 'Stack: phase root'"
             printf '%s' "$body" | grep -Eqi "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+" \
               || fail "the body closes no issue; add 'Closes #<issue>' for each item and the phase"
-            # §7.2 calls a phase without an item PR unhealthy only while unblocked
-            # work remains. When the last item merges, the phase PR is the
-            # remaining work and lands at once (§5.5), so a hard failure here
-            # would block the very merge it is waiting on.
+            # The item check walks this link, so the phase PR names the roadmap
+            # issue it belongs to. Without it an item has nothing to be a
+            # sub-issue of, and the check would have to guess from a title.
+            phase_issue=$(printf '%s\n' "$body" \
+              | sed -nE 's/^Phase issue: #([0-9]+)([^0-9]|$).*/\1/p' | head -n 1)
+            [ -n "$phase_issue" ] \
+              || fail "the body names no phase issue; add 'Phase issue: #<n>' for the roadmap issue"
+            # §7.2 calls a phase without an item PR unhealthy only while
+            # unblocked work remains. When the last item merges, the phase PR is
+            # the remaining work and lands at once (§5.5). A hard failure here
+            # would then block the very merge it is waiting on.
             open_items=$(gh pr list --base "$HEAD_REF" --state open --json number --jq 'length')
             if [ "$open_items" = 0 ]; then
               echo "note: no open item PR on $HEAD_REF; expected only while the phase lands"
@@ -535,6 +545,26 @@ jobs:
               *) fail "phase PR #$phase_pr is '$phase_title', not 'Phase ${seq%%.*}: <name>'" ;;
             esac
             [ "$phase_base" = main ] || fail "phase PR #$phase_pr targets '$phase_base'; the phase PR is the trunk and targets main"
+            # The phase issue is an ancestor of the item's issue. A decimal group
+            # such as 4.5 · Models is a sub-issue of the phase and a parent of the
+            # item. The chain can then be two links. The cap stops a cycle.
+            phase_body=$(gh pr view "$phase_pr" --json body --jq .body 2>/dev/null || true)
+            phase_issue=$(printf '%s\n' "$phase_body" \
+              | sed -nE 's/^Phase issue: #([0-9]+)([^0-9]|$).*/\1/p' | head -n 1)
+            [ -n "$phase_issue" ] \
+              || fail "phase PR #$phase_pr names no phase issue; add 'Phase issue: #<n>' to it"
+            parent_of() { gh api "repos/$GH_REPO/issues/$1/parent" --jq .number 2>/dev/null; }
+            ancestor=$issue
+            linked=""
+            for _ in 1 2 3 4 5 6 7 8; do
+              ancestor=$(parent_of "$ancestor") || break
+              if [ "$ancestor" = "$phase_issue" ]; then
+                linked=1
+                break
+              fi
+            done
+            [ -n "$linked" ] \
+              || fail "#$issue is not a sub-issue of #$phase_issue, the phase issue on PR #$phase_pr; parent it to the phase or to its decimal group"
             printf '%s' "$body" | grep -Eqi "(^|[^A-Za-z])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#$issue([^0-9]|$)" \
               || fail "the body does not close #$issue"
           fi

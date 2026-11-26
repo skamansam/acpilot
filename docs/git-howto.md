@@ -61,10 +61,11 @@
 | Phase | `Phase <N>: <Phase name>` | `Phase 2: Core Pilot Loop` |
 | Item | `[<N>.<seq>] <item title> (#<issue>)` | `[2.3] Session persistence (#47)` |
  
-- **Phase PR body:** first line `Stack: phase root`. A checklist of every item in the phase. And one **closing keyword per item** (`Closes #41`, `Closes #44`, …) plus the phase's own tracking issue if there is one. Keep it updated as items complete.
+- **Phase PR body:** first line `Stack: phase root`. Then `Phase issue: #<n>`, the phase's own issue from the roadmap. A checklist of every item in the phase. And one **closing keyword per item** (`Closes #41`, `Closes #44`, …) plus that phase issue. Keep it updated as items complete.
 - **Item PR body:** first line `Stack: 3 of 5 · base: item/2.2-… · phase: #101`. Then `Closes #<issue>`. Then what changed, how it was tested, and what the next item in the stack depends on from this one.
 - Item PRs link their issue with a closing keyword **from the start** (even as drafts). That is what attaches the PR to the ticket and moves the card.
 - **A phase PR is the trunk of one phase.** Its title carries the whole phase number. It never carries a decimal group (`Phase 4: Models`, not `Phase 4.5: Models`).
+- **An item's issue is a sub-issue of the phase issue**, directly or through a decimal group such as `4.5 · Models`. That chain is the roadmap, and the CI `phase` job walks it, so an item whose issue hangs off no phase — or off another phase — fails.
 ### 3.3 Commit messages (Conventional Commits + gitmoji)
  
 Sources: [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/#specification) and the [gitmoji specification](https://gitmoji.dev/specification).
@@ -253,8 +254,9 @@ git push -u origin phase/<N>-<slug>
 # 2. Phase PR (draft): checklist of all items + one closing keyword per item
 gh pr create --draft --base main --head phase/<N>-<slug> \
   --title "Phase <N>: <Phase name>" \
-  --body $'Stack: phase root\n\n## Items\n- [ ] #<issue-a> <title>\n- [ ] #<issue-b> <title>\n\nCloses #<issue-a>\nCloses #<issue-b>'
-# (add "Closes #<phase-tracking-issue>" too, if the phase has its own issue)
+  --body $'Stack: phase root\nPhase issue: #<phase-issue>\n\n## Items\n- [ ] #<issue-a> <title>\n- [ ] #<issue-b> <title>\n\nCloses #<issue-a>\nCloses #<issue-b>\nCloses #<phase-issue>'
+# <phase-issue> is the phase's own roadmap issue (e.g. #272); the items are its
+# sub-issues, so CI can check that each item belongs to this phase.
 ```
  
 A decimal group is an item under a phase, not a phase. Do not create a `phase/` branch or a phase PR for `4.5`.

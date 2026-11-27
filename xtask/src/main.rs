@@ -692,7 +692,9 @@ fn check_history(base: &str) -> bool {
         else {
             continue;
         };
-        if let Some(dropped) = discarded_side(merge, first, second, trees_match, is_ancestor) {
+        if let Some(dropped) =
+            discarded_side(merge, first, second, trees_match, is_ancestor, merge_base)
+        {
             eprintln!(
                 "==> history: merge {merge} kept one parent's tree whole, so the {dropped} \
                  side's changes are gone"
@@ -744,17 +746,25 @@ fn check_history(base: &str) -> bool {
 /// ancestors and every later merge is clean. `same` answers whether two commits hold
 /// the same content.
 ///
-/// One shape that looks identical and loses nothing is the ordinary merge of a branch
-/// back into the base it started from. The base had no commits of its own, so the
-/// merge's tree *is* the branch's, and nothing on the other side could be dropped.
-/// `ancestor` answers whether one commit is already reachable from the other, which
-/// is what separates "there was nothing to merge" from "the work was thrown away".
+/// Two shapes that look identical and lose nothing. The first is the ordinary merge
+/// of a branch back into the base it started from: the base had no commits of its
+/// own, so the merge's tree *is* the branch's, and nothing on the other side could be
+/// dropped. `ancestor` answers whether one commit is already reachable from the
+/// other, which is what separates "there was nothing to merge" from "the work was
+/// thrown away".
+///
+/// The second is a merge into a branch whose only commits since the fork change no
+/// files — the phase-start commit, say, which carries the phase's name and nothing
+/// else. Its tree matches the merge's because it had nothing to contribute, so failing
+/// here would refuse the first merge of every phase. `base` names the fork, and the
+/// dropped side is compared with it.
 fn discarded_side(
     merge: &str,
     first: &str,
     second: &str,
     same: impl Fn(&str, &str) -> Option<bool>,
     ancestor: impl Fn(&str, &str) -> Option<bool>,
+    base: impl Fn(&str, &str) -> Option<String>,
 ) -> Option<&'static str> {
     if same(first, second) == Some(true) {
         // Both parents already agreed, so the merge had nothing to drop.
@@ -778,6 +788,14 @@ fn discarded_side(
         // a branch into the base it was cut from.
         return None;
     }
+    if let Some(fork) = base(first, second)
+        && same(&fork, dropped_commit) == Some(true)
+    {
+        // The side that disappeared did not change a file since the two branches
+        // parted. There was no work in it to drop, and an empty commit is not a lost
+        // change.
+        return None;
+    }
     Some(dropped)
 }
 
@@ -788,6 +806,14 @@ fn is_ancestor(old: &str, new: &str) -> Option<bool> {
     match run_git(&["merge-base", "--is-ancestor", old, new])?.0 {
         0 => Some(true),
         1 => Some(false),
+        _ => None,
+    }
+}
+
+/// The commit two branches parted from, when git can name it.
+fn merge_base(first: &str, second: &str) -> Option<String> {
+    match run_git(&["merge-base", first, second])? {
+        (0, out) if !out.trim().is_empty() => Some(out.trim().to_owned()),
         _ => None,
     }
 }
@@ -2979,28 +3005,29 @@ end
         // side's: `discarded_side` is handed ids, and `same` is identity here.
         let same = |a: &str, b: &str| Some(a == b);
         let apart = |_: &str, _: &str| Some(false);
+        let no_fork = |_: &str, _: &str| None;
         assert_eq!(
-            discarded_side("branch", "branch", "main", same, apart),
+            discarded_side("branch", "branch", "main", same, apart, no_fork),
             Some("second"),
             "the merge is the branch's tree, so main's work is gone"
         );
         assert_eq!(
-            discarded_side("main", "branch", "main", same, apart),
+            discarded_side("main", "branch", "main", same, apart, no_fork),
             Some("first"),
             "the merge is main's tree, so the branch's work is gone"
         );
         assert_eq!(
-            discarded_side("merged", "branch", "main", same, apart),
+            discarded_side("merged", "branch", "main", same, apart, no_fork),
             None,
             "a real merge differs from both parents"
         );
         assert_eq!(
-            discarded_side("twin", "twin", "twin", same, apart),
+            discarded_side("twin", "twin", "twin", same, apart, no_fork),
             None,
             "two parents that already agreed drop nothing"
         );
         assert_eq!(
-            discarded_side("branch", "branch", "main", |_, _| None, apart),
+            discarded_side("branch", "branch", "main", |_, _| None, apart, no_fork),
             None,
             "no answer from git is not a finding"
         );
@@ -3014,16 +3041,42 @@ end
         // this way, so failing here would refuse the normal workflow.
         let same = |a: &str, b: &str| Some(a == b);
         let base_behind = |old: &str, new: &str| Some(old == "main" && new == "branch");
+        let no_fork = |_: &str, _: &str| None;
         assert_eq!(
-            discarded_side("branch", "branch", "main", same, base_behind),
+            discarded_side("branch", "branch", "main", same, base_behind, no_fork),
             None,
             "the base is an ancestor of the branch, so its changes are present in it"
         );
         let branch_behind = |old: &str, new: &str| Some(old == "branch" && new == "main");
         assert_eq!(
-            discarded_side("main", "branch", "main", same, branch_behind),
+            discarded_side("main", "branch", "main", same, branch_behind, no_fork),
             None,
             "the same shape with the parents the other way round"
+        );
+    }
+
+    #[test]
+    fn a_side_that_changed_nothing_since_the_fork_drops_nothing() {
+        // A phase branch starts with a commit that carries the phase's name and
+        // changes no file. Merging main into it then yields main's tree, which looks
+        // exactly like `-s ours` until the dropped side is compared with the fork.
+        let same = |a: &str, b: &str| {
+            Some(a == b || (a == "empty" && b == "fork") || (a == "fork" && b == "empty"))
+        };
+        let apart = |_: &str, _: &str| Some(false);
+        let fork = |_: &str, _: &str| Some("fork".to_owned());
+        assert_eq!(
+            discarded_side("main", "empty", "main", same, apart, fork),
+            None,
+            "the branch side holds the fork's tree, so it lost nothing"
+        );
+        // The same merge where the branch side did change a file is still a finding.
+        let different = |a: &str, b: &str| Some(a == b);
+        let unchanged_fork = |_: &str, _: &str| Some("unchanged".to_owned());
+        assert_eq!(
+            discarded_side("main", "work", "main", different, apart, unchanged_fork),
+            Some("first"),
+            "a side with real work that vanished is still a dropped merge"
         );
     }
 

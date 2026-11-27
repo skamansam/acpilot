@@ -56,7 +56,14 @@ the editor, and no assistant pane is drawn. The window is a text editor before i
 is an agent client. The session list, transcript and composer do not exist until
 **Session → Select Agent…** (or the palette's **Select agent…**) chooses one. At
 that point the agent's newest conversation opens, or a new one starts, and the
-panel appears beside the editor. A profile with no `agents.toml` has no agents to
+panel appears beside the editor. A new session asks which visible skills it
+receives. Every skill starts ticked. `Space` toggles one, `Enter` starts the
+session with the ticked set, and `Esc` closes the question. **New Session**
+always starts another conversation, so the same agent can run with review skills
+in one and none in the next. With several agents declared it asks which one first.
+Choosing the agent from the roster still reopens its newest conversation. A recipe
+agent is not asked which skills it receives. It resolves them from its recipe. The
+daemon says so, and the status line names the recipe as the source. A profile with no `agents.toml` has no agents to
 list, so that row names `agents.toml` and `acpilot doctor` rather than opening an
 empty picker. A row whose program changed under its name says `not approved` and
 names the pack it came from. `Enter` on it asks before it starts anything. The

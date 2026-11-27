@@ -86,6 +86,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Viewports {
     } else if app.agent_picker {
         draw_agent_picker(frame, app, body);
     }
+    if app.skill_picker.is_some() {
+        draw_skill_picker(frame, app, body);
+    }
     if app.lsp_pin.is_some() {
         draw_lsp_pin(frame, app, body);
     }
@@ -3102,6 +3105,81 @@ fn draw_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), card);
 }
 
+/// The skills a new external-agent session will receive.
+///
+/// A checkbox list rather than a sentence, because a skill is a set: the same
+/// agent may review one conversation and release another. All rows start ticked,
+/// so a person who wants the old behaviour presses `Enter` and is done.
+fn draw_skill_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(picker) = &app.skill_picker else {
+        return;
+    };
+    let card = centred(area);
+    frame.render_widget(Clear, card);
+    // The card has room for the skill rows, a blank line, the selected skill's
+    // description and the hint. A row the keys can reach has to be a row a person
+    // can see, so the rows are a window that follows the cursor.
+    let inner = usize::from(card.height.saturating_sub(2));
+    let visible = inner.saturating_sub(3).max(1);
+    let first = first_visible(picker.selected, app.skills.len(), visible);
+    let mut lines: Vec<Line> = app
+        .skills
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .map(|(index, skill)| {
+            let chosen = index == picker.selected;
+            let ticked = picker.chosen.contains(&skill.name);
+            let marker = if chosen { "▸ " } else { "  " };
+            let row = if chosen {
+                Style::default()
+                    .bg(app.theme.bg_panel())
+                    .fg(app.theme.accent_high())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let source = match skill.source {
+                acpilot_proto::skills::SkillSource::Workspace => "ws",
+                acpilot_proto::skills::SkillSource::Profile => "profile",
+                acpilot_proto::skills::SkillSource::Extension => "ext",
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{marker}{} {}", if ticked { "✓" } else { "·" }, skill.name),
+                    row,
+                ),
+                Span::styled(
+                    format!("  {source}"),
+                    Style::default().fg(app.theme.text_muted()),
+                ),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    if let Some(skill) = app.skills.get(picker.selected) {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", skill.description),
+            Style::default().fg(app.theme.text_muted()),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "Space toggles · Enter starts · Esc closes",
+        Style::default().fg(app.theme.accent()),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " Skills for {} · {}/{} selected ",
+            picker.agent,
+            picker.chosen.len(),
+            app.skills.len()
+        ))
+        .border_style(Style::default().fg(app.theme.accent()));
+    frame.render_widget(Paragraph::new(lines).block(block), card);
+}
+
 /// The pin question: a command whose bytes changed since somebody approved it.
 ///
 /// A card rather than a status line, because the answer decides which program
@@ -3388,6 +3466,7 @@ mod tests {
                 command: "one".to_owned(),
                 extension: None,
                 protocol_version: None,
+                accepts_system_prompt: None,
             },
             AgentSummary {
                 id: "two".to_owned(),
@@ -3397,6 +3476,7 @@ mod tests {
                 command: "two".to_owned(),
                 extension: Some("acpilot.two-pack".to_owned()),
                 protocol_version: None,
+                accepts_system_prompt: None,
             },
         ];
         app.agent_picker = true;
@@ -3448,6 +3528,7 @@ mod tests {
             command: "/usr/local/bin/rust-analyzer --stdio".to_owned(),
             extension: Some("acpilot.rust-pack".to_owned()),
             protocol_version: None,
+            accepts_system_prompt: None,
         }];
         app.agent_pin = Some("rust-analyzer".to_owned());
 
@@ -4724,6 +4805,34 @@ mod tests {
         assert!(text.contains("Commit message"), "{text}");
         assert!(text.contains("feat: write the message"), "{text}");
         assert!(text.contains("ctrl-s"), "{text}");
+    }
+
+    #[test]
+    fn the_skill_picker_scrolls_to_the_row_the_keys_reach() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        let skills: Vec<acpilot_proto::skills::SkillSummary> = (0..12)
+            .map(|index| acpilot_proto::skills::SkillSummary {
+                name: format!("skill-{index:02}"),
+                description: "A skill.".to_owned(),
+                instructions: "Do it.".to_owned(),
+                source: acpilot_proto::skills::SkillSource::Workspace,
+                path: format!("/work/.acpilot/skills/skill-{index:02}"),
+            })
+            .collect();
+        let chosen = skills.iter().map(|skill| skill.name.clone()).collect();
+        app.apply(crate::backend::Update::Skills(skills));
+        app.skill_picker = Some(crate::app::SkillPicker {
+            agent: "mock".to_owned(),
+            selected: 11,
+            chosen,
+        });
+
+        let text = render_at(&mut app, 80, 24);
+        assert!(text.contains("skill-11"), "the cursor can be seen: {text}");
+        assert!(
+            !text.contains("skill-00"),
+            "the rows above the window are gone: {text}"
+        );
     }
 
     #[test]

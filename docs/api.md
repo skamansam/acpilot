@@ -397,10 +397,19 @@ for a host where it is not on `PATH`.
 
 ## Sessions and turns
 
-`POST /v1/sessions` takes `CreateSessionRequest { workspace_id, agent_id, title? }`
-and returns `SessionSummary`. `workspace_id` may be empty, which means this
-daemon's own workspace. An id it does not serve is `404`, checked before the policy
-so that answer does not depend on whether one loaded.
+`POST /v1/sessions` takes
+`CreateSessionRequest { workspace_id, agent_id, title?, skills? }` and returns
+`SessionSummary`. `workspace_id` may be empty, which means this daemon's own
+workspace. An id it does not serve is `404`, checked before the policy so that
+answer does not depend on whether one loaded.
+
+`skills` is the picker's answer for an external agent. Absent means every visible
+skill, and an empty list means none. Each name must be visible to this daemon. An
+unknown name is `400` with the visible names in `details`. A `SKILL.md` that does not
+parse does not remove the names that do. The chosen instructions are appended to
+ACP's `systemPrompt` when the agent advertises it. A named set for an agent that
+ignores that field is `400`. The shipped recipe agent is the one case the daemon
+knows before a handshake.
 
 `SessionSummary` and `WorkspaceSummary` both carry `profile`, the identity that
 owns the row. `POST /v1/workspaces` records the first profile to open a host and
@@ -1132,7 +1141,7 @@ now would freeze transports that have not been measured.
 | `GET /v1/recipes/{id}/runs/{run}` | One record: the summary plus the prompt, selectors, resolved files with sizes, the budget it was assembled from. The model's reasoning when the server reported any. `404` for a run the log does not hold, including another recipe's |
 | `POST /v1/recipes/{id}/runs/{run}/replay` | Re-send the stored prompt and selectors as a new run with its own record. `?root=` is required when the selectors are not empty, and `404` names a run the log does not hold. The corpus is read again. The request is byte-identical while the workspace and recipe are unchanged |
 | `POST /v1/recipes/{id}/promote` | Write the recipe into `agents.toml` as an `acp-stdio` agent. `409` when a hand-written entry already owns the id, `400` for an id the loader refuses |
-| `GET /v1/skills` | Every visible Agent Skill, in precedence order, with its instructions and source (`workspace`, `profile` or `extension`) |
+| `GET /v1/skills` | Every visible Agent Skill that parses, in precedence order, with its instructions and source (`workspace`, `profile` or `extension`). A malformed `SKILL.md` is logged and omitted rather than failing the list |
 | `POST /v1/skills` | Check and write one `SKILL.md` into the workspace or profile. `400` for a draft the skill parser refuses, `409` when the chosen destination has no root |
 
 A recipe's `skills` array names Agent Skills. Their instructions are appended to the
@@ -1141,6 +1150,15 @@ neither the workspace, the profile nor an activated extension provides is a warn
 beside the run, not a refusal. `POST /v1/skills` takes the same name, description,
 instructions and destination the lab's editor holds. The parser runs before the write,
 so the file on disk is always one the model agent would accept.
+
+An external ACP agent receives every visible workspace and profile skill. The
+daemon appends them to the agent's own system prompt at `session/new` and
+`session/load`. It sends ACP's `systemPrompt` field only when the agent advertises
+`sessionCapabilities.systemPrompt`. An agent without a native skill mechanism keeps
+its own instructions. A skill that does not parse is logged and omitted, and the
+session still opens with the rest. `AgentSummary.accepts_system_prompt` is `false`
+for the shipped recipe agent, which resolves skills from its recipe. It is absent
+when only a handshake can answer.
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 

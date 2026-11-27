@@ -16,8 +16,9 @@ use acpilot_proto::event::SessionEventKind;
 use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
-    SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
+    PromptResponse, SessionCapabilities, SessionMode, SessionModeState, SessionNotification,
+    SessionSystemPromptCapabilities, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse,
+    StopReason, SystemPrompt, TextContent,
 };
 use agent_client_protocol::{Agent, Channel, on_receive_notification, on_receive_request};
 use tokio::sync::Notify;
@@ -30,6 +31,22 @@ struct Seen {
     cancel_seen: Notify,
     /// The mode ids `session/set_mode` named, in the order they arrived.
     modes: Mutex<Vec<String>>,
+    /// The system prompts `session/new` carried, in arrival order.
+    system_prompts: Mutex<Vec<Option<String>>>,
+}
+
+fn prompt_text(prompt: Option<&SystemPrompt>) -> Option<String> {
+    prompt.map(|prompt| {
+        prompt
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
 }
 
 fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
@@ -38,6 +55,7 @@ fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
         // `seen` into an `async move` block, and one closure cannot borrow what
         // another has already taken.
         let seen_modes = Arc::clone(&seen);
+        let seen_prompts = Arc::clone(&seen);
         let result = Agent
             .v1()
             .name("mock-agent")
@@ -45,14 +63,24 @@ fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
                 async |request: InitializeRequest, responder, _cx| {
                     responder.respond(
                         InitializeResponse::new(request.protocol_version)
-                            .agent_capabilities(AgentCapabilities::new())
+                            .agent_capabilities(
+                                AgentCapabilities::new().session_capabilities(
+                                    SessionCapabilities::new()
+                                        .system_prompt(SessionSystemPromptCapabilities::new()),
+                                ),
+                            )
                             .agent_info(Implementation::new("mock-agent", "0.0.0")),
                     )
                 },
                 on_receive_request!(),
             )
             .on_receive_request(
-                async |_request: NewSessionRequest, responder, _cx| {
+                async move |request: NewSessionRequest, responder, _cx| {
+                    seen_prompts
+                        .system_prompts
+                        .lock()
+                        .expect("seen lock")
+                        .push(prompt_text(request.system_prompt.as_ref()));
                     responder.respond(NewSessionResponse::new("acp-1").modes(
                         SessionModeState::new(
                             "ask",
@@ -107,14 +135,18 @@ fn mock_agent(transport: Channel, seen: Arc<Seen>) -> JoinHandle<()> {
     })
 }
 
-async fn connected() -> (Session, Arc<Seen>, JoinHandle<()>) {
+async fn connected_with(options: SessionOptions) -> (Session, Arc<Seen>, JoinHandle<()>) {
     let (client, agent) = Channel::duplex();
     let seen = Arc::new(Seen::default());
     let task = mock_agent(agent, Arc::clone(&seen));
-    let session = Session::over(client, SessionOptions::new("session-1"))
+    let session = Session::over(client, options)
         .await
         .expect("the mock agent initializes");
     (session, seen, task)
+}
+
+async fn connected() -> (Session, Arc<Seen>, JoinHandle<()>) {
+    connected_with(SessionOptions::new("session-1")).await
 }
 
 #[tokio::test]
@@ -150,6 +182,38 @@ async fn initialize_new_and_prompt_stream_ordered_chunks() {
     assert_eq!(second.payload["content"]["text"], "two");
     assert_eq!(first.session_id, "session-1");
 
+    agent.abort();
+}
+
+#[tokio::test]
+async fn an_advertised_system_prompt_carries_skills_on_session_new() {
+    let instructions = "## Skill: review\n\nRead the diff before commenting.";
+    let (mut session, seen, agent) = connected_with(
+        SessionOptions::new("session-1")
+            .system_prompt(format!("Use these Agent Skills.\n\n{instructions}")),
+    )
+    .await;
+
+    session.new_session(".").await.expect("session/new works");
+
+    assert_eq!(
+        seen.system_prompts.lock().expect("seen lock").as_slice(),
+        [Some(format!("Use these Agent Skills.\n\n{instructions}"))],
+        "the agent receives the client's instructions, not a truncated or repeated copy"
+    );
+
+    agent.abort();
+}
+
+#[tokio::test]
+async fn a_session_without_system_prompt_instructions_sends_none() {
+    let (mut session, seen, agent) = connected().await;
+    session.new_session(".").await.expect("session/new works");
+    assert_eq!(
+        seen.system_prompts.lock().expect("seen lock").as_slice(),
+        [None],
+        "the field is optional, and an empty one would claim instructions that are not there"
+    );
     agent.abort();
 }
 

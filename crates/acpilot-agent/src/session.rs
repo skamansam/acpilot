@@ -98,8 +98,8 @@ use agent_client_protocol::v1::schema::{
     ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
     SessionId as AcpSessionId, SessionInfoUpdate, SessionModeState, SessionNotification,
-    SessionUpdate, SetSessionModeRequest, TerminalOutputRequest, TextContent, ToolCall,
-    ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
+    SessionUpdate, SetSessionModeRequest, SystemPrompt, TerminalOutputRequest, TextContent,
+    ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate, WaitForTerminalExitRequest,
     WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo};
@@ -159,6 +159,13 @@ pub struct SessionOptions {
     /// follows, because a capability and the handler that serves it are one
     /// decision.
     pub terminals: Option<Arc<Terminals>>,
+    /// Instructions this client appends to the agent's own system prompt.
+    ///
+    /// This is where skills reach an external agent: they are instructions, not
+    /// tools. ACP only accepts the field from a client when the agent advertises
+    /// `sessionCapabilities.systemPrompt`, so an agent without that capability
+    /// receives nothing rather than a protocol error.
+    pub system_prompt: Option<String>,
 }
 
 impl SessionOptions {
@@ -173,7 +180,19 @@ impl SessionOptions {
             permission: None,
             agent: None,
             terminals: None,
+            system_prompt: None,
         }
+    }
+
+    /// Append `prompt` to the agent's system prompt, when the agent supports it.
+    ///
+    /// Omitted and empty are the same: an agent's own instructions are the
+    /// default, and a blank section would be a field sent to say nothing.
+    #[must_use]
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        let prompt = prompt.into();
+        self.system_prompt = (!prompt.trim().is_empty()).then_some(prompt);
+        self
     }
 
     /// Serve this session's `terminal/*` requests from `terminals`.
@@ -274,6 +293,9 @@ pub struct Session {
     /// notifications, which the daemon records; this copy is what a caller can ask
     /// about without re-reading the conversation's events.
     modes: Mutex<Option<SessionModeState>>,
+    /// Instructions to append to the agent's system prompt, when it advertises
+    /// the capability to accept them.
+    system_prompt: Option<String>,
 }
 
 impl std::fmt::Debug for Session {
@@ -289,6 +311,23 @@ impl std::fmt::Debug for Session {
             )
             .finish_non_exhaustive()
     }
+}
+
+/// The system prompt a `session/new` or `session/load` request should carry.
+///
+/// ACP makes the field conditional on the agent's advertised capability.
+/// Asking an agent that did not advertise it would turn a missing feature into
+/// a failed session. The answer is `None` rather than a request the agent must
+/// reject.
+fn appended_prompt(
+    capabilities: &AgentCapabilities,
+    instructions: Option<&str>,
+) -> Option<SystemPrompt> {
+    let instructions = instructions?;
+    capabilities.session_capabilities.system_prompt.as_ref()?;
+    Some(SystemPrompt::new(vec![ContentBlock::Text(
+        TextContent::new(instructions),
+    )]))
 }
 
 impl Session {
@@ -341,6 +380,7 @@ impl Session {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (stop_tx, stop_rx) = oneshot::channel();
 
+        let system_prompt = options.system_prompt.clone();
         let notification_log = Arc::clone(&log);
         let permission_log = Arc::clone(&log);
         let read_log = Arc::clone(&log);
@@ -588,6 +628,7 @@ impl Session {
             task: Some(task),
             terminals: options.terminals,
             modes: Mutex::new(None),
+            system_prompt,
         })
     }
 
@@ -643,9 +684,13 @@ impl Session {
         &mut self,
         cwd: impl AsRef<Path>,
     ) -> Result<NewSessionResponse, SessionError> {
+        let mut request = NewSessionRequest::new(cwd.as_ref());
+        if let Some(prompt) = appended_prompt(self.capabilities(), self.system_prompt.as_deref()) {
+            request = request.system_prompt(prompt);
+        }
         let response = self
             .connection
-            .send_request(NewSessionRequest::new(cwd.as_ref()))
+            .send_request(request)
             .block_task()
             .await
             .map_err(|source| SessionError::Protocol {
@@ -664,9 +709,13 @@ impl Session {
         cwd: impl AsRef<Path>,
     ) -> Result<LoadSessionResponse, SessionError> {
         let session_id = session_id.into();
+        let mut request = LoadSessionRequest::new(session_id.clone(), cwd.as_ref());
+        if let Some(prompt) = appended_prompt(self.capabilities(), self.system_prompt.as_deref()) {
+            request = request.system_prompt(prompt);
+        }
         let response = self
             .connection
-            .send_request(LoadSessionRequest::new(session_id.clone(), cwd.as_ref()))
+            .send_request(request)
             .block_task()
             .await
             .map_err(|source| SessionError::Protocol {
@@ -1276,8 +1325,9 @@ mod tests {
 
     use super::*;
     use agent_client_protocol::v1::schema::{
-        AvailableCommandsUpdate, CompactionStatus, PermissionOption, Plan, ToolCallLocation,
-        ToolCallUpdateFields, ToolKind,
+        AvailableCommandsUpdate, CompactionStatus, PermissionOption, Plan, SessionCapabilities,
+        SessionSystemPromptCapabilities, SystemPromptMode, ToolCallLocation, ToolCallUpdateFields,
+        ToolKind,
     };
 
     fn log() -> EventLog {
@@ -1287,6 +1337,29 @@ mod tests {
 
     fn chunk(text: &str) -> ContentChunk {
         ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+    }
+
+    #[test]
+    fn a_system_prompt_is_only_built_for_an_agent_that_advertises_it() {
+        let unsupported = AgentCapabilities::new();
+        assert!(
+            appended_prompt(&unsupported, Some("instructions")).is_none(),
+            "sending `systemPrompt` to an agent that did not advertise it is a protocol error"
+        );
+
+        let supported = AgentCapabilities::new().session_capabilities(
+            SessionCapabilities::new().system_prompt(SessionSystemPromptCapabilities::new()),
+        );
+        let prompt = appended_prompt(&supported, Some("instructions")).expect("a request field");
+        assert_eq!(prompt.mode, SystemPromptMode::Append);
+        assert_eq!(
+            prompt.content,
+            vec![ContentBlock::Text(TextContent::new("instructions"))]
+        );
+        assert!(
+            appended_prompt(&supported, None).is_none(),
+            "an absent prompt is not worth a field"
+        );
     }
 
     #[test]

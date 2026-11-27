@@ -182,25 +182,66 @@ pub fn discover_scoped(
     profile_root: Option<&Path>,
     extension_roots: &[PathBuf],
 ) -> Result<Vec<Skill>, SkillError> {
+    let discovered = discover_scoped_recovering(workspace_root, profile_root, extension_roots);
+    match discovered.problems.into_iter().next() {
+        Some(error) => Err(error),
+        None => Ok(discovered.skills),
+    }
+}
+
+/// Everything discovery found, with the skills that would not parse kept aside.
+///
+/// A daemon that lists skills or opens a session needs the valid rows even when one
+/// `SKILL.md` is broken. Failing the whole scope for one bad file denies a person
+/// every skill they have. The problem is still reported, so the file is not lost.
+#[derive(Debug, Default)]
+pub struct Discovered {
+    /// The skills that parsed, in name order.
+    pub skills: Vec<Skill>,
+    /// One entry per skill that could not be loaded.
+    pub problems: Vec<SkillError>,
+}
+
+/// Discover skills, keeping the ones that parse and naming the ones that do not.
+///
+/// Precedence is the same as [`discover_scoped`]: project, then profile, then pack.
+/// A name collision at equal precedence is a problem rather than an error, so the
+/// first definition still lists while the second is reported.
+pub fn discover_scoped_recovering(
+    workspace_root: &Path,
+    profile_root: Option<&Path>,
+    extension_roots: &[PathBuf],
+) -> Discovered {
     let mut found: BTreeMap<String, Skill> = BTreeMap::new();
+    let mut problems = Vec::new();
 
     for root in extension_roots {
-        load_tree(&root.join("skills"), SkillSource::Extension, &mut found)?;
+        load_tree(
+            &root.join("skills"),
+            SkillSource::Extension,
+            &mut found,
+            &mut problems,
+        );
     }
     if let Some(profile_root) = profile_root {
         load_tree(
             &profile_root.join("skills"),
             SkillSource::Profile,
             &mut found,
-        )?;
+            &mut problems,
+        );
     }
     load_tree(
         &workspace_root.join(".acpilot/skills"),
         SkillSource::Workspace,
         &mut found,
-    )?;
+        &mut problems,
+    );
 
-    Ok(found.into_values().collect())
+    Discovered {
+        skills: found.into_values().collect(),
+        problems,
+    }
 }
 
 /// Write one skill under `root`, validated by the same parser that reads it.
@@ -239,6 +280,23 @@ pub fn save_skill(
     Ok(skill)
 }
 
+/// The system-prompt section for `skills`, in the order given.
+///
+/// Every consumer appends the same text: the model agent, a lab run, and an
+/// external ACP agent. A skill then reads the same in each place. The leading
+/// blank line separates the section from the prompt before it.
+#[must_use]
+pub fn instructions(skills: &[Skill]) -> String {
+    let mut text = String::new();
+    for skill in skills {
+        text.push_str("\n\n## Skill: ");
+        text.push_str(&skill.name);
+        text.push_str("\n\n");
+        text.push_str(&skill.instructions);
+    }
+    text
+}
+
 /// The file text for one skill, with the YAML escaped rather than interpolated.
 #[must_use]
 pub fn render(name: &str, description: &str, instructions: &str) -> String {
@@ -260,16 +318,23 @@ fn load_tree(
     directory: &Path,
     source: SkillSource,
     found: &mut BTreeMap<String, Skill>,
-) -> Result<(), SkillError> {
+    problems: &mut Vec<SkillError>,
+) {
     if !directory.is_dir() {
-        return Ok(());
+        return;
     }
 
-    let mut entries: Vec<PathBuf> = fs::read_dir(directory)
-        .map_err(|source| SkillError::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            problems.push(SkillError::Io {
+                path: directory.to_path_buf(),
+                source: error,
+            });
+            return;
+        }
+    };
+    let mut entries: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
@@ -282,7 +347,13 @@ fn load_tree(
             // A directory without SKILL.md is assets, not a skill.
             continue;
         }
-        let skill = load_skill(&manifest, source)?;
+        let skill = match load_skill(&manifest, source) {
+            Ok(skill) => skill,
+            Err(error) => {
+                problems.push(error);
+                continue;
+            }
+        };
         if let Some(existing) = found.get(&skill.name) {
             if skill.source.rank() > existing.source.rank() {
                 found.insert(skill.name.clone(), skill);
@@ -290,16 +361,15 @@ fn load_tree(
             }
             // Equal precedence is a real collision: two packs, or two skills in
             // one directory, claiming one name means neither is predictable.
-            return Err(SkillError::Duplicate {
+            problems.push(SkillError::Duplicate {
                 name: skill.name,
                 first: existing.directory.clone(),
                 second: skill.directory.clone(),
             });
+            continue;
         }
         found.insert(skill.name.clone(), skill);
     }
-
-    Ok(())
 }
 
 /// Load one `SKILL.md`.
@@ -610,6 +680,45 @@ mod tests {
         assert!(
             matches!(error, SkillError::MissingFrontmatter { .. }),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_broken_skill_leaves_the_valid_ones_in_the_list() {
+        let fixture = Fixture::new("broken");
+        fixture_skill(
+            &fixture,
+            ".acpilot/skills/review/SKILL.md",
+            "review",
+            "Read.",
+        );
+        fixture.write(
+            ".acpilot/skills/release/SKILL.md",
+            "---\nname: release\n---\n\nWrite it.\n",
+        );
+
+        let discovered = discover_scoped_recovering(&fixture.root, None, &[]);
+        assert_eq!(
+            discovered
+                .skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["review"],
+            "the file that parses still lists"
+        );
+        assert_eq!(discovered.problems.len(), 1, "the broken file is reported");
+        assert!(
+            matches!(
+                discovered.problems[0],
+                SkillError::MissingDescription { .. }
+            ),
+            "{:?}",
+            discovered.problems[0]
+        );
+        assert!(
+            discover(&fixture.root, &[]).is_err(),
+            "strict discovery still refuses a scope with a broken file"
         );
     }
 

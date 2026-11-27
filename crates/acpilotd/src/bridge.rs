@@ -172,6 +172,7 @@ pub(crate) async fn open_session(
             workspace_id: String::new(),
             agent_id: choose_agent(state, request)?,
             title: None,
+            skills: None,
         },
         driver,
     )

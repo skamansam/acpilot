@@ -1251,6 +1251,16 @@ export interface components {
         AgentStatus: "available" | "missing" | "unhealthy" | "untrusted";
         /** @description An agent as returned by `GET /v1/agents`. */
         AgentSummary: {
+            /**
+             * @description Whether this agent accepts ACP's `systemPrompt` for a session.
+             *
+             *     `Some(false)` when the daemon knows the program ignores the field: the
+             *     shipped recipe agent resolves skills from its recipe at `session/new`.
+             *     `None` when only a handshake can answer, because the roster does not start
+             *     an agent to list it. A client that offers a skill picker reads this rather
+             *     than promising something the agent will not use.
+             */
+            accepts_system_prompt?: boolean | null;
             /** @description Command that will be spawned, for display and debugging. */
             command: string;
             /**
@@ -1464,6 +1474,14 @@ export interface components {
         CreateSessionRequest: {
             /** @description Agent to run. */
             agent_id: components["schemas"]["String"];
+            /**
+             * @description Skills to append to an external agent's system prompt.
+             *
+             *     Absent means every visible skill, which is what a client that has no
+             *     picker wants. An empty list means none. A name the daemon cannot see is
+             *     refused rather than silently dropped.
+             */
+            skills?: string[] | null;
             /** @description Optional title. The first prompt supplies one otherwise. */
             title?: string | null;
             /** @description Workspace to attach the session to. */

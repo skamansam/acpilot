@@ -125,7 +125,20 @@ pub fn summary(spec: &AgentSpec, pin: Option<&str>, extension: Option<&str>) -> 
             .map_or_else(String::new, CommandSpec::command_line),
         extension: extension.map(str::to_owned),
         protocol_version: None,
+        accepts_system_prompt: accepts_system_prompt(spec.command()),
     }
+}
+
+/// Whether this program accepts ACP's `systemPrompt`, when the daemon can tell.
+///
+/// A handshake is the only proof for a general agent, so most rows answer `None`.
+/// The recipe agent is the exception: this build ships it, and it resolves skills
+/// from its recipe at `session/new` rather than reading the field. Saying so lets
+/// a client skip a picker whose answer the agent would ignore.
+#[must_use]
+pub fn accepts_system_prompt(command: Option<&CommandSpec>) -> Option<bool> {
+    let command = command?;
+    (command.program == acpilot_agent::promote::COMMAND).then_some(false)
 }
 
 /// The agent routes that are about trust.
@@ -321,4 +334,31 @@ fn resolve(program: &str) -> Option<PathBuf> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(program: &str) -> CommandSpec {
+        CommandSpec {
+            program: program.to_owned(),
+            args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_recipe_agent_is_the_one_row_that_ignores_the_system_prompt() {
+        // The daemon ships this program, so it knows the answer without a
+        // handshake. Every other program is only known once it has spoken.
+        assert_eq!(
+            accepts_system_prompt(Some(&command(acpilot_agent::promote::COMMAND))),
+            Some(false)
+        );
+        assert_eq!(
+            accepts_system_prompt(Some(&command("claude-code-acp"))),
+            None
+        );
+        assert_eq!(accepts_system_prompt(None), None);
+    }
 }

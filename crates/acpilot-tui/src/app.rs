@@ -4496,8 +4496,11 @@ impl App {
         }
 
         // Choosing an agent is a question with a list of answers, and the panes it
-        // would reveal are not on screen yet: every key belongs to the answer.
-        if self.agent_picker {
+        // would reveal are not on screen yet: every key belongs to the answer. The
+        // permission card is drawn over this picker too, and answers a request an
+        // agent is waiting on, so it keeps the keyboard first. The picker is still
+        // behind the card when the card closes.
+        if self.agent_picker && !(self.permission_card && !self.permissions.is_empty()) {
             return self.agent_picker_key(key);
         }
 
@@ -8945,6 +8948,35 @@ mod tests {
                 skills: None
             }),
             "New Session creates a conversation with the chosen agent"
+        );
+    }
+
+    #[test]
+    fn a_permission_card_keeps_the_keys_over_the_agent_picker() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.apply(Update::Agents(vec![
+            agent("one", "One"),
+            agent("two", "Two"),
+        ]));
+        app.permission_card = true;
+
+        // New Session asks which agent, but the card is drawn over that question
+        // and an agent is waiting on it. Escape puts the card aside rather than
+        // dismissing a picker nobody had seen yet.
+        assert_eq!(app.run_menu(MenuAction::NewSession), None);
+        assert!(app.agent_picker, "New Session asks which agent");
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
+        assert!(!app.permission_card, "the card was put aside");
+        assert!(app.agent_picker, "the picker waited behind the card");
+
+        // And once the card is out of the way the picker continues where it was.
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::New {
+                agent: "one".to_owned(),
+                skills: None
+            }),
+            "the picker still has its key"
         );
     }
 

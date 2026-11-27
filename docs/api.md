@@ -1147,7 +1147,9 @@ now would freeze transports that have not been measured.
 A recipe's `skills` array names Agent Skills. Their instructions are appended to the
 system prompt, after the master prompt, in the order the names are written. A name that
 neither the workspace, the profile nor an activated extension provides is a warning
-beside the run, not a refusal. `POST /v1/skills` takes the same name, description,
+beside the run, not a refusal. A malformed `SKILL.md` does not hide the skills that
+parse: the run names the file in a warning and still sends the selected skills it
+found. `POST /v1/skills` takes the same name, description,
 instructions and destination the lab's editor holds. The parser runs before the write,
 so the file on disk is always one the model agent would accept.
 
@@ -1157,8 +1159,9 @@ daemon appends them to the agent's own system prompt at `session/new` and
 `sessionCapabilities.systemPrompt`. An agent without a native skill mechanism keeps
 its own instructions. A skill that does not parse is logged and omitted, and the
 session still opens with the rest. `AgentSummary.accepts_system_prompt` is `false`
-for the shipped recipe agent, which resolves skills from its recipe. It is absent
-when only a handshake can answer.
+for the shipped recipe agent, which resolves skills from its recipe. The command may
+be bare, a path, or carry the platform's executable suffix. All three spellings name
+the same agent. The field is absent when only a handshake can answer.
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 

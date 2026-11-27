@@ -138,7 +138,24 @@ pub fn summary(spec: &AgentSpec, pin: Option<&str>, extension: Option<&str>) -> 
 #[must_use]
 pub fn accepts_system_prompt(command: Option<&CommandSpec>) -> Option<bool> {
     let command = command?;
-    (command.program == acpilot_agent::promote::COMMAND).then_some(false)
+    is_recipe_program(&command.program).then_some(false)
+}
+
+/// Whether `program` names the recipe agent this build ships.
+///
+/// A manifest may write the shipped command bare, as a path to it, or with the
+/// platform's executable suffix. All three run the same agent, so all three must
+/// answer the same way. Comparing the whole string made the other spellings look
+/// like agents that take a per-session selection.
+fn is_recipe_program(program: &str) -> bool {
+    let Some(name) = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    name == acpilot_agent::promote::COMMAND
+        || name == format!("{}.exe", acpilot_agent::promote::COMMAND)
 }
 
 /// The agent routes that are about trust.
@@ -360,5 +377,31 @@ mod tests {
             None
         );
         assert_eq!(accepts_system_prompt(None), None);
+    }
+
+    #[test]
+    fn the_recipe_agent_is_recognised_through_a_path_or_an_executable_suffix() {
+        // A manifest may install the shipped binary anywhere, and Windows spells
+        // the program with `.exe`. Both are the same agent and the same answer.
+        for program in [
+            "/opt/acpilot/bin/acpilot-agent-lm",
+            "C:/acpilot/bin/acpilot-agent-lm.exe",
+        ] {
+            assert_eq!(
+                accepts_system_prompt(Some(&command(program))),
+                Some(false),
+                "{program}"
+            );
+        }
+        for program in [
+            "/opt/acpilot/bin/acpilot-agent-lm-other",
+            "/opt/acpilot/bin/other",
+        ] {
+            assert_eq!(
+                accepts_system_prompt(Some(&command(program))),
+                None,
+                "{program} is a different program"
+            );
+        }
     }
 }

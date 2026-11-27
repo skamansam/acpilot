@@ -59,4 +59,13 @@ pub struct AgentSummary {
     /// Protocol version reported by the last handshake, when there was one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,
+    /// Whether this agent accepts ACP's `systemPrompt` for a session.
+    ///
+    /// `Some(false)` when the daemon knows the program ignores the field: the
+    /// shipped recipe agent resolves skills from its recipe at `session/new`.
+    /// `None` when only a handshake can answer, because the roster does not start
+    /// an agent to list it. A client that offers a skill picker reads this rather
+    /// than promising something the agent will not use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepts_system_prompt: Option<bool>,
 }

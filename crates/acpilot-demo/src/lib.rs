@@ -148,6 +148,7 @@ fn agents() -> Vec<AgentSummary> {
             command: "target/debug/mock_agent".to_owned(),
             extension: None,
             protocol_version: Some("1".to_owned()),
+            accepts_system_prompt: None,
         },
         AgentSummary {
             id: "claude".to_owned(),
@@ -157,6 +158,7 @@ fn agents() -> Vec<AgentSummary> {
             command: "claude-code-acp".to_owned(),
             extension: None,
             protocol_version: Some("1".to_owned()),
+            accepts_system_prompt: None,
         },
         AgentSummary {
             id: "codex".to_owned(),
@@ -166,6 +168,7 @@ fn agents() -> Vec<AgentSummary> {
             command: "codex-acp".to_owned(),
             extension: None,
             protocol_version: None,
+            accepts_system_prompt: None,
         },
     ]
 }

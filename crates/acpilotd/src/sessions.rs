@@ -917,7 +917,7 @@ pub async fn create(
 
     let id = next_id(state);
     let fs = Arc::new(Fs::with_broker(Arc::new(LocalHost), Arc::clone(broker)));
-    let options = options_for(state, &id, &spec.id, fs);
+    let options = options_for(state, &id, &spec.id, fs, request.skills.as_deref())?;
     // The session opens before its record exists, so an agent that will not start
     // leaves no transcript behind: a file with a `meta` line and no conversation is
     // worse than no file, and it would hold the id forever.
@@ -969,11 +969,87 @@ pub async fn create(
 /// The terminal registry is the daemon's, not a fresh one: a terminal an agent
 /// opens is owned by this session id, and one store means the idle sweep and the
 /// session's own release see the same processes.
-fn options_for(state: &AppState, id: &str, agent: &str, fs: Arc<Fs>) -> SessionOptions {
-    SessionOptions::new(id.to_owned())
+fn options_for(
+    state: &AppState,
+    id: &str,
+    agent: &str,
+    fs: Arc<Fs>,
+    skills: Option<&[String]>,
+) -> Result<SessionOptions, ApiError> {
+    let options = SessionOptions::new(id.to_owned())
         .agent(agent.to_owned())
         .fs(fs)
-        .terminals(Arc::clone(state.agent_terminals()))
+        .terminals(Arc::clone(state.agent_terminals()));
+    Ok(match skills_prompt(state, skills)? {
+        Some(prompt) => options.system_prompt(prompt),
+        None => options,
+    })
+}
+
+/// The visible skills as an appended system prompt for an external agent.
+///
+/// ACP's `systemPrompt` is the portable way to give an external agent
+/// instructions it can act on. A skill is an instruction, not a tool. The agent
+/// decides whether it accepts the field. `Session::new_session` sends it only
+/// when the agent advertises `sessionCapabilities.systemPrompt`. An agent
+/// without a native skill mechanism keeps its own prompt.
+///
+/// A broken skill does not refuse a session. The daemon has a workspace to open
+/// whether or not every `SKILL.md` parses. The warning names the file.
+///
+/// A picker names its own subset. A name the daemon cannot see is a `400` with
+/// the visible names in `details`. A client that asked for `review` should not get
+/// a session with no skills and no way to notice.
+fn skills_prompt(
+    state: &AppState,
+    selected: Option<&[String]>,
+) -> Result<Option<String>, ApiError> {
+    let Some(workspace) = state.workspace() else {
+        return Ok(None);
+    };
+    let skills = match acpilot_skills::discover_scoped(&workspace.root, state.profile_root(), &[]) {
+        Ok(skills) => skills,
+        Err(error) => {
+            tracing::warn!(%error, "skills were not delivered to this session");
+            return Ok(None);
+        }
+    };
+    let skills = match selected {
+        None => skills,
+        Some(names) => {
+            let mut chosen: Vec<acpilot_skills::Skill> = Vec::new();
+            let mut unknown = Vec::new();
+            for name in names {
+                match skills.iter().find(|skill| &skill.name == name) {
+                    Some(skill) if !chosen.iter().any(|hit| hit.name == skill.name) => {
+                        chosen.push(skill.clone());
+                    }
+                    Some(_) => {}
+                    None => unknown.push(name.clone()),
+                }
+            }
+            if !unknown.is_empty() {
+                let available = skills
+                    .iter()
+                    .map(|skill| skill.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(ApiError::new(AcpilotError::invalid(format!(
+                    "unknown skill(s): {}",
+                    unknown.join(", ")
+                )))
+                .with_detail("skills", format!("visible skills: {available}")));
+            }
+            chosen
+        }
+    };
+    if skills.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "Use these Agent Skills when their instructions match the task.{}",
+        acpilot_skills::instructions(&skills)
+    )))
 }
 
 /// Run one session's owner loop on a thread of its own.
@@ -2027,6 +2103,91 @@ mod tests {
     }
 
     #[test]
+    fn a_workspaces_skills_become_the_external_agents_system_prompt() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("work");
+        let skill = root.join(".acpilot/skills/review");
+        std::fs::create_dir_all(&skill).expect("skill directory");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: review\ndescription: Review a diff.\n---\n\nRead the diff before commenting.\n",
+        )
+        .expect("skill");
+        let state = AppState::new().with_workspace(crate::Workspace {
+            id: "work".to_owned(),
+            profile: String::new(),
+            root,
+        });
+
+        let prompt = skills_prompt(&state, None)
+            .expect("no selection is valid")
+            .expect("the workspace contributes skills");
+        assert!(
+            prompt.contains("Use these Agent Skills"),
+            "the section says what it is: {prompt}"
+        );
+        assert!(
+            prompt.contains("## Skill: review"),
+            "the skill is named in the prompt: {prompt}"
+        );
+        assert!(
+            prompt.contains("Read the diff before commenting."),
+            "the instructions are delivered: {prompt}"
+        );
+    }
+
+    #[test]
+    fn a_per_session_skill_picker_selects_only_what_it_names() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("work");
+        for (name, instructions) in [
+            ("review", "Read the diff before commenting."),
+            ("release", "Write the changelog entry first."),
+        ] {
+            let skill = root.join(".acpilot/skills").join(name);
+            std::fs::create_dir_all(&skill).expect("skill directory");
+            std::fs::write(
+                skill.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: A test skill.\n---\n\n{instructions}\n"),
+            )
+            .expect("skill");
+        }
+        let state = AppState::new().with_workspace(crate::Workspace {
+            id: "work".to_owned(),
+            profile: String::new(),
+            root,
+        });
+
+        let prompt = skills_prompt(&state, Some(&["release".to_owned()]))
+            .expect("the name is visible")
+            .expect("one skill is still a prompt");
+        assert!(prompt.contains("## Skill: release"), "{prompt}");
+        assert!(
+            !prompt.contains("## Skill: review"),
+            "the skill the picker left out is left out: {prompt}"
+        );
+
+        assert!(
+            skills_prompt(&state, Some(&[]))
+                .expect("none is a valid answer")
+                .is_none(),
+            "an empty picker sends no section at all"
+        );
+
+        let refused = skills_prompt(&state, Some(&["missing".to_owned()]))
+            .expect_err("a name the workspace does not have is refused");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            refused
+                .details
+                .iter()
+                .any(|detail| { detail.field == "skills" && detail.message.contains("review") }),
+            "the refusal lists what can be picked: {:?}",
+            refused.details
+        );
+    }
+
+    #[test]
     fn a_session_is_handed_the_daemon_terminal_registry() {
         let state = AppState::new();
         let broker = Arc::new(Broker::with_timeout(
@@ -2035,7 +2196,7 @@ mod tests {
             None,
         ));
         let fs = Arc::new(Fs::with_broker(Arc::new(LocalHost), broker));
-        let options = options_for(&state, "s1", "mock", fs);
+        let options = options_for(&state, "s1", "mock", fs, None).expect("no selection");
 
         assert_eq!(options.id, "s1");
         assert_eq!(options.agent.as_deref(), Some("mock"));

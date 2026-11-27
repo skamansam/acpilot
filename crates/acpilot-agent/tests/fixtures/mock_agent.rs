@@ -15,6 +15,7 @@
 //! | `fs` | reads `seed.txt` in the session's cwd, reads a path outside it (the cwd's parent), writes a file in the cwd, reports each answer, ends the turn |
 //! | `write <path>` | writes one file at the absolute path given, reports the answer, ends the turn |
 //! | `terminal` | asks the client to open a terminal, reports the answer, ends the turn |
+//! | `system-prompt` | reports the `systemPrompt` it received at `session/new`, ends the turn |
 //! | `hang` | never answers, so the request stays pending |
 //!
 //! Every session advertises two modes, `ask` and `code`, and accepts a switch to
@@ -44,8 +45,9 @@ use agent_client_protocol::v1::schema::{
     Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
     Notice, NoticeSeverity, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
     PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, ReadTextFileRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionMode, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionId,
+    SessionMode, SessionModeState, SessionNotification, SessionSystemPromptCapabilities,
+    SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, SystemPrompt,
     TextContent, ToolCall, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
     ToolKind, WriteTextFileRequest,
 };
@@ -57,6 +59,12 @@ static SESSIONS: AtomicU32 = AtomicU32::new(0);
 /// treat as its own.
 static WORKSPACE: OnceLock<PathBuf> = OnceLock::new();
 
+/// The system prompt the client sent at `session/new`.
+///
+/// One process serves one session, so a `OnceLock` is the whole store: the
+/// fixture only needs to hand the text back to the test that sent it.
+static SYSTEM_PROMPT: OnceLock<String> = OnceLock::new();
+
 #[tokio::main]
 async fn main() {
     let result = Agent
@@ -66,9 +74,17 @@ async fn main() {
             async |request: InitializeRequest, responder, _cx| {
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
-                        // No filesystem, terminal, or load-session support, so a
-                        // test never has to wonder what was advertised.
-                        .agent_capabilities(AgentCapabilities::new())
+                        // `systemPrompt` is the one session capability: the daemon
+                        // sends the field only to an agent that advertises it, so
+                        // the fixture has to make the same claim a real agent does.
+                        // Filesystem, terminal and load-session stay off, so a test
+                        // never has to wonder what else was advertised.
+                        .agent_capabilities(
+                            AgentCapabilities::new().session_capabilities(
+                                SessionCapabilities::new()
+                                    .system_prompt(SessionSystemPromptCapabilities::new()),
+                            ),
+                        )
                         .agent_info(Implementation::new("acpilot-mock-agent", "0.0.0")),
                 )
             },
@@ -77,6 +93,9 @@ async fn main() {
         .on_receive_request(
             async |request: NewSessionRequest, responder, _cx| {
                 let _ = WORKSPACE.set(request.cwd.clone());
+                if let Some(prompt) = request.system_prompt.as_ref() {
+                    let _ = SYSTEM_PROMPT.set(system_prompt_text(prompt));
+                }
                 let id = SESSIONS.fetch_add(1, Ordering::Relaxed) + 1;
                 responder.respond(NewSessionResponse::new(format!("acp-{id}")).modes(
                     SessionModeState::new(
@@ -115,6 +134,13 @@ async fn main() {
                         connection.send_notification(chunk(
                             &session,
                             "feat(mock): ✨ describe the staged change".to_owned(),
+                        ))?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    }
+                    Directive::SystemPrompt => {
+                        connection.send_notification(notice(
+                            &session,
+                            SYSTEM_PROMPT.get().cloned().unwrap_or_default(),
                         ))?;
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
@@ -176,7 +202,8 @@ async fn main() {
                                 Directive::Stream(_)
                                 | Directive::Hang
                                 | Directive::Commit
-                                | Directive::Tools => Vec::new(),
+                                | Directive::Tools
+                                | Directive::SystemPrompt => Vec::new(),
                             };
                             for line in report {
                                 task.send_notification(notice(&session, line))?;
@@ -207,6 +234,7 @@ enum Directive {
     Terminal,
     Commit,
     Tools,
+    SystemPrompt,
     Hang,
 }
 
@@ -222,6 +250,7 @@ fn directive(text: &str) -> Directive {
         "permission" => Directive::Permission,
         "fs" => Directive::Fs,
         "tools" => Directive::Tools,
+        "system-prompt" => Directive::SystemPrompt,
         "terminal" => Directive::Terminal,
         "hang" => Directive::Hang,
         other => match other.strip_prefix("stream ") {
@@ -232,6 +261,19 @@ fn directive(text: &str) -> Directive {
             },
         },
     }
+}
+
+/// The text blocks a client sent as the session's system prompt.
+fn system_prompt_text(prompt: &SystemPrompt) -> String {
+    prompt
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The workspace the client named at `session/new`.

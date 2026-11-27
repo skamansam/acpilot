@@ -397,10 +397,16 @@ for a host where it is not on `PATH`.
 
 ## Sessions and turns
 
-`POST /v1/sessions` takes `CreateSessionRequest { workspace_id, agent_id, title? }`
-and returns `SessionSummary`. `workspace_id` may be empty, which means this
-daemon's own workspace. An id it does not serve is `404`, checked before the policy
-so that answer does not depend on whether one loaded.
+`POST /v1/sessions` takes
+`CreateSessionRequest { workspace_id, agent_id, title?, skills? }` and returns
+`SessionSummary`. `workspace_id` may be empty, which means this daemon's own
+workspace. An id it does not serve is `404`, checked before the policy so that
+answer does not depend on whether one loaded.
+
+`skills` is the picker's answer for an external agent. Absent means every visible
+skill, and an empty list means none. Each name must be visible to this daemon. An
+unknown name is `400` with the visible names in `details`. The chosen instructions
+are appended to ACP's `systemPrompt` when the agent advertises it.
 
 `SessionSummary` and `WorkspaceSummary` both carry `profile`, the identity that
 owns the row. `POST /v1/workspaces` records the first profile to open a host and
@@ -1141,6 +1147,13 @@ neither the workspace, the profile nor an activated extension provides is a warn
 beside the run, not a refusal. `POST /v1/skills` takes the same name, description,
 instructions and destination the lab's editor holds. The parser runs before the write,
 so the file on disk is always one the model agent would accept.
+
+An external ACP agent receives every visible workspace and profile skill. The
+daemon appends them to the agent's own system prompt at `session/new` and
+`session/load`. It sends ACP's `systemPrompt` field only when the agent advertises
+`sessionCapabilities.systemPrompt`. An agent without a native skill mechanism keeps
+its own instructions. A skill that does not parse is logged and omitted. The session
+still opens.
 
 A run is one HTTP response, so its status is `200` and not `202`. The frames are:
 

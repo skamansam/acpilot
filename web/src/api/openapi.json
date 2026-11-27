@@ -570,6 +570,16 @@
             "$ref": "#/components/schemas/String",
             "description": "Agent to run."
           },
+          "skills": {
+            "description": "Skills to append to an external agent's system prompt.\n\nAbsent means every visible skill, which is what a client that has no\npicker wants. An empty list means none. A name the daemon cannot see is\nrefused rather than silently dropped.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "title": {
             "description": "Optional title. The first prompt supplies one otherwise.",
             "type": [

@@ -11,6 +11,7 @@ use acpilot_proto::event::{SessionEvent, SessionEventKind};
 use acpilot_proto::permission::{PermissionOption, PermissionRequest};
 use acpilot_proto::profile::Preferences;
 use acpilot_proto::session::{SessionStatus, SessionSummary};
+use acpilot_proto::skills::SkillSummary;
 use acpilot_proto::terminal::{TerminalSize, TerminalSummary};
 use acpilot_stats::Row;
 use acpilot_text::highlight::Grammars;
@@ -22,7 +23,7 @@ use crate::keymap::{Action, Context, Keymap};
 use crate::lab::{FIELDS, Lab, Pane};
 use crate::layout::{Layout, MAX_FILES, MAX_SIDEBAR, MIN_FILES, MIN_SIDEBAR};
 use crate::theme::Theme;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How long the open buffer has to stop changing before its problems are asked about.
 ///
@@ -234,6 +235,21 @@ pub struct SnippetPicker {
     pub query: String,
     /// The index of the marked row, in the filtered list.
     pub selected: usize,
+}
+
+/// The skills a new external-agent session will receive.
+///
+/// A question about the session rather than the agent. The same agent can run
+/// with a review skill for one conversation and with none for the next.
+#[derive(Debug, Clone)]
+pub struct SkillPicker {
+    /// The agent the chosen skills belong to.
+    pub agent: String,
+    /// Which row `Space` toggles.
+    pub selected: usize,
+    /// The names that are ticked. Every visible skill is ticked when the list
+    /// opens, so `Enter` with no changes is the old behaviour.
+    pub chosen: BTreeSet<String>,
 }
 
 /// What a menu row does.
@@ -1824,6 +1840,10 @@ pub struct App {
     pub agent_picker: bool,
     /// Which row of that picker `Enter` chooses.
     pub agent_selected: usize,
+    /// The visible skills a new session can choose from.
+    pub skills: Vec<SkillSummary>,
+    /// The skill question, after an agent is chosen and before the session starts.
+    pub skill_picker: Option<SkillPicker>,
     /// The agent whose pin question is up, if one is.
     ///
     /// An id rather than a row: the roster is re-read while the question is on
@@ -2743,6 +2763,8 @@ impl App {
             show_assistant: assistant,
             agent_picker: false,
             agent_selected: 0,
+            skills: Vec::new(),
+            skill_picker: None,
             agent_pin: None,
             lsp_servers: Vec::new(),
             lsp_pin: None,
@@ -3567,6 +3589,7 @@ impl App {
                 lab.recipes = recipes;
                 lab.models = models;
                 lab.problems = problems;
+                self.skills = skills.clone();
                 lab.skills = skills;
                 lab.skill_selected = lab.skill_selected.min(lab.skills.len().saturating_sub(1));
                 lab.loading = false;
@@ -3592,6 +3615,11 @@ impl App {
                 self.status = "recipe saved".to_owned();
             }
             Update::LabSkillSaved(skill) => {
+                if let Some(slot) = self.skills.iter_mut().find(|row| row.name == skill.name) {
+                    *slot = skill.clone();
+                } else {
+                    self.skills.push(skill.clone());
+                }
                 if let Some(lab) = self.lab.as_mut() {
                     if let Some(slot) = lab.skills.iter_mut().find(|row| row.name == skill.name) {
                         *slot = skill.clone();
@@ -3669,6 +3697,18 @@ impl App {
                     lab.error = Some(message.clone());
                 }
                 self.status = format!("model lab · {message}");
+            }
+            Update::Skills(skills) => {
+                self.skills = skills;
+                // The list can shrink under a question that is already up. A
+                // ticked name that no longer exists would be a skill the daemon
+                // refuses when `Enter` sends it.
+                if let Some(picker) = &mut self.skill_picker {
+                    picker.selected = picker.selected.min(self.skills.len().saturating_sub(1));
+                    picker
+                        .chosen
+                        .retain(|name| self.skills.iter().any(|skill| &skill.name == name));
+                }
             }
             Update::Agents(agents) => {
                 self.agents = agents;
@@ -4451,6 +4491,13 @@ impl App {
         // would reveal are not on screen yet: every key belongs to the answer.
         if self.agent_picker {
             return self.agent_picker_key(key);
+        }
+
+        // Choosing skills is the second half of starting a session. The agent is
+        // already decided, and every key belongs to this list until the session
+        // starts or the question is dismissed.
+        if self.skill_picker.is_some() {
+            return self.skill_picker_key(key);
         }
 
         // The picker is modal in the same way the permission card is: it is a
@@ -8026,10 +8073,10 @@ impl App {
         }
     }
 
-    /// Start a session with the first declared agent, or say there is none.
+    /// Start a new session with the first declared agent, or say there is none.
     fn start_first_agent(&mut self) -> Option<Request> {
         match self.agents.first().map(|agent| agent.id.clone()) {
-            Some(id) => self.start_agent(&id),
+            Some(id) => self.start_new_agent(&id),
             None => {
                 self.notice(NO_AGENTS);
                 None
@@ -8057,8 +8104,39 @@ impl App {
             self.status = "assistant · reopening its conversation".to_owned();
             return Some(Request::Select(session));
         }
+        self.begin_session(id)
+    }
+
+    /// Start a new session even when this agent already has one.
+    ///
+    /// `New Session` is the row that means it. Choosing an agent from the roster
+    /// reopens its conversation. A second conversation is how a different set of
+    /// skills reaches the same program.
+    fn start_new_agent(&mut self, id: &str) -> Option<Request> {
+        self.show_assistant = true;
+        self.set_focus(Focus::Sessions);
+        self.begin_session(id)
+    }
+
+    /// Ask which skills a new session receives, or start one with every skill.
+    fn begin_session(&mut self, id: &str) -> Option<Request> {
+        if !self.skills.is_empty() {
+            self.skill_picker = Some(SkillPicker {
+                agent: id.to_owned(),
+                selected: 0,
+                chosen: self.skills.iter().map(|skill| skill.name.clone()).collect(),
+            });
+            self.status = format!(
+                "{} skills · Space toggles · Enter starts · Esc closes",
+                self.skills.len()
+            );
+            return None;
+        }
         self.status = "assistant · starting a session…".to_owned();
-        Some(Request::New(id.to_owned()))
+        Some(Request::New {
+            agent: id.to_owned(),
+            skills: None,
+        })
     }
 
     /// Put the assistant away, leaving the editor and its document open.
@@ -8104,6 +8182,57 @@ impl App {
                     self.agent_picker = false;
                     return self.start_agent(&id);
                 }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The keys the skill picker answers to.
+    ///
+    /// Every visible skill starts ticked, so `Enter` is the old all-skills
+    /// session. `Space` clears one. An empty answer is sent as an explicit empty
+    /// list, which the daemon reads as "none", not "choose for me".
+    fn skill_picker_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let picker = self.skill_picker.as_mut()?;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.skill_picker = None;
+                self.status = "never mind".to_owned();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.selected = picker.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if picker.selected + 1 < self.skills.len() {
+                    picker.selected += 1;
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(skill) = self.skills.get(picker.selected) {
+                    if !picker.chosen.remove(&skill.name) {
+                        picker.chosen.insert(skill.name.clone());
+                    }
+                    self.status = format!(
+                        "{} of {} skills selected · Enter starts",
+                        picker.chosen.len(),
+                        self.skills.len()
+                    );
+                }
+            }
+            KeyCode::Enter => {
+                let picker = self.skill_picker.take()?;
+                let skills: Vec<String> = self
+                    .skills
+                    .iter()
+                    .filter(|skill| picker.chosen.contains(&skill.name))
+                    .map(|skill| skill.name.clone())
+                    .collect();
+                self.status = format!("assistant · starting with {} skill(s)…", skills.len());
+                return Some(Request::New {
+                    agent: picker.agent,
+                    skills: Some(skills),
+                });
             }
             _ => {}
         }
@@ -8731,6 +8860,23 @@ mod tests {
     }
 
     #[test]
+    fn new_session_starts_another_conversation_instead_of_reopening() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![agent("mock", "Mock")]));
+        app.apply(Update::Sessions(vec![session("s1", "one")]));
+
+        // Select Agent reopens the conversation it has. New Session means a
+        // second one, which is how the same agent gets a different skill set.
+        assert_eq!(
+            app.run_menu(MenuAction::NewSession),
+            Some(Request::New {
+                agent: "mock".to_owned(),
+                skills: None
+            })
+        );
+    }
+
+    #[test]
     fn several_agents_ask_which_one() {
         let mut app = App::editor_first("http://127.0.0.1:7777");
         app.apply(Update::Agents(vec![
@@ -8744,10 +8890,61 @@ mod tests {
         let _ = app.handle_key(key(KeyCode::Down));
         assert_eq!(
             app.handle_key(key(KeyCode::Enter)),
-            Some(Request::New("two".to_owned()))
+            Some(Request::New {
+                agent: "two".to_owned(),
+                skills: None
+            })
         );
         assert!(!app.agent_picker);
         assert!(app.show_assistant);
+    }
+
+    #[test]
+    fn a_new_session_asks_which_skills_it_receives() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![agent("mock", "Mock")]));
+        app.apply(Update::Skills(vec![
+            skill("release", "Write the changelog entry first."),
+            skill("review", "Read the diff before commenting."),
+        ]));
+
+        assert_eq!(app.run_menu(MenuAction::SelectAgent), None);
+        let picker = app.skill_picker.as_ref().expect("the skill question");
+        assert_eq!(picker.chosen.len(), 2, "every visible skill starts ticked");
+        assert!(picker.chosen.contains("review"));
+
+        // The list is sorted, so the first row is release. Space clears it, and
+        // Enter sends review alone.
+        let _ = app.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::New {
+                agent: "mock".to_owned(),
+                skills: Some(vec!["review".to_owned()])
+            })
+        );
+        assert!(app.skill_picker.is_none());
+    }
+
+    #[test]
+    fn an_empty_skill_answer_is_explicit() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![agent("mock", "Mock")]));
+        app.apply(Update::Skills(vec![skill(
+            "review",
+            "Read the diff before commenting.",
+        )]));
+
+        assert_eq!(app.run_menu(MenuAction::SelectAgent), None);
+        let _ = app.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::New {
+                agent: "mock".to_owned(),
+                skills: Some(Vec::new())
+            }),
+            "none is not the same request as every skill"
+        );
     }
 
     #[test]
@@ -8788,6 +8985,16 @@ mod tests {
         let mut app = App::editor_first("http://127.0.0.1:7777");
         app.apply(Update::Agents(vec![agent("mock", "Mock")]));
         assert!(!app.first_run);
+    }
+
+    fn skill(name: &str, description: &str) -> SkillSummary {
+        SkillSummary {
+            name: name.to_owned(),
+            description: description.to_owned(),
+            instructions: description.to_owned(),
+            source: acpilot_proto::skills::SkillSource::Workspace,
+            path: format!("/work/.acpilot/skills/{name}"),
+        }
     }
 
     fn session(id: &str, title: &str) -> SessionSummary {

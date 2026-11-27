@@ -440,6 +440,136 @@ jobs:
       - name: History rules
         run: cargo xtask history-check --base "origin/${{ github.base_ref || 'main' }}"
 
+  # docs/git-howto.md §3.2, §5.2 and §7.2, checked from one pull request. A phase
+  # PR targets `main`. It starts `Phase <N>: ` and `Stack: phase root`, and it
+  # keeps an open item PR while unblocked work remains. An item PR targets the
+  # branch below it, never `main`. Its title is `[<N>.<seq>] <title> (#<issue>)`.
+  # Its body starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>`, and
+  # it closes its issue. A phase PR names its roadmap issue as `Phase issue: #<n>`.
+  # An item's issue must be a sub-issue of that issue. A phase number can carry a
+  # decimal part (`4.5`), because the roadmap ships Models and Mod shop that way.
+  # The rule is read from branch names, so no list goes stale.
+  #
+  # A push to `main` and a manual run have no pull request, and they pass. The job
+  # is in both aggregations for that reason: a skipped entry is not a success.
+  phase:
+    name: phase and item links
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || '' }}
+      HEAD_REF: ${{ github.head_ref || '' }}
+      BASE_REF: ${{ github.base_ref || '' }}
+    steps:
+      - name: The phase and item shape from docs/git-howto.md
+        run: |
+          set -euo pipefail
+          if [ -z "$PR" ]; then
+            echo "no pull request; nothing to check"
+            exit 0
+          fi
+          fail() { echo "$1"; exit 1; }
+
+          # `phase/4.5-models` names phase `4.5`. `item/4.5.1-60-skills` names
+          # phase `4.5`, stack position `1` and issue `60`. The phase part takes
+          # one decimal: the roadmap ships `4.5 · Models` as a phase of its own.
+          phase=$(printf '%s' "$HEAD_REF" | sed -nE 's|^phase/([0-9]+(\.[0-9]+)?)-[a-z0-9-]+$|\1|p')
+          item=$(printf '%s' "$HEAD_REF" | sed -nE 's|^item/([0-9]+(\.[0-9]+)?)\.([0-9]+)-([0-9]+)-[a-z0-9-]+$|\1 \3 \4|p')
+          case "$HEAD_REF" in
+            phase/*|item/*) ;;
+            *) echo "$HEAD_REF is not a phase or item branch; the guide does not cover it"; exit 0 ;;
+          esac
+          [ -n "$phase" ] || [ -n "$item" ] \
+            || fail "a phase number is <n> or <n>.<m>, and an item is item/<phase>.<seq>-<issue>-<slug>"
+
+          title=$(gh pr view "$PR" --json title --jq .title)
+          body=$(gh pr view "$PR" --json body --jq .body)
+          first=$(printf '%s\n' "$body" | head -n 1)
+
+          if [ -n "$phase" ]; then
+            [ "$BASE_REF" = main ] || fail "phase branch $HEAD_REF targets $BASE_REF; a phase PR targets main"
+            case "$title" in
+              "Phase $phase: "*) ;;
+              *) fail "the title does not start with 'Phase $phase: '" ;;
+            esac
+            [ "$first" = "Stack: phase root" ] || fail "the body does not start with 'Stack: phase root'"
+            printf '%s' "$body" | grep -Eqi "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+" \
+              || fail "the body closes no issue; add 'Closes #<issue>' for each item and the phase"
+            # The item check walks this link, so the phase PR names the roadmap
+            # issue it belongs to. Without it an item has nothing to be a
+            # sub-issue of, and the check would have to guess from a title.
+            phase_issue=$(printf '%s\n' "$body" \
+              | sed -nE 's/^Phase issue: #([0-9]+)([^0-9]|$).*/\1/p' | head -n 1)
+            [ -n "$phase_issue" ] \
+              || fail "the body names no phase issue; add 'Phase issue: #<n>' for the roadmap issue"
+            # §7.2 calls a phase without an item PR unhealthy only while
+            # unblocked work remains. When the last item merges, the phase PR is
+            # the remaining work and lands at once (§5.5). A hard failure here
+            # would then block the very merge it is waiting on.
+            open_items=$(gh pr list --base "$HEAD_REF" --state open --json number --jq 'length')
+            if [ "$open_items" = 0 ]; then
+              echo "note: no open item PR on $HEAD_REF; expected only while the phase lands"
+            fi
+          fi
+
+          if [ -n "$item" ]; then
+            read -r phase_of_item stack issue <<< "$item"
+            seq="$phase_of_item.$stack"
+            [ "$BASE_REF" != main ] || fail "item branch $HEAD_REF targets main; it must target the branch below it"
+            case "$BASE_REF" in
+              phase/*|item/*) ;;
+              *) fail "item branch $HEAD_REF targets $BASE_REF; its base must be the phase or the item below it" ;;
+            esac
+            [ "$(gh pr list --head "$BASE_REF" --state open --json number --jq 'length')" != 0 ] \
+              || fail "no open PR for $BASE_REF, so $HEAD_REF has no branch below it in the stack"
+            case "$title" in
+              "[$seq] "*) ;;
+              *) fail "the title does not start with '[$seq] '" ;;
+            esac
+            case "$title" in
+              *"(#$issue)") ;;
+              *) fail "the title does not end with '(#$issue)'" ;;
+            esac
+            case "$first" in
+              "Stack: "*" · base: $BASE_REF · phase: #"*) ;;
+              *) fail "the body does not start with 'Stack: <seq> of <total> · base: $BASE_REF · phase: #<pr>'" ;;
+            esac
+            phase_pr=$(printf '%s\n' "$first" | sed -nE 's/.* · phase: #([0-9]+)$/\1/p')
+            [ -n "$phase_pr" ] || fail "the body names no phase PR; add 'phase: #<pr>' to the first line"
+            phase_title=$(gh pr view "$phase_pr" --json title --jq .title 2>/dev/null || true)
+            phase_base=$(gh pr view "$phase_pr" --json baseRefName --jq .baseRefName 2>/dev/null || true)
+            case "$phase_title" in
+              "Phase $phase_of_item: "*)
+                ;;
+              *) fail "phase PR #$phase_pr is '$phase_title', not 'Phase ${seq%%.*}: <name>'" ;;
+            esac
+            [ "$phase_base" = main ] || fail "phase PR #$phase_pr targets '$phase_base'; the phase PR is the trunk and targets main"
+            # The phase issue is an ancestor of the item's issue. That link is the
+            # roadmap, so an item under another phase fails even when every PR
+            # field is right. The cap stops a cycle.
+            phase_body=$(gh pr view "$phase_pr" --json body --jq .body 2>/dev/null || true)
+            phase_issue=$(printf '%s\n' "$phase_body" \
+              | sed -nE 's/^Phase issue: #([0-9]+)([^0-9]|$).*/\1/p' | head -n 1)
+            [ -n "$phase_issue" ] \
+              || fail "phase PR #$phase_pr names no phase issue; add 'Phase issue: #<n>' to it"
+            parent_of() { gh api "repos/$GH_REPO/issues/$1/parent" --jq .number 2>/dev/null; }
+            ancestor=$issue
+            linked=""
+            for _ in 1 2 3 4 5 6 7 8; do
+              ancestor=$(parent_of "$ancestor") || break
+              if [ "$ancestor" = "$phase_issue" ]; then
+                linked=1
+                break
+              fi
+            done
+            [ -n "$linked" ] \
+              || fail "#$issue is not a sub-issue of #$phase_issue, the phase issue on PR #$phase_pr. Add it to that phase."
+            printf '%s' "$body" | grep -Eqi "(^|[^A-Za-z])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#$issue([^0-9]|$)" \
+              || fail "the body does not close #$issue"
+          fi
+
+          echo "$HEAD_REF has the shape docs/git-howto.md asks for"
   # One check to require in branch protection. The rule then does not need a
   # restatement every time a job arrives, and it cannot silently stop covering a
   # job that someone renames. This job needs every gate above and passes only if
@@ -471,7 +601,7 @@ jobs:
   # assertion.
   required:
     name: required checks
-    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste, phase]
     # `always()` also fired inside a cancelled run, where every dependency reports
     # `cancelled`. `!cancelled()` runs the job after a dependency fails, which is
     # the case it exists for. It stays out of a cancelled run, where it has nothing
@@ -492,6 +622,7 @@ jobs:
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}
             ste=${{ needs.ste.result }}
+            phase=${{ needs.phase.result }}
         run: |
           set -euo pipefail
           failed=""
@@ -515,7 +646,7 @@ jobs:
   # bodies in step. They are the same check because they serve the same gate.
   required-branch:
     name: required checks (branch)
-    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste]
+    needs: [check, web, gui, probes, frame-budget, resources, deny, docs, history, ste, phase]
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -532,6 +663,7 @@ jobs:
             docs=${{ needs.docs.result }}
             history=${{ needs.history.result }}
             ste=${{ needs.ste.result }}
+            phase=${{ needs.phase.result }}
         run: |
           set -euo pipefail
           failed=""

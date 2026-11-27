@@ -909,6 +909,20 @@ pub async fn create(
             request.workspace_id, workspace.id
         ))));
     }
+    // A recipe agent ignores ACP's `systemPrompt`, so a named set would reach it
+    // and change nothing. Refusing names the cause, where a session that quietly
+    // runs with other skills would look like the request worked.
+    if request
+        .skills
+        .as_deref()
+        .is_some_and(|skills| !skills.is_empty())
+        && crate::trust::accepts_system_prompt(spec.command()) == Some(false)
+    {
+        return Err(ApiError::new(AcpilotError::invalid(format!(
+            "{} resolves its skills from its recipe, so it does not take a per-session skill selection",
+            spec.name
+        ))));
+    }
     let broker = state.broker().ok_or_else(|| {
         ApiError::new(AcpilotError::conflict(
             "this daemon has no permission policy, so it cannot say what an agent may do",
@@ -1007,13 +1021,15 @@ fn skills_prompt(
     let Some(workspace) = state.workspace() else {
         return Ok(None);
     };
-    let skills = match acpilot_skills::discover_scoped(&workspace.root, state.profile_root(), &[]) {
-        Ok(skills) => skills,
-        Err(error) => {
-            tracing::warn!(%error, "skills were not delivered to this session");
-            return Ok(None);
-        }
-    };
+    // One file that does not parse costs the session that file, not the rest. The
+    // valid rows are what a picker names, so a selection can still be checked
+    // against them.
+    let discovered =
+        acpilot_skills::discover_scoped_recovering(&workspace.root, state.profile_root(), &[]);
+    for problem in &discovered.problems {
+        tracing::warn!(%problem, "a skill was not delivered to this session");
+    }
+    let skills = discovered.skills;
     let skills = match selected {
         None => skills,
         Some(names) => {
@@ -2183,6 +2199,46 @@ mod tests {
                 .iter()
                 .any(|detail| { detail.field == "skills" && detail.message.contains("review") }),
             "the refusal lists what can be picked: {:?}",
+            refused.details
+        );
+    }
+
+    #[test]
+    fn a_broken_skill_does_not_hide_the_valid_ones_or_accept_a_missing_name() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().join("work");
+        let review = root.join(".acpilot/skills/review");
+        std::fs::create_dir_all(&review).expect("skill directory");
+        std::fs::write(
+            review.join("SKILL.md"),
+            "---\nname: review\ndescription: Review a diff.\n---\n\nRead the diff.\n",
+        )
+        .expect("skill");
+        let release = root.join(".acpilot/skills/release");
+        std::fs::create_dir_all(&release).expect("skill directory");
+        std::fs::write(release.join("SKILL.md"), "---\nname: release\n---\n").expect("skill");
+        let state = AppState::new().with_workspace(crate::Workspace {
+            id: "work".to_owned(),
+            profile: String::new(),
+            root,
+        });
+
+        let prompt = skills_prompt(&state, Some(&["review".to_owned()]))
+            .expect("the good skill can still be picked")
+            .expect("one skill is still a prompt");
+        assert!(prompt.contains("## Skill: review"), "{prompt}");
+
+        // A name that is not in the valid set is refused with the set, not
+        // silently dropped because another file failed to parse.
+        let refused = skills_prompt(&state, Some(&["missing".to_owned()]))
+            .expect_err("an unknown name is still a 400");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            refused
+                .details
+                .iter()
+                .any(|detail| detail.field == "skills" && detail.message.contains("review")),
+            "the refusal lists the skill that does exist: {:?}",
             refused.details
         );
     }

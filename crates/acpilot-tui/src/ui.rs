@@ -3116,10 +3116,18 @@ fn draw_skill_picker(frame: &mut Frame, app: &App, area: Rect) {
     };
     let card = centred(area);
     frame.render_widget(Clear, card);
+    // The card has room for the skill rows, a blank line, the selected skill's
+    // description and the hint. A row the keys can reach has to be a row a person
+    // can see, so the rows are a window that follows the cursor.
+    let inner = usize::from(card.height.saturating_sub(2));
+    let visible = inner.saturating_sub(3).max(1);
+    let first = first_visible(picker.selected, app.skills.len(), visible);
     let mut lines: Vec<Line> = app
         .skills
         .iter()
         .enumerate()
+        .skip(first)
+        .take(visible)
         .map(|(index, skill)| {
             let chosen = index == picker.selected;
             let ticked = picker.chosen.contains(&skill.name);
@@ -3458,6 +3466,7 @@ mod tests {
                 command: "one".to_owned(),
                 extension: None,
                 protocol_version: None,
+                accepts_system_prompt: None,
             },
             AgentSummary {
                 id: "two".to_owned(),
@@ -3467,6 +3476,7 @@ mod tests {
                 command: "two".to_owned(),
                 extension: Some("acpilot.two-pack".to_owned()),
                 protocol_version: None,
+                accepts_system_prompt: None,
             },
         ];
         app.agent_picker = true;
@@ -3518,6 +3528,7 @@ mod tests {
             command: "/usr/local/bin/rust-analyzer --stdio".to_owned(),
             extension: Some("acpilot.rust-pack".to_owned()),
             protocol_version: None,
+            accepts_system_prompt: None,
         }];
         app.agent_pin = Some("rust-analyzer".to_owned());
 
@@ -4794,6 +4805,34 @@ mod tests {
         assert!(text.contains("Commit message"), "{text}");
         assert!(text.contains("feat: write the message"), "{text}");
         assert!(text.contains("ctrl-s"), "{text}");
+    }
+
+    #[test]
+    fn the_skill_picker_scrolls_to_the_row_the_keys_reach() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        let skills: Vec<acpilot_proto::skills::SkillSummary> = (0..12)
+            .map(|index| acpilot_proto::skills::SkillSummary {
+                name: format!("skill-{index:02}"),
+                description: "A skill.".to_owned(),
+                instructions: "Do it.".to_owned(),
+                source: acpilot_proto::skills::SkillSource::Workspace,
+                path: format!("/work/.acpilot/skills/skill-{index:02}"),
+            })
+            .collect();
+        let chosen = skills.iter().map(|skill| skill.name.clone()).collect();
+        app.apply(crate::backend::Update::Skills(skills));
+        app.skill_picker = Some(crate::app::SkillPicker {
+            agent: "mock".to_owned(),
+            selected: 11,
+            chosen,
+        });
+
+        let text = render_at(&mut app, 80, 24);
+        assert!(text.contains("skill-11"), "the cursor can be seen: {text}");
+        assert!(
+            !text.contains("skill-00"),
+            "the rows above the window are gone: {text}"
+        );
     }
 
     #[test]

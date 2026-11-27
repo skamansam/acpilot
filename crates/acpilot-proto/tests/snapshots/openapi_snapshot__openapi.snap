@@ -183,6 +183,13 @@ expression: canonical(document)
       "AgentSummary": {
         "description": "An agent as returned by `GET /v1/agents`.",
         "properties": {
+          "accepts_system_prompt": {
+            "description": "Whether this agent accepts ACP's `systemPrompt` for a session.\n\n`Some(false)` when the daemon knows the program ignores the field: the\nshipped recipe agent resolves skills from its recipe at `session/new`.\n`None` when only a handshake can answer, because the roster does not start\nan agent to list it. A client that offers a skill picker reads this rather\nthan promising something the agent will not use.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "command": {
             "description": "Command that will be spawned, for display and debugging.",
             "type": "string"

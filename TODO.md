@@ -1765,6 +1765,15 @@ record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run reso
     ticked, and always starts another conversation so one agent can run with
     different skills. **Open:** the capability is the only delivery path, so an
     external agent that does not advertise it still receives none.
+  - **Result (2026-11-27):** the five review notes on PR #368 are closed. Discovery
+    keeps the skills that parse and names the ones that do not, so one broken
+    `SKILL.md` no longer empties a session, hides the list or skips the name check.
+    `New Session` asks which agent when the roster has a choice. The skill picker
+    scrolls to the row the keys reach. The permission card keeps the keyboard over
+    the picker. A recipe agent is not offered the picker, and a named set for it is a
+    `400`. `AgentSummary.accepts_system_prompt` carries the one answer the daemon can
+    give without a handshake. **Open:** that field is absent for every other agent,
+    so a client learns their capability only from a session.
 
 ---
 

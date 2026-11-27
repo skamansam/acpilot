@@ -47,9 +47,13 @@ pub fn operations() -> Vec<(&'static str, HttpMethod, Operation)> {
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<SkillSummary>>, ApiError> {
     let workspace = workspace(&state)?;
     let profile = state.profile_root();
-    let skills = acpilot_skills::discover_scoped(&workspace, profile, &[])
-        .map_err(|error| ApiError::new(AcpilotError::invalid(error.to_string())))?;
-    Ok(Json(skills.into_iter().map(summary).collect()))
+    // A malformed `SKILL.md` costs the picker that one row. Refusing the whole
+    // list would hide every skill a person has because one file is broken.
+    let discovered = acpilot_skills::discover_scoped_recovering(&workspace, profile, &[]);
+    for problem in &discovered.problems {
+        tracing::warn!(%problem, "a skill is missing from the list");
+    }
+    Ok(Json(discovered.skills.into_iter().map(summary).collect()))
 }
 
 /// `POST /v1/skills`: create or replace one skill.

@@ -1251,6 +1251,16 @@ export interface components {
         AgentStatus: "available" | "missing" | "unhealthy" | "untrusted";
         /** @description An agent as returned by `GET /v1/agents`. */
         AgentSummary: {
+            /**
+             * @description Whether this agent accepts ACP's `systemPrompt` for a session.
+             *
+             *     `Some(false)` when the daemon knows the program ignores the field: the
+             *     shipped recipe agent resolves skills from its recipe at `session/new`.
+             *     `None` when only a handshake can answer, because the roster does not start
+             *     an agent to list it. A client that offers a skill picker reads this rather
+             *     than promising something the agent will not use.
+             */
+            accepts_system_prompt?: boolean | null;
             /** @description Command that will be spawned, for display and debugging. */
             command: string;
             /**

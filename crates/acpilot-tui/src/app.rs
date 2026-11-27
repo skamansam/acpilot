@@ -1838,6 +1838,13 @@ pub struct App {
     pub show_assistant: bool,
     /// Whether the agent picker is asking which declared agent to run.
     pub agent_picker: bool,
+    /// Whether that picker is starting a conversation or reopening one.
+    ///
+    /// `Select Agent` reopens the conversation an agent already has. `New Session`
+    /// starts a second one, which is how the same program runs with a different
+    /// skill set. One picker answers both questions, so it has to remember which
+    /// one it was opened for.
+    pub agent_picker_new: bool,
     /// Which row of that picker `Enter` chooses.
     pub agent_selected: usize,
     /// The visible skills a new session can choose from.
@@ -2762,6 +2769,7 @@ impl App {
             panels: Panels::default(),
             show_assistant: assistant,
             agent_picker: false,
+            agent_picker_new: false,
             agent_selected: 0,
             skills: Vec::new(),
             skill_picker: None,
@@ -4496,7 +4504,10 @@ impl App {
         // Choosing skills is the second half of starting a session. The agent is
         // already decided, and every key belongs to this list until the session
         // starts or the question is dismissed.
-        if self.skill_picker.is_some() {
+        // The picker is modal, except that the permission card is drawn over it and
+        // answers a request an agent is waiting on. A card nobody can answer would
+        // hold the agent, so it keeps the keyboard while it is up.
+        if self.skill_picker.is_some() && !(self.permission_card && !self.permissions.is_empty()) {
             return self.skill_picker_key(key);
         }
 
@@ -8066,6 +8077,7 @@ impl App {
             }
             count => {
                 self.agent_picker = true;
+                self.agent_picker_new = false;
                 self.agent_selected = self.agent_selected.min(count - 1);
                 self.status = format!("{count} agents · Enter chooses · Esc closes");
                 None
@@ -8073,12 +8085,26 @@ impl App {
         }
     }
 
-    /// Start a new session with the first declared agent, or say there is none.
+    /// Start a new session, asking which agent when the roster has a choice.
+    ///
+    /// A window with one agent needs no question. A window with several does: a
+    /// second conversation is about the program a person wants, and starting the
+    /// first row would answer that question with the roster's order.
     fn start_first_agent(&mut self) -> Option<Request> {
-        match self.agents.first().map(|agent| agent.id.clone()) {
-            Some(id) => self.start_new_agent(&id),
-            None => {
+        match self.agents.len() {
+            0 => {
                 self.notice(NO_AGENTS);
+                None
+            }
+            1 => {
+                let id = self.agents[0].id.clone();
+                self.start_new_agent(&id)
+            }
+            count => {
+                self.agent_picker = true;
+                self.agent_picker_new = true;
+                self.agent_selected = self.agent_selected.min(count - 1);
+                self.status = format!("{count} agents · Enter starts a session · Esc closes");
                 None
             }
         }
@@ -8120,6 +8146,21 @@ impl App {
 
     /// Ask which skills a new session receives, or start one with every skill.
     fn begin_session(&mut self, id: &str) -> Option<Request> {
+        // A recipe agent resolves its skills from the recipe and ignores ACP's
+        // field, so a checkbox list would be a promise it cannot keep. The roster
+        // says which agents those are.
+        let takes_skills = self
+            .agents
+            .iter()
+            .find(|agent| agent.id == id)
+            .is_none_or(|agent| agent.accepts_system_prompt != Some(false));
+        if !takes_skills {
+            self.status = "assistant · this agent's recipe decides its skills".to_owned();
+            return Some(Request::New {
+                agent: id.to_owned(),
+                skills: None,
+            });
+        }
         if !self.skills.is_empty() {
             self.skill_picker = Some(SkillPicker {
                 agent: id.to_owned(),
@@ -8157,6 +8198,7 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.agent_picker = false;
+                self.agent_picker_new = false;
                 self.status = "never mind".to_owned();
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -8179,8 +8221,13 @@ impl App {
                         self.status = "a command changed under this name".to_owned();
                         return None;
                     }
+                    let start_new = std::mem::take(&mut self.agent_picker_new);
                     self.agent_picker = false;
-                    return self.start_agent(&id);
+                    return if start_new {
+                        self.start_new_agent(&id)
+                    } else {
+                        self.start_agent(&id)
+                    };
                 }
             }
             _ => {}
@@ -8731,6 +8778,7 @@ mod tests {
             command: id.to_owned(),
             extension: None,
             protocol_version: None,
+            accepts_system_prompt: None,
         }
     }
 
@@ -8877,6 +8925,48 @@ mod tests {
     }
 
     #[test]
+    fn new_session_asks_which_agent_when_the_roster_has_a_choice() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        app.apply(Update::Agents(vec![
+            agent("one", "One"),
+            agent("two", "Two"),
+        ]));
+
+        // A second conversation is about the program a person wants, so the
+        // question comes before the session rather than the roster's first row.
+        assert_eq!(app.run_menu(MenuAction::NewSession), None);
+        assert!(app.agent_picker, "a question, not the first row");
+
+        let _ = app.handle_key(key(KeyCode::Down));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Request::New {
+                agent: "two".to_owned(),
+                skills: None
+            }),
+            "New Session creates a conversation with the chosen agent"
+        );
+    }
+
+    #[test]
+    fn a_permission_card_keeps_the_keys_over_the_skill_picker() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.permission_card = true;
+        app.skills = vec![skill("review", "Read a diff.")];
+        app.skill_picker = Some(SkillPicker {
+            agent: "mock".to_owned(),
+            selected: 0,
+            chosen: ["review".to_owned()].into_iter().collect(),
+        });
+
+        // The card is drawn over the picker and an agent is waiting on it, so it
+        // answers first. Escape puts the card aside and leaves the picker up.
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
+        assert!(!app.permission_card, "the card was put aside");
+        assert!(app.skill_picker.is_some(), "the picker is still there");
+    }
+
+    #[test]
     fn several_agents_ask_which_one() {
         let mut app = App::editor_first("http://127.0.0.1:7777");
         app.apply(Update::Agents(vec![
@@ -8924,6 +9014,34 @@ mod tests {
             })
         );
         assert!(app.skill_picker.is_none());
+    }
+
+    #[test]
+    fn a_recipe_agent_is_not_asked_which_skills_it_receives() {
+        let mut app = App::editor_first("http://127.0.0.1:7777");
+        let mut recipe = agent("lm", "Recipe");
+        recipe.accepts_system_prompt = Some(false);
+        app.apply(Update::Agents(vec![recipe]));
+        app.apply(Update::Skills(vec![skill(
+            "review",
+            "Read the diff before commenting.",
+        )]));
+
+        // The agent ignores the field, so the question is not asked and the
+        // selection is not sent. Its recipe decides what it runs with.
+        assert_eq!(
+            app.run_menu(MenuAction::NewSession),
+            Some(Request::New {
+                agent: "lm".to_owned(),
+                skills: None
+            })
+        );
+        assert!(app.skill_picker.is_none(), "no question it cannot answer");
+        assert!(
+            app.status.contains("recipe"),
+            "the status says where the skills come from: {}",
+            app.status
+        );
     }
 
     #[test]

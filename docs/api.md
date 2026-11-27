@@ -405,11 +405,11 @@ answer does not depend on whether one loaded.
 
 `skills` is the picker's answer for an external agent. Absent means every visible
 skill, and an empty list means none. Each name must be visible to this daemon. An
-unknown name is `400` with the visible names in `details`, and a `SKILL.md` that does
-not parse does not remove the names that do. The chosen instructions are appended to
-ACP's `systemPrompt` when the agent advertises it. A named set for an agent this
-daemon knows ignores that field — the shipped recipe agent — is `400` rather than a
-session that runs with other skills.
+unknown name is `400` with the visible names in `details`. A `SKILL.md` that does not
+parse does not remove the names that do. The chosen instructions are appended to
+ACP's `systemPrompt` when the agent advertises it. A named set for an agent that
+ignores that field is `400`. The shipped recipe agent is the one case the daemon
+knows before a handshake.
 
 `SessionSummary` and `WorkspaceSummary` both carry `profile`, the identity that
 owns the row. `POST /v1/workspaces` records the first profile to open a host and

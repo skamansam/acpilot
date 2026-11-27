@@ -62,7 +62,7 @@ session with the ticked set, and `Esc` closes the question. **New Session**
 always starts another conversation, so the same agent can run with review skills
 in one and none in the next. With several agents declared it asks which one first.
 Choosing the agent from the roster still reopens its newest conversation. A recipe
-agent is not asked which skills it receives: it resolves them from its recipe, the
+agent is not asked which skills it receives. It resolves them from its recipe. The
 daemon says so, and the status line names the recipe as the source. A profile with no `agents.toml` has no agents to
 list, so that row names `agents.toml` and `acpilot doctor` rather than opening an
 empty picker. A row whose program changed under its name says `not approved` and

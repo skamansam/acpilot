@@ -898,7 +898,9 @@ The short version:
   Windows, so a platform-specific shortcut is caught there.
 - One idea per commit, imperative subject, scoped by area (`proto:`, `acpilotd:`, `tui:`,
   `docs:`). The body explains why.
-- One pull request per phase, with a capability PR per ticket targeting the phase branch.
+- One phase PR (`phase/<phase>-<slug>`) with an item PR stack
+  (`item/<phase>.<seq>-<issue>-<slug>`) under it. `docs/git-howto.md` is the authority
+  on names, titles, commit footers and merge order.
 - Never `git commit --no-verify`: the same failure is waiting in CI.
 - A new dependency needs a sentence on why the existing ones do not do the job, plus a
   clean `cargo deny`. The version policy is latest stable, with the documented pins.

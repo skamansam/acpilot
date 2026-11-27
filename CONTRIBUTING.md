@@ -287,17 +287,18 @@ Two suites are contracts rather than coverage, and should not be weakened:
 
 ## Commits
 
-One idea per commit, imperative subject, scoped by area:
+`docs/git-howto.md` §3.3 is the format: a Conventional Commit type, a noun scope,
+then a gitmoji and an imperative description. Every commit ends with a `Refs #<issue>`
+or a `Closes #<issue>` footer.
 
 ```
-proto: add terminal resize event
-acpilotd: reject stale ETags on file writes
-tui: keep cursor visible on fold
-docs: record the GUI framework decision
+feat(session): ✨ persist pilot sessions to disk
+
+Refs #47
 ```
 
-Body explains *why*, not *what*, because the diff already says what. Reference the task
-ID from `TODO.md` (`P3-5`, `XT-1`) when a commit closes one.
+One idea per commit. The body explains *why*, not *what*, because the diff already
+says what.
 
 ## Git history
 
@@ -320,8 +321,9 @@ back. Every rule below prevents a state this repository has already been in.
   a second hash. The next merge carries it twice.
 - **`main` takes merge commits only.** Squash and rebase rewrite shared history, and
   they are how one change has two identities. The ruleset allows `merge` alone.
-- **Never force push, on any branch.** `main` refuses it. Every other branch is
-  somebody's work in progress. To fix a commit, add a commit that fixes it.
+- **Never force push a shared branch.** `main` and `phase/*` refuse it. An item
+  branch you own may take `--force-with-lease` after a restack, because
+  `docs/git-howto.md` §5.4 rewrites it on purpose. Never use `--force`.
 
 `cargo xtask history-check` is the mechanical half. CI's `history` job runs it on every
 push and pull request:
@@ -360,67 +362,53 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
 
 ### One pull request per phase, and a stack under it
 
-A phase in `TODO.md` receives one pull request. That PR is the unit that matches a
-phase in the roadmap project. Its body lists the tasks it closes.
+`docs/git-howto.md` is the authority on branches, PR titles and bodies, commit
+messages, stack order and the merge procedure. Read it before you open a branch, and
+re-read it when the repository state looks wrong.
 
-Each capability in that phase receives its own pull request. It targets the phase
-branch, not `main`. Merge it into the phase branch when its checks are green.
-The phase PR then reaches `main` once, and its history names every ticket it
-closed.
+The gate enforces the part it can see from one pull request:
 
-```
-main
-└── phase/p4-profiles            one PR, merged once
-    ├── p4-9-global-profile      one PR per capability
-    ├── p4-10-precedence-matrix
-    └── p4-11-provider-registry
-```
+- A phase branch is `phase/<phase>-<slug>`, and its PR targets `main`, starts
+  `Phase <phase>: ` and opens with `Stack: phase root`. Its body names the
+  phase's roadmap issue with `Phase issue: #<n>`.
+- An item branch is `item/<phase>.<seq>-<issue>-<slug>`. Its PR targets the branch
+  below it, never `main`. Its title is `[<phase>.<seq>] <title> (#<issue>)`. Its body
+  starts `Stack: <seq> of <total> · base: <branch> · phase: #<pr>` and it closes the
+  issue with `Closes #<issue>`.
+- A phase number may carry one decimal part (`4.5 · Models`, `4.6 · Mod shop`),
+  and each of those is a phase with its own `phase/` branch and trunk PR. Its items
+  take the phase number, so Phase 4.5's first item is `item/4.5.1-…`.
+- An item's issue is a sub-issue of its phase issue. The job walks the parent
+  chain, so an item parented to no phase, or to another phase, fails.
+- A phase PR keeps an open item PR on it while unblocked work remains (§7.2).
+  Once the last item merges, the phase PR is the remaining work and lands
+  immediately (§5.5). The job reports the empty stack as a note rather than
+  failing the merge it is waiting on.
+- A PR that belongs to no phase (a `docs/`, `ci/`, `fix/` or `deps/` branch) says so
+  in its body. The `phase` job exempts it, because it closes no ticket.
+- The `phase` job in CI reads the branch, the base, the title and the body. The
+  project card, the commit footers and the reviewer approvals are still yours.
 
-The rules that keep the stack traceable:
+The merge order is the guide's §5.5. Squash each item into the phase branch, bottom
+up. Then merge the phase PR into `main` with a merge commit.
 
-- A phase branch is named `phase/<phase code>`, for example `phase/p4-profiles`.
-- A capability branch carries its ticket code, for example `p4-10-precedence`.
-  Its PR title starts with the same code.
-- Every PR body links the ticket it closes in the roadmap project. A PR with no
-  ticket is either a task `TODO.md` does not have yet, or work that does not
-  belong in the phase.
-- A capability PR never targets `main` while its phase PR is open. That breaks
-  the stack, and the phase PR then carries the same change twice.
-- The phase PR merges only after its capability PRs are in and
-  `cargo xtask check` is green on the phase branch.
-- Drop a branch only when its base holds every commit on it. The checks below
-  use `<base>` and `<branch>`.
-  - Each pull request that targets the branch merged. A closed pull request is
-    not a merge. Its commits need another home first.
-  - `git rev-list --count <base>..<branch>` prints `0`, so the branch has no
-    commit that its base lacks. The branch may be behind by any number.
-  - `git diff --name-only <base> <branch>` prints nothing when the branch is
-    level with its base. A branch that is behind shows only what the base
-    gained after the merge.
-  - The branch exists on the remote. A ref that lives in one clone has no
-    second copy to restore.
-- A capability branch's base is the phase branch. A phase branch's base is
-  `main`, and it passes the checks above only after its phase PR merges.
+If the PRs were linked as a GitHub stack, run `gh stack unstack` before that
+procedure. A stack merge applies one method to every PR. `main` allows merge
+commits only, so the stack cannot squash the items and merge the phase in one
+operation.
 
-A merge that lands a phase is one commit on `main`, so a reader can see what a
-phase shipped without reading the whole branch.
+Drop a branch only when its base holds every commit on it. The checks below use
+`<base>` and `<branch>`.
 
-#### How a phase moves
-
-1. Create the phase branch from `main` and open its pull request as a draft. The
-   draft says what the phase covers, and it gives the phase branch a place to
-   report its checks.
-2. Create a branch for the task and open a draft pull request that targets the
-   phase branch. Every commit for that task goes on this branch.
-3. When the task is complete, merge its pull request into the phase branch, then add
-   it to the phase pull request body. The body is the stack: it lists each task
-   in merge order.
-4. When every task is in and `cargo xtask check` is green on the phase branch,
-   tell the maintainer. The maintainer reviews the phase pull request, then
-   merges it.
-
-A task that starts before the phase branch exists belongs to the next phase.
-Create the phase branch first.
+- Each pull request that targets the branch merged. A closed pull request is not a
+  merge. Its commits need another home first.
+- `git rev-list --count <base>..<branch>` prints `0`, so the branch has no commit
+  that its base lacks. The branch may be behind by any number.
+- `git diff --name-only <base> <branch>` prints nothing when the branch is level
+  with its base. A branch that is behind shows only what the base gained after the
+  merge.
+- The branch exists on the remote. A ref that lives in one clone has no second copy
+  to restore.
 
 ### The protection rule
 

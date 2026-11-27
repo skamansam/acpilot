@@ -154,8 +154,15 @@ fn is_recipe_program(program: &str) -> bool {
     else {
         return false;
     };
-    name == acpilot_agent::promote::COMMAND
-        || name == format!("{}.exe", acpilot_agent::promote::COMMAND)
+    let command = acpilot_agent::promote::COMMAND;
+    let executable = format!("{command}.exe");
+    // Windows resolves a path case-blind, so the same binary may be written
+    // `.EXE`. Match the filesystem the daemon is on, not the one it was built on.
+    if acpilot_host::CASE_INSENSITIVE_PATHS {
+        name.eq_ignore_ascii_case(command) || name.eq_ignore_ascii_case(&executable)
+    } else {
+        name == command || name == executable
+    }
 }
 
 /// The agent routes that are about trust.
@@ -403,5 +410,20 @@ mod tests {
                 "{program} is a different program"
             );
         }
+    }
+
+    #[test]
+    fn the_executable_suffix_follows_the_platform_case_rule() {
+        // Windows resolves paths case-blind, so `.EXE` is the same program there.
+        // Elsewhere it is a different file name and the daemon cannot know it.
+        let expected = if acpilot_host::CASE_INSENSITIVE_PATHS {
+            Some(false)
+        } else {
+            None
+        };
+        assert_eq!(
+            accepts_system_prompt(Some(&command("C:/acpilot/bin/acpilot-agent-lm.EXE"))),
+            expected
+        );
     }
 }

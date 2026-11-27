@@ -4546,6 +4546,17 @@ impl App {
             return self.copy_key(key);
         }
 
+        // The permission card is drawn over the picker that asked for it, and the
+        // terminal is checked before the card below. In that overlap the card must
+        // answer first: a byte sent to the shell would leave an agent waiting behind
+        // a question that looked answered. Ctrl-T above still leaves the terminal.
+        if self.permission_card
+            && !self.permissions.is_empty()
+            && (self.agent_picker || self.skill_picker.is_some())
+        {
+            return self.permission_key(key);
+        }
+
         // A terminal takes the keyboard. Every key is a byte for the program,
         // Ctrl-C included: a person typing into a shell means the shell, not
         // "quit the client". The way out is Ctrl-T, which is why the pane says so.
@@ -4641,63 +4652,7 @@ impl App {
         }
 
         if self.permission_card && !self.permissions.is_empty() {
-            let Some(request) = self.permissions.get(self.permission_at).cloned() else {
-                self.permission_card = false;
-                return None;
-            };
-            match self.action(Context::Permission, key) {
-                // Tab walks the requests that are waiting, because a question does
-                // not stop the world: an agent can ask about two files at once.
-                Some(Action::NextQuestion) => {
-                    self.permission_at = (self.permission_at + 1) % self.permissions.len();
-                    self.status = format!(
-                        "request {} of {}",
-                        self.permission_at + 1,
-                        self.permissions.len()
-                    );
-                    return None;
-                }
-                Some(Action::PreviousQuestion) => {
-                    self.permission_at =
-                        (self.permission_at + self.permissions.len() - 1) % self.permissions.len();
-                    self.status = format!(
-                        "request {} of {}",
-                        self.permission_at + 1,
-                        self.permissions.len()
-                    );
-                    return None;
-                }
-                Some(Action::PutAside) => {
-                    self.permission_card = false;
-                    self.status = format!(
-                        "permission put aside · {} waiting · Session → Answer Permission",
-                        self.permissions.len()
-                    );
-                    return None;
-                }
-                Some(
-                    action @ (Action::PermissionOnce
-                    | Action::PermissionAlways
-                    | Action::PermissionDeny),
-                ) => {
-                    // Only the answers this request actually offers, with the key
-                    // the card draws: a card that advertised an option the wire did
-                    // not send would answer with something nobody could choose.
-                    let option = match action {
-                        Action::PermissionOnce => PermissionOption::AllowOnce,
-                        Action::PermissionAlways => PermissionOption::AllowAlways,
-                        _ => PermissionOption::Deny,
-                    };
-                    if request.options.contains(&option) {
-                        let message =
-                            format!("{} · {} · recorded", option_label(option), request.title);
-                        return self.answer_permission(option, message);
-                    }
-                }
-                _ => {}
-            }
-            // The card is modal: everything else waits until it is answered.
-            return None;
+            return self.permission_key(key);
         }
 
         // `Alt` plus the letter underlined in a title opens that menu with its list
@@ -8196,6 +8151,70 @@ impl App {
         self.status = "assistant closed · the editor is still open".to_owned();
     }
 
+    /// The keys the permission card answers to.
+    ///
+    /// The card is drawn over whatever asked it to appear, and an agent is waiting
+    /// on the answer, so it keeps the keyboard while it is up.
+    fn permission_key(&mut self, key: KeyEvent) -> Option<Request> {
+        let Some(request) = self.permissions.get(self.permission_at).cloned() else {
+            self.permission_card = false;
+            return None;
+        };
+        match self.action(Context::Permission, key) {
+            // Tab walks the requests that are waiting, because a question does
+            // not stop the world: an agent can ask about two files at once.
+            Some(Action::NextQuestion) => {
+                self.permission_at = (self.permission_at + 1) % self.permissions.len();
+                self.status = format!(
+                    "request {} of {}",
+                    self.permission_at + 1,
+                    self.permissions.len()
+                );
+                return None;
+            }
+            Some(Action::PreviousQuestion) => {
+                self.permission_at =
+                    (self.permission_at + self.permissions.len() - 1) % self.permissions.len();
+                self.status = format!(
+                    "request {} of {}",
+                    self.permission_at + 1,
+                    self.permissions.len()
+                );
+                return None;
+            }
+            Some(Action::PutAside) => {
+                self.permission_card = false;
+                self.status = format!(
+                    "permission put aside · {} waiting · Session → Answer Permission",
+                    self.permissions.len()
+                );
+                return None;
+            }
+            Some(
+                action @ (Action::PermissionOnce
+                | Action::PermissionAlways
+                | Action::PermissionDeny),
+            ) => {
+                // Only the answers this request actually offers, with the key
+                // the card draws: a card that advertised an option the wire did
+                // not send would answer with something nobody could choose.
+                let option = match action {
+                    Action::PermissionOnce => PermissionOption::AllowOnce,
+                    Action::PermissionAlways => PermissionOption::AllowAlways,
+                    _ => PermissionOption::Deny,
+                };
+                if request.options.contains(&option) {
+                    let message =
+                        format!("{} · {} · recorded", option_label(option), request.title);
+                    return self.answer_permission(option, message);
+                }
+            }
+            _ => {}
+        }
+        // The card is modal: everything else waits until it is answered.
+        None
+    }
+
     /// The keys the agent picker answers to, in the same dialect as the terminal's.
     fn agent_picker_key(&mut self, key: KeyEvent) -> Option<Request> {
         match key.code {
@@ -8978,6 +8997,35 @@ mod tests {
             }),
             "the picker still has its key"
         );
+    }
+
+    #[test]
+    fn a_permission_card_answers_before_the_terminal_when_the_agent_picker_is_up() {
+        let mut app = with_terminal();
+        app.apply(Update::Agents(vec![
+            agent("one", "One"),
+            agent("two", "Two"),
+        ]));
+        app.permissions = App::demo(&acpilot_demo::demo()).permissions;
+        app.permission_card = true;
+
+        assert_eq!(app.run_menu(MenuAction::NewSession), None);
+        assert!(app.agent_picker, "New Session asks which agent");
+
+        // The terminal is checked before the card lower down, but the card is
+        // drawn over the picker and an agent is waiting. A printable answer must
+        // not become a byte for the shell.
+        let id = app.permissions[0].id.clone();
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('y'))),
+            Some(Request::Resolve {
+                id,
+                option: PermissionOption::AllowOnce,
+            }),
+            "the card answers, not the shell"
+        );
+        assert!(!app.permission_card, "the card is answered");
+        assert!(app.agent_picker, "the picker is still behind it");
     }
 
     #[test]

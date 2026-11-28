@@ -4495,6 +4495,19 @@ impl App {
             return self.lsp_pin_key(key);
         }
 
+        // `Ctrl-D` is the review, and the review is how the diff behind a card is
+        // answered: while the card is up it outranks the card and the pickers the
+        // card is drawn over. A terminal still keeps `Ctrl-D` — end-of-file is a
+        // byte a shell can want — so this stands aside for one.
+        if self.terminal.is_none()
+            && self.permission_card
+            && !self.permissions.is_empty()
+            && self.action(Context::App, key) == Some(Action::Review)
+        {
+            self.toggle_review();
+            return None;
+        }
+
         // Choosing an agent is a question with a list of answers, and the panes it
         // would reveal are not on screen yet: every key belongs to the answer. The
         // permission card is drawn over this picker too, and answers a request an
@@ -4516,8 +4529,10 @@ impl App {
 
         // The picker is modal in the same way the permission card is: it is a
         // question with a list of answers, and a keystroke aimed at a program that
-        // is not on screen yet would be lost.
-        if self.terminal_picker {
+        // is not on screen yet would be lost. The card is drawn over this list too
+        // and answers a request an agent is waiting on, so it keeps the keyboard
+        // while it is up.
+        if self.terminal_picker && !(self.permission_card && !self.permissions.is_empty()) {
             return self.picker_key(key);
         }
 
@@ -4552,7 +4567,7 @@ impl App {
         // a question that looked answered. Ctrl-T above still leaves the terminal.
         if self.permission_card
             && !self.permissions.is_empty()
-            && (self.agent_picker || self.skill_picker.is_some())
+            && (self.agent_picker || self.skill_picker.is_some() || self.terminal_picker)
         {
             return self.permission_key(key);
         }
@@ -4590,7 +4605,8 @@ impl App {
         // `Ctrl-D` is the review. It comes after the terminal has had its chance
         // to swallow it, because `Ctrl-D` in a shell is end-of-file and a pane
         // being typed into must keep it; from behind a terminal the review is one
-        // `Ctrl-P` away instead.
+        // `Ctrl-P` away instead. The card's own `Ctrl-D` was answered above, before
+        // the pickers the card is drawn over.
         if self.action(Context::App, key) == Some(Action::Review) {
             self.toggle_review();
             return None;
@@ -9044,6 +9060,34 @@ mod tests {
         assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
         assert!(!app.permission_card, "the card was put aside");
         assert!(app.skill_picker.is_some(), "the picker is still there");
+    }
+
+    #[test]
+    fn a_permission_card_keeps_the_keys_over_the_terminal_picker() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.permission_card = true;
+        app.terminal_picker = true;
+
+        // The card is drawn over the list of shells and an agent is waiting on it,
+        // so the answer is the card's. Escape puts the card aside and leaves the
+        // list where it was.
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), None);
+        assert!(!app.permission_card, "the card was put aside");
+        assert!(app.terminal_picker, "the picker waited behind the card");
+    }
+
+    #[test]
+    fn the_review_opens_over_the_card_and_the_terminal_picker() {
+        let mut app = App::demo(&acpilot_demo::demo());
+        app.permission_card = true;
+        app.terminal_picker = true;
+
+        // The review is how the diff behind the card is answered, so `Ctrl-D`
+        // reaches it rather than dying in the picker or the card.
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(app.handle_key(ctrl_d), None);
+        assert!(app.review.is_some(), "the diff is on the screen");
+        assert!(app.permission_card, "looking at the diff answers nothing");
     }
 
     #[test]

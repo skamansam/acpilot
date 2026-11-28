@@ -1774,6 +1774,30 @@ record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run reso
     `400`. `AgentSummary.accepts_system_prompt` carries the one answer the daemon can
     give without a handshake. **Open:** that field is absent for every other agent,
     so a client learns their capability only from a session.
+- [x] **P4.5-14 · Devin Review on #371** (0.5d) — the three findings the review posted
+  after the five #368 notes merged: recipe runs resolve skills with the recovering
+  discovery, `accepts_system_prompt` recognises the recipe agent through a path or an
+  executable suffix, and the permission card keeps the keyboard over the agent picker.
+  - **Result (2026-11-27):** the three findings are closed. `model_runs` and
+    `acpilot-agent-lm` resolve recipe skills with the recovering discovery, so a
+    malformed `SKILL.md` is a warning and the valid selected skills still reach the
+    model. `accepts_system_prompt` matches the shipped recipe agent by file name, so a
+    path or `.exe` spelling gets the same `false`, from the roster and from session
+    validation. The permission card outranks the agent picker as well as the skill
+    picker, and Escape puts the card aside with the picker still up. A second Devin
+    pass on the fix PR found two more: an attached terminal still took the card's
+    answer keys while a picker was under it, and `.EXE` missed the case-blind Windows
+    lookup. The card now answers before terminal input in that overlap, and the
+    suffix follows `CASE_INSENSITIVE_PATHS`. A third pass found one more: with the card
+    over a picker, `Ctrl-D` — the review that answers the diff the card is about — died
+    in the card's own dispatch. The review now outranks the card and the pickers it is
+    drawn over (a terminal still keeps `Ctrl-D`), and the card outranks the terminal
+    picker as it already did the agent and skill pickers. Tests: 152 in `acpilotd`, 336
+    in `acpilot-tui`, with new cases for the malformed skill, both command spellings,
+    the uppercase suffix, the card over the picker and the terminal, the card over the
+    terminal picker, and the review opening over both.
+  - **Open:** the fourth flag was not posted to GitHub; it is visible only in the Devin
+    dashboard.
 
 ---
 

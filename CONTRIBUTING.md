@@ -340,6 +340,13 @@ base? Did a merge drop a side? Is a commit's patch already upstream?
 
 - `cargo xtask check` green locally. CI runs the same commands on Linux, macOS
   and Windows, so a platform-specific shortcut will be caught.
+- **Devin Review has commented before the merge.** Every pull request receives a
+  review, and its findings are comments on the PR. Read them and fix what they name
+  on the same branch. Check the PR again before merging. A review read after the
+  merge is a finding already in `main`. When that happens the finding needs its own
+  item, and that item's branch can merge into the next task. `P4.5-14` exists
+  because #371 merged before its review arrived. The review can also report flags
+  its settings kept off GitHub. Those flags are visible only in its dashboard.
 - One check is required to merge: **`required checks`**, the job at the bottom of
   `.github/workflows/ci.yml`. It needs `check`, `web`, `gui`, `probes`,
   `frame-budget`, `resources`, `deny`, `docs`, `history` and `ste`, and it passes

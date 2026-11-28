@@ -108,12 +108,16 @@ async fn main() {
                 // Skills are workspace facts, so they are resolved at session/new
                 // rather than at startup; a recipe names which ones it wants.
                 let wanted = &new_loaded.recipe.skills;
-                let skills = acpilot_skills::discover_scoped(
+                // Recovering discovery for the same reason the picker uses it: one
+                // malformed `SKILL.md` must not drop the valid skills the recipe
+                // names. The broken file is reported by the daemon, which lists
+                // with the same recovery.
+                let skills = acpilot_skills::discover_scoped_recovering(
                     &request.cwd,
                     Some(&new_loaded.profile_root),
                     &[],
                 )
-                .unwrap_or_default()
+                .skills
                 .into_iter()
                 .filter(|skill| wanted.contains(&skill.name))
                 .collect();

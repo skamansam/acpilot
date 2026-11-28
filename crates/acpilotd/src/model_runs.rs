@@ -19,7 +19,7 @@
 //! hour ago" answerable.
 
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::time::Instant;
 
 use acpilot_core::AcpilotError;
@@ -275,20 +275,38 @@ fn prepare(
 /// not a refusal: the recipe is still answerable without it, and the person who
 /// selected it needs to know it was not sent.
 fn system_prompt(plan: &Plan) -> (String, Vec<String>) {
-    let mut prompt = plan.recipe.system_prompt.clone();
-    if plan.recipe.skills.is_empty() {
+    prompt_with_skills(
+        &plan.recipe.system_prompt,
+        &plan.recipe.skills,
+        &plan.root,
+        plan.profile_root.as_deref(),
+    )
+}
+
+/// Append the selected skills, keeping the ones that parse when one does not.
+///
+/// Discovery is the recovering kind because the lab's picker lists with the same
+/// recovery. A malformed `SKILL.md` must not silence a valid skill the picker
+/// offered. The broken file is a warning, not a reason to send the master prompt
+/// alone.
+fn prompt_with_skills(
+    master: &str,
+    selected: &[String],
+    root: &FsPath,
+    profile_root: Option<&FsPath>,
+) -> (String, Vec<String>) {
+    let mut prompt = master.to_owned();
+    if selected.is_empty() {
         return (prompt, Vec::new());
     }
-    let skills =
-        match acpilot_skills::discover_scoped(&plan.root, plan.profile_root.as_deref(), &[]) {
-            Ok(skills) => skills,
-            Err(error) => {
-                return (prompt, vec![format!("skills could not be read: {error}")]);
-            }
-        };
-    let mut warnings = Vec::new();
-    for name in &plan.recipe.skills {
-        match skills.iter().find(|skill| &skill.name == name) {
+    let discovered = acpilot_skills::discover_scoped_recovering(root, profile_root, &[]);
+    let mut warnings: Vec<String> = discovered
+        .problems
+        .iter()
+        .map(|error| format!("skills could not be read: {error}"))
+        .collect();
+    for name in selected {
+        match discovered.skills.iter().find(|skill| &skill.name == name) {
             Some(skill) => {
                 prompt.push_str(&acpilot_skills::instructions(std::slice::from_ref(skill)))
             }
@@ -686,3 +704,83 @@ fn record_doc() {}
     )
 )]
 fn replay_doc() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_skill(root: &FsPath, name: &str, description: &str, instructions: &str) {
+        let directory = root.join(".acpilot/skills").join(name);
+        fs::create_dir_all(&directory).expect("skill directory");
+        fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n{instructions}\n"),
+        )
+        .expect("SKILL.md");
+    }
+
+    #[test]
+    fn a_malformed_skill_does_not_silence_the_valid_one_a_recipe_names() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        write_skill(
+            workspace.path(),
+            "review",
+            "Read a diff.",
+            "Check every hunk.",
+        );
+        let broken = workspace.path().join(".acpilot/skills/release");
+        fs::create_dir_all(&broken).expect("broken directory");
+        fs::write(broken.join("SKILL.md"), "no frontmatter").expect("broken SKILL.md");
+
+        let (prompt, warnings) = prompt_with_skills(
+            "You are a recipe.",
+            &["review".to_owned()],
+            workspace.path(),
+            None,
+        );
+
+        assert!(
+            prompt.contains("Check every hunk."),
+            "the valid skill is still sent: {prompt}"
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "the broken file is still named: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("skills could not be read"),
+            "and the run says why: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_selected_name_that_is_missing_is_a_warning_beside_the_run() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        write_skill(
+            workspace.path(),
+            "review",
+            "Read a diff.",
+            "Check every hunk.",
+        );
+
+        let (prompt, warnings) = prompt_with_skills(
+            "You are a recipe.",
+            &["review".to_owned(), "release".to_owned()],
+            workspace.path(),
+            None,
+        );
+
+        assert!(
+            prompt.contains("Check every hunk."),
+            "the named skill is sent"
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "only the missing name warns: {warnings:?}"
+        );
+        assert!(warnings[0].contains("`release`"), "{warnings:?}");
+    }
+}

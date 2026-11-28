@@ -1784,9 +1784,13 @@ record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run reso
     model. `accepts_system_prompt` matches the shipped recipe agent by file name, so a
     path or `.exe` spelling gets the same `false`, from the roster and from session
     validation. The permission card outranks the agent picker as well as the skill
-    picker, and Escape puts the card aside with the picker still up. Tests: 151 in
-    `acpilotd`, 333 in `acpilot-tui`, with new cases for the malformed skill, both
-    command spellings and the card over the picker.
+    picker, and Escape puts the card aside with the picker still up. A second Devin
+    pass on the fix PR found two more: an attached terminal still took the card's
+    answer keys while a picker was under it, and `.EXE` missed the case-blind Windows
+    lookup. The card now answers before terminal input in that overlap, and the
+    suffix follows `CASE_INSENSITIVE_PATHS`. Tests: 152 in `acpilotd`, 334 in
+    `acpilot-tui`, with new cases for the malformed skill, both command spellings,
+    the uppercase suffix and the card over the picker and the terminal.
   - **Open:** the fourth flag was not posted to GitHub; it is visible only in the Devin
     dashboard.
 

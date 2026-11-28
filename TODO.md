@@ -1788,9 +1788,14 @@ record back through `GET /v1/recipes/{id}/runs/{run}` for the files the run reso
     pass on the fix PR found two more: an attached terminal still took the card's
     answer keys while a picker was under it, and `.EXE` missed the case-blind Windows
     lookup. The card now answers before terminal input in that overlap, and the
-    suffix follows `CASE_INSENSITIVE_PATHS`. Tests: 152 in `acpilotd`, 334 in
-    `acpilot-tui`, with new cases for the malformed skill, both command spellings,
-    the uppercase suffix and the card over the picker and the terminal.
+    suffix follows `CASE_INSENSITIVE_PATHS`. A third pass found one more: with the card
+    over a picker, `Ctrl-D` — the review that answers the diff the card is about — died
+    in the card's own dispatch. The review now outranks the card and the pickers it is
+    drawn over (a terminal still keeps `Ctrl-D`), and the card outranks the terminal
+    picker as it already did the agent and skill pickers. Tests: 152 in `acpilotd`, 336
+    in `acpilot-tui`, with new cases for the malformed skill, both command spellings,
+    the uppercase suffix, the card over the picker and the terminal, the card over the
+    terminal picker, and the review opening over both.
   - **Open:** the fourth flag was not posted to GitHub; it is visible only in the Devin
     dashboard.
 
